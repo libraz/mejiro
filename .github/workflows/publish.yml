@@ -66,7 +66,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Publish in dependency order: core first, then framework packages
+      # continue-on-error: skip gracefully if version is already published
       - name: Publish @libraz/mejiro
+        continue-on-error: true
         working-directory: packages/mejiro
         run: npm publish --access public --provenance
 
@@ -74,9 +76,11 @@ jobs:
         run: sleep 15
 
       - name: Publish @libraz/mejiro-react
+        continue-on-error: true
         working-directory: packages/mejiro-react
         run: npm publish --access public --provenance
 
       - name: Publish @libraz/mejiro-vue
+        continue-on-error: true
         working-directory: packages/mejiro-vue
         run: npm publish --access public --provenance
