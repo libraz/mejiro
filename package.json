@@ -6,7 +6,8 @@
   ],
   "packageManager": "yarn@4.12.0",
   "volta": {
-    "node": "22.14.0"
+    "node": "22.14.0",
+    "yarn": "4.12.0"
   },
   "scripts": {
     "build": "yarn workspaces foreach -At run build",
