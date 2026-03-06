@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { computeBreaks } from '../src/layout.js';
-import { toCodepoints, uniformAdvances } from './helpers.js';
-
 import basicBreak from './golden/basic-break.json';
 import forcedBreak from './golden/forced-break.json';
 import hangingComma from './golden/hanging-comma.json';
@@ -9,6 +7,7 @@ import hangingPeriod from './golden/hanging-period.json';
 import kinsokuLineEnd from './golden/kinsoku-line-end.json';
 import kinsokuLineStart from './golden/kinsoku-line-start.json';
 import mixedWidth from './golden/mixed-width.json';
+import { toCodepoints, uniformAdvances } from './helpers.js';
 
 function runGolden(fixture: {
   description: string;

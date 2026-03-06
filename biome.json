@@ -1,8 +1,6 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
-  "organizeImports": {
-    "enabled": true
-  },
+  "$schema": "https://biomejs.dev/schemas/2.4.6/schema.json",
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,
     "rules": {
@@ -37,16 +35,15 @@
           }
         },
         "useNumberNamespace": "error",
-        "useTemplate": "error"
+        "useTemplate": "error",
+        "noRestrictedImports": "off"
       },
       "suspicious": {
-        "noConsoleLog": "warn",
         "noDoubleEquals": "error",
-        "noExplicitAny": "warn"
+        "noExplicitAny": "warn",
+        "noConsole": { "level": "warn", "options": { "allow": ["log"] } }
       },
-      "nursery": {
-        "noRestrictedImports": "off"
-      }
+      "nursery": {}
     }
   },
   "formatter": {
@@ -69,6 +66,6 @@
     }
   },
   "files": {
-    "ignore": ["node_modules", "dist", ".yarn", "*.json"]
+    "includes": ["**", "!**/node_modules", "!**/dist", "!**/coverage", "!**/.yarn", "!**/*.json"]
   }
 }

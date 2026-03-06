@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isKana, preprocessRuby } from '../src/ruby.js';
 import type { RubyAnnotation } from '../src/ruby.js';
+import { isKana, preprocessRuby } from '../src/ruby.js';
 import { toCodepoints, uniformAdvances } from './helpers.js';
 
 describe('isKana', () => {

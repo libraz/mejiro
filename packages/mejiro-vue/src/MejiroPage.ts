@@ -1,5 +1,5 @@
 import type { RenderLine, RenderPage, RenderSegment } from '@libraz/mejiro/render';
-import { type PropType, type VNode, defineComponent, h } from 'vue';
+import { defineComponent, h, type PropType, type VNode } from 'vue';
 
 function renderSegment(segment: RenderSegment, key: number): VNode | string {
   if (segment.type === 'text') {
