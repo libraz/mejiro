@@ -1,0 +1,13 @@
+{
+  "description": "Hanging punctuation: period hangs beyond line width",
+  "input": {
+    "text": "あいうえおかきくけこ。さしすせそ",
+    "advanceWidth": 16,
+    "lineWidth": 160
+  },
+  "expected": {
+    "breakPoints": [10],
+    "hangingAdjustments": [16],
+    "comment": "。 at index 10 hangs beyond line width"
+  }
+}

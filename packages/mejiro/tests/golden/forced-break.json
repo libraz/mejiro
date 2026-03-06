@@ -1,0 +1,12 @@
+{
+  "description": "Forced break when all positions are kinsoku-prohibited",
+  "input": {
+    "text": "「「「「「「「「「「「「",
+    "advanceWidth": 16,
+    "lineWidth": 160
+  },
+  "expected": {
+    "breakPoints": [9],
+    "comment": "All chars are line-end prohibited, so force break at overflow position"
+  }
+}

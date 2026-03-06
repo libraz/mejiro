@@ -1,0 +1,11 @@
+{
+  "description": "Basic line breaking with uniform-width characters",
+  "input": {
+    "text": "あいうえおかきくけこさしすせそたちつてと",
+    "advanceWidth": 16,
+    "lineWidth": 160
+  },
+  "expected": {
+    "breakPoints": [9]
+  }
+}

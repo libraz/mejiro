@@ -1,0 +1,22 @@
+{
+  "description": "Mono ruby overhang into adjacent kana reduces effective advance increase",
+  "input": {
+    "text": "あ漢い",
+    "advanceWidth": 16,
+    "lineWidth": 100,
+    "rubyAnnotations": [
+      {
+        "startIndex": 1,
+        "endIndex": 2,
+        "rubyText": "かんかん",
+        "rubyAdvanceWidth": 10,
+        "type": "mono"
+      }
+    ]
+  },
+  "expected": {
+    "breakPoints": [],
+    "hasEffectiveAdvances": true,
+    "comment": "Ruby width 40 > base 16, excess 24. Left kana overhang 8, right kana overhang 8. Net excess 8 added to base."
+  }
+}

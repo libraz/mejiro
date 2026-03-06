@@ -1,0 +1,62 @@
+{
+  "name": "@libraz/mejiro",
+  "version": "0.1.0",
+  "description": "Japanese vertical text layout engine — line breaking, kinsoku shori, hanging punctuation, ruby, and pagination for the web",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "libraz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/libraz/mejiro.git",
+    "directory": "packages/mejiro"
+  },
+  "homepage": "https://github.com/libraz/mejiro",
+  "bugs": "https://github.com/libraz/mejiro/issues",
+  "keywords": [
+    "japanese",
+    "vertical-text",
+    "line-breaking",
+    "kinsoku",
+    "typography",
+    "ruby",
+    "furigana",
+    "pagination",
+    "epub",
+    "jlreq",
+    "writing-mode"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "import": "./dist/browser/index.js"
+    },
+    "./epub": {
+      "types": "./dist/epub/index.d.ts",
+      "import": "./dist/epub/index.js"
+    },
+    "./render": {
+      "types": "./dist/render/index.d.ts",
+      "import": "./dist/render/index.js"
+    },
+    "./render/mejiro.css": "./dist/render/mejiro.css"
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  }
+}

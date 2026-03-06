@@ -1,0 +1,11 @@
+{
+  "description": "Mixed-width characters (full-width and half-width)",
+  "input": {
+    "text": "Hello世界Test日本語ABC",
+    "advances": [8, 8, 8, 8, 8, 16, 16, 8, 8, 8, 8, 16, 16, 16, 8, 8, 8],
+    "lineWidth": 80
+  },
+  "expected": {
+    "breakPoints": [7, 14]
+  }
+}

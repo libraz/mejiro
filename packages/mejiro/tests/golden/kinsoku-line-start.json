@@ -1,0 +1,12 @@
+{
+  "description": "Line-start prohibition: closing bracket must not start a line",
+  "input": {
+    "text": "あいうえおかきくけ」さしすせそ",
+    "advanceWidth": 16,
+    "lineWidth": 160
+  },
+  "expected": {
+    "breakPoints": [9],
+    "comment": "Break after 」(index 9) because 」 is line-start prohibited, so break is pushed to include it on the first line"
+  }
+}

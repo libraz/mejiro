@@ -1,0 +1,29 @@
+{
+  "name": "mejiro-monorepo",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "packageManager": "yarn@4.12.0",
+  "volta": {
+    "node": "22.14.0"
+  },
+  "scripts": {
+    "build": "yarn workspaces foreach -At run build",
+    "test": "vitest",
+    "bench": "vitest bench",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit",
+    "dev": "yarn workspace @mejiro/demo dev",
+    "fetch-demo-epub": "npx tsx scripts/fetch-demo-epub.ts"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "happy-dom": "^20.8.3",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

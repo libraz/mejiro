@@ -1,0 +1,40 @@
+{
+  "name": "@libraz/mejiro-react",
+  "version": "0.1.0",
+  "description": "React components for mejiro vertical text rendering",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "libraz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/libraz/mejiro.git",
+    "directory": "packages/mejiro-react"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@libraz/mejiro": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.1.0"
+  }
+}

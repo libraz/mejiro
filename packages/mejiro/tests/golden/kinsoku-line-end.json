@@ -1,0 +1,12 @@
+{
+  "description": "Line-end prohibition: opening bracket must not end a line",
+  "input": {
+    "text": "あいうえおかきくけ「さしすせそ",
+    "advanceWidth": 16,
+    "lineWidth": 160
+  },
+  "expected": {
+    "breakPoints": [8],
+    "comment": "Break at index 8 (before 「) because 「 is line-end prohibited"
+  }
+}

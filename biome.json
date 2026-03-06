@@ -1,0 +1,74 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.0/schema.json",
+  "organizeImports": {
+    "enabled": true
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "complexity": {
+        "noForEach": "warn",
+        "noStaticOnlyClass": "error",
+        "useSimplifiedLogicExpression": "warn"
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "useExhaustiveDependencies": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "warn",
+        "useConst": "error",
+        "useExportType": "error",
+        "useImportType": "error",
+        "useNamingConvention": {
+          "level": "warn",
+          "options": {
+            "strictCase": false,
+            "conventions": [
+              {
+                "selector": { "kind": "variable" },
+                "formats": ["camelCase", "CONSTANT_CASE", "PascalCase"]
+              },
+              { "selector": { "kind": "function" }, "formats": ["camelCase", "PascalCase"] },
+              { "selector": { "kind": "typeLike" }, "formats": ["PascalCase"] }
+            ]
+          }
+        },
+        "useNumberNamespace": "error",
+        "useTemplate": "error"
+      },
+      "suspicious": {
+        "noConsoleLog": "warn",
+        "noDoubleEquals": "error",
+        "noExplicitAny": "warn"
+      },
+      "nursery": {
+        "noRestrictedImports": "off"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    }
+  },
+  "json": {
+    "formatter": {
+      "trailingCommas": "none"
+    }
+  },
+  "files": {
+    "ignore": ["node_modules", "dist", ".yarn", "*.json"]
+  }
+}

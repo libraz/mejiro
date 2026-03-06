@@ -1,0 +1,21 @@
+{
+  "description": "Group ruby prevents break within base text span",
+  "input": {
+    "text": "あいうえお明日かきくけこ",
+    "advanceWidth": 16,
+    "lineWidth": 112,
+    "rubyAnnotations": [
+      {
+        "startIndex": 5,
+        "endIndex": 7,
+        "rubyText": "あした",
+        "rubyAdvanceWidth": 8,
+        "type": "group"
+      }
+    ]
+  },
+  "expected": {
+    "breakPoints": [4, 9],
+    "clusterGroupIndices": [5, 6]
+  }
+}

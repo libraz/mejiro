@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+*.epub
+backup/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+
+# AI agents
+.claude
+CLAUDE.md
+AGENT.md

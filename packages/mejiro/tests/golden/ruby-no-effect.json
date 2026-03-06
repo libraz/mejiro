@@ -1,0 +1,22 @@
+{
+  "description": "Ruby narrower than base text leaves advances unchanged",
+  "input": {
+    "text": "漢字です",
+    "advanceWidth": 16,
+    "lineWidth": 100,
+    "rubyAnnotations": [
+      {
+        "startIndex": 0,
+        "endIndex": 2,
+        "rubyText": "かんじ",
+        "rubyAdvanceWidth": 8,
+        "type": "group"
+      }
+    ]
+  },
+  "expected": {
+    "breakPoints": [],
+    "hasEffectiveAdvances": true,
+    "effectiveAdvancesUnchanged": [0, 1, 2, 3]
+  }
+}

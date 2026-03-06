@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>mejiro — EPUB Vertical Text Viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Shippori+Mincho:wght@400;500;600&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-deep: #1c1915;
+      --bg-shelf: #252119;
+      --bg-paper: #f5f0e4;
+      --bg-paper-warm: #f0eadb;
+      --bg-paper-edge: #e8e1d2;
+      --ink: #2a2521;
+      --ink-light: #6b6156;
+      --ink-faint: #a89e91;
+      --ink-ghost: #c8c0b4;
+      --accent: #8b3a3a;
+      --accent-soft: #a85c50;
+      --border: #d8d0c4;
+      --control-bg: #fff;
+      --control-border: #ccc5b8;
+      --control-focus: #8b3a3a33;
+      --shadow-book:
+        0 1px 2px rgba(0,0,0,0.07),
+        0 4px 12px rgba(0,0,0,0.10),
+        0 16px 40px rgba(0,0,0,0.14);
+      --shadow-spine:
+        inset 4px 0 8px rgba(0,0,0,0.08),
+        inset 1px 0 0 rgba(0,0,0,0.04);
+      --font-ui: 'Zen Kaku Gothic New', 'Helvetica Neue', sans-serif;
+      --font-body: 'Shippori Mincho', 'Noto Serif JP', serif;
+      --transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      --page-pad-x: 52px;
+      --page-pad-y: 56px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html {
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      height: 100%;
+    }
+
+    body {
+      font-family: var(--font-ui);
+      background: var(--bg-deep);
+      color: var(--ink);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--bg-deep);
+      color: #d6cfc5;
+      padding: 0 28px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      z-index: 100;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    .logo {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .logo-mark {
+      font-family: var(--font-body);
+      font-size: 1.15rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      color: #e8e0d4;
+    }
+
+    .logo-sub {
+      font-size: 0.6rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #7a7268;
+    }
+
+    .chapter-nav {
+      display: none;
+      align-items: center;
+    }
+
+    .chapter-nav.visible { display: flex; }
+
+    .chapter-nav select {
+      padding: 4px 26px 4px 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      background: transparent;
+      color: #c8c0b4;
+      font-size: 0.7rem;
+      font-family: var(--font-ui);
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%237a7268'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+      max-width: 260px;
+      cursor: pointer;
+      border-radius: 0;
+    }
+
+    .chapter-nav select:focus {
+      outline: none;
+      border-color: var(--accent-soft);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    #stats {
+      font-size: 0.62rem;
+      letter-spacing: 0.04em;
+      color: #7a7268;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .btn-header {
+      background: none;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #b0a898;
+      padding: 4px 12px;
+      font-size: 0.65rem;
+      font-family: var(--font-ui);
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      transition: all var(--transition);
+      border-radius: 0;
+    }
+
+    .btn-header:hover {
+      background: rgba(255,255,255,0.04);
+      color: #d6cfc5;
+      border-color: rgba(255,255,255,0.2);
+    }
+
+    .btn-header .arrow {
+      display: inline-block;
+      transition: transform var(--transition);
+      font-size: 0.55rem;
+      margin-left: 4px;
+    }
+
+    .btn-header.active .arrow {
+      transform: rotate(180deg);
+    }
+
+    /* ── Settings Panel ── */
+    .settings-panel {
+      background: #f0ebe0;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      flex-shrink: 0;
+      z-index: 90;
+    }
+
+    .settings-panel.open { max-height: 200px; }
+
+    .settings-inner {
+      padding: 16px 28px 20px;
+      display: flex;
+      gap: 32px;
+      opacity: 0;
+      transform: translateY(-6px);
+      transition: all 0.25s ease 0.08s;
+    }
+
+    .settings-panel.open .settings-inner {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .settings-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .settings-group-title {
+      font-size: 0.58rem;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      color: var(--ink-faint);
+      white-space: nowrap;
+    }
+
+    .control {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .control-label {
+      font-size: 0.65rem;
+      color: var(--ink-light);
+      white-space: nowrap;
+    }
+
+    .control input,
+    .control select {
+      padding: 4px 8px;
+      border: 1px solid var(--control-border);
+      background: var(--control-bg);
+      font-size: 0.72rem;
+      font-family: var(--font-ui);
+      color: var(--ink);
+      appearance: none;
+      -webkit-appearance: none;
+      border-radius: 0;
+      width: auto;
+    }
+
+    .control select {
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%236b6156'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 6px center;
+      padding-right: 22px;
+    }
+
+    .control input:focus,
+    .control select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--control-focus);
+    }
+
+    .control input[type="number"] { width: 52px; }
+    .control input#lineSpacing { width: 58px; }
+
+    /* ── Reading Surface ── */
+    .reading-surface {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(ellipse at 40% 30%, rgba(40,35,28,0.95) 0%, var(--bg-deep) 70%),
+        var(--bg-deep);
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* Subtle shelf texture */
+    .reading-surface::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        repeating-linear-gradient(
+          90deg,
+          transparent 0,
+          transparent 2px,
+          rgba(255,255,255,0.003) 2px,
+          rgba(255,255,255,0.003) 4px
+        );
+      pointer-events: none;
+    }
+
+    /* ── Drop Zone ── */
+    .drop-zone {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      border: 1.5px dashed rgba(255,255,255,0.08);
+      padding: 56px 40px;
+      width: 400px;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .drop-zone:hover,
+    .drop-zone.dragover {
+      border-color: var(--accent-soft);
+      background: rgba(139,58,58,0.03);
+    }
+
+    .drop-zone-icon {
+      font-size: 1.8rem;
+      opacity: 0.35;
+      line-height: 1;
+    }
+
+    .drop-zone-text {
+      color: #8a8078;
+      font-size: 0.78rem;
+      text-align: center;
+      line-height: 1.7;
+    }
+
+    .drop-zone-text strong {
+      color: #b8ae9e;
+      font-weight: 500;
+    }
+
+    .drop-zone-hint {
+      font-size: 0.62rem;
+      color: #6a6258;
+    }
+
+    .drop-zone.hidden { display: none; }
+
+    /* ── Book ── */
+    .book {
+      display: none;
+      position: relative;
+    }
+
+    .book.visible { display: block; }
+
+    /* ── Spread ── */
+    .spread {
+      display: flex;
+      flex-direction: row-reverse;
+      position: relative;
+    }
+
+    /* ── Page ── */
+    .page-container {
+      position: relative;
+      background: var(--bg-paper);
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .spread { box-shadow: var(--shadow-book); }
+
+    /* Paper texture */
+    .page-container::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E") repeat;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* Spine shadow — right page left edge */
+    .page-right::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 20px;
+      background: linear-gradient(to right, rgba(0,0,0,0.06), transparent);
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* Spine shadow — left page right edge */
+    .page-left::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 20px;
+      background: linear-gradient(to left, rgba(0,0,0,0.06), transparent);
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    /* Spine divider */
+    .page-right {
+      border-left: 1px solid rgba(0,0,0,0.06);
+    }
+    .page-left {
+      border-right: 1px solid rgba(0,0,0,0.06);
+    }
+
+    /* Top decorative rule */
+    .page-rule {
+      position: absolute;
+      top: 28px;
+      left: var(--page-pad-x);
+      right: var(--page-pad-x);
+      height: 1px;
+      background: linear-gradient(to right, transparent, var(--accent) 15%, var(--accent) 85%, transparent);
+      opacity: 0.18;
+      z-index: 3;
+    }
+
+    /* Running header */
+    .page-header {
+      position: absolute;
+      top: 14px;
+      left: var(--page-pad-x);
+      right: var(--page-pad-x);
+      display: flex;
+      justify-content: space-between;
+      z-index: 3;
+    }
+
+    .page-header-title {
+      font-family: var(--font-body);
+      font-size: 0.52rem;
+      color: var(--ink-ghost);
+      letter-spacing: 0.15em;
+    }
+
+    .page-header-num {
+      font-family: var(--font-body);
+      font-size: 0.52rem;
+      color: var(--ink-ghost);
+      letter-spacing: 0.08em;
+    }
+
+    /* Page content viewport */
+    .page-viewport {
+      padding: var(--page-pad-y) var(--page-pad-x) 40px;
+    }
+
+    /* Clips at content area boundary */
+    .page-clip {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    .page-content {
+      writing-mode: vertical-rl;
+      width: 100%;
+    }
+
+    .page-content .mejiro-paragraph {
+      writing-mode: vertical-rl;
+      display: inline-block;
+      margin-left: 0.4em;
+      white-space: nowrap;
+    }
+
+    .page-content .mejiro-paragraph:first-child { margin-left: 0; }
+    .page-content .mejiro-paragraph--heading {
+      font-weight: 700;
+      font-size: 1.4em;
+      height: 100%;
+    }
+    .page-content .mejiro-paragraph--heading + .mejiro-paragraph { margin-left: 1.2em; }
+
+    .page-content ruby { ruby-align: center; }
+    .page-content rt {
+      font-size: 0.5em;
+      font-weight: 400;
+    }
+
+    /* ── Navigation zones ── */
+    .nav-zone {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 25%;
+      cursor: pointer;
+      z-index: 10;
+      transition: background 0.15s ease;
+    }
+
+    .nav-zone:active { background: rgba(0,0,0,0.02); }
+
+    /* vertical-rl: right = prev (earlier), left = next (later) */
+    .nav-zone--prev { right: 0; }
+    .nav-zone--next { left: 0; }
+
+    /* ── Page indicator ── */
+    .page-indicator {
+      position: absolute;
+      bottom: -24px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: var(--font-body);
+      font-size: 0.55rem;
+      color: #7a7268;
+      letter-spacing: 0.12em;
+      z-index: 3;
+      white-space: nowrap;
+    }
+
+    /* ── Page transition ── */
+    .spread {
+      transition: opacity 0.2s ease;
+    }
+
+    .spread.turning {
+      opacity: 0;
+    }
+
+    /* ── Loading ── */
+    .loading-indicator {
+      display: none;
+      color: #7a7268;
+      font-size: 0.78rem;
+      font-family: var(--font-body);
+      letter-spacing: 0.1em;
+      animation: pulse 1.8s ease-in-out infinite;
+    }
+
+    .loading-indicator.visible { display: block; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 0.25; }
+      50% { opacity: 0.7; }
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      :root {
+        --page-pad-x: 28px;
+        --page-pad-y: 40px;
+      }
+      header { padding: 0 16px; }
+      .logo-sub { display: none; }
+      .settings-inner { padding: 12px 16px 16px; gap: 16px; flex-wrap: wrap; }
+      .drop-zone { width: 300px; padding: 40px 24px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <div class="logo">
+        <span class="logo-mark">mejiro</span>
+        <span class="logo-sub">Vertical Reader</span>
+      </div>
+      <div class="chapter-nav" id="chapterNav">
+        <select id="chapterSelect"></select>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="stats"></div>
+      <button class="btn-header" id="openFile">Open</button>
+      <button class="btn-header" id="settingsToggle">
+        Settings<span class="arrow">&#9662;</span>
+      </button>
+    </div>
+  </header>
+
+  <div class="settings-panel" id="settingsPanel">
+    <div class="settings-inner">
+      <div class="settings-group">
+        <span class="settings-group-title">Font</span>
+        <div class="control">
+          <select id="fontFamily">
+            <option value="'Shippori Mincho', serif">Shippori Mincho</option>
+            <option value="'Noto Serif JP', serif">Noto Serif JP</option>
+            <option value="'Zen Kaku Gothic New', sans-serif">Zen Kaku Gothic New</option>
+            <option value="serif">System Serif</option>
+          </select>
+        </div>
+        <div class="control">
+          <label class="control-label">Size</label>
+          <input type="number" id="fontSize" value="16" min="10" max="48" />
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <span class="settings-group-title">Layout</span>
+        <div class="control">
+          <label class="control-label">Kinsoku</label>
+          <select id="mode">
+            <option value="strict">Strict</option>
+            <option value="loose">Loose</option>
+          </select>
+        </div>
+        <div class="control">
+          <label class="control-label">Hanging</label>
+          <select id="hanging">
+            <option value="true">On</option>
+            <option value="false">Off</option>
+          </select>
+        </div>
+        <div class="control">
+          <label class="control-label">行間</label>
+          <input type="number" id="lineSpacing" value="1.9" min="1.0" max="3.0" step="0.1" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="reading-surface">
+    <div class="drop-zone" id="dropZone">
+      <div class="drop-zone-icon">&#x1F4D6;</div>
+      <div class="drop-zone-text">
+        <strong>Drop an EPUB file here</strong><br>
+        or click to browse
+      </div>
+      <div class="drop-zone-hint">Supports EPUB with furigana / ruby</div>
+    </div>
+
+    <div class="loading-indicator" id="loading">Loading...</div>
+
+    <div class="book" id="book">
+      <div class="spread" id="spread">
+        <!-- Right page = earlier content (vertical-rl reads right-to-left) -->
+        <div class="page-container page-right" id="pageRight">
+          <div class="page-rule"></div>
+          <div class="page-header">
+            <span class="page-header-title" id="runningTitleRight"></span>
+            <span class="page-header-num" id="runningPageRight"></span>
+          </div>
+          <div class="page-viewport">
+            <div class="page-clip">
+              <div class="page-content" id="pageContentRight"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Left page = later content -->
+        <div class="page-container page-left" id="pageLeft">
+          <div class="page-rule"></div>
+          <div class="page-header">
+            <span class="page-header-title" id="runningTitleLeft"></span>
+            <span class="page-header-num" id="runningPageLeft"></span>
+          </div>
+          <div class="page-viewport">
+            <div class="page-clip">
+              <div class="page-content" id="pageContentLeft"></div>
+            </div>
+          </div>
+        </div>
+        <div class="nav-zone nav-zone--prev" id="navPrev"></div>
+        <div class="nav-zone nav-zone--next" id="navNext"></div>
+        <div class="page-indicator" id="pageIndicator"></div>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="fileInput" accept=".epub" hidden />
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

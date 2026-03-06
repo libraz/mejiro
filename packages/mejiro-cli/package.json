@@ -1,0 +1,16 @@
+{
+  "name": "@mejiro/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mejiro": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch"
+  },
+  "dependencies": {
+    "@libraz/mejiro": "workspace:*"
+  }
+}

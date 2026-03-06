@@ -1,0 +1,22 @@
+{
+  "description": "Jukugo ruby splits at kanji boundary",
+  "input": {
+    "text": "あいうえお東京都かきく",
+    "advanceWidth": 16,
+    "lineWidth": 128,
+    "rubyAnnotations": [
+      {
+        "startIndex": 5,
+        "endIndex": 8,
+        "rubyText": "とうきょうと",
+        "rubyAdvanceWidth": 8,
+        "type": "jukugo",
+        "jukugoSplitPoints": [1, 2]
+      }
+    ]
+  },
+  "expected": {
+    "breakPoints": [6],
+    "comment": "Break allowed after 京(index 6) due to split point, but not within sub-groups"
+  }
+}

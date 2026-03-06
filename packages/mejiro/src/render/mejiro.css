@@ -1,0 +1,34 @@
+.mejiro-page {
+  writing-mode: vertical-rl;
+  width: 100%;
+}
+
+.mejiro-paragraph {
+  writing-mode: vertical-rl;
+  display: inline-block;
+  margin-left: 0.4em;
+  white-space: nowrap;
+}
+
+.mejiro-paragraph:first-child {
+  margin-left: 0;
+}
+
+.mejiro-paragraph--heading {
+  font-weight: 700;
+  font-size: 1.4em;
+  height: 100%;
+}
+
+.mejiro-paragraph--heading + .mejiro-paragraph {
+  margin-left: 1.2em;
+}
+
+.mejiro-page ruby {
+  ruby-align: center;
+}
+
+.mejiro-page rt {
+  font-size: 0.5em;
+  font-weight: 400;
+}

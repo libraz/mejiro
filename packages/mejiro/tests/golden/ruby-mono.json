@@ -1,0 +1,22 @@
+{
+  "description": "Mono ruby wider than base char expands effective advance",
+  "input": {
+    "text": "漢字です",
+    "advanceWidth": 16,
+    "lineWidth": 100,
+    "rubyAnnotations": [
+      {
+        "startIndex": 0,
+        "endIndex": 1,
+        "rubyText": "かん",
+        "rubyAdvanceWidth": 10,
+        "type": "mono"
+      }
+    ]
+  },
+  "expected": {
+    "breakPoints": [],
+    "hasEffectiveAdvances": true,
+    "effectiveAdvanceAt0": 20
+  }
+}

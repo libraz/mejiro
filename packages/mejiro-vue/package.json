@@ -1,0 +1,39 @@
+{
+  "name": "@libraz/mejiro-vue",
+  "version": "0.1.0",
+  "description": "Vue components for mejiro vertical text rendering",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "libraz",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/libraz/mejiro.git",
+    "directory": "packages/mejiro-vue"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
+  "dependencies": {
+    "@libraz/mejiro": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": ">=3.3"
+  },
+  "devDependencies": {
+    "vue": "^3.5.0"
+  }
+}
