@@ -6,5 +6,10 @@ export default defineConfig({
     benchmark: {
       include: ['packages/*/bench/**/*.bench.ts'],
     },
+    coverage: {
+      provider: 'v8',
+      include: ['packages/mejiro/src/**'],
+      exclude: ['packages/mejiro/src/browser/**'],
+    },
   },
 });

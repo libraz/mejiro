@@ -1,15 +1,26 @@
 # mejiro
 
+[![CI](https://img.shields.io/github/actions/workflow/status/libraz/mejiro/ci.yml?branch=main&label=CI)](https://github.com/libraz/mejiro/actions)
+[![npm](https://img.shields.io/npm/v/@libraz/mejiro)](https://www.npmjs.com/package/@libraz/mejiro)
+[![codecov](https://codecov.io/gh/libraz/mejiro/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/mejiro)
+[![License](https://img.shields.io/github/license/libraz/mejiro)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
+
 Web向け日本語縦書き組版エンジン。改行処理、禁則処理、ぶら下げ組み、ルビ（振り仮名）前処理、ページネーションを提供します。コアエンジンはDOM非依存です。
 
 <p align="center">
   <img src="docs/images/wagahai.jpg" alt="mejiro デモ — 夏目漱石「吾輩は猫である」縦書き表示" width="640">
 </p>
 
+## インストール
+
 ```bash
 npm install @libraz/mejiro
+# or
 yarn add @libraz/mejiro
+# or
 pnpm add @libraz/mejiro
+# or
 bun add @libraz/mejiro
 ```
 
@@ -46,17 +57,18 @@ mejiroは、ブラウザでの日本語縦書きテキスト（`writing-mode: ve
 ## クイックスタート
 
 ```ts
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
+import { MejiroBrowser } from '@libraz/mejiro/browser';
 import { getLineRanges, paginate } from '@libraz/mejiro';
 
-const mejiro = new MejiroBrowser();
+const mejiro = new MejiroBrowser({
+  fixedFontFamily: '"Noto Serif JP"',
+  fixedFontSize: 16,
+});
 
-// 1. テキストをレイアウト
+// 1. テキストをレイアウト（fontFamily/fontSizeはインスタンスのデフォルトを使用）
 const result = await mejiro.layout({
   text: '吾輩は猫である。名前はまだ無い。',
-  fontFamily: '"Noto Serif JP"',
-  fontSize: 16,
-  lineWidth: verticalLineWidth(600, 16), // コンテナ高さ, フォントサイズ
+  lineWidth: mejiro.verticalLineWidth(600), // コンテナ高さからfontSizeを自動適用
 });
 
 // 2. 行範囲を取得
@@ -72,25 +84,26 @@ const pages = paginate(400, [
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
+import { MejiroBrowser } from '@libraz/mejiro/browser';
 import { paginate } from '@libraz/mejiro';
 import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
 import type { RenderEntry } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
 
-const mejiro = new MejiroBrowser();
+const mejiro = new MejiroBrowser({
+  fixedFontFamily: '"Noto Serif JP"',
+  fixedFontSize: 16,
+});
 const book = await parseEpub(epubArrayBuffer);
 const chapter = book.chapters[0];
 
-// 1. 全段落を一括レイアウト
+// 1. 全段落を一括レイアウト（fontFamily/fontSizeはインスタンスのデフォルトを使用）
 const result = await mejiro.layoutChapter({
   paragraphs: chapter.paragraphs.map((p) => ({
     text: p.text,
     rubyAnnotations: p.rubyAnnotations,
   })),
-  fontFamily: '"Noto Serif JP"',
-  fontSize: 16,
-  lineWidth: verticalLineWidth(600, 16),
+  lineWidth: mejiro.verticalLineWidth(600),
 });
 
 // 2. レンダーエントリを構築
@@ -181,7 +194,8 @@ const renderPage = buildRenderPage(pages[0], entries);
 | `MejiroBrowser` | メインクラス。フォント読み込み・幅キャッシュ・レイアウト計算を管理。 |
 | `MejiroBrowser.layout(options): Promise<BreakResult>` | 単一段落のレイアウト: フォント読み込み→文字計測→改行計算。 |
 | `MejiroBrowser.layoutChapter(options): Promise<ChapterLayoutResult>` | 複数段落の一括レイアウト。段落ごとのフォント指定（見出し等）に対応。 |
-| `MejiroBrowser.preloadFont(fontFamily, fontSize): Promise<void>` | フォントを事前読み込み。 |
+| `MejiroBrowser.preloadFont(fontFamily?, fontSize?): Promise<void>` | フォントを事前読み込み。省略時はインスタンスのデフォルトを使用。 |
+| `MejiroBrowser.verticalLineWidth(containerHeight, fontSize?): number` | 縦書きテキスト用の有効行幅を計算。fontSizeはインスタンスのデフォルトにフォールバック。 |
 | `MejiroBrowser.clearCache(fontKey?): void` | 幅計測キャッシュをクリア。 |
 | `layoutText(options): Promise<BreakResult>` | スタンドアロンの単発レイアウト関数（内部で計測器を生成）。 |
 | `verticalLineWidth(containerHeight, fontSize): number` | 縦書きテキスト用の有効行幅を計算。CSS縦書きとCanvas計測の差異を補正。 |
@@ -202,7 +216,7 @@ const renderPage = buildRenderPage(pages[0], entries);
 |---|---|
 | `MejiroBrowserOptions` | コンストラクタオプション: fixedFontFamily, fixedFontSize, strictFontCheck。 |
 | `LayoutOptions` | 段落レイアウトオプション: text, fontFamily, fontSize, lineWidth, mode, enableHanging, rubyAnnotations。 |
-| `ChapterLayoutOptions` | 一括レイアウトオプション: paragraphs, fontFamily, fontSize, lineWidth, mode, enableHanging。 |
+| `ChapterLayoutOptions` | 一括レイアウトオプション: paragraphs, fontFamily?, fontSize?, lineWidth, mode, enableHanging。fontFamily/fontSizeはインスタンスのデフォルトにフォールバック。 |
 | `ChapterLayoutResult` | 段落ごとの`ParagraphLayoutResult`を含む結果。 |
 | `ParagraphLayoutResult` | 段落ごとの結果: breakResult, chars。 |
 | `ParagraphInput` | レイアウト対象の段落: text, rubyAnnotations, fontFamily/fontSize指定（任意）。 |

@@ -3,8 +3,24 @@ name: CI
 on:
   push:
     branches: [main]
+    tags-ignore:
+      - 'v*.*.*'
+    paths:
+      - 'packages/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'packages/**'
+      - 'package.json'
+      - 'yarn.lock'
+      - 'tsconfig.json'
+      - 'vitest.config.ts'
+      - '.github/workflows/ci.yml'
 
 jobs:
   test:
@@ -12,22 +28,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: volta-cli/action@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-      - name: Install dependencies
-        run: yarn install --immutable
+      - run: corepack enable
+      - run: corepack prepare yarn@4.12.0 --activate
 
-      - name: Lint
-        run: yarn lint
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
 
-      - name: Type check
-        run: yarn typecheck
+      - run: yarn install --immutable
+      - run: yarn lint
+      - run: yarn typecheck
+      - run: yarn build
+      - run: yarn test --run --coverage
 
-      - name: Build
-        run: yarn build
-
-      - name: Test
-        run: yarn test --run
-
-      - name: Benchmark
-        run: yarn bench
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

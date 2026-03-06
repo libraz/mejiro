@@ -44,10 +44,10 @@ export interface ParagraphInput {
 export interface ChapterLayoutOptions {
   /** Paragraphs to lay out. */
   paragraphs: ParagraphInput[];
-  /** CSS font family for body text (e.g. '"Noto Serif JP"'). */
-  fontFamily: string;
-  /** Font size in pixels for body text. */
-  fontSize: number;
+  /** CSS font family for body text. Falls back to MejiroBrowser's fixedFontFamily. */
+  fontFamily?: string;
+  /** Font size in pixels for body text. Falls back to MejiroBrowser's fixedFontSize. */
+  fontSize?: number;
   /** Available line width in pixels (use `verticalLineWidth()` for vertical text). */
   lineWidth: number;
   /** Kinsoku mode. @defaultValue 'strict' */

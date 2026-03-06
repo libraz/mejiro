@@ -1,0 +1,82 @@
+name: Publish and Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org/'
+
+      - run: corepack enable
+      - run: corepack prepare yarn@4.12.0 --activate
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            .yarn/cache
+            node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - run: yarn install --immutable
+      - run: yarn lint
+      - run: yarn typecheck
+      - run: yarn build
+      - run: yarn test --run
+
+      - name: Prepare packages for publish
+        run: |
+          cp LICENSE packages/mejiro/
+          cp LICENSE packages/mejiro-react/
+          cp LICENSE packages/mejiro-vue/
+
+          # Replace workspace:* dependencies with actual version
+          MEJIRO_VERSION=$(node -p "require('./packages/mejiro/package.json').version")
+          for pkg in packages/mejiro-react packages/mejiro-vue; do
+            jq --arg v "^${MEJIRO_VERSION}" '
+              .dependencies |= with_entries(
+                if .value == "workspace:*" then .value = $v else . end
+              )
+            ' "${pkg}/package.json" > "${pkg}/package.json.tmp"
+            mv "${pkg}/package.json.tmp" "${pkg}/package.json"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Release ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body: |
+            Automated release for ${{ github.ref_name }}.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish in dependency order: core first, then framework packages
+      - name: Publish @libraz/mejiro
+        working-directory: packages/mejiro
+        run: npm publish --access public --provenance
+
+      - name: Wait for registry propagation
+        run: sleep 15
+
+      - name: Publish @libraz/mejiro-react
+        working-directory: packages/mejiro-react
+        run: npm publish --access public --provenance
+
+      - name: Publish @libraz/mejiro-vue
+        working-directory: packages/mejiro-vue
+        run: npm publish --access public --provenance

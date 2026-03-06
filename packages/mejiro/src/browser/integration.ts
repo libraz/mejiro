@@ -167,8 +167,12 @@ export class MejiroBrowser {
    * @param fontFamily - CSS font family to preload.
    * @param fontSize - Font size in pixels (used for the font loading check).
    */
-  async preloadFont(fontFamily: string, fontSize: number): Promise<void> {
-    await this.fontLoader.ensureLoaded(toFontSpec(fontFamily, fontSize));
+  async preloadFont(fontFamily?: string, fontSize?: number): Promise<void> {
+    const family = fontFamily ?? this.options.fixedFontFamily;
+    const size = fontSize ?? this.options.fixedFontSize;
+    if (!family) throw new Error('fontFamily must be specified');
+    if (!size) throw new Error('fontSize must be specified');
+    await this.fontLoader.ensureLoaded(toFontSpec(family, size));
   }
 
   /**
@@ -181,7 +185,11 @@ export class MejiroBrowser {
    * @returns Per-paragraph layout results with break points and character arrays.
    */
   async layoutChapter(options: ChapterLayoutOptions): Promise<ChapterLayoutResult> {
-    const { paragraphs: inputs, fontFamily, fontSize, lineWidth, mode, enableHanging } = options;
+    const fontFamily = options.fontFamily ?? this.options.fixedFontFamily;
+    const fontSize = options.fontSize ?? this.options.fixedFontSize;
+    if (!fontFamily) throw new Error('fontFamily must be specified');
+    if (!fontSize) throw new Error('fontSize must be specified');
+    const { paragraphs: inputs, lineWidth, mode, enableHanging } = options;
 
     const results: ChapterLayoutResult['paragraphs'] = [];
     for (const para of inputs) {
@@ -198,6 +206,20 @@ export class MejiroBrowser {
     }
 
     return { paragraphs: results };
+  }
+
+  /**
+   * Computes the effective line width for vertical text layout.
+   * Uses the instance's fixedFontSize unless overridden.
+   *
+   * @param containerHeight - Available height in pixels.
+   * @param fontSize - Font size override in pixels.
+   * @returns Effective line width for the line breaking algorithm.
+   */
+  verticalLineWidth(containerHeight: number, fontSize?: number): number {
+    const size = fontSize ?? this.options.fixedFontSize;
+    if (!size) throw new Error('fontSize must be specified');
+    return verticalLineWidth(containerHeight, size);
   }
 
   /**
