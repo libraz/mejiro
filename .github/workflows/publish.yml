@@ -18,8 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          registry-url: 'https://registry.npmjs.org/'
 
+      - run: npm install -g npm@latest
       - run: corepack enable
       - run: corepack prepare yarn@4.12.0 --activate
 
@@ -68,15 +68,15 @@ jobs:
       # Publish in dependency order: core first, then framework packages
       - name: Publish @libraz/mejiro
         working-directory: packages/mejiro
-        run: npm publish --access public --provenance
+        run: npm publish --access public
 
       - name: Wait for registry propagation
         run: sleep 15
 
       - name: Publish @libraz/mejiro-react
         working-directory: packages/mejiro-react
-        run: npm publish --access public --provenance
+        run: npm publish --access public
 
       - name: Publish @libraz/mejiro-vue
         working-directory: packages/mejiro-vue
-        run: npm publish --access public --provenance
+        run: npm publish --access public
