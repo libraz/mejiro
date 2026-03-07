@@ -1,5 +1,6 @@
 import { computeBreaks } from '../layout.js';
 import type { RubyAnnotation } from '../ruby.js';
+import { toCodepoints } from '../text.js';
 import type { BreakResult } from '../types.js';
 import { FontLoader } from './font-loader.js';
 import { CharMeasurer, deriveRubyFont } from './measure.js';
@@ -39,16 +40,6 @@ export function verticalLineWidth(containerHeight: number, fontSize: number): nu
   return containerHeight - fontSize * VERTICAL_SAFETY_RATIO;
 }
 
-/** Converts a string to a Uint32Array of Unicode codepoints. */
-function textToCodepoints(text: string): Uint32Array {
-  const codepoints: number[] = [];
-  for (const char of text) {
-    const cp = char.codePointAt(0);
-    if (cp !== undefined) codepoints.push(cp);
-  }
-  return new Uint32Array(codepoints);
-}
-
 /**
  * Converts string-based ruby annotations to core RubyAnnotation format
  * by measuring ruby text advances.
@@ -59,7 +50,7 @@ function buildRubyAnnotations(
   measurer: CharMeasurer,
 ): RubyAnnotation[] {
   return annotations.map((ann) => {
-    const rubyCps = textToCodepoints(ann.rubyText);
+    const rubyCps = toCodepoints(ann.rubyText);
     const rubyAdvances = measurer.measureAll(rubyFontSpec, rubyCps);
     return {
       startIndex: ann.startIndex,
@@ -90,7 +81,7 @@ export async function layoutText(options: {
   await loader.ensureLoaded(fontSpec);
 
   const measurer = new CharMeasurer();
-  const codepoints = textToCodepoints(options.text);
+  const codepoints = toCodepoints(options.text);
   const advances = measurer.measureAll(fontSpec, codepoints);
 
   let rubyAnnotations: RubyAnnotation[] | undefined;
@@ -142,7 +133,7 @@ export class MejiroBrowser {
       throw new Error(`Font not available (possible fallback): ${fontSpec}`);
     }
 
-    const codepoints = textToCodepoints(options.text);
+    const codepoints = toCodepoints(options.text);
     const advances = this.measurer.measureAll(fontSpec, codepoints);
 
     let rubyAnnotations: RubyAnnotation[] | undefined;
@@ -159,6 +150,7 @@ export class MejiroBrowser {
       mode: options.mode,
       enableHanging: options.enableHanging,
       rubyAnnotations,
+      tokenBoundaries: options.tokenBoundaries,
     });
   }
 
@@ -201,6 +193,7 @@ export class MejiroBrowser {
         mode,
         enableHanging,
         rubyAnnotations: para.rubyAnnotations?.length ? para.rubyAnnotations : undefined,
+        tokenBoundaries: para.tokenBoundaries,
       });
       results.push({ breakResult, chars: [...para.text] });
     }

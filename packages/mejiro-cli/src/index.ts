@@ -1,4 +1,4 @@
-import { computeBreaks } from '@libraz/mejiro';
+import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -47,7 +47,7 @@ function runLayout(args: string[]): void {
     process.exit(1);
   }
 
-  const codepoints = textToCodepoints(text);
+  const codepoints = toCodepoints(text);
   const advances = new Float32Array(codepoints.length).fill(advance);
 
   const result = computeBreaks({
@@ -101,15 +101,6 @@ function runBench(args: string[]): void {
   process.stdout.write(`${numChars} chars x ${iterations} iterations\n`);
   process.stdout.write(`Total: ${elapsed.toFixed(2)}ms\n`);
   process.stdout.write(`Per iteration: ${(elapsed / iterations).toFixed(4)}ms\n`);
-}
-
-function textToCodepoints(str: string): Uint32Array {
-  const cps: number[] = [];
-  for (const ch of str) {
-    const cp = ch.codePointAt(0);
-    if (cp !== undefined) cps.push(cp);
-  }
-  return new Uint32Array(cps);
 }
 
 function codepointsToString(cps: Uint32Array, start: number, end: number): string {

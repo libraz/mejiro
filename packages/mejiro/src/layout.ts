@@ -2,7 +2,7 @@ import { isClusterBreakAllowed } from './cluster.js';
 import { isHangingTarget } from './hanging.js';
 import { isLineEndProhibited, isLineStartProhibited } from './kinsoku.js';
 import { preprocessRuby } from './ruby.js';
-import type { BreakResult, KinsokuMode, LayoutInput } from './types.js';
+import type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
 
 /**
  * Computes line break positions for the given layout input.
@@ -14,8 +14,18 @@ import type { BreakResult, KinsokuMode, LayoutInput } from './types.js';
  * @returns Break points and optional hanging adjustments.
  */
 export function computeBreaks(input: LayoutInput): BreakResult {
-  const { text, lineWidth, enableHanging = true, mode = 'strict' } = input;
+  const { text, lineWidth, enableHanging = true, mode = 'strict', kinsokuRules } = input;
   let { clusterIds } = input;
+
+  // Normalize tokenBoundaries: accept both Uint32Array and number[]
+  const rawBoundaries = input.tokenBoundaries;
+  const tokenBoundaries =
+    rawBoundaries && !(rawBoundaries instanceof Uint32Array)
+      ? new Uint32Array(rawBoundaries)
+      : rawBoundaries;
+
+  // Build token boundary lookup set for O(1) access
+  const tokenBoundarySet = tokenBoundaries?.length ? new Set<number>(tokenBoundaries) : undefined;
   const len = text.length;
 
   if (len === 0) {
@@ -54,17 +64,38 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         continue;
       }
 
-      // Search backwards for a valid break position
+      // Search backwards for a valid break position.
+      // When token boundaries are provided, prefer breaking at token edges.
       let breakPos = i - 1;
-      while (breakPos > lineStart) {
-        if (canBreakAt(text, breakPos, clusterIds, mode)) {
-          break;
+      let fallbackPos = -1;
+      if (tokenBoundarySet) {
+        while (breakPos > lineStart) {
+          if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
+            if (tokenBoundarySet.has(breakPos)) break;
+            if (fallbackPos < 0) fallbackPos = breakPos;
+          }
+          breakPos--;
         }
-        breakPos--;
+        // No token boundary found — use first kinsoku-valid position
+        if (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
+          breakPos = fallbackPos;
+        } else if (breakPos === lineStart && !tokenBoundarySet.has(breakPos) && fallbackPos >= 0) {
+          breakPos = fallbackPos;
+        }
+      } else {
+        while (breakPos > lineStart) {
+          if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
+            break;
+          }
+          breakPos--;
+        }
       }
 
       // Force break if no valid candidate was found
-      if (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode)) {
+      if (
+        breakPos < 0 ||
+        (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules))
+      ) {
         breakPos = i - 1;
       }
 
@@ -94,6 +125,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
  * @param pos - Position to check (break would occur after this index).
  * @param clusterIds - Optional cluster IDs for indivisible units.
  * @param mode - Kinsoku mode.
+ * @param rules - Optional custom kinsoku rules.
  * @returns `true` if a break is allowed at this position.
  */
 export function canBreakAt(
@@ -101,17 +133,18 @@ export function canBreakAt(
   pos: number,
   clusterIds?: Uint32Array,
   mode: KinsokuMode = 'strict',
+  rules?: KinsokuRules,
 ): boolean {
   // Cannot break within a cluster
   if (!isClusterBreakAllowed(clusterIds, pos, text.length)) {
     return false;
   }
   // Line-end prohibition: cannot break if current char is prohibited at line end
-  if (isLineEndProhibited(text[pos])) {
+  if (isLineEndProhibited(text[pos], rules)) {
     return false;
   }
   // Line-start prohibition: cannot break if next char is prohibited at line start
-  if (pos + 1 < text.length && isLineStartProhibited(text[pos + 1], mode)) {
+  if (pos + 1 < text.length && isLineStartProhibited(text[pos + 1], mode, rules)) {
     return false;
   }
   return true;

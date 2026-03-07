@@ -36,6 +36,11 @@ export interface ParagraphInput {
   fontFamily?: string;
   /** Font size override in pixels for this paragraph (e.g. for headings). */
   fontSize?: number;
+  /**
+   * Token boundary indices for morphological-aware line breaking.
+   * @see {@link LayoutInput.tokenBoundaries}
+   */
+  tokenBoundaries?: Uint32Array | readonly number[];
 }
 
 /**
@@ -92,6 +97,11 @@ export interface LayoutOptions {
   enableHanging?: boolean;
   /** Ruby annotations for furigana support. */
   rubyAnnotations?: RubyInputAnnotation[];
+  /**
+   * Token boundary indices for morphological-aware line breaking.
+   * @see {@link LayoutInput.tokenBoundaries}
+   */
+  tokenBoundaries?: Uint32Array | readonly number[];
 }
 
 /**

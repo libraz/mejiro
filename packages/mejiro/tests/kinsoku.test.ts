@@ -1,14 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
+  buildKinsokuRules,
   getDefaultKinsokuRules,
   isLineEndProhibited,
   isLineStartProhibited,
-  setKinsokuRules,
 } from '../src/kinsoku.js';
-
-afterEach(() => {
-  setKinsokuRules(null);
-});
 
 describe('isLineStartProhibited', () => {
   it('prohibits closing brackets in strict mode', () => {
@@ -36,6 +32,16 @@ describe('isLineStartProhibited', () => {
     expect(isLineStartProhibited(0x3042, 'strict')).toBe(false); // あ
     expect(isLineStartProhibited(0x6f22, 'strict')).toBe(false); // 漢
   });
+
+  it('uses custom rules when provided', () => {
+    const rules = buildKinsokuRules({
+      lineStartProhibited: [0x0041], // 'A'
+      lineEndProhibited: [0x0042], // 'B'
+    });
+    expect(isLineStartProhibited(0x0041, 'strict', rules)).toBe(true);
+    // Original rules no longer apply when custom rules are passed
+    expect(isLineStartProhibited(0x3001, 'strict', rules)).toBe(false);
+  });
 });
 
 describe('isLineEndProhibited', () => {
@@ -47,30 +53,33 @@ describe('isLineEndProhibited', () => {
   it('allows regular characters', () => {
     expect(isLineEndProhibited(0x3042)).toBe(false); // あ
   });
-});
 
-describe('setKinsokuRules / getDefaultKinsokuRules', () => {
-  it('can set custom rules', () => {
-    setKinsokuRules({
-      lineStartProhibited: [0x0041], // 'A'
+  it('uses custom rules when provided', () => {
+    const rules = buildKinsokuRules({
+      lineStartProhibited: [0x0041],
       lineEndProhibited: [0x0042], // 'B'
     });
-    expect(isLineStartProhibited(0x0041)).toBe(true);
-    expect(isLineEndProhibited(0x0042)).toBe(true);
+    expect(isLineEndProhibited(0x0042, rules)).toBe(true);
     // Original rules no longer apply
-    expect(isLineStartProhibited(0x3001)).toBe(false);
+    expect(isLineEndProhibited(0x300c, rules)).toBe(false);
   });
+});
 
-  it('can reset to defaults by passing null', () => {
-    setKinsokuRules({ lineStartProhibited: [0x0041], lineEndProhibited: [] });
-    setKinsokuRules(null);
-    expect(isLineStartProhibited(0x0041)).toBe(false);
-    expect(isLineStartProhibited(0x3001)).toBe(true);
-  });
-
-  it('returns default rules', () => {
+describe('getDefaultKinsokuRules / buildKinsokuRules', () => {
+  it('returns default rules with lookup sets', () => {
     const rules = getDefaultKinsokuRules();
     expect(rules.lineStartProhibited).toContain(0x3001);
     expect(rules.lineEndProhibited).toContain(0x300c);
+    expect(rules.lineStartProhibitedSet.has(0x3001)).toBe(true);
+    expect(rules.lineEndProhibitedSet.has(0x300c)).toBe(true);
+  });
+
+  it('buildKinsokuRules creates rules with sets', () => {
+    const rules = buildKinsokuRules({
+      lineStartProhibited: [0x0041],
+      lineEndProhibited: [0x0042],
+    });
+    expect(rules.lineStartProhibitedSet.has(0x0041)).toBe(true);
+    expect(rules.lineEndProhibitedSet.has(0x0042)).toBe(true);
   });
 });

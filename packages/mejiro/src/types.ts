@@ -18,6 +18,15 @@ export interface LayoutInput {
   clusterIds?: Uint32Array;
   /** Ruby annotations for furigana support. */
   rubyAnnotations?: RubyAnnotation[];
+  /**
+   * Sorted array of codepoint indices representing token boundaries.
+   * Each value is the index of the last codepoint in a token.
+   * The algorithm prefers breaking at these positions over mid-token positions.
+   * Use {@link tokenLengthsToBoundaries} to convert morphological analyzer output.
+   */
+  tokenBoundaries?: Uint32Array | readonly number[];
+  /** Custom kinsoku rules. When provided, overrides the default rules. */
+  kinsokuRules?: KinsokuRules;
 }
 
 /**
@@ -41,10 +50,16 @@ export type KinsokuMode = 'strict' | 'loose';
 
 /**
  * Custom kinsoku (line break prohibition) rules.
+ *
+ * Use {@link buildKinsokuRules} to create an instance from raw codepoint arrays.
  */
 export interface KinsokuRules {
   /** Codepoints prohibited at the start of a line. */
   lineStartProhibited: number[];
   /** Codepoints prohibited at the end of a line. */
   lineEndProhibited: number[];
+  /** Pre-computed lookup set for lineStartProhibited. */
+  lineStartProhibitedSet: Set<number>;
+  /** Pre-computed lookup set for lineEndProhibited. */
+  lineEndProhibitedSet: Set<number>;
 }

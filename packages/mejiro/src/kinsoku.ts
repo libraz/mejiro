@@ -92,16 +92,18 @@ const LINE_END_PROHIBITED = new Set([
   0x3010, // 【
 ]);
 
-let customLineStartSet: Set<number> | null = null;
-let customLineEndSet: Set<number> | null = null;
-
 /**
  * Returns whether the given codepoint is prohibited at the start of a line.
  * @param codepoint - Unicode codepoint to check.
  * @param mode - Kinsoku mode. Defaults to 'strict'.
+ * @param rules - Optional custom kinsoku rules. When provided, mode is ignored.
  */
-export function isLineStartProhibited(codepoint: number, mode: KinsokuMode = 'strict'): boolean {
-  if (customLineStartSet) return customLineStartSet.has(codepoint);
+export function isLineStartProhibited(
+  codepoint: number,
+  mode: KinsokuMode = 'strict',
+  rules?: KinsokuRules,
+): boolean {
+  if (rules) return rules.lineStartProhibitedSet.has(codepoint);
   if (!STRICT_LINE_START_PROHIBITED.has(codepoint)) return false;
   if (mode === 'loose' && LOOSE_LINE_START_EXCLUSIONS.has(codepoint)) return false;
   return true;
@@ -110,33 +112,35 @@ export function isLineStartProhibited(codepoint: number, mode: KinsokuMode = 'st
 /**
  * Returns whether the given codepoint is prohibited at the end of a line.
  * @param codepoint - Unicode codepoint to check.
+ * @param rules - Optional custom kinsoku rules. When provided, uses rules instead of defaults.
  */
-export function isLineEndProhibited(codepoint: number): boolean {
-  if (customLineEndSet) return customLineEndSet.has(codepoint);
+export function isLineEndProhibited(codepoint: number, rules?: KinsokuRules): boolean {
+  if (rules) return rules.lineEndProhibitedSet.has(codepoint);
   return LINE_END_PROHIBITED.has(codepoint);
-}
-
-/**
- * Replaces the active kinsoku rules with custom ones.
- * Pass `null` to restore defaults.
- * @param rules - Custom kinsoku rules to apply, or null to reset.
- */
-export function setKinsokuRules(rules: KinsokuRules | null): void {
-  if (rules === null) {
-    customLineStartSet = null;
-    customLineEndSet = null;
-  } else {
-    customLineStartSet = new Set(rules.lineStartProhibited);
-    customLineEndSet = new Set(rules.lineEndProhibited);
-  }
 }
 
 /**
  * Returns a copy of the default strict kinsoku rules.
  */
 export function getDefaultKinsokuRules(): KinsokuRules {
-  return {
+  return buildKinsokuRules({
     lineStartProhibited: [...STRICT_LINE_START_PROHIBITED],
     lineEndProhibited: [...LINE_END_PROHIBITED],
+  });
+}
+
+/**
+ * Builds a KinsokuRules object with pre-computed lookup sets from raw codepoint arrays.
+ * @param raw - Object with lineStartProhibited and lineEndProhibited codepoint arrays.
+ * @returns KinsokuRules with both the raw arrays and pre-computed sets.
+ */
+export function buildKinsokuRules(raw: {
+  lineStartProhibited: number[];
+  lineEndProhibited: number[];
+}): KinsokuRules {
+  return {
+    ...raw,
+    lineStartProhibitedSet: new Set(raw.lineStartProhibited),
+    lineEndProhibitedSet: new Set(raw.lineEndProhibited),
   };
 }

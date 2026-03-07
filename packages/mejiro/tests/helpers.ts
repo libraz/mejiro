@@ -1,14 +1,4 @@
-/**
- * Converts a string to a Uint32Array of Unicode codepoints.
- */
-export function toCodepoints(str: string): Uint32Array {
-  const cps: number[] = [];
-  for (const ch of str) {
-    const cp = ch.codePointAt(0);
-    if (cp !== undefined) cps.push(cp);
-  }
-  return new Uint32Array(cps);
-}
+export { toCodepoints } from '../src/text.js';
 
 /**
  * Creates a Float32Array of uniform advances.
