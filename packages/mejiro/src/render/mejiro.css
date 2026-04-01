@@ -14,6 +14,7 @@
   margin-left: 0;
 }
 
+/* Heading defaults — applies to all heading levels unless overridden */
 .mejiro-paragraph--heading {
   font-weight: 700;
   font-size: 1.4em;
@@ -22,6 +23,67 @@
 
 .mejiro-paragraph--heading + .mejiro-paragraph {
   margin-left: 1.2em;
+}
+
+/* Per-level heading styles */
+.mejiro-paragraph--h1 {
+  font-weight: 700;
+  font-size: 1.6em;
+  height: 100%;
+}
+
+.mejiro-paragraph--h1 + .mejiro-paragraph {
+  margin-left: 1.4em;
+}
+
+.mejiro-paragraph--h2 {
+  font-weight: 700;
+  font-size: 1.4em;
+  height: 100%;
+}
+
+.mejiro-paragraph--h2 + .mejiro-paragraph {
+  margin-left: 1.2em;
+}
+
+.mejiro-paragraph--h3 {
+  font-weight: 700;
+  font-size: 1.2em;
+  height: 100%;
+}
+
+.mejiro-paragraph--h3 + .mejiro-paragraph {
+  margin-left: 1em;
+}
+
+.mejiro-paragraph--h4 {
+  font-weight: 700;
+  font-size: 1.1em;
+  height: 100%;
+}
+
+.mejiro-paragraph--h4 + .mejiro-paragraph {
+  margin-left: 0.8em;
+}
+
+.mejiro-paragraph--h5 {
+  font-weight: 700;
+  font-size: 1em;
+  height: 100%;
+}
+
+.mejiro-paragraph--h5 + .mejiro-paragraph {
+  margin-left: 0.6em;
+}
+
+.mejiro-paragraph--h6 {
+  font-weight: 700;
+  font-size: 1em;
+  height: 100%;
+}
+
+.mejiro-paragraph--h6 + .mejiro-paragraph {
+  margin-left: 0.6em;
 }
 
 .mejiro-page ruby {

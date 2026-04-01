@@ -37,9 +37,12 @@ export const MejiroPage = defineComponent({
   setup(props) {
     return () => {
       const children = props.page.paragraphs.map((paragraph, pi) => {
-        const paraClass = paragraph.isHeading
-          ? 'mejiro-paragraph mejiro-paragraph--heading'
-          : 'mejiro-paragraph';
+        let paraClass = 'mejiro-paragraph';
+        if (paragraph.headingLevel != null) {
+          paraClass += ` mejiro-paragraph--h${paragraph.headingLevel}`;
+        } else if (paragraph.isHeading) {
+          paraClass += ' mejiro-paragraph--heading';
+        }
 
         const lineNodes = paragraph.lines.flatMap((line, li) => renderLine(line, li));
 

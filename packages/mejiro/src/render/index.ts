@@ -1,7 +1,16 @@
-export type { MeasureOptions } from './measures.js';
-export { buildParagraphMeasures } from './measures.js';
+export type { HeadingStyle, MeasureOptions } from './measures.js';
+export {
+  adjustExclusionSlots,
+  buildColumnSlots,
+  buildLineMetrics,
+  buildParagraphMeasures,
+  getImageXOffset,
+  packPageLines,
+} from './measures.js';
 export { buildRenderPage } from './page.js';
 export type {
+  LineMetric,
+  LineMetricsResult,
   RenderEntry,
   RenderLine,
   RenderPage,

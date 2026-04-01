@@ -254,6 +254,136 @@ function renderToString(page: RenderPage): string {
 
 ---
 
+## 6. Image Exclusion (Text Wrapping)
+
+mejiro supports flowing text around arbitrary rectangular obstacles (images, figures, etc.) via the `ExclusionEngine` class.
+
+### Basic Usage
+
+```ts
+import { ExclusionEngine, computeBreaks, toCodepoints } from '@libraz/mejiro';
+
+const engine = new ExclusionEngine({
+  lineWidth: 600,     // Column height (px)
+  lineCount: 12,      // Number of columns
+  linePitch: 30.4,    // fontSize × lineHeight
+  contentWidth: 380,  // Available width for columns (px)
+});
+
+// Add images (content-area coordinates)
+engine.addImage({ x: 100, y: 50, w: 120, h: 160 });
+engine.addImage({ x: 50, y: 300, w: 80, h: 100 });
+
+// Compute column slots and line widths
+const { slots, lineWidths } = engine.compute();
+
+// Pass lineWidths to the layout engine
+const text = toCodepoints('...');
+const advances = new Float32Array(text.length).fill(16);
+const result = computeBreaks({
+  text,
+  advances,
+  lineWidth: 600,
+  lineWidths,   // Per-column widths from ExclusionEngine
+});
+
+// Render each column at slots[i].xPos, slots[i].yStart
+// with height = slots[i].height
+```
+
+### How It Works
+
+1. For each column, the engine collects all image regions that overlap it horizontally.
+2. Overlapping regions are merged into non-overlapping intervals.
+3. The largest contiguous gap (not occupied by any image) becomes the available text area for that column.
+4. The gap's height becomes the effective `lineWidth` for that column, and its vertical position (`yStart`) indicates where to render the text.
+
+### Coordinate System (Vertical Writing)
+
+In `writing-mode: vertical-rl`:
+- **Block direction** = horizontal (columns flow right-to-left)
+- **Inline direction** = vertical (text flows top-to-bottom)
+- `ImageRect.x` / `.w` correspond to the block axis
+- `ImageRect.y` / `.h` correspond to the inline axis
+- Coordinates are relative to the **content area** origin (after padding)
+
+### Dynamic Updates
+
+`ExclusionEngine` is designed for interactive use (e.g., drag-and-drop image placement):
+
+```ts
+const engine = new ExclusionEngine(geometry);
+const img = { x: 100, y: 50, w: 120, h: 160 };
+engine.addImage(img);
+
+// On drag: update coordinates and recompute
+img.x = 150;
+img.y = 80;
+const { slots, lineWidths } = engine.compute(); // Sub-millisecond
+
+// On resize
+engine.setGeometry({ ...geometry, lineWidth: 500 });
+engine.compute();
+
+// Remove an image
+engine.removeImage(img);
+```
+
+### Spread Layout (Two-Page Flow)
+
+For book-style layouts where text flows across a two-page spread, use `SpreadExclusionEngine`. It handles gutter (spine padding) coordinate conversion automatically:
+
+```ts
+import { SpreadExclusionEngine, computeBreaks } from '@libraz/mejiro';
+
+const spread = new SpreadExclusionEngine({
+  pageWidth: 537,
+  pagePaddingX: 52,    // Inner + outer padding
+  pagePaddingY: 56,
+  lineWidth: 676,
+  linePitch: 30.4,
+});
+
+// Images are positioned relative to the right page's top-left corner.
+// Negative x values automatically map to the left page with gutter offset.
+spread.addImage({ x: 200, y: 100, w: 120, h: 160, inlineMargin: 16 });
+spread.addImage({ x: -100, y: 300, w: 80, h: 100 }); // left page
+
+const { rightSlots, leftSlots, lineWidths, rightSlotCount } = spread.compute();
+
+// One computeBreaks call for the entire spread
+const result = computeBreaks({ text, advances, lineWidth: 676, lineWidths });
+
+// Split lines for rendering:
+// Lines 0..rightSlotCount-1 → render on right page using rightSlots
+// Lines rightSlotCount..     → render on left page using leftSlots
+```
+
+Key differences from `ExclusionEngine`:
+- **Automatic gutter handling** — No manual coordinate conversion needed
+- **Continuous text flow** — Single `lineWidths` array spans both pages
+- **Split rendering** — `rightSlotCount` tells you where to split lines between pages
+
+### One-Shot Convenience Function
+
+For static layouts where images don't change, use `computeExclusionSlots()`:
+
+```ts
+import { computeExclusionSlots, computeBreaks } from '@libraz/mejiro';
+
+const { slots, lineWidths } = computeExclusionSlots({
+  lineWidth: 600,
+  lineCount: 12,
+  linePitch: 30.4,
+  contentWidth: 380,
+  images: [
+    { x: 100, y: 50, w: 120, h: 160 },
+  ],
+});
+```
+
+---
+
 ## Related Documentation
 
 - [03-line-breaking.md](./03-line-breaking.md) -- Line breaking algorithm, kinsoku modes, hanging punctuation

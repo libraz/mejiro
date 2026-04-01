@@ -6,7 +6,7 @@
 [![License](https://img.shields.io/github/license/libraz/mejiro)](https://github.com/libraz/mejiro/blob/main/LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-Web向け日本語縦書き組版エンジン。改行処理、禁則処理、ぶら下げ組み、ルビ（振り仮名）前処理、ページネーションを提供します。コアエンジンはDOM非依存です。
+Web向け日本語縦書き組版エンジン。改行処理、禁則処理、ぶら下げ組み、ルビ（振り仮名）前処理、画像除外（テキスト回り込み）、ページネーションを提供します。コアエンジンはDOM非依存です。
 
 <p align="center">
   <img src="docs/images/wagahai.jpg" alt="mejiro デモ — 夏目漱石「吾輩は猫である」縦書き表示" width="640">
@@ -23,7 +23,7 @@ npm install @libraz/mejiro   # or yarn / pnpm / bun
 mejiroは、ブラウザでの日本語縦書きテキスト（`writing-mode: vertical-rl`）レンダリングに必要な構成要素を提供します。コアエンジンはTypedArrayと純粋な数値計算で動作するため、高速・決定的・ポータブルです。ブラウザ固有の処理（フォント計測、Canvas API）は別サブパスに分離し、EPUB解析は第3のサブパスとして利用できます。
 
 ```
-@libraz/mejiro          コア: 改行・禁則・ぶら下げ・ルビ・ページネーション
+@libraz/mejiro          コア: 改行・禁則・ぶら下げ・ルビ・画像除外・ページネーション
 @libraz/mejiro/browser  ブラウザ: フォント計測・幅キャッシュ・レイアウト統合
 @libraz/mejiro/epub     EPUB: 解析・ルビ抽出
 @libraz/mejiro/render   レンダー: レイアウトデータ → フレームワーク非依存のページ構造 + CSS
@@ -127,7 +127,7 @@ const renderPage = buildRenderPage(pages[0], entries);
 
 | サブパス | 説明 |
 |---|---|
-| `@libraz/mejiro` | コア: `computeBreaks()`、`toCodepoints()`、禁則、ぶら下げ、ルビ、ページネーション |
+| `@libraz/mejiro` | コア: `computeBreaks()`、`ExclusionEngine`、`toCodepoints()`、禁則、ぶら下げ、ルビ、ページネーション |
 | `@libraz/mejiro/browser` | ブラウザ: `MejiroBrowser`クラス、フォント計測、幅キャッシュ |
 | `@libraz/mejiro/epub` | EPUB: `parseEpub()`、ルビ抽出 |
 | `@libraz/mejiro/render` | レンダー: `buildRenderPage()`、`buildParagraphMeasures()`、`mejiro.css` |
@@ -152,6 +152,7 @@ mejiroは2つのモードでこれを実装しています。
 - **TypedArrayベースのコア** — コードポイントに`Uint32Array`、アドバンスに`Float32Array`を使用。ホットパスでの文字列操作を排除。
 - **O(n)改行アルゴリズム** — 禁則バックトラック付きの単一パス貪欲法。動的計画法のオーバーヘッドなし。
 - **前処理としてのルビ** — ルビ注釈をメインループ前に実効アドバンスとクラスタIDに解決。改行アルゴリズム本体は変更不要。
+- **画像除外** — `ExclusionEngine` と `SpreadExclusionEngine` が任意配置の画像に対する列ごとのテキスト配置を計算。単一ページまたは見開き2ページにわたるノド自動処理とリアルタイムのドラッグ＆ドロップをサポート。
 - **決定的** — 同一入力に対して常に同一出力。
 - **関心の分離** — コアは純粋な計算（DOM・Canvas不要）。ブラウザ層が計測を担当。EPUB層が解析を担当。レンダー層がフレームワーク非依存のデータを生成。最終的なDOM出力は利用者の責務。
 

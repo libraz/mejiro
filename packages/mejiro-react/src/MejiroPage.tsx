@@ -46,9 +46,12 @@ export function MejiroPage({ page, className, style }: MejiroPageProps): ReactNo
   return (
     <div className={rootClass} style={style}>
       {page.paragraphs.map((paragraph, pi) => {
-        const paraClass = paragraph.isHeading
-          ? 'mejiro-paragraph mejiro-paragraph--heading'
-          : 'mejiro-paragraph';
+        let paraClass = 'mejiro-paragraph';
+        if (paragraph.headingLevel != null) {
+          paraClass += ` mejiro-paragraph--h${paragraph.headingLevel}`;
+        } else if (paragraph.isHeading) {
+          paraClass += ' mejiro-paragraph--heading';
+        }
 
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs have no stable ID

@@ -254,6 +254,136 @@ function renderToString(page: RenderPage): string {
 
 ---
 
+## 6. 画像除外（テキスト回り込み）
+
+mejiroは `ExclusionEngine` クラスにより、任意の矩形障害物（画像、図表など）の周りにテキストを流し込む機能をサポートしています。
+
+### 基本的な使い方
+
+```ts
+import { ExclusionEngine, computeBreaks, toCodepoints } from '@libraz/mejiro';
+
+const engine = new ExclusionEngine({
+  lineWidth: 600,     // 列の高さ（px）
+  lineCount: 12,      // 列数
+  linePitch: 30.4,    // fontSize × lineHeight
+  contentWidth: 380,  // 列に利用可能な幅（px）
+});
+
+// 画像を追加（コンテンツ領域座標系）
+engine.addImage({ x: 100, y: 50, w: 120, h: 160 });
+engine.addImage({ x: 50, y: 300, w: 80, h: 100 });
+
+// 列スロットと行幅を計算
+const { slots, lineWidths } = engine.compute();
+
+// lineWidthsをレイアウトエンジンに渡す
+const text = toCodepoints('...');
+const advances = new Float32Array(text.length).fill(16);
+const result = computeBreaks({
+  text,
+  advances,
+  lineWidth: 600,
+  lineWidths,   // ExclusionEngineからの列ごとの幅
+});
+
+// 各列を slots[i].xPos, slots[i].yStart の位置に
+// height = slots[i].height で描画
+```
+
+### 動作原理
+
+1. 各列について、水平方向に重なるすべての画像領域を収集する。
+2. 重なる領域をマージして非重複区間にする。
+3. 画像に占有されていない最大の連続ギャップが、その列のテキスト領域になる。
+4. ギャップの高さがその列の実効的な `lineWidth` となり、垂直位置（`yStart`）がテキストの描画開始位置を示す。
+
+### 座標系（縦書き）
+
+`writing-mode: vertical-rl` の場合:
+- **ブロック方向** = 水平（列は右から左に配置）
+- **インライン方向** = 垂直（テキストは上から下に流れる）
+- `ImageRect.x` / `.w` はブロック軸に対応
+- `ImageRect.y` / `.h` はインライン軸に対応
+- 座標は**コンテンツ領域**の原点（パディング後）からの相対値
+
+### 動的な更新
+
+`ExclusionEngine` はインタラクティブな用途（画像のドラッグ＆ドロップ配置など）向けに設計されています:
+
+```ts
+const engine = new ExclusionEngine(geometry);
+const img = { x: 100, y: 50, w: 120, h: 160 };
+engine.addImage(img);
+
+// ドラッグ時: 座標を更新して再計算
+img.x = 150;
+img.y = 80;
+const { slots, lineWidths } = engine.compute(); // サブミリ秒
+
+// リサイズ時
+engine.setGeometry({ ...geometry, lineWidth: 500 });
+engine.compute();
+
+// 画像の削除
+engine.removeImage(img);
+```
+
+### 見開きレイアウト（2ページフロー）
+
+テキストが見開き2ページにわたって流れる書籍スタイルのレイアウトには、`SpreadExclusionEngine` を使用します。ノド（背表紙側余白）の座標変換を自動で処理します:
+
+```ts
+import { SpreadExclusionEngine, computeBreaks } from '@libraz/mejiro';
+
+const spread = new SpreadExclusionEngine({
+  pageWidth: 537,
+  pagePaddingX: 52,    // ノド側+小口側パディング
+  pagePaddingY: 56,
+  lineWidth: 676,
+  linePitch: 30.4,
+});
+
+// 画像は右ページの左上を基準に配置。
+// 負のx値は自動的にノドのオフセットを考慮して左ページにマッピングされる。
+spread.addImage({ x: 200, y: 100, w: 120, h: 160, inlineMargin: 16 });
+spread.addImage({ x: -100, y: 300, w: 80, h: 100 }); // 左ページ
+
+const { rightSlots, leftSlots, lineWidths, rightSlotCount } = spread.compute();
+
+// 見開き全体で1回のcomputeBreaks呼び出し
+const result = computeBreaks({ text, advances, lineWidth: 676, lineWidths });
+
+// 行をページごとに分割してレンダリング:
+// 行 0..rightSlotCount-1 → rightSlotsを使って右ページに描画
+// 行 rightSlotCount..     → leftSlotsを使って左ページに描画
+```
+
+`ExclusionEngine` との主な違い:
+- **ノドの自動処理** — 手動の座標変換が不要
+- **連続テキストフロー** — 1つの `lineWidths` 配列が両ページにまたがる
+- **分割レンダリング** — `rightSlotCount` で行をページ間で分割
+
+### ワンショット便利関数
+
+画像が変化しない静的レイアウトには `computeExclusionSlots()` を使用:
+
+```ts
+import { computeExclusionSlots, computeBreaks } from '@libraz/mejiro';
+
+const { slots, lineWidths } = computeExclusionSlots({
+  lineWidth: 600,
+  lineCount: 12,
+  linePitch: 30.4,
+  contentWidth: 380,
+  images: [
+    { x: 100, y: 50, w: 120, h: 160 },
+  ],
+});
+```
+
+---
+
 ## 関連ドキュメント
 
 - [03-line-breaking.md](./03-line-breaking.md) -- 改行アルゴリズム、禁則モード、ぶら下げ組み

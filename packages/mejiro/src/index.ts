@@ -1,4 +1,19 @@
 export { isClusterBreakAllowed, resolveClusterBoundaries } from './cluster.js';
+export type {
+  ColumnSlot,
+  ExclusionPageGeometry,
+  ExclusionZone,
+  ImageRect,
+  SpreadExclusionResult,
+  SpreadGeometry,
+  SpreadImageRect,
+} from './exclusion.js';
+export {
+  computeExclusionSlots,
+  computeLineWidths,
+  ExclusionEngine,
+  SpreadExclusionEngine,
+} from './exclusion.js';
 export { computeHangingAdjustment, isHangingTarget } from './hanging.js';
 export {
   buildKinsokuRules,

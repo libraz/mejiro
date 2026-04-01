@@ -14,7 +14,7 @@ Web向け日本語縦書き組版エンジン — 改行処理、禁則処理、
 | 06 | [EPUB](06-epub.md) | EPUB解析とルビ抽出 |
 | 07 | [ページネーションとレンダリング](07-pagination-and-rendering.md) | paginate、buildRenderPage、CSS |
 | 08 | [ReactとVue](08-react-and-vue.md) | フレームワークコンポーネント |
-| 09 | [応用](09-advanced.md) | カスタム禁則、トークン境界、パフォーマンス |
+| 09 | [応用](09-advanced.md) | カスタム禁則、トークン境界、パフォーマンス、画像除外、見開きレイアウト |
 | 10 | [APIリファレンス](10-api-reference.md) | 完全なAPIリファレンス |
 
 ## 何を読むべきか
@@ -30,6 +30,9 @@ Web向け日本語縦書き組版エンジン — 改行処理、禁則処理、
 
 **ブラウザなしでコアエンジンを使いたい**
 → [コアコンセプト](02-core-concepts.md) → [応用](09-advanced.md)
+
+**画像の周りにテキストを流し込みたい**
+→ [応用](09-advanced.md) § 画像除外 → [APIリファレンス](10-api-reference.md)
 
 ---
 

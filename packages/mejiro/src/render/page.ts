@@ -91,7 +91,8 @@ export function buildRenderPage(slices: PageSlice[], entries: RenderEntry[]): Re
       });
     }
 
-    return { lines, isHeading: entry.isHeading };
+    const headingLevel = entry.headingLevel ?? (entry.isHeading ? 1 : undefined);
+    return { lines, isHeading: headingLevel != null, headingLevel };
   });
 
   return { paragraphs };

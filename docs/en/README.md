@@ -14,7 +14,7 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 | 06 | [EPUB](06-epub.md) | EPUB parsing and ruby extraction |
 | 07 | [Pagination & Rendering](07-pagination-and-rendering.md) | paginate, buildRenderPage, CSS |
 | 08 | [React & Vue](08-react-and-vue.md) | Framework components |
-| 09 | [Advanced](09-advanced.md) | Custom kinsoku, token boundaries, performance |
+| 09 | [Advanced](09-advanced.md) | Custom kinsoku, token boundaries, performance, image exclusion, spread layout |
 | 10 | [API Reference](10-api-reference.md) | Complete API reference |
 
 ## What Should I Read?
@@ -30,6 +30,9 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 
 **I want to use the core engine without a browser**
 → [Core Concepts](02-core-concepts.md) → [Advanced](09-advanced.md)
+
+**I want to flow text around images**
+→ [Advanced](09-advanced.md) § Image Exclusion → [API Reference](10-api-reference.md)
 
 ---
 

@@ -116,6 +116,46 @@ Converts break points into `[start, end)` character index pairs per line.
 
 Converts morphological analyzer token lengths to boundary indices for `LayoutInput.tokenBoundaries`.
 
+### Image Exclusion
+
+**`ExclusionEngine`** — Manages image exclusion zones for text layout:
+
+- `constructor(geometry: ExclusionPageGeometry)`
+- `setGeometry(geometry: ExclusionPageGeometry): void` — Update page geometry
+- `getGeometry(): Readonly<ExclusionPageGeometry>` — Get current geometry
+- `addImage(rect: ImageRect): this` — Add an image (chainable)
+- `removeImage(rect: ImageRect): boolean` — Remove by reference
+- `clearImages(): void` — Remove all images
+- `getImages(): readonly ImageRect[]` — Get current images
+- `imageCount: number` — Number of images (getter)
+- `compute(): { slots: ColumnSlot[]; lineWidths: Float32Array }` — Compute per-column slots and line widths
+
+**`SpreadExclusionEngine`** — Manages image exclusion across a two-page spread:
+
+- `constructor(geometry: SpreadGeometry)`
+- `setGeometry(geometry: SpreadGeometry): void` — Update spread geometry
+- `getGeometry(): Readonly<SpreadGeometry>` — Get current geometry
+- `addImage(rect: ImageRect): this` — Add image (position relative to right page's top-left; negative `x` = left page)
+- `removeImage(rect: ImageRect): boolean` — Remove by reference
+- `clearImages(): void` — Remove all images
+- `getImages(): readonly ImageRect[]` — Get current images
+- `imageCount: number` — Number of images (getter)
+- `compute(): SpreadExclusionResult` — Compute slots and lineWidths for both pages
+
+Handles gutter (page padding) coordinate conversion automatically. Text flows continuously from right page to left page.
+
+| Export | Signature |
+|---|---|
+| `computeExclusionSlots` | `(options: ExclusionPageGeometry & { images: readonly ImageRect[] }) => { slots: ColumnSlot[]; lineWidths: Float32Array }` |
+
+Convenience function. Equivalent to creating an `ExclusionEngine`, adding all images, and calling `compute()`.
+
+| Export | Signature |
+|---|---|
+| `computeLineWidths` | `(baseLineWidth: number, lineCount: number, exclusions: readonly ExclusionZone[]) => Float32Array` |
+
+Low-level API. Computes per-line widths by subtracting exclusion zones from the base width.
+
 ### Types
 
 **`LayoutInput`** -- Input for `computeBreaks()`:
@@ -123,6 +163,7 @@ Converts morphological analyzer token lengths to boundary indices for `LayoutInp
 - `text: Uint32Array` -- Unicode codepoints
 - `advances: Float32Array` -- Per-character advance widths (px)
 - `lineWidth: number` -- Available line width (px)
+- `lineWidths?: Float32Array` -- Per-line widths overriding `lineWidth`
 - `mode?: KinsokuMode` -- `'strict'` (default) or `'loose'`
 - `enableHanging?: boolean` -- Enable hanging punctuation (default: `true`)
 - `clusterIds?: Uint32Array` -- Indivisible character groups
@@ -135,6 +176,7 @@ Converts morphological analyzer token lengths to boundary indices for `LayoutInp
 - `breakPoints: Uint32Array` -- Index of last character before each break
 - `hangingAdjustments?: Float32Array` -- Hanging overhang per line (px)
 - `effectiveAdvances?: Float32Array` -- Per-char advances after ruby distribution
+- `lineWidths?: Float32Array` -- Actual width used per line (present when `lineWidths` input was provided)
 
 **`KinsokuMode`** -- `'strict' | 'loose'`
 
@@ -157,6 +199,44 @@ Converts morphological analyzer token lengths to boundary indices for `LayoutInp
 **`PageSlice`** -- Pagination output:
 
 - `paragraphIndex: number` / `lineStart: number` / `lineEnd: number`
+
+**`ExclusionPageGeometry`** — Page geometry for exclusion computation:
+
+- `lineWidth: number` — Base line width (px)
+- `lineCount: number` — Number of columns
+- `linePitch: number` — Column pitch (fontSize × lineHeight) (px)
+- `contentWidth: number` — Content width in block direction (px)
+
+**`ImageRect`** — Image rectangle in content-area coordinates:
+
+- `x: number` / `y: number` — Position from content area origin (px)
+- `w: number` / `h: number` — Size (px)
+
+**`ColumnSlot`** — Per-column rendering slot:
+
+- `xPos: number` — Offset from right edge of content area (px)
+- `yStart: number` — Vertical offset from content top (px)
+- `height: number` — Available text height (px)
+
+**`ExclusionZone`** — Low-level exclusion zone:
+
+- `blockStart: number` / `blockEnd: number` — Affected line range
+- `inlineSize: number` — Space consumed (px)
+
+**`SpreadGeometry`** — Two-page spread geometry:
+
+- `pageWidth: number` — Width of each page (px)
+- `pagePaddingX: number` — Horizontal padding per side (px)
+- `pagePaddingY: number` — Vertical padding at top (px)
+- `lineWidth: number` — Base line width (px)
+- `linePitch: number` — Column pitch (px)
+
+**`SpreadExclusionResult`** — Result of spread exclusion computation:
+
+- `rightSlots: ColumnSlot[]` — Slots for right page
+- `leftSlots: ColumnSlot[]` — Slots for left page
+- `lineWidths: Float32Array` — Combined line widths (right + left) for `computeBreaks()`
+- `rightSlotCount: number` — Number of slots for right page
 
 ---
 

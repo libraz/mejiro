@@ -15,14 +15,36 @@ export interface RenderLine {
 export interface RenderParagraph {
   /** Lines in this paragraph. */
   lines: RenderLine[];
-  /** Whether this paragraph is a heading. */
+  /** Whether this paragraph is a heading (true if headingLevel is set). */
   isHeading: boolean;
+  /** Heading level (1–6), or undefined for body text. */
+  headingLevel?: number;
 }
 
 /** A full rendered page containing paragraphs. */
 export interface RenderPage {
   /** Paragraphs on this page. */
   paragraphs: RenderParagraph[];
+}
+
+/** Per-line layout metric for exclusion-mode column positioning. */
+export interface LineMetric {
+  /** Horizontal pitch this line occupies (heading lines are wider than body). */
+  pitch: number;
+  /** Gap before this line in pixels (paragraph or heading gap; 0 for mid-paragraph lines). */
+  gapBefore: number;
+  /** Heading level if this line belongs to a heading paragraph. */
+  headingLevel?: number;
+}
+
+/** Result of {@link buildLineMetrics}. */
+export interface LineMetricsResult {
+  /** One LineMetric per flattened line across all paragraphs. */
+  metrics: LineMetric[];
+  /** Cumulative x-offset at each line index, accounting for heading pitch excess and paragraph gaps. */
+  offsets: Float32Array;
+  /** Base body line pitch (fontSize × lineHeight). */
+  linePitch: number;
 }
 
 /** Input entry for render functions, combining layout results with annotations. */
@@ -33,6 +55,11 @@ export interface RenderEntry {
   breakPoints: Uint32Array;
   /** Ruby annotations for this paragraph. */
   rubyAnnotations: RubyInputAnnotation[];
-  /** Whether this paragraph is a heading. */
-  isHeading: boolean;
+  /**
+   * Whether this paragraph is a heading.
+   * @deprecated Use `headingLevel` instead. When `headingLevel` is set, this field is ignored.
+   */
+  isHeading?: boolean;
+  /** Heading level (1–6), or undefined for body text. */
+  headingLevel?: number;
 }

@@ -8,12 +8,14 @@ function makeEntry(
   breakPoints: number[],
   isHeading = false,
   rubyAnnotations: RenderEntry['rubyAnnotations'] = [],
+  headingLevel?: number,
 ): RenderEntry {
   return {
     chars: [...text],
     breakPoints: new Uint32Array(breakPoints),
     rubyAnnotations,
     isHeading,
+    headingLevel,
   };
 }
 
@@ -31,13 +33,24 @@ describe('buildRenderPage', () => {
     expect(page.paragraphs[0].lines[1].segments).toEqual([{ type: 'text', text: 'えお' }]);
   });
 
-  it('marks heading paragraphs', () => {
+  it('marks heading paragraphs with headingLevel', () => {
+    const entries = [makeEntry('タイトル', [], false, [], 2)];
+    const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
+
+    const page = buildRenderPage(slices, entries);
+
+    expect(page.paragraphs[0].isHeading).toBe(true);
+    expect(page.paragraphs[0].headingLevel).toBe(2);
+  });
+
+  it('marks heading paragraphs with legacy isHeading', () => {
     const entries = [makeEntry('タイトル', [], true)];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
 
     const page = buildRenderPage(slices, entries);
 
     expect(page.paragraphs[0].isHeading).toBe(true);
+    expect(page.paragraphs[0].headingLevel).toBe(1);
   });
 
   it('handles ruby annotations', () => {

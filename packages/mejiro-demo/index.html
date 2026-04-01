@@ -464,12 +464,43 @@
     }
 
     .page-content .mejiro-paragraph:first-child { margin-left: 0; }
+
+    /* Legacy heading class (fallback) */
     .page-content .mejiro-paragraph--heading {
       font-weight: 700;
       font-size: 1.4em;
       height: 100%;
     }
     .page-content .mejiro-paragraph--heading + .mejiro-paragraph { margin-left: 1.2em; }
+
+    /* Per-level heading styles */
+    .page-content .mejiro-paragraph--h1 {
+      font-weight: 700;
+      font-size: 1.6em;
+      height: 100%;
+    }
+    .page-content .mejiro-paragraph--h1 + .mejiro-paragraph { margin-left: 1.4em; }
+
+    .page-content .mejiro-paragraph--h2 {
+      font-weight: 700;
+      font-size: 1.4em;
+      height: 100%;
+    }
+    .page-content .mejiro-paragraph--h2 + .mejiro-paragraph { margin-left: 1.2em; }
+
+    .page-content .mejiro-paragraph--h3 {
+      font-weight: 700;
+      font-size: 1.2em;
+      height: 100%;
+    }
+    .page-content .mejiro-paragraph--h3 + .mejiro-paragraph { margin-left: 1.0em; }
+
+    .page-content .mejiro-paragraph--h4 {
+      font-weight: 700;
+      font-size: 1.1em;
+      height: 100%;
+    }
+    .page-content .mejiro-paragraph--h4 + .mejiro-paragraph { margin-left: 0.8em; }
 
     .page-content ruby { ruby-align: center; }
     .page-content rt {
@@ -534,6 +565,207 @@
       50% { opacity: 0.7; }
     }
 
+    /* ── Image exclusion overlay ── */
+    .image-overlay {
+      position: absolute;
+      width: 120px;
+      height: 160px;
+      /* Warm parchment base with fine diagonal hatching — galley proof style */
+      background-color: #ece5d8;
+      background-image:
+        repeating-linear-gradient(
+          -45deg,
+          transparent,
+          transparent 3px,
+          rgba(139,58,58,0.06) 3px,
+          rgba(139,58,58,0.06) 3.5px
+        );
+      /* Hairline border in accent tone, like a technical pen stroke */
+      border: 0.5px solid rgba(139,58,58,0.28);
+      box-shadow:
+        0 1px 3px rgba(0,0,0,0.06),
+        0 0 0 0.5px rgba(139,58,58,0.08);
+      cursor: grab;
+      z-index: 20;
+      display: none;
+      touch-action: none;
+      overflow: visible;
+      transition:
+        box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .image-overlay.visible { display: block; }
+
+    /* Crop marks at corners — printer's registration marks */
+    .image-overlay::before,
+    .image-overlay::after {
+      content: '';
+      position: absolute;
+      width: 8px;
+      height: 8px;
+      pointer-events: none;
+      z-index: 22;
+    }
+
+    /* Top-right and bottom-left crop marks via box-shadow trick */
+    .image-overlay::before {
+      top: -4px;
+      right: -4px;
+      border-top: 0.5px solid rgba(139,58,58,0.35);
+      border-right: 0.5px solid rgba(139,58,58,0.35);
+    }
+
+    .image-overlay::after {
+      bottom: -4px;
+      left: -4px;
+      border-bottom: 0.5px solid rgba(139,58,58,0.35);
+      border-left: 0.5px solid rgba(139,58,58,0.35);
+    }
+
+    .image-overlay:hover {
+      border-color: rgba(139,58,58,0.4);
+      box-shadow:
+        0 1px 4px rgba(0,0,0,0.08),
+        0 0 0 0.5px rgba(139,58,58,0.15);
+    }
+
+    .image-overlay.dragging {
+      cursor: grabbing;
+      border-color: var(--accent-soft);
+      box-shadow:
+        0 3px 12px rgba(0,0,0,0.12),
+        0 0 0 1px rgba(139,58,58,0.18);
+    }
+
+    .image-overlay-label {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 6px;
+      pointer-events: none;
+    }
+
+    .image-overlay-icon {
+      /* Thin landscape icon drawn with CSS — two nested rectangles */
+      width: 22px;
+      height: 16px;
+      border: 0.5px solid rgba(139,58,58,0.3);
+      position: relative;
+      opacity: 0.7;
+    }
+
+    .image-overlay-icon::before {
+      content: '';
+      position: absolute;
+      bottom: 2px;
+      left: 3px;
+      right: 3px;
+      height: 5px;
+      background: linear-gradient(
+        135deg,
+        rgba(139,58,58,0.12) 40%,
+        rgba(139,58,58,0.06) 100%
+      );
+    }
+
+    /* Small circle in icon — like a sun in a landscape thumbnail */
+    .image-overlay-icon::after {
+      content: '';
+      position: absolute;
+      top: 3px;
+      right: 4px;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: rgba(139,58,58,0.18);
+    }
+
+    .image-overlay-label span:last-child {
+      font-family: var(--font-body);
+      font-size: 0.48rem;
+      color: var(--ink-faint);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      opacity: 0.7;
+    }
+
+    /* Resize handle — subtle triangular grip in bottom-left corner */
+    .image-overlay-resize {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 14px;
+      height: 14px;
+      cursor: nwse-resize;
+      z-index: 21;
+    }
+
+    .image-overlay-resize::before {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 0;
+      height: 0;
+      border-style: solid;
+      border-width: 0 0 10px 10px;
+      border-color: transparent transparent rgba(139,58,58,0.15) transparent;
+      transition: border-color 0.2s ease;
+    }
+
+    .image-overlay-resize:hover::before {
+      border-color: transparent transparent rgba(139,58,58,0.35) transparent;
+    }
+
+    .image-overlay-close {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--bg-paper);
+      border: 0.5px solid rgba(139,58,58,0.3);
+      cursor: pointer;
+      z-index: 23;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      transition: opacity 0.15s ease;
+    }
+
+    .image-overlay:hover .image-overlay-close { opacity: 1; }
+
+    .image-overlay-close::before,
+    .image-overlay-close::after {
+      content: '';
+      position: absolute;
+      width: 6px;
+      height: 0.5px;
+      background: var(--accent);
+    }
+    .image-overlay-close::before { transform: rotate(45deg); }
+    .image-overlay-close::after { transform: rotate(-45deg); }
+
+    /* ── Exclusion columns (absolute-positioned text) ── */
+    .exclusion-column {
+      position: absolute;
+      writing-mode: vertical-rl;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    .btn-header.active {
+      background: rgba(139,58,58,0.12);
+      color: var(--accent-soft);
+      border-color: var(--accent-soft);
+    }
+
     /* ── Responsive ── */
     @media (max-width: 768px) {
       :root {
@@ -561,6 +793,7 @@
     <div class="header-actions">
       <div id="stats"></div>
       <button type="button" class="btn-header" id="openFile">Open</button>
+      <button type="button" class="btn-header" id="imageToggle">Image</button>
       <button type="button" class="btn-header" id="settingsToggle">
         Settings<span class="arrow">&#9662;</span>
       </button>
@@ -635,6 +868,7 @@
               <div class="page-content" id="pageContentRight"></div>
             </div>
           </div>
+          <!-- Image overlays are created dynamically by JS -->
         </div>
         <!-- Left page = later content -->
         <div class="page-container page-left" id="pageLeft">

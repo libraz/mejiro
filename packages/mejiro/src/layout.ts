@@ -14,7 +14,14 @@ import type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './type
  * @returns Break points and optional hanging adjustments.
  */
 export function computeBreaks(input: LayoutInput): BreakResult {
-  const { text, lineWidth, enableHanging = true, mode = 'strict', kinsokuRules } = input;
+  const {
+    text,
+    lineWidth: defaultLineWidth,
+    lineWidths: perLineWidths,
+    enableHanging = true,
+    mode = 'strict',
+    kinsokuRules,
+  } = input;
   let { clusterIds } = input;
 
   // Normalize tokenBoundaries: accept both Uint32Array and number[]
@@ -44,12 +51,20 @@ export function computeBreaks(input: LayoutInput): BreakResult {
 
   const breaks: number[] = [];
   const hangingAdj: number[] = [];
+  const usedLineWidths: number[] = [];
 
   let lineStart = 0;
   let accWidth = 0;
+  let lineIndex = 0;
+
+  /** Returns the effective width for the current line. */
+  const getLineWidth = (): number =>
+    perLineWidths && lineIndex < perLineWidths.length ? perLineWidths[lineIndex] : defaultLineWidth;
 
   for (let i = 0; i < len; i++) {
     accWidth += adv[i];
+
+    const lineWidth = getLineWidth();
 
     if (accWidth > lineWidth && i > lineStart) {
       // Allow hanging punctuation to protrude beyond line width
@@ -58,6 +73,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         if (i < len - 1) {
           breaks.push(i);
           hangingAdj.push(accWidth - lineWidth);
+          usedLineWidths.push(lineWidth);
+          lineIndex++;
         }
         lineStart = i + 1;
         accWidth = 0;
@@ -101,6 +118,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
 
       breaks.push(breakPos);
       hangingAdj.push(0);
+      usedLineWidths.push(lineWidth);
+      lineIndex++;
       lineStart = breakPos + 1;
 
       // Recalculate accumulated width for the new line
@@ -111,10 +130,16 @@ export function computeBreaks(input: LayoutInput): BreakResult {
     }
   }
 
+  // Record width for the final line (after the last break)
+  if (perLineWidths) {
+    usedLineWidths.push(getLineWidth());
+  }
+
   return {
     breakPoints: new Uint32Array(breaks),
     hangingAdjustments: enableHanging ? new Float32Array(hangingAdj) : undefined,
     effectiveAdvances,
+    lineWidths: perLineWidths ? new Float32Array(usedLineWidths) : undefined,
   };
 }
 

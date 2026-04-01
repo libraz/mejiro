@@ -8,8 +8,17 @@ export interface LayoutInput {
   text: Uint32Array;
   /** Advance width of each character in pixels. */
   advances: Float32Array;
-  /** Available line width in pixels. */
+  /**
+   * Available line width in pixels.
+   * Used as the uniform width for all lines, unless `lineWidths` is provided.
+   */
   lineWidth: number;
+  /**
+   * Per-line widths in pixels, overriding `lineWidth` for individual lines.
+   * When provided, the i-th line uses `lineWidths[i]` as its width.
+   * Lines beyond the array length fall back to `lineWidth`.
+   */
+  lineWidths?: Float32Array;
   /** Kinsoku (line break prohibition) mode. @defaultValue 'strict' */
   mode?: KinsokuMode;
   /** Whether to enable hanging punctuation. @defaultValue true */
@@ -39,6 +48,8 @@ export interface BreakResult {
   hangingAdjustments?: Float32Array;
   /** Per-character effective advances after ruby width distribution. Present when ruby was provided. */
   effectiveAdvances?: Float32Array;
+  /** Actual line width used for each line. Present when per-line `lineWidths` was provided. */
+  lineWidths?: Float32Array;
 }
 
 /**
