@@ -27,12 +27,15 @@ mejiro provides the building blocks for rendering Japanese vertical text (`writi
 @libraz/mejiro/browser  Browser: font measurement, width caching, layout integration
 @libraz/mejiro/epub     EPUB: parsing, ruby extraction
 @libraz/mejiro/render   Render: layout data → framework-agnostic page structure + CSS
+@libraz/mejiro/book     Book: high-level API — layout, pagination, image exclusion in one class
 ```
 
 ## Architecture
 
 ```
 Application (React / Vue / vanilla DOM)
+       ↓
+  @libraz/mejiro/book     High-level: MejiroBook → layout, paginate, image exclusion
        ↓
   @libraz/mejiro/render   Layout data → RenderPage structure + CSS
        ↓
@@ -47,6 +50,7 @@ Application (React / Vue / vanilla DOM)
 - **Browser** uses Canvas and FontFace APIs
 - **EPUB** depends on `jszip`
 - **Render** converts layout results into a framework-agnostic `RenderPage` data structure
+- **Book** orchestrates all layers into a simple `MejiroBook` → `ChapterLayout` → `SpreadResult` workflow
 
 ## Quick Start
 
@@ -76,48 +80,37 @@ const pages = paginate(400, [
 ]);
 ```
 
-### EPUB + Chapter Layout + Render
+### EPUB + MejiroBook (Recommended)
 
 ```ts
+import { MejiroBook } from '@libraz/mejiro/book';
+import { verticalLineWidth } from '@libraz/mejiro/browser';
 import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroBrowser } from '@libraz/mejiro/browser';
-import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderEntry } from '@libraz/mejiro/render';
-import '@libraz/mejiro/render/mejiro.css';
 
-const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
-});
-const book = await parseEpub(epubArrayBuffer);
-const chapter = book.chapters[0];
-
-// 1. Lay out all paragraphs (fontFamily/fontSize use instance defaults)
-const lineWidth = mejiro.verticalLineWidth(600); // effective line width from container height
-const result = await mejiro.layoutChapter({
-  paragraphs: chapter.paragraphs.map((p) => ({
-    text: p.text,
-    rubyAnnotations: p.rubyAnnotations,
-  })),
-  lineWidth,
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  lineSpacing: 1.8,
+  headingStyles: { 1: { scale: 1.6, gapAfterEm: 1.4 } },
 });
 
-// 2. Build render entries
-const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
-  chars: result.paragraphs[i].chars,
-  breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  rubyAnnotations: p.rubyAnnotations,
-  isHeading: !!p.headingLevel,
-}));
+book.setPageSize({
+  pageWidth: 400,
+  lineWidth: verticalLineWidth(600, 16),
+});
 
-// 3. Paginate into pages of 400px width
-const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
-const pages = paginate(400, measures);
+const epub = await parseEpub(epubArrayBuffer);
+const layout = await book.layoutChapter(epub.chapters[0]);
 
-// 4. Render a page (framework-agnostic data)
-const renderPage = buildRenderPage(pages[0], entries);
-// renderPage.paragraphs → lines → segments (text or ruby)
+// Get a two-page spread
+const spread = layout.getSpread(0);
+// spread.right.page → RenderPage (paragraphs → lines → segments)
+// spread.right.lines / spread.right.slots → for absolute positioning
+// spread.totalPages → total page count
+
+// Place images with text wrapping
+layout.setImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
+const updated = layout.getSpread(0); // reflow-aware result
 ```
 
 ## API
@@ -131,6 +124,7 @@ For detailed guides with examples, see [Documentation](docs/en/).
 | `@libraz/mejiro/browser` | Browser: `MejiroBrowser` class, font measurement, width caching |
 | `@libraz/mejiro/epub` | EPUB: `parseEpub()`, ruby extraction |
 | `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `mejiro.css` |
+| `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout` — high-level layout, pagination, and image exclusion |
 | `@libraz/mejiro-react` | React: `<MejiroPage>` component (experimental) |
 | `@libraz/mejiro-vue` | Vue: `<MejiroPage>` component (experimental) |
 

@@ -8,11 +8,16 @@ mejiroは4つのレイヤーで構成されており、それぞれ明確な責�
 
 ```mermaid
 graph TD
-    A["アプリケーション (React / Vue / vanilla DOM)"] --> B["@libraz/mejiro/render"]
+    A["アプリケーション (React / Vue / vanilla DOM)"] --> F["@libraz/mejiro/book"]
+    F --> B["@libraz/mejiro/render"]
     B --> C["@libraz/mejiro/epub"]
     C --> D["@libraz/mejiro/browser"]
     D --> E["@libraz/mejiro (コア)"]
 ```
+
+### ブック (`@libraz/mejiro/book`)
+
+高レベルのオーケストレーションレイヤーです。`MejiroBook` はフォント読み込み、文字計測、レイアウトを1つのクラスで管理します。`ChapterLayout` は遅延計算によるページネーション、見開き生成、画像除外を処理します。ほとんどのアプリケーションにとって**推奨されるエントリポイント**です — 下位レイヤーを手動で接続する必要がなくなります。
 
 ### コア (`@libraz/mejiro`)
 

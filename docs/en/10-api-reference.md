@@ -419,6 +419,84 @@ import '@libraz/mejiro/render/mejiro.css';
 
 ---
 
+## `@libraz/mejiro/book` — High-Level API
+
+The recommended entry point for most applications. Orchestrates font loading, layout, pagination, and image exclusion in a simple class-based API.
+
+### MejiroBook
+
+**`MejiroBook`** — Main orchestrator class:
+
+- `constructor(options: BookOptions)` — Create with font, spacing, and heading configuration
+- `setOptions(options: Partial<BookOptions>): void` — Update options (existing layouts are not affected)
+- `setPageSize(size: PageSize): void` — Set page geometry (must be called before `layoutChapter`)
+- `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — Lay out a chapter (compatible with `EpubChapter`)
+- `clearCache(fontKey?: string): void` — Clear the character width measurement cache
+
+### ChapterLayout
+
+**`ChapterLayout`** — Manages pagination and image exclusion for a laid-out chapter:
+
+- `totalPages: number` — Total page count (getter, triggers lazy computation)
+- `hasImages: boolean` — Whether any spread has image exclusions
+- `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — Update geometry; re-breaks lines if `lineWidth` changes
+- `setImages(spreadIndex: number, images: BookImage[]): void` — Set image exclusions for a spread (empty array removes)
+- `clearImages(): void` — Remove all image exclusions
+- `getSpread(spreadIndex: number): SpreadResult` — Get layout data for a two-page spread
+- `getPage(pageIndex: number): PageResult` — Get layout data for a single page
+
+### Types
+
+**`BookOptions`**:
+
+- `fontFamily: string` — CSS font family
+- `fontSize: number` — Base font size (px)
+- `lineSpacing?: number` — Line spacing multiplier (default: 1.8)
+- `mode?: 'strict' | 'loose'` — Kinsoku mode (default: `'strict'`)
+- `enableHanging?: boolean` — Hanging punctuation (default: `true`)
+- `headingStyles?: Record<number, HeadingStyle>` — Per-level heading overrides
+- `headingScale?: number` — Default heading scale (default: 1.4)
+
+**`PageSize`**:
+
+- `pageWidth: number` — Page width (px)
+- `lineWidth: number` — Line width / column height (px)
+- `pagePaddingX?: number` — Horizontal padding (default: 0)
+- `pagePaddingY?: number` — Vertical padding (default: 0)
+
+**`BookParagraph`**:
+
+- `text: string`
+- `rubyAnnotations?: RubyInputAnnotation[]`
+- `headingLevel?: number`
+
+**`BookImage`**:
+
+- `x: number` / `y: number` — Position relative to right page top-left (px)
+- `w: number` / `h: number` — Size (px)
+- `margin?: number` — Inline margin (default: base fontSize)
+
+**`SpreadResult`**:
+
+- `right: PageResult` — Right page (first in vertical-rl reading order)
+- `left: PageResult` — Left page
+- `totalPages: number`
+
+**`PageResult`**:
+
+- `page: RenderPage` — Paragraph-structured data (for CSS `vertical-rl` rendering)
+- `lines: PageLine[]` — Flat line list (for slot-based absolute rendering)
+- `slots: ColumnSlot[]` — Per-line position and dimensions
+- `hasImages: boolean` — Whether this page has image exclusions
+
+**`PageLine`**:
+
+- `segments: RenderSegment[]` — Text and ruby segments
+- `headingLevel?: number` — Heading level (undefined for body)
+- `fontSize: number` — Computed font size (px, accounts for heading scale)
+
+---
+
 ## `@libraz/mejiro-react` — React Component (Experimental)
 
 ```bash

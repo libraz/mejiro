@@ -52,6 +52,7 @@ All dimensional parameters — `fontSize`, `lineWidth`, `containerHeight`, advan
 | `@libraz/mejiro/browser` | Font loading, measurement, and browser integration |
 | `@libraz/mejiro/epub` | EPUB parsing — extracts text and ruby annotations |
 | `@libraz/mejiro/render` | Converts layout results into framework-agnostic render data + CSS |
+| `@libraz/mejiro/book` | High-level API — `MejiroBook` + `ChapterLayout` for layout, pagination, and image exclusion |
 
 ## API Overview
 

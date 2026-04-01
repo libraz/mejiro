@@ -1,5 +1,7 @@
 # Pagination & Rendering
 
+> **Tip:** For most applications, [`MejiroBook`](10-api-reference.md) from `@libraz/mejiro/book` is the recommended approach. It handles layout, pagination, and image exclusion in a single high-level API. The manual pipeline described below is useful when you need fine-grained control.
+
 After computing line breaks, the next steps are:
 
 1. Build paragraph measures (line pitch, gaps)

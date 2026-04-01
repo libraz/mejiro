@@ -19,6 +19,9 @@ Web向け日本語縦書き組版エンジン — 改行処理、禁則処理、
 
 ## 何を読むべきか
 
+**EPUBを素早くレイアウトしたい（推奨）**
+→ [はじめに](01-getting-started.md) → [APIリファレンス](10-api-reference.md) の `MejiroBook`
+
 **ReactやVueで縦書きテキストを表示したい**
 → [はじめに](01-getting-started.md) → [ReactとVue](08-react-and-vue.md)
 
@@ -32,7 +35,7 @@ Web向け日本語縦書き組版エンジン — 改行処理、禁則処理、
 → [コアコンセプト](02-core-concepts.md) → [応用](09-advanced.md)
 
 **画像の周りにテキストを流し込みたい**
-→ [応用](09-advanced.md) § 画像除外 → [APIリファレンス](10-api-reference.md)
+→ [APIリファレンス](10-api-reference.md) の `MejiroBook` + `layout.setImages()`、または低レベル制御は[応用](09-advanced.md)
 
 ---
 

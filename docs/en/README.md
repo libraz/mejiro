@@ -19,6 +19,9 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 
 ## What Should I Read?
 
+**I want to lay out an EPUB quickly (recommended)**
+→ [Getting Started](01-getting-started.md) → `MejiroBook` in [API Reference](10-api-reference.md)
+
 **I want to render vertical text in React or Vue**
 → [Getting Started](01-getting-started.md) → [React & Vue](08-react-and-vue.md)
 
@@ -32,7 +35,7 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 → [Core Concepts](02-core-concepts.md) → [Advanced](09-advanced.md)
 
 **I want to flow text around images**
-→ [Advanced](09-advanced.md) § Image Exclusion → [API Reference](10-api-reference.md)
+→ `MejiroBook` + `layout.setImages()` in [API Reference](10-api-reference.md), or [Advanced](09-advanced.md) for low-level control
 
 ---
 

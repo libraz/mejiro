@@ -2,7 +2,13 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/browser/index.ts', 'src/epub/index.ts', 'src/render/index.ts'],
+  entry: [
+    'src/index.ts',
+    'src/browser/index.ts',
+    'src/epub/index.ts',
+    'src/render/index.ts',
+    'src/book/index.ts',
+  ],
   format: ['esm'],
   dts: true,
   clean: true,

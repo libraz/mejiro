@@ -8,11 +8,16 @@ mejiro is organized into four layers, each with a clear responsibility. Higher l
 
 ```mermaid
 graph TD
-    A["Application (React / Vue / vanilla DOM)"] --> B["@libraz/mejiro/render"]
+    A["Application (React / Vue / vanilla DOM)"] --> F["@libraz/mejiro/book"]
+    F --> B["@libraz/mejiro/render"]
     B --> C["@libraz/mejiro/epub"]
     C --> D["@libraz/mejiro/browser"]
     D --> E["@libraz/mejiro (core)"]
 ```
+
+### Book (`@libraz/mejiro/book`)
+
+The high-level orchestration layer. `MejiroBook` manages font loading, character measurement, and layout in a single class. `ChapterLayout` handles pagination, spread generation, and image exclusion with lazy computation. This is the **recommended entry point** for most applications -- it eliminates the need to manually wire together the lower layers.
 
 ### Core (`@libraz/mejiro`)
 

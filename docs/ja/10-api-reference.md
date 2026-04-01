@@ -419,6 +419,84 @@ import '@libraz/mejiro/render/mejiro.css';
 
 ---
 
+## `@libraz/mejiro/book` — 高レベルAPI
+
+ほとんどのアプリケーションに推奨されるエントリポイントです。フォント読み込み、レイアウト、ページネーション、画像除外をシンプルなクラスベースのAPIで統合します。
+
+### MejiroBook
+
+**`MejiroBook`** — メインオーケストレータークラス:
+
+- `constructor(options: BookOptions)` — フォント、行間、見出し設定で作成
+- `setOptions(options: Partial<BookOptions>): void` — オプションを更新（既存のレイアウトには影響しない）
+- `setPageSize(size: PageSize): void` — ページジオメトリを設定（`layoutChapter`の前に呼び出す必要あり）
+- `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — 章をレイアウト（`EpubChapter`と互換）
+- `clearCache(fontKey?: string): void` — 文字幅計測キャッシュをクリア
+
+### ChapterLayout
+
+**`ChapterLayout`** — レイアウト済みの章のページネーションと画像除外を管理:
+
+- `totalPages: number` — 総ページ数（getter、遅延計算をトリガー）
+- `hasImages: boolean` — 画像除外が設定されているか
+- `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — ジオメトリを更新。`lineWidth`変更時は改行を再計算
+- `setImages(spreadIndex: number, images: BookImage[]): void` — スプレッドの画像除外を設定（空配列で削除）
+- `clearImages(): void` — すべての画像除外を削除
+- `getSpread(spreadIndex: number): SpreadResult` — 見開きのレイアウトデータを取得
+- `getPage(pageIndex: number): PageResult` — 単一ページのレイアウトデータを取得
+
+### 型定義
+
+**`BookOptions`**:
+
+- `fontFamily: string` — CSSフォントファミリー
+- `fontSize: number` — 基本フォントサイズ（px）
+- `lineSpacing?: number` — 行間倍率（デフォルト: 1.8）
+- `mode?: 'strict' | 'loose'` — 禁則モード（デフォルト: `'strict'`）
+- `enableHanging?: boolean` — ぶら下げ組み（デフォルト: `true`）
+- `headingStyles?: Record<number, HeadingStyle>` — レベル別見出しスタイル
+- `headingScale?: number` — デフォルトの見出しスケール（デフォルト: 1.4）
+
+**`PageSize`**:
+
+- `pageWidth: number` — ページ幅（px）
+- `lineWidth: number` — 行幅/カラム高さ（px）
+- `pagePaddingX?: number` — 水平パディング（デフォルト: 0）
+- `pagePaddingY?: number` — 垂直パディング（デフォルト: 0）
+
+**`BookParagraph`**:
+
+- `text: string`
+- `rubyAnnotations?: RubyInputAnnotation[]`
+- `headingLevel?: number`
+
+**`BookImage`**:
+
+- `x: number` / `y: number` — 右ページ左上からの位置（px）
+- `w: number` / `h: number` — サイズ（px）
+- `margin?: number` — インラインマージン（デフォルト: 基本fontSize）
+
+**`SpreadResult`**:
+
+- `right: PageResult` — 右ページ（縦書き読み順で最初）
+- `left: PageResult` — 左ページ
+- `totalPages: number`
+
+**`PageResult`**:
+
+- `page: RenderPage` — 段落構造データ（CSS `vertical-rl` レンダリング用）
+- `lines: PageLine[]` — フラットな行リスト（スロットベースの絶対配置レンダリング用）
+- `slots: ColumnSlot[]` — 行ごとの位置とサイズ
+- `hasImages: boolean` — このページに画像除外があるか
+
+**`PageLine`**:
+
+- `segments: RenderSegment[]` — テキストとルビのセグメント
+- `headingLevel?: number` — 見出しレベル（本文はundefined）
+- `fontSize: number` — 計算済みフォントサイズ（px、見出しスケール反映済み）
+
+---
+
 ## `@libraz/mejiro-react` — Reactコンポーネント（実験的）
 
 ```bash

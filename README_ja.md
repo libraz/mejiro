@@ -27,12 +27,15 @@ mejiroは、ブラウザでの日本語縦書きテキスト（`writing-mode: ve
 @libraz/mejiro/browser  ブラウザ: フォント計測・幅キャッシュ・レイアウト統合
 @libraz/mejiro/epub     EPUB: 解析・ルビ抽出
 @libraz/mejiro/render   レンダー: レイアウトデータ → フレームワーク非依存のページ構造 + CSS
+@libraz/mejiro/book     ブック: 高レベルAPI — レイアウト・ページネーション・画像除外を1クラスに統合
 ```
 
 ## アーキテクチャ
 
 ```
 アプリケーション（React / Vue / vanilla DOM）
+       ↓
+  @libraz/mejiro/book     高レベル: MejiroBook → レイアウト・ページネーション・画像除外
        ↓
   @libraz/mejiro/render   レイアウトデータ → RenderPage構造 + CSS
        ↓
@@ -47,6 +50,7 @@ mejiroは、ブラウザでの日本語縦書きテキスト（`writing-mode: ve
 - **ブラウザ**はCanvas APIとFontFace APIを使用
 - **EPUB**は`jszip`に依存
 - **レンダー**はレイアウト結果をフレームワーク非依存の`RenderPage`データ構造に変換
+- **ブック**は全レイヤーを `MejiroBook` → `ChapterLayout` → `SpreadResult` のシンプルなワークフローに統合
 
 ## クイックスタート
 
@@ -76,48 +80,37 @@ const pages = paginate(400, [
 ]);
 ```
 
-### EPUB + 章レイアウト + レンダー
+### EPUB + MejiroBook（推奨）
 
 ```ts
+import { MejiroBook } from '@libraz/mejiro/book';
+import { verticalLineWidth } from '@libraz/mejiro/browser';
 import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroBrowser } from '@libraz/mejiro/browser';
-import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderEntry } from '@libraz/mejiro/render';
-import '@libraz/mejiro/render/mejiro.css';
 
-const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
-});
-const book = await parseEpub(epubArrayBuffer);
-const chapter = book.chapters[0];
-
-// 1. 全段落を一括レイアウト（fontFamily/fontSizeはインスタンスのデフォルトを使用）
-const lineWidth = mejiro.verticalLineWidth(600); // コンテナ高さから実効行幅を算出
-const result = await mejiro.layoutChapter({
-  paragraphs: chapter.paragraphs.map((p) => ({
-    text: p.text,
-    rubyAnnotations: p.rubyAnnotations,
-  })),
-  lineWidth,
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  lineSpacing: 1.8,
+  headingStyles: { 1: { scale: 1.6, gapAfterEm: 1.4 } },
 });
 
-// 2. レンダーエントリを構築
-const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
-  chars: result.paragraphs[i].chars,
-  breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  rubyAnnotations: p.rubyAnnotations,
-  isHeading: !!p.headingLevel,
-}));
+book.setPageSize({
+  pageWidth: 400,
+  lineWidth: verticalLineWidth(600, 16),
+});
 
-// 3. 幅400pxのページに分割
-const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
-const pages = paginate(400, measures);
+const epub = await parseEpub(epubArrayBuffer);
+const layout = await book.layoutChapter(epub.chapters[0]);
 
-// 4. ページをレンダー（フレームワーク非依存データ）
-const renderPage = buildRenderPage(pages[0], entries);
-// renderPage.paragraphs → lines → segments (テキスト or ルビ)
+// 見開きページを取得
+const spread = layout.getSpread(0);
+// spread.right.page → RenderPage（段落 → 行 → セグメント）
+// spread.right.lines / spread.right.slots → 絶対配置用
+// spread.totalPages → 総ページ数
+
+// 画像配置とテキスト回り込み
+layout.setImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
+const updated = layout.getSpread(0); // リフロー反映済み
 ```
 
 ## API
@@ -131,6 +124,7 @@ const renderPage = buildRenderPage(pages[0], entries);
 | `@libraz/mejiro/browser` | ブラウザ: `MejiroBrowser`クラス、フォント計測、幅キャッシュ |
 | `@libraz/mejiro/epub` | EPUB: `parseEpub()`、ルビ抽出 |
 | `@libraz/mejiro/render` | レンダー: `buildRenderPage()`、`buildParagraphMeasures()`、`mejiro.css` |
+| `@libraz/mejiro/book` | ブック: `MejiroBook`、`ChapterLayout` — 高レベルのレイアウト・ページネーション・画像除外 |
 | `@libraz/mejiro-react` | React: `<MejiroPage>`コンポーネント（実験的） |
 | `@libraz/mejiro-vue` | Vue: `<MejiroPage>`コンポーネント（実験的） |
 
