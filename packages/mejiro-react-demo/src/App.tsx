@@ -116,6 +116,19 @@ export default function App() {
     }
   }, [layout, spreadIdx, imageRect]);
 
+  const navigate = useCallback((delta: number, total: number) => {
+    setSpreadIdx((prev) => {
+      const next = prev + delta;
+      if (next < 0 || next >= total) return prev;
+      setTurning(true);
+      setTimeout(() => {
+        setSpreadIdx(next);
+        setTurning(false);
+      }, 180);
+      return prev;
+    });
+  }, []);
+
   // Keyboard + resize
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -140,20 +153,7 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('resize', onResize);
     };
-  }, [fontSize]);
-
-  const navigate = useCallback((delta: number, total: number) => {
-    setSpreadIdx((prev) => {
-      const next = prev + delta;
-      if (next < 0 || next >= total) return prev;
-      setTurning(true);
-      setTimeout(() => {
-        setSpreadIdx(next);
-        setTurning(false);
-      }, 180);
-      return prev;
-    });
-  }, []);
+  }, [fontSize, navigate]);
 
   const runningTitleRight = epub
     ? epub.author
@@ -182,7 +182,7 @@ export default function App() {
                 }}
               >
                 {epub.chapters.map((ch, i) => (
-                  <option key={i} value={i}>
+                  <option key={ch.title ?? `chapter-${i}`} value={i}>
                     {ch.title ?? `Chapter ${i + 1}`}
                   </option>
                 ))}
@@ -226,8 +226,11 @@ export default function App() {
               </select>
             </div>
             <div className="control">
-              <label className="control-label">Size</label>
+              <label className="control-label" htmlFor="fontSize">
+                Size
+              </label>
               <input
+                id="fontSize"
                 type="number"
                 value={fontSize}
                 min={10}
@@ -239,15 +242,24 @@ export default function App() {
           <div className="settings-group">
             <span className="settings-group-title">Layout</span>
             <div className="control">
-              <label className="control-label">Kinsoku</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value as 'strict' | 'loose')}>
+              <label className="control-label" htmlFor="kinsoku">
+                Kinsoku
+              </label>
+              <select
+                id="kinsoku"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as 'strict' | 'loose')}
+              >
                 <option value="strict">Strict</option>
                 <option value="loose">Loose</option>
               </select>
             </div>
             <div className="control">
-              <label className="control-label">Hanging</label>
+              <label className="control-label" htmlFor="hanging">
+                Hanging
+              </label>
               <select
+                id="hanging"
                 value={String(hanging)}
                 onChange={(e) => setHanging(e.target.value === 'true')}
               >
@@ -256,8 +268,11 @@ export default function App() {
               </select>
             </div>
             <div className="control">
-              <label className="control-label">行間</label>
+              <label className="control-label" htmlFor="lineSpacing">
+                行間
+              </label>
               <input
+                id="lineSpacing"
                 className="line-spacing"
                 type="number"
                 value={lineSpacing}
@@ -273,7 +288,7 @@ export default function App() {
 
       <div className="reading-surface" ref={surfaceRef}>
         {!(epub || loading) && (
-          <div className="drop-zone" onClick={() => fileRef.current?.click()}>
+          <button type="button" className="drop-zone" onClick={() => fileRef.current?.click()}>
             <div className="drop-zone-icon">&#x1F4D6;</div>
             <div className="drop-zone-text">
               <strong>Drop an EPUB file here</strong>
@@ -281,7 +296,7 @@ export default function App() {
               or click to browse
             </div>
             <div className="drop-zone-hint">Supports EPUB with furigana / ruby</div>
-          </div>
+          </button>
         )}
         {loading && <div className="loading-indicator">Loading...</div>}
         {epub && spread && pageW > 0 && (
@@ -358,8 +373,16 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="nav-zone nav-zone--prev" onClick={() => navigate(-1, totalSpreads)} />
-              <div className="nav-zone nav-zone--next" onClick={() => navigate(1, totalSpreads)} />
+              <button
+                type="button"
+                className="nav-zone nav-zone--prev"
+                onClick={() => navigate(-1, totalSpreads)}
+              />
+              <button
+                type="button"
+                className="nav-zone nav-zone--next"
+                onClick={() => navigate(1, totalSpreads)}
+              />
               <div className="page-indicator">
                 {spreadIdx + 1} / {totalSpreads}
               </div>

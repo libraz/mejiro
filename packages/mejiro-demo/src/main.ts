@@ -1,5 +1,5 @@
 import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, DEFAULT_PAGE_PADDING, MejiroBook } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import type { RenderPage, RenderSegment } from '@libraz/mejiro/render';

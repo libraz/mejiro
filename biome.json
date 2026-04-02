@@ -41,7 +41,7 @@
       "suspicious": {
         "noDoubleEquals": "error",
         "noExplicitAny": "warn",
-        "noConsole": { "level": "warn", "options": { "allow": ["log"] } }
+        "noConsole": { "level": "warn", "options": { "allow": ["log", "error"] } }
       },
       "nursery": {}
     }
@@ -73,6 +73,21 @@
           "correctness": {
             "noUnusedImports": "off",
             "noUnusedVariables": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "packages/mejiro-demo/**",
+        "packages/mejiro-react-demo/**",
+        "packages/mejiro-vue-demo/**",
+        "scripts/**"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
           }
         }
       }

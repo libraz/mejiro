@@ -19,7 +19,7 @@ function runGolden(fixture: {
   const text = toCodepoints(fixture.input.text);
   const advances = fixture.input.advances
     ? new Float32Array(fixture.input.advances)
-    : uniformAdvances(text.length, fixture.input.advanceWidth!);
+    : uniformAdvances(text.length, fixture.input.advanceWidth ?? 10);
 
   const result = computeBreaks({
     text,
@@ -31,7 +31,9 @@ function runGolden(fixture: {
 
   if (fixture.expected.hangingAdjustments) {
     expect(result.hangingAdjustments).toBeDefined();
-    expect([...result.hangingAdjustments!]).toEqual(fixture.expected.hangingAdjustments);
+    expect(result.hangingAdjustments ? [...result.hangingAdjustments] : undefined).toEqual(
+      fixture.expected.hangingAdjustments,
+    );
   }
 }
 
