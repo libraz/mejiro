@@ -316,6 +316,32 @@ describe('adjustExclusionSlots', () => {
     expect(adjusted[1].yStart).toBe(0);
     expect(adjusted[1].height).toBe(400);
   });
+
+  it('keeps same xPos for multi-gap slots within a single column', () => {
+    // Heading with 3 lines followed by body text — simulates an image
+    // splitting heading columns into two gaps each.
+    const entries = [makeEntry(30, 2, 1), makeEntry(100, 4)];
+    const { metrics } = buildLineMetrics(entries, {
+      ...baseOpts,
+      headingStyles: { 1: { scale: 1.6, gapAfterEm: 1.4 } },
+    });
+    const h1Pitch = Math.round(16 * 1.6) * 1.8;
+
+    // Column 0: two gaps (split by image) → same xPos from exclusion engine
+    // Column 1: single gap
+    const inputSlots = [
+      { xPos: 0, yStart: 0, height: 100 },
+      { xPos: 0, yStart: 200, height: 300 },
+      { xPos: basePitch, yStart: 0, height: 500 },
+    ];
+    const adjusted = adjustExclusionSlots(inputSlots, metrics, 0, basePitch);
+
+    // Both gaps at column 0 must have the same adjusted xPos
+    expect(adjusted[0].xPos).toBe(0);
+    expect(adjusted[1].xPos).toBe(0);
+    // Column 1 shifts by one heading pitch excess
+    expect(adjusted[2].xPos).toBeCloseTo(basePitch + (h1Pitch - basePitch));
+  });
 });
 
 describe('getImageXOffset', () => {

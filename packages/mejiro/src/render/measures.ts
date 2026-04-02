@@ -246,7 +246,11 @@ export function adjustExclusionSlots(
   for (let i = 0; i < slots.length; i++) {
     const li = startIdx + i;
     if (li >= metrics.length) break;
-    if (i > 0) {
+    // Only accumulate pitch excess and paragraph gaps when moving to a
+    // new physical column.  When an image splits a column into multiple
+    // gaps (slots), they share the same xPos and should receive the same
+    // offset — incrementing here would double-count the heading excess.
+    if (i > 0 && slots[i].xPos !== slots[i - 1].xPos) {
       extraOffset += metrics[li - 1].pitch - basePitch;
       extraOffset += metrics[li].gapBefore;
     }
@@ -278,4 +282,37 @@ export function getImageXOffset(
   const globalLine = spreadStartLine + col;
   const colOffset = globalLine < offsets.length ? offsets[globalLine] : startOffset;
   return colOffset - startOffset;
+}
+
+/**
+ * Finds the column index at a given physical distance from the right content edge,
+ * accounting for heading pitch differences and paragraph gaps.
+ *
+ * The physical position of column `col` is `col * basePitch + offset(col)`.
+ * A naive `floor(fromRight / basePitch)` overestimates the column index when
+ * heading lines are wider than body lines. This function refines the estimate
+ * downward until the physical position fits within `fromRight`.
+ *
+ * @param offsets - Cumulative offsets from {@link LineMetricsResult.offsets}.
+ * @param spreadStartLine - Global line index of the spread's first line.
+ * @param fromRight - Physical distance from the right content edge (px).
+ * @param basePitch - Base body line pitch (px).
+ * @returns Column index at that physical distance.
+ */
+export function findPhysicalColumn(
+  offsets: Float32Array,
+  spreadStartLine: number,
+  fromRight: number,
+  basePitch: number,
+): number {
+  const startOffset = spreadStartLine < offsets.length ? offsets[spreadStartLine] : 0;
+  let col = Math.max(0, Math.floor(fromRight / basePitch));
+  while (col > 0) {
+    const globalLine = spreadStartLine + col;
+    const colOffset = globalLine < offsets.length ? offsets[globalLine] : startOffset;
+    const physicalPos = col * basePitch + (colOffset - startOffset);
+    if (physicalPos <= fromRight) break;
+    col--;
+  }
+  return col;
 }

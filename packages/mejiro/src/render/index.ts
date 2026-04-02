@@ -4,6 +4,7 @@ export {
   buildColumnSlots,
   buildLineMetrics,
   buildParagraphMeasures,
+  findPhysicalColumn,
   getImageXOffset,
   packPageLines,
 } from './measures.js';

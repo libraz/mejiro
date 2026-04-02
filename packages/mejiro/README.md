@@ -1,48 +1,44 @@
 # @libraz/mejiro
 
-Japanese vertical text layout engine — line breaking, kinsoku shori, and hanging punctuation for the web.
+[![npm version](https://img.shields.io/npm/v/@libraz/mejiro.svg)](https://www.npmjs.com/package/@libraz/mejiro)
+[![license](https://img.shields.io/npm/l/@libraz/mejiro.svg)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+[![bundle size](https://img.shields.io/bundlephobia/minzip/@libraz/mejiro)](https://bundlephobia.com/package/@libraz/mejiro)
+
+Japanese vertical text layout engine — line breaking, kinsoku shori, hanging punctuation, ruby, and image exclusion for the web.
 
 ## Install
 
 ```bash
 npm install @libraz/mejiro
-# or
-yarn add @libraz/mejiro
-# or
-pnpm add @libraz/mejiro
-# or
-bun add @libraz/mejiro
 ```
 
 ## Quick Start
 
 ```ts
-import { MejiroBrowser } from '@libraz/mejiro/browser';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { parseEpub } from '@libraz/mejiro/epub';
 
-const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  lineSpacing: 1.8,
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// Preload font (uses instance defaults)
-await mejiro.preloadFont();
+// Auto-compute page size from a container element
+book.computePageSize(document.querySelector('.reader')!);
 
-// Compute effective line width for vertical layout
-const lineWidth = mejiro.verticalLineWidth(containerHeight);
+// Layout an EPUB chapter
+const epub = await parseEpub(epubBuffer);
+const layout = await book.layoutChapter(epub.chapters[0]);
 
-// Layout a single paragraph
-const result = await mejiro.layout({ text: '吾輩は猫である。', lineWidth });
+// Get a two-page spread
+const spread = layout.getSpread(0);
+// spread.right / spread.left → PageResult with page, lines, slots
 
-// Layout an entire chapter
-const chapter = await mejiro.layoutChapter({
-  paragraphs: [{ text: '吾輩は猫である。' }, { text: '名前はまだ無い。' }],
-  lineWidth,
-});
+// Image exclusion with text reflow
+const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
 ```
-
-## Units
-
-All dimensional parameters — `fontSize`, `lineWidth`, `containerHeight`, advances, etc. — are in **CSS pixels (px)**. This matches the unit returned by `Canvas.measureText()` and used by CSS layout.
 
 ## Subpath Exports
 
@@ -52,29 +48,30 @@ All dimensional parameters — `fontSize`, `lineWidth`, `containerHeight`, advan
 | `@libraz/mejiro/browser` | Font loading, measurement, and browser integration |
 | `@libraz/mejiro/epub` | EPUB parsing — extracts text and ruby annotations |
 | `@libraz/mejiro/render` | Converts layout results into framework-agnostic render data + CSS |
-| `@libraz/mejiro/book` | High-level API — `MejiroBook` + `ChapterLayout` for layout, pagination, and image exclusion |
+| `@libraz/mejiro/book` | High-level API — `MejiroBook`, `ChapterLayout`, `DEFAULT_HEADING_STYLES`, `DEFAULT_PAGE_PADDING` |
 
-## API Overview
+## Key APIs
 
-### `MejiroBrowser`
+| API | Description |
+|-----|-------------|
+| `MejiroBook` | Orchestrates font loading, layout, pagination, and image exclusion |
+| `book.computePageSize(el)` | Auto-compute page dimensions from a container element |
+| `book.layoutChapter(ch)` | Layout a chapter → `ChapterLayout` |
+| `layout.getSpread(n)` | Get two-page spread data → `SpreadResult` |
+| `layout.syncImages(n, imgs)` | Set images and get updated spread with text reflow |
+| `layout.resize(size)` | Resize pages (responsive layout) |
+| `DEFAULT_HEADING_STYLES` | Pre-configured heading styles for levels 1–4 |
+| `DEFAULT_PAGE_PADDING` | Default page padding `{ x: 52, y: 56, bottom: 40 }` |
 
-Main browser integration class. Manages font loading, width caching, and layout.
+For the complete API reference including low-level APIs (`computeBreaks`, `ExclusionEngine`, `MejiroBrowser`), see the [documentation](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md).
 
-- **`constructor(options?)`** — `fixedFontFamily` / `fixedFontSize` set defaults for all methods.
-- **`layout(options)`** — Compute line breaks for a single text. `fontFamily` / `fontSize` fall back to instance defaults.
-- **`layoutChapter(options)`** — Lay out multiple paragraphs. `fontFamily` / `fontSize` fall back to instance defaults.
-- **`preloadFont(fontFamily?, fontSize?)`** — Preload a font. Falls back to instance defaults.
-- **`verticalLineWidth(containerHeight, fontSize?)`** — Effective line width for vertical text. Falls back to instance `fixedFontSize`.
-- **`clearCache(fontKey?)`** — Clear the width measurement cache.
+## Framework Components
 
-### `layoutText(options)`
-
-Standalone one-shot layout function. Creates its own font loader and measurer — no `MejiroBrowser` instance needed. All parameters are required.
-
-### `verticalLineWidth(containerHeight, fontSize)`
-
-Standalone function to compute effective vertical line width with a safety margin.
+| Package | Description |
+|---------|-------------|
+| [`@libraz/mejiro-react`](https://www.npmjs.com/package/@libraz/mejiro-react) | `<MejiroPageView>` component + `useImageOverlay` hook |
+| [`@libraz/mejiro-vue`](https://www.npmjs.com/package/@libraz/mejiro-vue) | `<MejiroPageView>` component + `useImageOverlay` composable |
 
 ## License
 
-MIT
+[Apache License 2.0](https://github.com/libraz/mejiro/blob/main/LICENSE)

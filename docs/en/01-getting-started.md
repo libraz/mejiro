@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through installing mejiro and rendering your first vertical Japanese text. Choose the approach that fits your stack: vanilla JS, React, Vue, or headless (core only, no browser APIs).
+This guide walks you through installing mejiro and rendering your first vertical Japanese text. The recommended approach uses the high-level `MejiroBook` API, which handles font loading, line breaking, pagination, and rendering in just a few steps. Framework-specific components are available for React and Vue, and a headless core is available for use without browser APIs.
 
 ## Installation
 
@@ -30,131 +30,225 @@ npm install @libraz/mejiro-react
 npm install @libraz/mejiro-vue
 ```
 
-## Quick Start: Browser (Vanilla JS)
+## Quick Start: EPUB Reader (Recommended)
 
-This example measures text with a real font via `MejiroBrowser`, computes line breaks with kinsoku processing, paginates the result, and builds render-ready page data.
+This example uses `MejiroBook` to load an EPUB file, lay out a chapter with heading styles, and render a two-page spread. This is the simplest way to get started with mejiro.
 
 ```ts
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
-import { getLineRanges, paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
+import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { parseEpub } from '@libraz/mejiro/epub';
 import '@libraz/mejiro/render/mejiro.css';
 
-const mejiro = new MejiroBrowser();
-
-// 1. Lay out text
-const result = await mejiro.layout({
-  text: '吾輩は猫である。名前はまだ無い。',
-  fontFamily: '"Noto Serif JP"',
+// 1. Create a MejiroBook instance
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
-  lineWidth: verticalLineWidth(600, 16),
+  lineSpacing: 1.8,
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// 2. Get line ranges
-const lines = getLineRanges(result.breakPoints, 16);
+// 2. Compute page size from a container element
+const container = document.getElementById('reader')!;
+const { pageWidth, pageHeight } = book.computePageSize(container);
 
-// 3. Paginate
-const entries = [{
-  chars: [...'吾輩は猫である。名前はまだ無い。'],
-  breakPoints: result.breakPoints,
-  rubyAnnotations: [],
-  isHeading: false,
-}];
-const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
-const pages = paginate(400, measures);
+// 3. Load and parse an EPUB file
+const response = await fetch('/book.epub');
+const epub = await parseEpub(await response.arrayBuffer());
 
-// 4. Render
-const page = buildRenderPage(pages[0], entries);
-// page.paragraphs -> lines -> segments (text or ruby)
+// 4. Lay out the first chapter
+const layout = await book.layoutChapter(epub.chapters[0]);
+
+// 5. Get a two-page spread (right page + left page)
+const spread = layout.getSpread(0);
+
+// spread.right  — PageResult for the right page
+// spread.left   — PageResult for the left page
+// spread.totalPages — total page count
+
+// 6. Render with DOM (example for the right page)
+const pageEl = document.createElement('div');
+pageEl.style.width = `${pageWidth}px`;
+pageEl.style.height = `${pageHeight}px`;
+pageEl.style.writingMode = 'vertical-rl';
+pageEl.style.fontFamily = '"Noto Serif JP", serif';
+pageEl.style.fontSize = '16px';
+pageEl.style.lineHeight = '1.8';
+
+for (const para of spread.right.page.paragraphs) {
+  const p = document.createElement('p');
+  if (para.isHeading) p.style.fontWeight = '700';
+  for (const line of para.lines) {
+    for (const seg of line.segments) {
+      if (seg.type === 'text') {
+        p.appendChild(document.createTextNode(seg.text));
+      } else {
+        // Ruby annotation
+        const ruby = document.createElement('ruby');
+        ruby.textContent = seg.base;
+        const rt = document.createElement('rt');
+        rt.textContent = seg.rubyText;
+        ruby.appendChild(rt);
+        p.appendChild(ruby);
+      }
+    }
+  }
+  pageEl.appendChild(p);
+}
+
+container.appendChild(pageEl);
 ```
 
-`verticalLineWidth` converts a container height and font size into the maximum line width in pixels. `getLineRanges` returns an array of `[start, end)` index pairs describing each line. `buildRenderPage` produces a framework-agnostic `RenderPage` structure that you can walk to build DOM nodes, or pass directly to the React/Vue components below.
+You can also lay out plain text paragraphs without an EPUB file:
+
+```ts
+const layout = await book.layoutChapter({
+  paragraphs: [
+    { text: '吾輩は猫である。', headingLevel: 1 },
+    { text: '名前はまだ無い。どこで生れたかとんと見当がつかぬ。' },
+  ],
+});
+```
+
+### Key APIs
+
+| API | Description |
+|-----|-------------|
+| `new MejiroBook({ fontFamily, fontSize, lineSpacing, headingStyles })` | Create a layout engine with typographic options |
+| `book.computePageSize(container)` | Auto-compute page dimensions from a DOM element |
+| `await book.layoutChapter(chapter)` | Lay out a chapter (font loading + line breaking + pagination) |
+| `layout.getSpread(index)` | Get a two-page spread result |
+| `layout.totalPages` | Total page count |
+| `layout.syncImages(index, images)` | Set image exclusion zones with text reflow |
+| `layout.resize({ pageWidth, lineWidth })` | Reflow on window resize |
 
 ## Quick Start: React
 
-The `@libraz/mejiro-react` package provides a `MejiroPage` component that renders a `RenderPage` object.
+The `@libraz/mejiro-react` package provides a `MejiroPageView` component that renders a `PageResult` from the high-level API.
 
 ```tsx
-import { useEffect, useState } from 'react';
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
-import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderPage } from '@libraz/mejiro/render';
-import { MejiroPage } from '@libraz/mejiro-react';
+import { useEffect, useRef, useState } from 'react';
+import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import { parseEpub } from '@libraz/mejiro/epub';
+import { MejiroPageView } from '@libraz/mejiro-react';
 import '@libraz/mejiro/render/mejiro.css';
 
-const mejiro = new MejiroBrowser();
+// Create once outside the component so the cache persists across renders
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP", serif',
+  fontSize: 16,
+  lineSpacing: 1.8,
+  headingStyles: DEFAULT_HEADING_STYLES,
+});
 
-function VerticalText() {
-  const [page, setPage] = useState<RenderPage | null>(null);
+function Reader() {
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  const [spread, setSpread] = useState<SpreadResult | null>(null);
+  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
     (async () => {
-      const result = await mejiro.layout({
-        text: '吾輩は猫である。名前はまだ無い。',
-        fontFamily: '"Noto Serif JP"',
-        fontSize: 16,
-        lineWidth: verticalLineWidth(600, 16),
-      });
+      if (!surfaceRef.current) return;
 
-      const entries = [{
-        chars: [...'吾輩は猫である。名前はまだ無い。'],
-        breakPoints: result.breakPoints,
-        rubyAnnotations: [],
-        isHeading: false,
-      }];
-      const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
-      const pages = paginate(400, measures);
-      setPage(buildRenderPage(pages[0], entries));
+      // Compute page dimensions from container
+      const { pageWidth, pageHeight } = book.computePageSize(surfaceRef.current);
+      setPageSize({ w: pageWidth, h: pageHeight });
+
+      // Load EPUB and lay out the first chapter
+      const res = await fetch('/book.epub');
+      const epub = await parseEpub(await res.arrayBuffer());
+      const layout = await book.layoutChapter(epub.chapters[0]);
+
+      // Get first spread
+      setSpread(layout.getSpread(0));
     })();
   }, []);
 
-  if (!page) return null;
-  return <MejiroPage page={page} />;
+  if (!spread) return <div ref={surfaceRef} style={{ width: '100%', height: '100vh' }} />;
+
+  const style = {
+    width: pageSize.w,
+    height: pageSize.h,
+    fontSize: 16,
+    fontFamily: '"Noto Serif JP", serif',
+    lineHeight: 1.8,
+  };
+
+  return (
+    <div ref={surfaceRef} style={{ display: 'flex', justifyContent: 'center' }}>
+      <MejiroPageView result={spread.right} style={style} fontFamily='"Noto Serif JP", serif' lineSpacing={1.8} />
+      <MejiroPageView result={spread.left} style={style} fontFamily='"Noto Serif JP", serif' lineSpacing={1.8} />
+    </div>
+  );
 }
 ```
 
-Create `MejiroBrowser` once outside the component so the internal width cache persists across renders.
+`MejiroPageView` accepts a `PageResult` (from `layout.getSpread()` or `layout.getPage()`) and automatically selects between CSS vertical writing mode and slot-based rendering when images are present.
 
 ## Quick Start: Vue
 
-The `@libraz/mejiro-vue` package provides an equivalent `MejiroPage` component for Vue 3.
+The `@libraz/mejiro-vue` package provides an equivalent `MejiroPageView` component for Vue 3.
 
 ```vue
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
-import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderPage } from '@libraz/mejiro/render';
-import { MejiroPage } from '@libraz/mejiro-vue';
+import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import type { SpreadResult } from '@libraz/mejiro/book';
+import { parseEpub } from '@libraz/mejiro/epub';
+import { MejiroPageView } from '@libraz/mejiro-vue';
 import '@libraz/mejiro/render/mejiro.css';
 
-const mejiro = new MejiroBrowser();
-const page = ref<RenderPage | null>(null);
+// Create once so the cache persists
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP", serif',
+  fontSize: 16,
+  lineSpacing: 1.8,
+  headingStyles: DEFAULT_HEADING_STYLES,
+});
+
+const surfaceEl = ref<HTMLDivElement | null>(null);
+const spread = ref<SpreadResult | null>(null);
+const pageW = ref(0);
+const pageH = ref(0);
 
 onMounted(async () => {
-  const result = await mejiro.layout({
-    text: '吾輩は猫である。名前はまだ無い。',
-    fontFamily: '"Noto Serif JP"',
-    fontSize: 16,
-    lineWidth: verticalLineWidth(600, 16),
-  });
+  if (!surfaceEl.value) return;
 
-  const entries = [{
-    chars: [...'吾輩は猫である。名前はまだ無い。'],
-    breakPoints: result.breakPoints,
-    rubyAnnotations: [],
-    isHeading: false,
-  }];
-  const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
-  const pages = paginate(400, measures);
-  page.value = buildRenderPage(pages[0], entries);
+  // Compute page dimensions from container
+  const { pageWidth, pageHeight } = book.computePageSize(surfaceEl.value);
+  pageW.value = pageWidth;
+  pageH.value = pageHeight;
+
+  // Load EPUB and lay out the first chapter
+  const res = await fetch('/book.epub');
+  const epub = await parseEpub(await res.arrayBuffer());
+  const layout = await book.layoutChapter(epub.chapters[0]);
+
+  // Get first spread
+  spread.value = layout.getSpread(0);
 });
+
+const fontFamily = '"Noto Serif JP", serif';
+const lineSpacing = 1.8;
 </script>
 
 <template>
-  <MejiroPage v-if="page" :page="page" />
+  <div ref="surfaceEl" style="display: flex; justify-content: center; width: 100%; height: 100vh">
+    <template v-if="spread">
+      <MejiroPageView
+        :result="spread.right"
+        :style="{ width: `${pageW}px`, height: `${pageH}px`, fontSize: '16px', fontFamily, lineHeight: lineSpacing }"
+        :font-family="fontFamily"
+        :line-spacing="lineSpacing"
+      />
+      <MejiroPageView
+        :result="spread.left"
+        :style="{ width: `${pageW}px`, height: `${pageH}px`, fontSize: '16px', fontFamily, lineHeight: lineSpacing }"
+        :font-family="fontFamily"
+        :line-spacing="lineSpacing"
+      />
+    </template>
+  </div>
 </template>
 ```
 
@@ -179,6 +273,8 @@ const lines = getLineRanges(result.breakPoints, text.length);
 ```
 
 `toCodepoints` converts a string into a `Uint32Array` of Unicode codepoints (handling surrogate pairs correctly). `computeBreaks` runs the O(n) greedy line breaking algorithm with kinsoku and hanging punctuation rules, returning break point indices. `getLineRanges` turns those break points into line ranges you can iterate over.
+
+For low-level APIs such as `MejiroBrowser`, `buildParagraphMeasures`, `paginate`, and `buildRenderPage`, see the [API Reference](10-api-reference.md).
 
 ## Next Steps
 

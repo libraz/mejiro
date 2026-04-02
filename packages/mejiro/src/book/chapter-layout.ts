@@ -10,6 +10,7 @@ import {
   buildColumnSlots,
   buildLineMetrics,
   buildParagraphMeasures,
+  findPhysicalColumn,
   getImageXOffset,
   packPageLines,
 } from '../render/measures.js';
@@ -151,6 +152,23 @@ export class ChapterLayout {
   clearImages(): void {
     this.images.clear();
     this.excl = null;
+  }
+
+  /**
+   * Sets or clears images for a spread and returns the updated spread result.
+   * Combines {@link setImages} / {@link clearImages} with {@link getSpread}.
+   *
+   * @param spreadIndex - Zero-based spread index.
+   * @param images - Image rectangles, or `undefined` / empty array to clear all images.
+   * @returns Updated spread result for the given spread.
+   */
+  syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult {
+    if (images && images.length > 0) {
+      this.setImages(spreadIndex, images);
+    } else {
+      this.clearImages();
+    }
+    return this.getSpread(spreadIndex);
   }
 
   /**
@@ -320,7 +338,12 @@ export class ChapterLayout {
           if (rightW > 0) {
             const rCenter = rightW / 2;
             const fromRight = this.size.pageWidth - this.size.pagePaddingX - rCenter;
-            const col = Math.max(0, Math.floor(fromRight / lp));
+            const col = findPhysicalColumn(
+              preMetrics.offsets,
+              si * normalLinesPerSpread,
+              fromRight,
+              lp,
+            );
             const rAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
             spreadEngine.addImage({
               x: rAdj,
@@ -346,7 +369,12 @@ export class ChapterLayout {
           let xAdj = 0;
           if (onRight) {
             const fromRight = this.size.pageWidth - this.size.pagePaddingX - center;
-            const col = Math.max(0, Math.floor(fromRight / lp));
+            const col = findPhysicalColumn(
+              preMetrics.offsets,
+              si * normalLinesPerSpread,
+              fromRight,
+              lp,
+            );
             xAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
           }
           spreadEngine.addImage({
@@ -440,9 +468,7 @@ export class ChapterLayout {
         // packPageLines may return a different count than the engine assumed,
         // causing left page lines to read from wrong lineWidth offsets.
         let rSlots: ColumnSlot[];
-        const rCount = rHasImg
-          ? excl.rightSlots.length
-          : excl.rightSlotCount;
+        const rCount = rHasImg ? excl.rightSlots.length : excl.rightSlotCount;
         if (rHasImg) {
           rSlots = adjustExclusionSlots(excl.rightSlots, lm, li, lp);
         } else {

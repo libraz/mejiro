@@ -1,4 +1,4 @@
-import { MejiroBrowser } from '../browser/integration.js';
+import { MejiroBrowser, verticalLineWidth } from '../browser/integration.js';
 import { CharMeasurer } from '../browser/measure.js';
 import type { RubyInputAnnotation } from '../browser/types.js';
 import { toFontSpec } from '../browser/types.js';
@@ -7,6 +7,7 @@ import type { RenderEntry } from '../render/types.js';
 import { toCodepoints } from '../text.js';
 import type { CachedParagraph, LayoutConfig } from './chapter-layout.js';
 import { ChapterLayout } from './chapter-layout.js';
+import { DEFAULT_PAGE_PADDING } from './constants.js';
 import type { BookOptions, BookParagraph, PageSize } from './types.js';
 
 interface InternalOptions {
@@ -92,6 +93,49 @@ export class MejiroBook {
       pagePaddingX: size.pagePaddingX ?? 0,
       pagePaddingY: size.pagePaddingY ?? 0,
     };
+  }
+
+  /**
+   * Computes page dimensions from a container element and applies them
+   * via {@link setPageSize}. Uses a 1.45 aspect ratio with minimum sizes
+   * of 280×400 px and a maximum height of 780 px.
+   *
+   * @param container - DOM element representing the reading surface.
+   * @param padding - Page padding overrides. Defaults to {@link DEFAULT_PAGE_PADDING}.
+   * @returns Computed page width, page height, and content height.
+   */
+  computePageSize(
+    container: HTMLElement,
+    padding?: { x?: number; y?: number; bottom?: number },
+  ): { pageWidth: number; pageHeight: number; contentHeight: number } {
+    const padX = padding?.x ?? DEFAULT_PAGE_PADDING.x;
+    const padY = padding?.y ?? DEFAULT_PAGE_PADDING.y;
+    const padBottom = padding?.bottom ?? DEFAULT_PAGE_PADDING.bottom;
+
+    const availH = container.clientHeight - 56;
+    const availW = container.clientWidth - 48;
+    const ratio = 1.45;
+
+    let h = Math.min(availH, 780);
+    let w = Math.round(h / ratio);
+    if (w * 2 > availW) {
+      w = Math.floor(availW / 2);
+      h = Math.round(w * ratio);
+    }
+    w = Math.max(w, 280);
+    h = Math.max(h, 400);
+
+    const contentHeight = h - padY - padBottom;
+    const lineWidth = verticalLineWidth(contentHeight, this.opts.fontSize);
+
+    this.setPageSize({
+      pageWidth: w,
+      lineWidth,
+      pagePaddingX: padX,
+      pagePaddingY: padY,
+    });
+
+    return { pageWidth: w, pageHeight: h, contentHeight };
   }
 
   /**

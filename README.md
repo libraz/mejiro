@@ -83,21 +83,18 @@ const pages = paginate(400, [
 ### EPUB + MejiroBook (Recommended)
 
 ```ts
-import { MejiroBook } from '@libraz/mejiro/book';
-import { verticalLineWidth } from '@libraz/mejiro/browser';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: { 1: { scale: 1.6, gapAfterEm: 1.4 } },
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-book.setPageSize({
-  pageWidth: 400,
-  lineWidth: verticalLineWidth(600, 16),
-});
+// Auto-compute page size from a container element
+book.computePageSize(document.querySelector('.reading-surface')!);
 
 const epub = await parseEpub(epubArrayBuffer);
 const layout = await book.layoutChapter(epub.chapters[0]);
@@ -108,9 +105,8 @@ const spread = layout.getSpread(0);
 // spread.right.lines / spread.right.slots → for absolute positioning
 // spread.totalPages → total page count
 
-// Place images with text wrapping
-layout.setImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
-const updated = layout.getSpread(0); // reflow-aware result
+// Place images with text wrapping (returns updated spread)
+const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
 ```
 
 ## API
@@ -124,9 +120,9 @@ For detailed guides with examples, see [Documentation](docs/en/).
 | `@libraz/mejiro/browser` | Browser: `MejiroBrowser` class, font measurement, width caching |
 | `@libraz/mejiro/epub` | EPUB: `parseEpub()`, ruby extraction |
 | `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `mejiro.css` |
-| `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout` — high-level layout, pagination, and image exclusion |
-| `@libraz/mejiro-react` | React: `<MejiroPage>` component (experimental) |
-| `@libraz/mejiro-vue` | Vue: `<MejiroPage>` component (experimental) |
+| `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout`, `DEFAULT_HEADING_STYLES`, `DEFAULT_PAGE_PADDING` — high-level layout, pagination, and image exclusion |
+| `@libraz/mejiro-react` | React: `<MejiroPageView>`, `useImageOverlay` hook (experimental) |
+| `@libraz/mejiro-vue` | Vue: `<MejiroPageView>`, `useImageOverlay` composable (experimental) |
 
 ## Kinsoku Shori (禁則処理)
 

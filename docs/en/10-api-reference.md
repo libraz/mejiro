@@ -423,6 +423,13 @@ import '@libraz/mejiro/render/mejiro.css';
 
 The recommended entry point for most applications. Orchestrates font loading, layout, pagination, and image exclusion in a simple class-based API.
 
+### Constants
+
+| Export | Description |
+|---|---|
+| `DEFAULT_HEADING_STYLES` | Default heading style overrides for levels 1–4 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... }`) |
+| `DEFAULT_PAGE_PADDING` | Default page padding values in pixels (`{ x: 52, y: 56, bottom: 40 }`) |
+
 ### MejiroBook
 
 **`MejiroBook`** — Main orchestrator class:
@@ -430,6 +437,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `constructor(options: BookOptions)` — Create with font, spacing, and heading configuration
 - `setOptions(options: Partial<BookOptions>): void` — Update options (existing layouts are not affected)
 - `setPageSize(size: PageSize): void` — Set page geometry (must be called before `layoutChapter`)
+- `computePageSize(container: HTMLElement, padding?): { pageWidth, pageHeight, contentHeight }` — Compute page dimensions from a container element and apply them via `setPageSize`. Uses a 1.45 aspect ratio with min 280×400 and max height 780.
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — Lay out a chapter (compatible with `EpubChapter`)
 - `clearCache(fontKey?: string): void` — Clear the character width measurement cache
 
@@ -442,6 +450,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — Update geometry; re-breaks lines if `lineWidth` changes
 - `setImages(spreadIndex: number, images: BookImage[]): void` — Set image exclusions for a spread (empty array removes)
 - `clearImages(): void` — Remove all image exclusions
+- `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — Set or clear images and return the updated spread (combines `setImages`/`clearImages` + `getSpread`)
 - `getSpread(spreadIndex: number): SpreadResult` — Get layout data for a two-page spread
 - `getPage(pageIndex: number): PageResult` — Get layout data for a single page
 
@@ -510,8 +519,18 @@ Props:
 - `result: PageResult` -- Required
 - `fontFamily?: string` -- CSS font family (for slot-based mode)
 - `lineSpacing?: number` -- Line spacing multiplier (for slot-based mode)
+- `slotMode?: boolean` -- Force slot-based rendering (set when layout has images)
 - `className?: string`
 - `style?: CSSProperties`
+
+**`useImageOverlay(layout, spreadIdx, onUpdate, options?)`** -- Hook for managing a draggable/resizable image overlay with automatic text reflow.
+
+- `layout: ChapterLayout | null` -- Current chapter layout
+- `spreadIdx: number` -- Current spread index
+- `onUpdate: (spread: SpreadResult) => void` -- Called after every reflow
+- `options?: { defaultWidth?, defaultHeight?, defaultX?, defaultY?, margin? }`
+
+Returns: `{ imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown }`
 
 **`MejiroPage`** -- Low-level. Renders a `RenderPage` using CSS `writing-mode: vertical-rl`.
 
@@ -536,6 +555,16 @@ Props:
 - `result: PageResult` -- Required
 - `fontFamily?: string` -- CSS font family (for slot-based mode)
 - `lineSpacing?: number` -- Line spacing multiplier (for slot-based mode)
+- `slotMode?: boolean` -- Force slot-based rendering (set when layout has images)
+
+**`useImageOverlay(layout, spreadIdx, onUpdate, options?)`** -- Composable for managing a draggable/resizable image overlay with automatic text reflow.
+
+- `layout: Ref<ChapterLayout | null>` -- Current chapter layout ref
+- `spreadIdx: Ref<number>` -- Current spread index ref
+- `onUpdate: (spread: SpreadResult) => void` -- Called after every reflow
+- `options?: { defaultWidth?, defaultHeight?, defaultX?, defaultY?, margin? }`
+
+Returns: `{ imageRect: Ref, hasImage: Ref, toggleImage, onOverlayPointerDown, onResizePointerDown }`
 
 **`MejiroPage`** -- Low-level. Renders a `RenderPage` using CSS `writing-mode: vertical-rl`.
 

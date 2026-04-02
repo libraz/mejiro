@@ -65,6 +65,19 @@
       "trailingCommas": "none"
     }
   },
+  "overrides": [
+    {
+      "includes": ["**/*.vue"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedImports": "off",
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    }
+  ],
   "files": {
     "includes": ["**", "!**/node_modules", "!**/dist", "!**/coverage", "!**/.yarn", "!**/*.json"]
   }

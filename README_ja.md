@@ -83,21 +83,18 @@ const pages = paginate(400, [
 ### EPUB + MejiroBook（推奨）
 
 ```ts
-import { MejiroBook } from '@libraz/mejiro/book';
-import { verticalLineWidth } from '@libraz/mejiro/browser';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: { 1: { scale: 1.6, gapAfterEm: 1.4 } },
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-book.setPageSize({
-  pageWidth: 400,
-  lineWidth: verticalLineWidth(600, 16),
-});
+// コンテナ要素からページサイズを自動計算
+book.computePageSize(document.querySelector('.reading-surface')!);
 
 const epub = await parseEpub(epubArrayBuffer);
 const layout = await book.layoutChapter(epub.chapters[0]);
@@ -108,9 +105,8 @@ const spread = layout.getSpread(0);
 // spread.right.lines / spread.right.slots → 絶対配置用
 // spread.totalPages → 総ページ数
 
-// 画像配置とテキスト回り込み
-layout.setImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
-const updated = layout.getSpread(0); // リフロー反映済み
+// 画像配置とテキスト回り込み（更新済みのspreadを返す）
+const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
 ```
 
 ## API
@@ -124,9 +120,9 @@ const updated = layout.getSpread(0); // リフロー反映済み
 | `@libraz/mejiro/browser` | ブラウザ: `MejiroBrowser`クラス、フォント計測、幅キャッシュ |
 | `@libraz/mejiro/epub` | EPUB: `parseEpub()`、ルビ抽出 |
 | `@libraz/mejiro/render` | レンダー: `buildRenderPage()`、`buildParagraphMeasures()`、`mejiro.css` |
-| `@libraz/mejiro/book` | ブック: `MejiroBook`、`ChapterLayout` — 高レベルのレイアウト・ページネーション・画像除外 |
-| `@libraz/mejiro-react` | React: `<MejiroPage>`コンポーネント（実験的） |
-| `@libraz/mejiro-vue` | Vue: `<MejiroPage>`コンポーネント（実験的） |
+| `@libraz/mejiro/book` | ブック: `MejiroBook`、`ChapterLayout`、`DEFAULT_HEADING_STYLES`、`DEFAULT_PAGE_PADDING` — 高レベルのレイアウト・ページネーション・画像除外 |
+| `@libraz/mejiro-react` | React: `<MejiroPageView>`、`useImageOverlay`フック（実験的） |
+| `@libraz/mejiro-vue` | Vue: `<MejiroPageView>`、`useImageOverlay`コンポーザブル（実験的） |
 
 ## 禁則処理
 

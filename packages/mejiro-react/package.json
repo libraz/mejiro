@@ -18,7 +18,8 @@
   },
   "files": [
     "dist",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "sideEffects": false,
   "engines": {

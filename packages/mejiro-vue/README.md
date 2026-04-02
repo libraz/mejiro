@@ -1,6 +1,11 @@
 # @libraz/mejiro-vue
 
-Vue components for [mejiro](https://github.com/libraz/mejiro) vertical text rendering.
+[![npm version](https://img.shields.io/npm/v/@libraz/mejiro-vue.svg)](https://www.npmjs.com/package/@libraz/mejiro-vue)
+[![license](https://img.shields.io/npm/l/@libraz/mejiro-vue.svg)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+
+Vue components and composables for [mejiro](https://www.npmjs.com/package/@libraz/mejiro) vertical text rendering.
+
+> **Experimental** — API may change in future releases.
 
 ## Install
 
@@ -10,16 +15,11 @@ npm install @libraz/mejiro @libraz/mejiro-vue
 
 Peer dependency: `vue >= 3.3`
 
-## Components
-
-### `MejiroPageView` (Recommended)
-
-Renders a `PageResult` from `ChapterLayout`. Automatically selects the rendering strategy based on whether images are present.
+## Quick Start
 
 ```vue
 <script setup lang="ts">
-import { MejiroBook } from '@libraz/mejiro/book';
-import { verticalLineWidth } from '@libraz/mejiro/browser';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
 import '@libraz/mejiro/render/mejiro.css';
@@ -28,8 +28,9 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
-book.setPageSize({ pageWidth: 400, lineWidth: verticalLineWidth(600, 16) });
+book.computePageSize(containerEl);
 
 const epub = await parseEpub(buffer);
 const layout = await book.layoutChapter(epub.chapters[0]);
@@ -37,48 +38,50 @@ const spread = layout.getSpread(0);
 </script>
 
 <template>
-  <div style="display: flex">
-    <MejiroPageView :result="spread.right" fontFamily="'Noto Serif JP'" :lineSpacing="1.8" />
-    <MejiroPageView :result="spread.left" fontFamily="'Noto Serif JP'" :lineSpacing="1.8" />
-  </div>
+  <MejiroPageView :result="spread.right" fontFamily="'Noto Serif JP'" :lineSpacing="1.8" />
 </template>
 ```
 
-#### Props
+## Components
+
+### `MejiroPageView` (Recommended)
+
+Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS `vertical-rl` and slot-based rendering when images are present.
 
 | Prop | Type | Description |
 |------|------|-------------|
 | `result` | `PageResult` | Required. Page result from `ChapterLayout`. |
-| `fontFamily` | `string` | CSS font family (used in slot-based rendering mode). |
-| `lineSpacing` | `number` | Line spacing multiplier (used in slot-based rendering mode). |
+| `fontFamily` | `string` | CSS font family (used in slot-based mode). |
+| `lineSpacing` | `number` | Line spacing multiplier (used in slot-based mode). |
+| `slotMode` | `boolean` | Force slot-based rendering (set when layout has images). |
 
 ### `MejiroPage` (Low-Level)
 
-Renders a `RenderPage` data structure using CSS `writing-mode: vertical-rl`. Use this when you are working with the lower-level `buildRenderPage()` API directly.
+Renders a `RenderPage` using CSS `writing-mode: vertical-rl`. For use with the lower-level `buildRenderPage()` API.
 
-```vue
-<script setup lang="ts">
-import { buildRenderPage } from '@libraz/mejiro/render';
-import { MejiroPage } from '@libraz/mejiro-vue';
-import '@libraz/mejiro/render/mejiro.css';
+## Composables
 
-const renderPage = buildRenderPage(pageSlices, entries);
-</script>
+### `useImageOverlay`
 
-<template>
-  <MejiroPage :page="renderPage" />
-</template>
+Manages a draggable/resizable image overlay with automatic text reflow.
+
+```ts
+import { useImageOverlay } from '@libraz/mejiro-vue';
+
+const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
+  useImageOverlay(layout, spreadIdx, (spread) => { spreadRef.value = spread; });
 ```
 
-#### Props
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `layout` | `Ref<ChapterLayout \| null>` | Current chapter layout ref. |
+| `spreadIdx` | `Ref<number>` | Current spread index ref. |
+| `onUpdate` | `(spread: SpreadResult) => void` | Called after every reflow. |
+| `options?` | `UseImageOverlayOptions` | Default dimensions, position, and margin. |
 
-| Prop | Type | Description |
-|------|------|-------------|
-| `page` | `RenderPage` | Required. Render page data from `buildRenderPage()`. |
+Returns `{ imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown }` (values are Vue refs or functions).
 
 ## CSS
-
-Import the base stylesheet for vertical text layout:
 
 ```ts
 import '@libraz/mejiro/render/mejiro.css';
@@ -86,4 +89,4 @@ import '@libraz/mejiro/render/mejiro.css';
 
 ## License
 
-[Apache License 2.0](../../LICENSE)
+[Apache License 2.0](https://github.com/libraz/mejiro/blob/main/LICENSE)

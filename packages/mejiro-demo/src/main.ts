@@ -1,6 +1,5 @@
 import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
-import { MejiroBook } from '@libraz/mejiro/book';
-import { verticalLineWidth } from '@libraz/mejiro/browser';
+import { DEFAULT_HEADING_STYLES, DEFAULT_PAGE_PADDING, MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import type { RenderPage, RenderSegment } from '@libraz/mejiro/render';
@@ -42,12 +41,7 @@ const book = new MejiroBook({
   lineSpacing: Number(lineSpacingInput.value),
   mode: modeSelect.value as 'strict' | 'loose',
   enableHanging: hangingSelect.value === 'true',
-  headingStyles: {
-    1: { scale: 1.6, gapAfterEm: 1.4 },
-    2: { scale: 1.4, gapAfterEm: 1.2 },
-    3: { scale: 1.2, gapAfterEm: 1.0 },
-    4: { scale: 1.1, gapAfterEm: 0.8 },
-  },
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 let currentBook: EpubBook | null = null;
@@ -309,41 +303,16 @@ function showSpreadOverlays(): void {
 }
 
 // ── Page sizing ──
-const PAGE_PAD_X = 52;
-const PAGE_PAD_Y = 56;
-const PAGE_PAD_BOTTOM = 40;
-
-function computePageDimensions(): { width: number; height: number; lineWidth: number } {
-  const surface = document.querySelector('.reading-surface') as HTMLElement;
-  const availH = surface.clientHeight - 56;
-  const availW = surface.clientWidth - 48;
-
-  const ratio = 1.45;
-  let h = Math.min(availH, 780);
-  let w = Math.round(h / ratio);
-
-  if (w * 2 > availW) {
-    w = Math.floor(availW / 2);
-    h = Math.round(w * ratio);
-  }
-
-  w = Math.max(w, 280);
-  h = Math.max(h, 400);
-
-  const lineWidth = h - PAGE_PAD_Y - PAGE_PAD_BOTTOM;
-  return { width: w, height: h, lineWidth };
-}
 
 function applyPageSize(): void {
-  const { width, height } = computePageDimensions();
+  const surface = document.querySelector('.reading-surface') as HTMLElement;
+  const { pageWidth, pageHeight, contentHeight } = book.computePageSize(surface);
   for (const page of [pageRight, pageLeft]) {
-    page.style.width = `${width}px`;
-    page.style.height = `${height}px`;
+    page.style.width = `${pageWidth}px`;
+    page.style.height = `${pageHeight}px`;
   }
-
-  const contentH = height - PAGE_PAD_Y - PAGE_PAD_BOTTOM;
-  pageContentRight.style.height = `${contentH}px`;
-  pageContentLeft.style.height = `${contentH}px`;
+  pageContentRight.style.height = `${contentHeight}px`;
+  pageContentLeft.style.height = `${contentHeight}px`;
 }
 
 // ── Font ──
@@ -512,10 +481,7 @@ async function render(): Promise<void> {
   const chapter = currentBook.chapters[currentChapter];
   if (!chapter) return;
 
-  applyPageSize();
-
   const fontSize = Number(fontSizeInput.value);
-  const { lineWidth } = computePageDimensions();
 
   book.setOptions({
     fontFamily: fontFamilySelect.value,
@@ -524,12 +490,9 @@ async function render(): Promise<void> {
     mode: modeSelect.value as 'strict' | 'loose',
     enableHanging: hangingSelect.value === 'true',
   });
-  book.setPageSize({
-    pageWidth: pageRight.clientWidth,
-    lineWidth: verticalLineWidth(lineWidth, fontSize),
-    pagePaddingX: PAGE_PAD_X,
-    pagePaddingY: PAGE_PAD_Y,
-  });
+
+  // computePageSize calculates dimensions, sets page size internally, and returns metrics
+  applyPageSize();
 
   pageContentRight.innerHTML = '';
   pageContentLeft.innerHTML = '';

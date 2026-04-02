@@ -1,15 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { MejiroBook } from '@libraz/mejiro/book';
-import { verticalLineWidth } from '@libraz/mejiro/browser';
+import { DEFAULT_HEADING_STYLES, DEFAULT_PAGE_PADDING, MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroPageView } from '@libraz/mejiro-vue';
-
-const PAD_X = 52;
-const PAD_Y = 56;
-const PAD_BOTTOM = 40;
+import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
 
 const FONTS = [
   { value: "'Shippori Mincho', serif", label: 'Shippori Mincho' },
@@ -18,29 +13,18 @@ const FONTS = [
   { value: 'serif', label: 'System Serif' },
 ];
 
-const HEADING_STYLES = {
-  1: { scale: 1.6, gapAfterEm: 1.4 },
-  2: { scale: 1.4, gapAfterEm: 1.2 },
-  3: { scale: 1.2, gapAfterEm: 1.0 },
-  4: { scale: 1.1, gapAfterEm: 0.8 },
-};
-
 const book = new MejiroBook({
   fontFamily: FONTS[0].value,
   fontSize: 16,
   lineSpacing: 1.9,
-  headingStyles: HEADING_STYLES,
+  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 const epub = ref<EpubBook | null>(null);
-const layout = ref<ChapterLayout | null>(null);
+const layout = shallowRef<ChapterLayout | null>(null);
 const spread = ref<SpreadResult | null>(null);
 const spreadIdx = ref(0);
 const chapter = ref(0);
-const imageRect = ref<{ x: number; y: number; w: number; h: number } | null>(null);
-const hasImage = computed(() => imageRect.value !== null);
-const IMG_W = 120;
-const IMG_H = 160;
 const loading = ref(false);
 const turning = ref(false);
 const settingsOpen = ref(false);
@@ -55,7 +39,13 @@ const pageH = ref(0);
 const surfaceEl = ref<HTMLDivElement | null>(null);
 const fileEl = ref<HTMLInputElement | null>(null);
 
-const contentH = computed(() => pageH.value - PAD_Y - PAD_BOTTOM);
+// Image overlay composable — manages imageRect, drag, and resize internally
+const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
+  useImageOverlay(layout, spreadIdx, (s) => {
+    spread.value = s;
+  });
+
+const contentH = computed(() => pageH.value - DEFAULT_PAGE_PADDING.y - DEFAULT_PAGE_PADDING.bottom);
 const totalSpreads = computed(() => (spread.value ? Math.ceil(spread.value.totalPages / 2) : 0));
 const currentPage = computed(() => spreadIdx.value * 2);
 const fontStyle = computed(() => ({
@@ -68,18 +58,6 @@ const runningTitleRight = computed(() => {
   return epub.value.author ? `${epub.value.author}  ${epub.value.title}` : epub.value.title;
 });
 const runningTitleLeft = computed(() => epub.value?.chapters[chapter.value]?.title ?? '');
-
-function computeSize() {
-  const el = surfaceEl.value;
-  if (!el) return null;
-  const availH = el.clientHeight - 56;
-  const availW = el.clientWidth - 48;
-  const ratio = 1.45;
-  let h = Math.min(availH, 780);
-  let w = Math.round(h / ratio);
-  if (w * 2 > availW) { w = Math.floor(availW / 2); h = Math.round(w * ratio); }
-  return { w: Math.max(w, 280), h: Math.max(h, 400) };
-}
 
 async function loadEpub(buf: ArrayBuffer) {
   loading.value = true;
@@ -106,11 +84,8 @@ watch(
     if (!epub.value) return;
     const ch = epub.value.chapters[chapter.value];
     if (!ch) return;
-    const size = computeSize();
-    if (!size) return;
+    if (!surfaceEl.value) return;
 
-    pageW.value = size.w;
-    pageH.value = size.h;
     book.setOptions({
       fontFamily: fontFamily.value,
       fontSize: fontSize.value,
@@ -118,12 +93,9 @@ watch(
       mode: mode.value,
       enableHanging: hanging.value,
     });
-    book.setPageSize({
-      pageWidth: size.w,
-      lineWidth: verticalLineWidth(size.h - PAD_Y - PAD_BOTTOM, fontSize.value),
-      pagePaddingX: PAD_X,
-      pagePaddingY: PAD_Y,
-    });
+    const { pageWidth, pageHeight } = book.computePageSize(surfaceEl.value);
+    pageW.value = pageWidth;
+    pageH.value = pageHeight;
 
     const t0 = performance.now();
     layout.value = await book.layoutChapter(ch);
@@ -140,7 +112,9 @@ watch(
       totalRuby > 0 ? `${totalRuby}ruby` : null,
       `${fontLabel} ${fontSize.value}px`,
       `${elapsed.toFixed(0)}ms`,
-    ].filter(Boolean).join(' / ');
+    ]
+      .filter(Boolean)
+      .join(' / ');
   },
   { immediate: true },
 );
@@ -160,80 +134,6 @@ function navigate(delta: number) {
   }, 180);
 }
 
-function syncImages(rect: { x: number; y: number; w: number; h: number } | null) {
-  if (!layout.value) return;
-  if (rect) {
-    layout.value.setImages(spreadIdx.value, [rect]);
-  } else {
-    layout.value.clearImages();
-  }
-  spread.value = layout.value.getSpread(spreadIdx.value);
-}
-
-function toggleImage() {
-  if (!layout.value) return;
-  if (imageRect.value) {
-    imageRect.value = null;
-    syncImages(null);
-  } else {
-    imageRect.value = { x: 80, y: 100, w: IMG_W, h: IMG_H };
-    syncImages(imageRect.value);
-  }
-}
-
-function onOverlayPointerDown(e: PointerEvent) {
-  e.preventDefault();
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const start = { ...imageRect.value! };
-  const target = e.currentTarget as HTMLElement;
-  target.setPointerCapture(e.pointerId);
-  target.classList.add('dragging');
-
-  let rafId = 0;
-  const onMove = (me: PointerEvent) => {
-    const dx = me.clientX - startX;
-    const dy = me.clientY - startY;
-    const r = { ...start, x: start.x + dx, y: start.y + dy };
-    cancelAnimationFrame(rafId);
-    rafId = requestAnimationFrame(() => { imageRect.value = r; syncImages(r); });
-  };
-  const onUp = () => {
-    target.classList.remove('dragging');
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-  };
-  document.addEventListener('pointermove', onMove);
-  document.addEventListener('pointerup', onUp);
-}
-
-function onResizePointerDown(e: PointerEvent) {
-  e.preventDefault();
-  e.stopPropagation();
-  const startX = e.clientX;
-  const startY = e.clientY;
-  const start = { ...imageRect.value! };
-  const target = e.currentTarget as HTMLElement;
-  target.setPointerCapture(e.pointerId);
-  target.parentElement?.classList.add('dragging');
-
-  let rafId = 0;
-  const onMove = (me: PointerEvent) => {
-    const dx = me.clientX - startX;
-    const dy = me.clientY - startY;
-    const r = { ...start, w: Math.max(40, start.w + dx), h: Math.max(40, start.h + dy) };
-    cancelAnimationFrame(rafId);
-    rafId = requestAnimationFrame(() => { imageRect.value = r; syncImages(r); });
-  };
-  const onUp = () => {
-    target.parentElement?.classList.remove('dragging');
-    document.removeEventListener('pointermove', onMove);
-    document.removeEventListener('pointerup', onUp);
-  };
-  document.addEventListener('pointermove', onMove);
-  document.addEventListener('pointerup', onUp);
-}
-
 function onFileChange(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0];
   if (file) file.arrayBuffer().then(loadEpub);
@@ -245,20 +145,31 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 function onResize() {
-  const size = computeSize();
-  if (size && layout.value) {
-    pageW.value = size.w;
-    pageH.value = size.h;
-    layout.value.resize({
-      pageWidth: size.w,
-      lineWidth: verticalLineWidth(size.h - PAD_Y - PAD_BOTTOM, fontSize.value),
-    });
-    syncImages(imageRect.value);
-  }
+  if (!(surfaceEl.value && layout.value)) return;
+  // computePageSize calculates dimensions and updates book's internal page size
+  const { pageWidth, pageHeight, contentHeight } = book.computePageSize(surfaceEl.value);
+  pageW.value = pageWidth;
+  pageH.value = pageHeight;
+  layout.value.resize({
+    pageWidth,
+    // Derive line width from content height using the same formula as verticalLineWidth
+    lineWidth: contentHeight - fontSize.value * 0.5,
+  });
+  // Re-sync images to reflow with new dimensions
+  const images = imageRect.value
+    ? [{ x: imageRect.value.x, y: imageRect.value.y, w: imageRect.value.w, h: imageRect.value.h }]
+    : undefined;
+  spread.value = layout.value.syncImages(spreadIdx.value, images);
 }
 
-onMounted(() => { window.addEventListener('keydown', onKeydown); window.addEventListener('resize', onResize); });
-onUnmounted(() => { window.removeEventListener('keydown', onKeydown); window.removeEventListener('resize', onResize); });
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown);
+  window.addEventListener('resize', onResize);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown);
+  window.removeEventListener('resize', onResize);
+});
 </script>
 
 <template>

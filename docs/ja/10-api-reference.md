@@ -423,6 +423,13 @@ import '@libraz/mejiro/render/mejiro.css';
 
 ほとんどのアプリケーションに推奨されるエントリポイントです。フォント読み込み、レイアウト、ページネーション、画像除外をシンプルなクラスベースのAPIで統合します。
 
+### 定数
+
+| エクスポート | 説明 |
+|---|---|
+| `DEFAULT_HEADING_STYLES` | レベル1–4のデフォルト見出しスタイル（`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... }`） |
+| `DEFAULT_PAGE_PADDING` | デフォルトのページパディング値（px）（`{ x: 52, y: 56, bottom: 40 }`） |
+
 ### MejiroBook
 
 **`MejiroBook`** — メインオーケストレータークラス:
@@ -430,6 +437,7 @@ import '@libraz/mejiro/render/mejiro.css';
 - `constructor(options: BookOptions)` — フォント、行間、見出し設定で作成
 - `setOptions(options: Partial<BookOptions>): void` — オプションを更新（既存のレイアウトには影響しない）
 - `setPageSize(size: PageSize): void` — ページジオメトリを設定（`layoutChapter`の前に呼び出す必要あり）
+- `computePageSize(container: HTMLElement, padding?): { pageWidth, pageHeight, contentHeight }` — コンテナ要素からページサイズを自動計算し`setPageSize`を内部で呼び出す。アスペクト比1.45、最小280×400、最大高さ780。
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — 章をレイアウト（`EpubChapter`と互換）
 - `clearCache(fontKey?: string): void` — 文字幅計測キャッシュをクリア
 
@@ -442,6 +450,7 @@ import '@libraz/mejiro/render/mejiro.css';
 - `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — ジオメトリを更新。`lineWidth`変更時は改行を再計算
 - `setImages(spreadIndex: number, images: BookImage[]): void` — スプレッドの画像除外を設定（空配列で削除）
 - `clearImages(): void` — すべての画像除外を削除
+- `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — 画像を設定またはクリアし、更新済みスプレッドを返す（`setImages`/`clearImages` + `getSpread`の統合）
 - `getSpread(spreadIndex: number): SpreadResult` — 見開きのレイアウトデータを取得
 - `getPage(pageIndex: number): PageResult` — 単一ページのレイアウトデータを取得
 
@@ -510,8 +519,18 @@ Props:
 - `result: PageResult` -- 必須
 - `fontFamily?: string` -- CSSフォントファミリー（スロットモード用）
 - `lineSpacing?: number` -- 行間倍率（スロットモード用）
+- `slotMode?: boolean` -- スロットベースレンダリングを強制（レイアウトに画像がある場合に設定）
 - `className?: string`
 - `style?: CSSProperties`
+
+**`useImageOverlay(layout, spreadIdx, onUpdate, options?)`** -- ドラッグ/リサイズ可能な画像オーバーレイをテキストリフロー付きで管理するフック。
+
+- `layout: ChapterLayout | null` -- 現在の章レイアウト
+- `spreadIdx: number` -- 現在のスプレッドインデックス
+- `onUpdate: (spread: SpreadResult) => void` -- リフロー後に呼ばれるコールバック
+- `options?: { defaultWidth?, defaultHeight?, defaultX?, defaultY?, margin? }`
+
+戻り値: `{ imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown }`
 
 **`MejiroPage`** -- 低レベル。`RenderPage`をCSS `writing-mode: vertical-rl`でレンダリング。
 
@@ -536,6 +555,16 @@ Props:
 - `result: PageResult` -- 必須
 - `fontFamily?: string` -- CSSフォントファミリー（スロットモード用）
 - `lineSpacing?: number` -- 行間倍率（スロットモード用）
+- `slotMode?: boolean` -- スロットベースレンダリングを強制（レイアウトに画像がある場合に設定）
+
+**`useImageOverlay(layout, spreadIdx, onUpdate, options?)`** -- ドラッグ/リサイズ可能な画像オーバーレイをテキストリフロー付きで管理するコンポーザブル。
+
+- `layout: Ref<ChapterLayout | null>` -- 現在の章レイアウトRef
+- `spreadIdx: Ref<number>` -- 現在のスプレッドインデックスRef
+- `onUpdate: (spread: SpreadResult) => void` -- リフロー後に呼ばれるコールバック
+- `options?: { defaultWidth?, defaultHeight?, defaultX?, defaultY?, margin? }`
+
+戻り値: `{ imageRect: Ref, hasImage: Ref, toggleImage, onOverlayPointerDown, onResizePointerDown }`
 
 **`MejiroPage`** -- 低レベル。`RenderPage`をCSS `writing-mode: vertical-rl`でレンダリング。
 
