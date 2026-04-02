@@ -503,7 +503,17 @@ import '@libraz/mejiro/render/mejiro.css';
 npm install @libraz/mejiro-react  # peerDep: react >=18
 ```
 
-**`MejiroPage`** -- `(props: MejiroPageProps) => ReactNode`
+**`MejiroPageView`** -- 推奨。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
+
+Props:
+
+- `result: PageResult` -- 必須
+- `fontFamily?: string` -- CSSフォントファミリー（スロットモード用）
+- `lineSpacing?: number` -- 行間倍率（スロットモード用）
+- `className?: string`
+- `style?: CSSProperties`
+
+**`MejiroPage`** -- 低レベル。`RenderPage`をCSS `writing-mode: vertical-rl`でレンダリング。
 
 Props:
 
@@ -519,7 +529,15 @@ Props:
 npm install @libraz/mejiro-vue  # peerDep: vue >=3.3
 ```
 
-**`MejiroPage`** -- Vueコンポーネント（defineComponent）
+**`MejiroPageView`** -- 推奨。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
+
+Props:
+
+- `result: PageResult` -- 必須
+- `fontFamily?: string` -- CSSフォントファミリー（スロットモード用）
+- `lineSpacing?: number` -- 行間倍率（スロットモード用）
+
+**`MejiroPage`** -- 低レベル。`RenderPage`をCSS `writing-mode: vertical-rl`でレンダリング。
 
 Props:
 

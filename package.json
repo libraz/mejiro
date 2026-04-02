@@ -18,6 +18,8 @@
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
     "dev": "yarn workspace @mejiro/demo dev",
+    "dev:react": "yarn workspace @mejiro/react-demo dev",
+    "dev:vue": "yarn workspace @mejiro/vue-demo dev",
     "fetch-demo-epub": "npx tsx scripts/fetch-demo-epub.ts",
     "changeset": "changeset",
     "version": "changeset version",

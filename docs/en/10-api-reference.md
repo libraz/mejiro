@@ -503,7 +503,17 @@ The recommended entry point for most applications. Orchestrates font loading, la
 npm install @libraz/mejiro-react  # peerDep: react >=18
 ```
 
-**`MejiroPage`** -- `(props: MejiroPageProps) => ReactNode`
+**`MejiroPageView`** -- Recommended. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
+
+Props:
+
+- `result: PageResult` -- Required
+- `fontFamily?: string` -- CSS font family (for slot-based mode)
+- `lineSpacing?: number` -- Line spacing multiplier (for slot-based mode)
+- `className?: string`
+- `style?: CSSProperties`
+
+**`MejiroPage`** -- Low-level. Renders a `RenderPage` using CSS `writing-mode: vertical-rl`.
 
 Props:
 
@@ -519,7 +529,15 @@ Props:
 npm install @libraz/mejiro-vue  # peerDep: vue >=3.3
 ```
 
-**`MejiroPage`** -- Vue component (defineComponent)
+**`MejiroPageView`** -- Recommended. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
+
+Props:
+
+- `result: PageResult` -- Required
+- `fontFamily?: string` -- CSS font family (for slot-based mode)
+- `lineSpacing?: number` -- Line spacing multiplier (for slot-based mode)
+
+**`MejiroPage`** -- Low-level. Renders a `RenderPage` using CSS `writing-mode: vertical-rl`.
 
 Props:
 

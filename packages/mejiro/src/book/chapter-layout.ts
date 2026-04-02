@@ -404,13 +404,17 @@ export class ChapterLayout {
         const rHasImg = excl.rightSlots.some((s) => s.height < this.size.lineWidth - 0.5);
         const lHasImg = excl.leftSlots.some((s) => s.height < this.size.lineWidth - 0.5);
 
+        // Use excl.rightSlotCount for right page line count to keep lineWidths
+        // aligned with the exclusion engine's right/left split. Without this,
+        // packPageLines may return a different count than the engine assumed,
+        // causing left page lines to read from wrong lineWidth offsets.
         let rSlots: ColumnSlot[];
-        let rCount: number;
+        const rCount = rHasImg
+          ? excl.rightSlots.length
+          : excl.rightSlotCount;
         if (rHasImg) {
           rSlots = adjustExclusionSlots(excl.rightSlots, lm, li, lp);
-          rCount = rSlots.length;
         } else {
-          rCount = packPageLines(lm, li, cw);
           rSlots = buildColumnSlots(lm, li, rCount, this.size.lineWidth);
         }
 
