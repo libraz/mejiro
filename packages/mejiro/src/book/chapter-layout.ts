@@ -310,22 +310,53 @@ export class ChapterLayout {
       if (imgs.length === 0) continue;
       spreadEngine.clearImages();
       for (const img of imgs) {
-        // Only adjust x for right page images (heading offset compensation)
-        const center = img.x + img.w / 2;
-        const onRight = center > 0 && center < this.size.pageWidth;
-        let xAdj = 0;
-        if (onRight) {
-          const fromRight = this.size.pageWidth - this.size.pagePaddingX - center;
-          const col = Math.max(0, Math.floor(fromRight / lp));
-          xAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
+        const margin = img.margin ?? fontSize;
+        const crossesSpine = img.x < 0 && img.x + img.w > 0;
+
+        if (crossesSpine) {
+          // Split straddling images at the spine so each page gets the
+          // correct heading offset compensation independently.
+          const rightW = img.x + img.w; // portion on right page (x >= 0)
+          if (rightW > 0) {
+            const rCenter = rightW / 2;
+            const fromRight = this.size.pageWidth - this.size.pagePaddingX - rCenter;
+            const col = Math.max(0, Math.floor(fromRight / lp));
+            const rAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
+            spreadEngine.addImage({
+              x: rAdj,
+              y: img.y,
+              w: rightW,
+              h: img.h,
+              inlineMargin: margin,
+            });
+          }
+          const leftW = -img.x; // portion on left page (x < 0)
+          if (leftW > 0) {
+            spreadEngine.addImage({
+              x: img.x,
+              y: img.y,
+              w: leftW,
+              h: img.h,
+              inlineMargin: margin,
+            });
+          }
+        } else {
+          const center = img.x + img.w / 2;
+          const onRight = center > 0 && center < this.size.pageWidth;
+          let xAdj = 0;
+          if (onRight) {
+            const fromRight = this.size.pageWidth - this.size.pagePaddingX - center;
+            const col = Math.max(0, Math.floor(fromRight / lp));
+            xAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
+          }
+          spreadEngine.addImage({
+            x: img.x + xAdj,
+            y: img.y,
+            w: img.w,
+            h: img.h,
+            inlineMargin: margin,
+          });
         }
-        spreadEngine.addImage({
-          x: img.x + xAdj,
-          y: img.y,
-          w: img.w,
-          h: img.h,
-          inlineMargin: img.margin ?? fontSize,
-        });
       }
       exclBySpread.set(si, spreadEngine.compute());
     }
