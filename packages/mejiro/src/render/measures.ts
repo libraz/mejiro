@@ -192,6 +192,7 @@ export function packPageLines(metrics: LineMetric[], startIdx: number, pageWidth
     used += addition;
     count++;
   }
+  if (count === 0 && startIdx < metrics.length) return 1;
   return count;
 }
 

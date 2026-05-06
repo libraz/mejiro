@@ -294,17 +294,14 @@ describe('computeExclusionSlots', () => {
     }
   });
 
-  it('column completely blocked by image returns height 0', () => {
+  it('omits columns completely blocked by image', () => {
     // Image covers entire inline extent
-    const { slots } = computeExclusionSlots({
+    const { slots, lineWidths } = computeExclusionSlots({
       ...base,
       images: [{ x: 0, y: 0, w: 150, h: 400 }],
     });
-    // All blocked → 1 zero-height slot per column
-    expect(slots).toHaveLength(5);
-    for (const slot of slots) {
-      expect(slot.height).toBe(0);
-    }
+    expect(slots).toHaveLength(0);
+    expect(lineWidths).toHaveLength(0);
   });
 
   it('inlineMargin expands image in inline direction', () => {
@@ -387,7 +384,7 @@ describe('ExclusionEngine', () => {
     const engine = new ExclusionEngine(geometry);
     engine.addImage({ x: 0, y: 0, w: 150, h: 400 });
     // All blocked with lineWidth=400
-    expect(engine.compute().slots.every((s) => s.height === 0)).toBe(true);
+    expect(engine.compute().slots).toHaveLength(0);
     // Increase lineWidth → gap appears below the image
     engine.setGeometry({ ...geometry, lineWidth: 500 });
     expect(engine.compute().slots.every((s) => s.height === 100)).toBe(true);

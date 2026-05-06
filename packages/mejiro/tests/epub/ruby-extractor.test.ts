@@ -135,4 +135,23 @@ describe('extractRubyContent', () => {
     expect(nonEmpty.length).toBeGreaterThanOrEqual(1);
     expect(nonEmpty[0].text).toBe('テスト');
   });
+
+  it('does not duplicate nested block text', () => {
+    const xhtml = wrapXhtml('<div><p>第一段落</p><p>第二段落</p></div>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result.map((p) => p.text)).toEqual(['第一段落', '第二段落']);
+  });
+
+  it('adjusts ruby annotation indices after trimming paragraph whitespace', () => {
+    const xhtml = wrapXhtml('<p>\n  <ruby>漢<rt>かん</rt></ruby>字</p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('漢字');
+    expect(result[0].rubyAnnotations[0]).toMatchObject({
+      startIndex: 0,
+      endIndex: 1,
+      rubyText: 'かん',
+    });
+  });
 });

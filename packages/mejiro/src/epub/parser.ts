@@ -51,7 +51,11 @@ async function readZipText(zip: JSZip, path: string): Promise<string> {
 /** Parses XML string into a Document. */
 function parseXml(xml: string): Document {
   const parser = new DOMParser();
-  return parser.parseFromString(xml, 'application/xml');
+  const doc = parser.parseFromString(xml, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length > 0) {
+    throw new Error('Failed to parse XML document');
+  }
+  return doc;
 }
 
 /** Extracts the rootfile path from container.xml. */
@@ -86,12 +90,13 @@ function parseOpf(
 } {
   const doc = parseXml(opfXml);
 
-  // Extract title — getElementsByTagNameNS handles the dc: namespace
-  const titleEl = doc.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/', 'title')[0];
+  // Extract title — prefer namespace-aware lookup, then fall back for DOMParser implementations
+  // that do not preserve XML namespaces consistently.
+  const titleEl = findElementByName(doc, 'title');
   const title = titleEl?.textContent?.trim() || 'Unknown Title';
 
   // Extract author
-  const creatorEl = doc.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/', 'creator')[0];
+  const creatorEl = findElementByName(doc, 'creator');
   const author = creatorEl?.textContent?.trim() || undefined;
 
   // Build manifest id → href map
@@ -101,7 +106,7 @@ function parseOpf(
     const id = item.getAttribute('id');
     const href = item.getAttribute('href');
     if (id && href) {
-      manifest.set(id, opfDir + href);
+      manifest.set(id, resolveZipPath(opfDir, href));
     }
   }
 
@@ -117,4 +122,32 @@ function parseOpf(
   }
 
   return { title, author, spineHrefs };
+}
+
+function resolveZipPath(baseDir: string, href: string): string {
+  const hrefPath = href.split('#', 1)[0].split('?', 1)[0];
+  const decodedHref = decodeURIComponent(hrefPath);
+  const parts = `${baseDir}${decodedHref}`.split('/');
+  const normalized: string[] = [];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      normalized.pop();
+    } else {
+      normalized.push(part);
+    }
+  }
+  return normalized.join('/');
+}
+
+function findElementByName(doc: Document, localName: string): Element | undefined {
+  const nsEl = doc.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/', localName)[0];
+  if (nsEl) return nsEl;
+
+  for (const el of Array.from(doc.getElementsByTagName('*'))) {
+    if (el.localName === localName || el.tagName === `dc:${localName}`) {
+      return el;
+    }
+  }
+  return undefined;
 }

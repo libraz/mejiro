@@ -302,11 +302,6 @@ function computeColumnGaps(
     gaps.push({ xPos, yStart: prevEnd, height: tailGap });
   }
 
-  // If all gaps are too small, return a zero-height slot
-  if (gaps.length === 0) {
-    return [{ xPos, yStart: 0, height: 0 }];
-  }
-
   return gaps;
 }
 

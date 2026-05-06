@@ -16,6 +16,7 @@ import {
 } from '../render/measures.js';
 import { buildRenderPage } from '../render/page.js';
 import type { LineMetric, RenderEntry, RenderLine, RenderParagraph } from '../render/types.js';
+import type { RubyAnnotation } from '../ruby.js';
 import type { BookImage, PageLine, PageResult, PageSize, SpreadResult } from './types.js';
 
 /** @internal Cached per-paragraph data for fast re-layout. */
@@ -24,6 +25,7 @@ export interface CachedParagraph {
   advances: Float32Array;
   chars: string[];
   rubyAnnotations: RubyInputAnnotation[];
+  layoutRubyAnnotations?: RubyAnnotation[];
   headingLevel?: number;
 }
 
@@ -166,7 +168,7 @@ export class ChapterLayout {
     if (images && images.length > 0) {
       this.setImages(spreadIndex, images);
     } else {
-      this.clearImages();
+      this.setImages(spreadIndex, []);
     }
     return this.getSpread(spreadIndex);
   }
@@ -233,6 +235,7 @@ export class ChapterLayout {
         lineWidth: this.size.lineWidth,
         mode: this.config.mode,
         enableHanging: this.config.enableHanging,
+        rubyAnnotations: para.layoutRubyAnnotations,
       });
       return {
         chars: para.chars,
@@ -313,6 +316,20 @@ export class ChapterLayout {
 
     // Pre-reflow metrics for image coordinate adjustment
     const preMetrics = buildLineMetrics(this.entries, opts);
+    const preMeasures = buildParagraphMeasures(this.entries, opts);
+    const prePages = paginate(cw, preMeasures);
+    const preParaLineStarts: number[] = [];
+    let preTotal = 0;
+    for (const entry of this.entries) {
+      preParaLineStarts.push(preTotal);
+      preTotal += entry.breakPoints.length + 1;
+    }
+    const preSpreadStarts = prePages
+      .filter((_, pageIndex) => pageIndex % 2 === 0)
+      .map((slices) => {
+        const first = slices[0];
+        return first ? preParaLineStarts[first.paragraphIndex] + first.lineStart : preTotal;
+      });
 
     // Compute exclusion for each spread that has images
     const spreadEngine = new SpreadExclusionEngine({
@@ -327,6 +344,7 @@ export class ChapterLayout {
     for (const [si, imgs] of this.images) {
       if (imgs.length === 0) continue;
       spreadEngine.clearImages();
+      const spreadStartLine = preSpreadStarts[si] ?? si * normalLinesPerSpread;
       for (const img of imgs) {
         const margin = img.margin ?? fontSize;
         const crossesSpine = img.x < 0 && img.x + img.w > 0;
@@ -338,13 +356,8 @@ export class ChapterLayout {
           if (rightW > 0) {
             const rCenter = rightW / 2;
             const fromRight = this.size.pageWidth - this.size.pagePaddingX - rCenter;
-            const col = findPhysicalColumn(
-              preMetrics.offsets,
-              si * normalLinesPerSpread,
-              fromRight,
-              lp,
-            );
-            const rAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
+            const col = findPhysicalColumn(preMetrics.offsets, spreadStartLine, fromRight, lp);
+            const rAdj = getImageXOffset(preMetrics.offsets, spreadStartLine, col);
             spreadEngine.addImage({
               x: rAdj,
               y: img.y,
@@ -369,13 +382,8 @@ export class ChapterLayout {
           let xAdj = 0;
           if (onRight) {
             const fromRight = this.size.pageWidth - this.size.pagePaddingX - center;
-            const col = findPhysicalColumn(
-              preMetrics.offsets,
-              si * normalLinesPerSpread,
-              fromRight,
-              lp,
-            );
-            xAdj = getImageXOffset(preMetrics.offsets, si * normalLinesPerSpread, col);
+            const col = findPhysicalColumn(preMetrics.offsets, spreadStartLine, fromRight, lp);
+            xAdj = getImageXOffset(preMetrics.offsets, spreadStartLine, col);
           }
           spreadEngine.addImage({
             x: img.x + xAdj,
@@ -416,6 +424,7 @@ export class ChapterLayout {
         lineWidths: plw,
         mode: this.config.mode,
         enableHanging: this.config.enableHanging,
+        rubyAnnotations: para.layoutRubyAnnotations,
       });
       gi += br.breakPoints.length + 1;
       entries.push({

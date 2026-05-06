@@ -1,9 +1,10 @@
 import { MejiroBrowser, verticalLineWidth } from '../browser/integration.js';
-import { CharMeasurer } from '../browser/measure.js';
+import { CharMeasurer, deriveRubyFont } from '../browser/measure.js';
 import type { RubyInputAnnotation } from '../browser/types.js';
 import { toFontSpec } from '../browser/types.js';
 import type { HeadingStyle } from '../render/measures.js';
 import type { RenderEntry } from '../render/types.js';
+import type { RubyAnnotation } from '../ruby.js';
 import { toCodepoints } from '../text.js';
 import type { CachedParagraph, LayoutConfig } from './chapter-layout.js';
 import { ChapterLayout } from './chapter-layout.js';
@@ -26,6 +27,25 @@ function resolveScale(
 ): number {
   if (level == null) return 1;
   return opts.headingStyles?.[level]?.scale ?? opts.headingScale;
+}
+
+function buildLayoutRubyAnnotations(
+  annotations: RubyInputAnnotation[] | undefined,
+  rubyFontSpec: string,
+  measurer: CharMeasurer,
+): RubyAnnotation[] | undefined {
+  if (!annotations?.length) return undefined;
+  return annotations.map((ann) => {
+    const rubyText = toCodepoints(ann.rubyText);
+    return {
+      startIndex: ann.startIndex,
+      endIndex: ann.endIndex,
+      rubyText,
+      rubyAdvances: measurer.measureAll(rubyFontSpec, rubyText),
+      type: ann.type,
+      jukugoSplitPoints: ann.jukugoSplitPoints,
+    };
+  });
 }
 
 /**
@@ -184,6 +204,7 @@ export class MejiroBook {
       const scale = resolveScale(p.headingLevel, this.opts);
       const pFontSize = p.headingLevel ? Math.round(fontSize * scale) : fontSize;
       const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
+      const rubySpec = deriveRubyFont(fontFamily, pFontSize);
       const codepoints = toCodepoints(p.text);
       const advances = this.measurer.measureAll(spec, codepoints);
       return {
@@ -191,6 +212,11 @@ export class MejiroBook {
         advances,
         chars: result.paragraphs[i].chars,
         rubyAnnotations: (p.rubyAnnotations ?? []) as RubyInputAnnotation[],
+        layoutRubyAnnotations: buildLayoutRubyAnnotations(
+          p.rubyAnnotations,
+          rubySpec,
+          this.measurer,
+        ),
         headingLevel: p.headingLevel,
       };
     });

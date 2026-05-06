@@ -16,7 +16,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "yarn build && tsc -b --noEmit",
     "dev": "yarn workspace @mejiro/demo dev",
     "dev:react": "yarn workspace @mejiro/react-demo dev",
     "dev:vue": "yarn workspace @mejiro/vue-demo dev",

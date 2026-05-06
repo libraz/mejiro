@@ -1,3 +1,4 @@
+import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { computed, type Ref, ref } from 'vue';
 
@@ -90,9 +91,11 @@ export function useImageOverlay(
 
   function onOverlayPointerDown(e: PointerEvent): void {
     e.preventDefault();
+    const current = imageRect.value;
+    if (!current) return;
     const startX = e.clientX;
     const startY = e.clientY;
-    const start = { ...(imageRect.value as ImageRect) };
+    const start = { ...current };
     const target = e.currentTarget as HTMLElement;
     target.setPointerCapture(e.pointerId);
     target.classList.add('dragging');
@@ -101,7 +104,7 @@ export function useImageOverlay(
     const onMove = (me: PointerEvent) => {
       const dx = me.clientX - startX;
       const dy = me.clientY - startY;
-      const r = { ...start, x: start.x + dx, y: start.y + dy };
+      const r = moveImageOverlayRect(start, dx, dy);
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
         imageRect.value = r;
@@ -120,9 +123,11 @@ export function useImageOverlay(
   function onResizePointerDown(e: PointerEvent): void {
     e.preventDefault();
     e.stopPropagation();
+    const current = imageRect.value;
+    if (!current) return;
     const startX = e.clientX;
     const startY = e.clientY;
-    const start = { ...(imageRect.value as ImageRect) };
+    const start = { ...current };
     const target = e.currentTarget as HTMLElement;
     target.setPointerCapture(e.pointerId);
     target.parentElement?.classList.add('dragging');
@@ -131,7 +136,7 @@ export function useImageOverlay(
     const onMove = (me: PointerEvent) => {
       const dx = me.clientX - startX;
       const dy = me.clientY - startY;
-      const r = { ...start, w: Math.max(40, start.w + dx), h: Math.max(40, start.h + dy) };
+      const r = resizeImageOverlayRect(start, dx, dy);
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(() => {
         imageRect.value = r;

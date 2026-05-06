@@ -252,6 +252,10 @@ describe('packPageLines', () => {
     const count = packPageLines(metrics, 5, basePitch * 3);
     expect(count).toBe(3);
   });
+
+  it('returns one line when the first line is wider than the page', () => {
+    expect(packPageLines([{ pitch: 120, gapBefore: 0 }], 0, 80)).toBe(1);
+  });
 });
 
 describe('buildColumnSlots', () => {

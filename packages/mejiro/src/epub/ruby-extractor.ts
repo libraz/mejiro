@@ -34,13 +34,10 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
   const body = doc.body ?? doc.documentElement;
 
   const paragraphs: AnnotatedParagraph[] = [];
-  const blocks = body.querySelectorAll(Array.from(BLOCK_ELEMENTS).join(','));
-
-  // If no block elements found, treat the entire body as one paragraph
-  const elements = blocks.length > 0 ? Array.from(blocks) : [body];
+  const elements = collectParagraphElements(body);
 
   for (const el of elements) {
-    const result = extractFromElement(el);
+    const result = trimParagraph(extractFromElement(el));
     if (result.text.length > 0) {
       const tag = el.localName?.toLowerCase() ?? '';
       const headingMatch = /^h([1-6])$/.exec(tag);
@@ -52,6 +49,29 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
   }
 
   return paragraphs;
+}
+
+function collectParagraphElements(root: Element): Element[] {
+  const elements: Element[] = [];
+
+  function visit(el: Element): void {
+    const childElements = Array.from(el.children);
+    const blockChildren = childElements.filter((child) =>
+      BLOCK_ELEMENTS.has(child.localName.toLowerCase()),
+    );
+
+    if (BLOCK_ELEMENTS.has(el.localName.toLowerCase()) && blockChildren.length === 0) {
+      elements.push(el);
+      return;
+    }
+
+    for (const child of childElements) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return elements.length > 0 ? elements : [root];
 }
 
 /**
@@ -196,10 +216,31 @@ function extractFromElement(element: Element): AnnotatedParagraph {
     walk(child);
   }
 
-  return { text: text.trim(), rubyAnnotations };
+  return { text, rubyAnnotations };
 }
 
 /** Counts characters in a string (respecting surrogate pairs). */
 function charCount(str: string): number {
   return [...str].length;
+}
+
+function trimParagraph(paragraph: AnnotatedParagraph): AnnotatedParagraph {
+  const chars = [...paragraph.text];
+  let start = 0;
+  let end = chars.length;
+
+  while (start < end && /\s/u.test(chars[start])) start++;
+  while (end > start && /\s/u.test(chars[end - 1])) end--;
+
+  if (start === 0 && end === chars.length) return paragraph;
+
+  const rubyAnnotations = paragraph.rubyAnnotations
+    .filter((ann) => ann.startIndex >= start && ann.endIndex <= end)
+    .map((ann) => ({
+      ...ann,
+      startIndex: ann.startIndex - start,
+      endIndex: ann.endIndex - start,
+    }));
+
+  return { ...paragraph, text: chars.slice(start, end).join(''), rubyAnnotations };
 }

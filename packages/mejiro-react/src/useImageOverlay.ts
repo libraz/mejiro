@@ -1,3 +1,4 @@
+import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { type PointerEvent as ReactPointerEvent, useCallback, useRef, useState } from 'react';
 
@@ -103,9 +104,11 @@ export function useImageOverlay(
   const onOverlayPointerDown = useCallback(
     (e: ReactPointerEvent) => {
       e.preventDefault();
+      const current = rectRef.current;
+      if (!current) return;
       const startX = e.clientX;
       const startY = e.clientY;
-      const start = { ...(rectRef.current as ImageRect) };
+      const start = { ...current };
       const target = e.currentTarget as HTMLElement;
       target.setPointerCapture(e.nativeEvent.pointerId);
       target.classList.add('dragging');
@@ -114,7 +117,7 @@ export function useImageOverlay(
       const onMove = (me: PointerEvent) => {
         const dx = me.clientX - startX;
         const dy = me.clientY - startY;
-        const r = { ...start, x: start.x + dx, y: start.y + dy };
+        const r = moveImageOverlayRect(start, dx, dy);
         cancelAnimationFrame(rafId);
         rafId = requestAnimationFrame(() => {
           setImageRect(r);
@@ -136,9 +139,11 @@ export function useImageOverlay(
     (e: ReactPointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
+      const current = rectRef.current;
+      if (!current) return;
       const startX = e.clientX;
       const startY = e.clientY;
-      const start = { ...(rectRef.current as ImageRect) };
+      const start = { ...current };
       const target = e.currentTarget as HTMLElement;
       target.setPointerCapture(e.nativeEvent.pointerId);
       target.parentElement?.classList.add('dragging');
@@ -147,7 +152,7 @@ export function useImageOverlay(
       const onMove = (me: PointerEvent) => {
         const dx = me.clientX - startX;
         const dy = me.clientY - startY;
-        const r = { ...start, w: Math.max(40, start.w + dx), h: Math.max(40, start.h + dy) };
+        const r = resizeImageOverlayRect(start, dx, dy);
         cancelAnimationFrame(rafId);
         rafId = requestAnimationFrame(() => {
           setImageRect(r);

@@ -22,6 +22,8 @@ export {
   isLineStartProhibited,
 } from './kinsoku.js';
 export { canBreakAt, computeBreaks } from './layout.js';
+export type { ImageOverlayRect } from './overlay.js';
+export { moveImageOverlayRect, resizeImageOverlayRect } from './overlay.js';
 export type { PageSlice, ParagraphMeasure } from './paginate.js';
 export { getLineRanges, paginate } from './paginate.js';
 export type { RubyAnnotation, RubyType } from './ruby.js';
