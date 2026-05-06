@@ -1,5 +1,18 @@
 # @libraz/mejiro
 
+## 0.4.0
+
+### Minor Changes
+
+- Harden book reflow, EPUB parsing, and CLI; share overlay helpers.
+
+  - Preserve ruby annotations across resize reflow and use real spread starts when computing image column offsets
+  - Make EPUB parsing throw on malformed XML, fall back when DC namespace is dropped, and normalize manifest hrefs
+  - Recursively pick leaf block paragraphs and re-index ruby annotations after whitespace trim
+  - Refactor the CLI to be testable, validate flag values, and surface errors via stderr
+  - Extract `moveImageOverlayRect` / `resizeImageOverlayRect` into core and consume them from React/Vue hooks
+  - Drop the zero-height exclusion fallback and ensure `packPageLines` always advances on oversized first lines
+
 ## 0.3.0
 
 ### Minor Changes
