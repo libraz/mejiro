@@ -3,87 +3,50 @@
 [![npm version](https://img.shields.io/npm/v/@libraz/mejiro-react.svg)](https://www.npmjs.com/package/@libraz/mejiro-react)
 [![license](https://img.shields.io/npm/l/@libraz/mejiro-react.svg)](https://github.com/libraz/mejiro/blob/main/LICENSE)
 
-React components and hooks for [mejiro](https://www.npmjs.com/package/@libraz/mejiro) vertical text rendering.
-
-> **Experimental** — API may change in future releases.
+React components and hooks for [mejiro](https://www.npmjs.com/package/@libraz/mejiro) — vertical text rendering plus full-featured `MejiroReader` / `MejiroEditor` / `MejiroManuscriptEditor` components.
 
 ## Install
 
 ```bash
-npm install @libraz/mejiro @libraz/mejiro-react
+npm install @libraz/mejiro @libraz/mejiro-react react
+npm install -D @types/react
 ```
 
-Peer dependency: `react >= 18`
+Peer dependency: `react >= 18`.
 
-## Quick Start
+## Quick start
 
 ```tsx
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
-import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroPageView } from '@libraz/mejiro-react';
-import '@libraz/mejiro/render/mejiro.css';
+import '@libraz/mejiro/render/mejiro-fonts.css';  // optional webfonts
+import { MejiroReader } from '@libraz/mejiro-react';
 
-const book = new MejiroBook({
-  fontFamily: '"Noto Serif JP"',
-  fontSize: 16,
-  lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
-});
-book.computePageSize(containerEl);
-
-const epub = await parseEpub(buffer);
-const layout = await book.layoutChapter(epub.chapters[0]);
-const spread = layout.getSpread(0);
-
-<MejiroPageView result={spread.right} fontFamily='"Noto Serif JP"' lineSpacing={1.8} />
+export default function App() {
+  return <MejiroReader epubUrl="/book.epub" />;
+}
 ```
 
-## Components
+`MejiroReader` fills its container, so the root chain needs an explicit height:
 
-### `MejiroPageView` (Recommended)
-
-Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS `vertical-rl` and slot-based rendering when images are present.
-
-| Prop | Type | Description |
-|------|------|-------------|
-| `result` | `PageResult` | Required. Page result from `ChapterLayout`. |
-| `fontFamily` | `string` | CSS font family (used in slot-based mode). |
-| `lineSpacing` | `number` | Line spacing multiplier (used in slot-based mode). |
-| `slotMode` | `boolean` | Force slot-based rendering (set when layout has images). |
-| `className` | `string` | Additional CSS class name. |
-| `style` | `CSSProperties` | Additional inline styles. |
-
-### `MejiroPage` (Low-Level)
-
-Renders a `RenderPage` using CSS `writing-mode: vertical-rl`. For use with the lower-level `buildRenderPage()` API.
-
-## Hooks
-
-### `useImageOverlay`
-
-Manages a draggable/resizable image overlay with automatic text reflow.
-
-```tsx
-import { useImageOverlay } from '@libraz/mejiro-react';
-
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, (spread) => setSpread(spread));
+```css
+html, body, #root { height: 100%; margin: 0; }
 ```
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `layout` | `ChapterLayout \| null` | Current chapter layout. |
-| `spreadIdx` | `number` | Current spread index. |
-| `onUpdate` | `(spread: SpreadResult) => void` | Called after every reflow. |
-| `options?` | `UseImageOverlayOptions` | Default dimensions, position, and margin. |
+## Templates
 
-Returns `{ imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown }`.
+Copy-paste-ready starters live under [`examples/`](https://github.com/libraz/mejiro/tree/main/examples):
 
-## CSS
-
-```ts
-import '@libraz/mejiro/render/mejiro.css';
+```bash
+npx degit libraz/mejiro/examples/react my-reader
+npx degit libraz/mejiro/examples/react-shelf my-library
+npx degit libraz/mejiro/examples/react-editor my-editor
+npx degit libraz/mejiro/examples/react-manuscript my-author
 ```
+
+## Documentation
+
+- [React / Vue guide](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md) — components, hooks, props, theming, SSR
+- [Project README](https://github.com/libraz/mejiro)
+- 日本語ドキュメント: [docs/ja/08-react-and-vue.md](https://github.com/libraz/mejiro/tree/main/docs/ja/08-react-and-vue.md)
 
 ## License
 

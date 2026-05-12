@@ -1,15 +1,29 @@
 {
   "name": "@libraz/mejiro-react",
   "version": "0.4.0",
-  "description": "React components for mejiro vertical text rendering",
+  "description": "React components and hooks for mejiro — vertical text rendering, EPUB reader, and editor",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "license": "Apache-2.0",
   "author": "libraz",
   "repository": {
     "type": "git",
-    "url": "https://github.com/libraz/mejiro.git",
+    "url": "git+https://github.com/libraz/mejiro.git",
     "directory": "packages/mejiro-react"
   },
+  "homepage": "https://github.com/libraz/mejiro",
+  "bugs": "https://github.com/libraz/mejiro/issues",
+  "keywords": [
+    "japanese",
+    "vertical-text",
+    "react",
+    "epub",
+    "reader",
+    "editor",
+    "ruby",
+    "writing-mode"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -21,7 +35,10 @@
     "LICENSE",
     "README.md"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css",
+    "./dist/index.js"
+  ],
   "engines": {
     "node": ">=18"
   },
@@ -29,13 +46,23 @@
     "build": "tsup"
   },
   "dependencies": {
-    "@libraz/mejiro": "workspace:*"
+    "@libraz/mejiro": "workspace:^"
   },
   "peerDependencies": {
+    "@types/react": ">=18",
     "react": ">=18"
   },
+  "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    }
+  },
   "devDependencies": {
-    "@types/react": "^19.0.0",
-    "react": "^19.1.0"
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   }
 }

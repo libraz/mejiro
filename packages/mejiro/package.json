@@ -1,13 +1,15 @@
 {
   "name": "@libraz/mejiro",
   "version": "0.4.0",
-  "description": "Japanese vertical text layout engine — line breaking, kinsoku shori, hanging punctuation, ruby, and pagination for the web",
+  "description": "Japanese vertical text layout engine for the web — line breaking, kinsoku shori, hanging punctuation, ruby, EPUB parsing/authoring, and pagination",
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "license": "Apache-2.0",
   "author": "libraz",
   "repository": {
     "type": "git",
-    "url": "https://github.com/libraz/mejiro.git",
+    "url": "git+https://github.com/libraz/mejiro.git",
     "directory": "packages/mejiro"
   },
   "homepage": "https://github.com/libraz/mejiro",
@@ -46,7 +48,15 @@
       "types": "./dist/book/index.d.ts",
       "import": "./dist/book/index.js"
     },
-    "./render/mejiro.css": "./dist/render/mejiro.css"
+    "./image": {
+      "types": "./dist/image/index.d.ts",
+      "import": "./dist/image/index.js"
+    },
+    "./render/mejiro.css": "./dist/render/mejiro.css",
+    "./render/mejiro-reader.css": "./dist/render/mejiro-reader.css",
+    "./render/mejiro-editor.css": "./dist/render/mejiro-editor.css",
+    "./render/mejiro-fonts.css": "./dist/render/mejiro-fonts.css",
+    "./render/mejiro-print.css": "./dist/render/mejiro-print.css"
   },
   "files": [
     "dist",
@@ -54,7 +64,7 @@
     "README.md"
   ],
   "sideEffects": [
-    "*.css"
+    "**/*.css"
   ],
   "engines": {
     "node": ">=18"

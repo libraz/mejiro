@@ -2,12 +2,13 @@
   "name": "mejiro-monorepo",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
-  "packageManager": "yarn@4.12.0",
+  "packageManager": "yarn@4.15.0",
   "volta": {
-    "node": "22.14.0",
-    "yarn": "4.12.0"
+    "node": "22.22.3",
+    "yarn": "4.15.0"
   },
   "scripts": {
     "build": "yarn workspaces foreach -At run build",
@@ -20,18 +21,17 @@
     "dev": "yarn workspace @mejiro/demo dev",
     "dev:react": "yarn workspace @mejiro/react-demo dev",
     "dev:vue": "yarn workspace @mejiro/vue-demo dev",
-    "fetch-demo-epub": "npx tsx scripts/fetch-demo-epub.ts",
-    "changeset": "changeset",
-    "version": "changeset version",
-    "prepublish": "cp LICENSE packages/mejiro/ && cp LICENSE packages/mejiro-react/ && cp LICENSE packages/mejiro-vue/"
+    "fetch-demo-epub": "tsx scripts/fetch-demo-epub.ts",
+    "bump": "node scripts/bump-version.mjs"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.6",
-    "@changesets/cli": "^2.30.0",
-    "@vitest/coverage-v8": "^4.0.18",
-    "happy-dom": "^20.8.3",
+    "@biomejs/biome": "^2.4.15",
+    "@types/node": "^25",
+    "@vitest/coverage-v8": "^4.1.7",
+    "happy-dom": "^20.9.0",
     "tsup": "^8.5.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   }
 }

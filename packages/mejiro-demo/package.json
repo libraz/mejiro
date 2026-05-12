@@ -1,6 +1,6 @@
 {
   "name": "@mejiro/demo",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,6 @@
     "@libraz/mejiro": "workspace:*"
   },
   "devDependencies": {
-    "vite": "^6.0.0"
+    "vite": "^8.0.13"
   }
 }
