@@ -76,6 +76,17 @@ describe('edge cases', () => {
     expect(result.breakPoints.length).toBe(0);
   });
 
+  it('forces a line break at a newline character', () => {
+    const text = toCodepoints('あい\nうえ');
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 16),
+      lineWidth: 1000,
+    });
+
+    expect([...result.breakPoints]).toEqual([2]);
+  });
+
   it('handles single character wider than line width', () => {
     const result = computeBreaks({
       text: toCodepoints('あ'),

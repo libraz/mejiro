@@ -4,6 +4,8 @@ import { isLineEndProhibited, isLineStartProhibited } from './kinsoku.js';
 import { preprocessRuby } from './ruby.js';
 import type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
 
+const LINE_FEED = 10;
+
 /**
  * Computes line break positions for the given layout input.
  *
@@ -63,6 +65,18 @@ export function computeBreaks(input: LayoutInput): BreakResult {
 
   for (let i = 0; i < len; i++) {
     accWidth += adv[i];
+
+    if (text[i] === LINE_FEED) {
+      if (i < len - 1) {
+        breaks.push(i);
+        hangingAdj.push(0);
+        usedLineWidths.push(getLineWidth());
+        lineIndex++;
+      }
+      lineStart = i + 1;
+      accWidth = 0;
+      continue;
+    }
 
     const lineWidth = getLineWidth();
 
