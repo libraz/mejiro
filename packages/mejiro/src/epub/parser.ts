@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import { extractRubyContent } from './ruby-extractor.js';
-import type { EpubBook, EpubChapter } from './types.js';
+import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
 
 /**
  * Parses an EPUB file from an ArrayBuffer.
@@ -13,7 +13,16 @@ import type { EpubBook, EpubChapter } from './types.js';
  * @returns Parsed book with chapters and ruby annotations.
  */
 export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
-  const zip = await JSZip.loadAsync(data);
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(data);
+  } catch (err) {
+    // JSZip's native messages ("Can't find end of central directory…") leak
+    // internal terminology. Wrap so the consumer sees a stable, user-friendly
+    // failure mode for arbitrary non-EPUB input (corrupt buffer, wrong file
+    // type, truncated upload).
+    throw new Error(`Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // 1. Read container.xml to find rootfile path
   const containerXml = await readZipText(zip, 'META-INF/container.xml');
@@ -30,12 +39,25 @@ export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
   const chapters: EpubChapter[] = [];
   for (const href of spineHrefs) {
     const xhtml = await readZipText(zip, href);
-    const paragraphs = extractRubyContent(xhtml);
+    let paragraphs: AnnotatedParagraph[];
+    try {
+      paragraphs = extractRubyContent(xhtml);
+    } catch (err) {
+      // Wrap so the failing chapter is identifiable. Bare XHTML parser errors
+      // would otherwise leave the consumer guessing which spine entry broke.
+      throw new Error(
+        `Failed to parse chapter XHTML: ${href} (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
     const chapterTitle = extractChapterTitle(xhtml);
 
     if (paragraphs.length > 0) {
       chapters.push({ title: chapterTitle, paragraphs });
     }
+  }
+
+  if (chapters.length === 0) {
+    throw new Error('EPUB has no readable chapters');
   }
 
   return { title, author, chapters };
@@ -61,7 +83,7 @@ function parseXml(xml: string): Document {
 /** Extracts the rootfile path from container.xml. */
 function extractRootfilePath(containerXml: string): string {
   const doc = parseXml(containerXml);
-  const rootfile = doc.querySelector('rootfile');
+  const rootfile = firstElementByName(doc, 'rootfile');
   const fullPath = rootfile?.getAttribute('full-path');
   if (!fullPath) throw new Error('Cannot find rootfile path in container.xml');
   return fullPath;
@@ -69,14 +91,25 @@ function extractRootfilePath(containerXml: string): string {
 
 /** Extracts chapter title from XHTML heading elements. */
 function extractChapterTitle(xhtml: string): string | undefined {
-  const doc = parseXml(xhtml);
+  const doc = parseXml(stripStylesheetLinks(xhtml));
+  const explicitTitle = doc.getElementById('chapter-title');
+  if (explicitTitle?.textContent?.trim()) {
+    return explicitTitle.textContent.trim();
+  }
   for (const tag of ['h1', 'h2', 'h3']) {
-    const el = doc.getElementsByTagName(tag)[0];
+    const el = firstElementByName(doc, tag);
     if (el?.textContent?.trim()) {
       return el.textContent.trim();
     }
   }
   return undefined;
+}
+
+function stripStylesheetLinks(xhtml: string): string {
+  return xhtml.replace(
+    /<link\b(?=[^>]*\brel=["']?stylesheet["']?)[^>]*(?:\/>|>(?:\s*<\/link\s*>)?)/giu,
+    '',
+  );
 }
 
 /** Parses OPF to extract metadata and spine item hrefs. */
@@ -101,8 +134,8 @@ function parseOpf(
 
   // Build manifest id → href map
   const manifest = new Map<string, string>();
-  const items = doc.querySelectorAll('manifest > item');
-  for (const item of Array.from(items)) {
+  const manifestEl = firstElementByName(doc, 'manifest');
+  for (const item of childElementsByName(manifestEl, 'item')) {
     const id = item.getAttribute('id');
     const href = item.getAttribute('href');
     if (id && href) {
@@ -112,8 +145,8 @@ function parseOpf(
 
   // Extract spine itemrefs in order
   const spineHrefs: string[] = [];
-  const itemrefs = doc.querySelectorAll('spine > itemref');
-  for (const itemref of Array.from(itemrefs)) {
+  const spineEl = firstElementByName(doc, 'spine');
+  for (const itemref of childElementsByName(spineEl, 'itemref')) {
     const idref = itemref.getAttribute('idref');
     if (idref) {
       const href = manifest.get(idref);
@@ -124,9 +157,27 @@ function parseOpf(
   return { title, author, spineHrefs };
 }
 
+function firstElementByName(parent: Document | Element, localName: string): Element | undefined {
+  return Array.from(parent.getElementsByTagName('*')).find(
+    (el) => el.localName === localName || el.tagName === localName,
+  );
+}
+
+function childElementsByName(parent: Element | undefined, localName: string): Element[] {
+  if (!parent) return [];
+  return Array.from(parent.children).filter(
+    (el) => el.localName === localName || el.tagName === localName,
+  );
+}
+
 function resolveZipPath(baseDir: string, href: string): string {
   const hrefPath = href.split('#', 1)[0].split('?', 1)[0];
-  const decodedHref = decodeURIComponent(hrefPath);
+  let decodedHref: string;
+  try {
+    decodedHref = decodeURIComponent(hrefPath);
+  } catch {
+    throw new Error(`Invalid EPUB href: ${href}`);
+  }
   const parts = `${baseDir}${decodedHref}`.split('/');
   const normalized: string[] = [];
   for (const part of parts) {

@@ -1,4 +1,4 @@
-import type { RubyInputAnnotation } from '../browser/types.js';
+import type { InlineAnnotation } from '../browser/types.js';
 import type { AnnotatedParagraph } from './types.js';
 
 /** Block-level element names that act as paragraph boundaries. */
@@ -30,7 +30,12 @@ const BLOCK_ELEMENTS = new Set([
  */
 export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
   const parser = new DOMParser();
-  const doc = parser.parseFromString(xhtml, 'application/xhtml+xml');
+  const doc = parser.parseFromString(stripStylesheetLinks(xhtml), 'application/xhtml+xml');
+  if (doc.getElementsByTagName('parsererror').length > 0) {
+    // application/xhtml+xml parsing inserts a <parsererror> on malformed
+    // input instead of throwing; promote it so the caller can react.
+    throw new Error('Failed to parse XHTML document');
+  }
   const body = doc.body ?? doc.documentElement;
 
   const paragraphs: AnnotatedParagraph[] = [];
@@ -49,6 +54,13 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
   }
 
   return paragraphs;
+}
+
+function stripStylesheetLinks(xhtml: string): string {
+  return xhtml.replace(
+    /<link\b(?=[^>]*\brel=["']?stylesheet["']?)[^>]*(?:\/>|>(?:\s*<\/link\s*>)?)/giu,
+    '',
+  );
 }
 
 function collectParagraphElements(root: Element): Element[] {
@@ -79,7 +91,7 @@ function collectParagraphElements(root: Element): Element[] {
  */
 function extractFromElement(element: Element): AnnotatedParagraph {
   let text = '';
-  const rubyAnnotations: RubyInputAnnotation[] = [];
+  const inlineAnnotations: InlineAnnotation[] = [];
 
   function walk(node: Node): void {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -103,10 +115,73 @@ function extractFromElement(element: Element): AnnotatedParagraph {
       return;
     }
 
+    if (tagName === 'br') {
+      text += '\n';
+      return;
+    }
+
+    if (tagName === 'em' && el.classList.contains('mejiro-emphasis')) {
+      recordInline(el, (startIndex, endIndex) => ({
+        kind: 'emphasis',
+        startIndex,
+        endIndex,
+        style: emphasisStyle(el.getAttribute('data-style')),
+      }));
+      return;
+    }
+
+    if (tagName === 'span' && el.classList.contains('mejiro-tcy')) {
+      recordInline(el, (startIndex, endIndex) => ({ kind: 'tcy', startIndex, endIndex }));
+      return;
+    }
+
+    if (tagName === 'em') {
+      recordInline(el, (startIndex, endIndex) => ({ kind: 'em', startIndex, endIndex }));
+      return;
+    }
+
+    if (tagName === 'strong') {
+      recordInline(el, (startIndex, endIndex) => ({ kind: 'strong', startIndex, endIndex }));
+      return;
+    }
+
+    if (tagName === 'a') {
+      const href = el.getAttribute('href') ?? '';
+      if (el.classList.contains('mejiro-footnote-ref') && href.startsWith('#')) {
+        recordInline(el, (startIndex, endIndex) => ({
+          kind: 'footnote',
+          startIndex,
+          endIndex,
+          noteId: href.slice(1),
+        }));
+      } else {
+        recordInline(el, (startIndex, endIndex) => ({
+          kind: 'link',
+          startIndex,
+          endIndex,
+          href,
+          ...(el.getAttribute('title') ? { title: el.getAttribute('title') ?? undefined } : {}),
+        }));
+      }
+      return;
+    }
+
     // Recurse into child nodes
     for (const child of Array.from(el.childNodes)) {
       walk(child);
     }
+  }
+
+  function recordInline(
+    el: Element,
+    create: (startIndex: number, endIndex: number) => InlineAnnotation,
+  ): void {
+    const startIndex = charCount(text);
+    for (const child of Array.from(el.childNodes)) {
+      walk(child);
+    }
+    const endIndex = charCount(text);
+    if (endIndex > startIndex) inlineAnnotations.push(create(startIndex, endIndex));
   }
 
   function processRuby(rubyEl: Element): void {
@@ -161,7 +236,8 @@ function extractFromElement(element: Element): AnnotatedParagraph {
       const endIndex = charCount(text);
       const baseLen = endIndex - startIndex;
 
-      rubyAnnotations.push({
+      inlineAnnotations.push({
+        kind: 'ruby',
         startIndex,
         endIndex,
         rubyText: seg.rt,
@@ -182,7 +258,8 @@ function extractFromElement(element: Element): AnnotatedParagraph {
         const segEnd = charCount(text);
         const segLen = segEnd - segStart;
 
-        rubyAnnotations.push({
+        inlineAnnotations.push({
+          kind: 'ruby',
           startIndex: segStart,
           endIndex: segEnd,
           rubyText: seg.rt,
@@ -201,7 +278,8 @@ function extractFromElement(element: Element): AnnotatedParagraph {
       if (overallEnd - overallStart > 1) {
         // Combine all ruby text
         const combinedRubyText = segments.map((s) => s.rt).join('');
-        rubyAnnotations.push({
+        inlineAnnotations.push({
+          kind: 'ruby',
           startIndex: overallStart,
           endIndex: overallEnd,
           rubyText: combinedRubyText,
@@ -216,7 +294,12 @@ function extractFromElement(element: Element): AnnotatedParagraph {
     walk(child);
   }
 
-  return { text, rubyAnnotations };
+  return { text, inlineAnnotations };
+}
+
+function emphasisStyle(value: string | null): 'sesame' | 'dot' | 'circle' | undefined {
+  if (value === 'sesame' || value === 'dot' || value === 'circle') return value;
+  return undefined;
 }
 
 /** Counts characters in a string (respecting surrogate pairs). */
@@ -234,7 +317,7 @@ function trimParagraph(paragraph: AnnotatedParagraph): AnnotatedParagraph {
 
   if (start === 0 && end === chars.length) return paragraph;
 
-  const rubyAnnotations = paragraph.rubyAnnotations
+  const inlineAnnotations: InlineAnnotation[] = paragraph.inlineAnnotations
     .filter((ann) => ann.startIndex >= start && ann.endIndex <= end)
     .map((ann) => ({
       ...ann,
@@ -242,5 +325,5 @@ function trimParagraph(paragraph: AnnotatedParagraph): AnnotatedParagraph {
       endIndex: ann.endIndex - start,
     }));
 
-  return { ...paragraph, text: chars.slice(start, end).join(''), rubyAnnotations };
+  return { ...paragraph, text: chars.slice(start, end).join(''), inlineAnnotations };
 }
