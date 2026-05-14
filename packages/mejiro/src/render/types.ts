@@ -1,30 +1,36 @@
-import type { RubyInputAnnotation } from '../browser/types.js';
+import type { InlineAnnotation } from '../browser/types.js';
 
 /** A text segment within a rendered line. */
 export type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string };
+  | { type: 'ruby'; base: string; rubyText: string }
+  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
+  | { type: 'tcy'; text: string }
+  | { type: 'em'; text: string }
+  | { type: 'strong'; text: string }
+  | { type: 'link'; text: string; href: string; title?: string }
+  | { type: 'footnote-ref'; text: string; noteId: string };
 
 /** A single rendered line containing text and ruby segments. */
 export interface RenderLine {
   /** Segments that make up this line. */
-  segments: RenderSegment[];
+  readonly segments: readonly RenderSegment[];
 }
 
 /** A rendered paragraph containing multiple lines. */
 export interface RenderParagraph {
   /** Lines in this paragraph. */
-  lines: RenderLine[];
+  readonly lines: readonly RenderLine[];
   /** Whether this paragraph is a heading (true if headingLevel is set). */
-  isHeading: boolean;
+  readonly isHeading: boolean;
   /** Heading level (1–6), or undefined for body text. */
-  headingLevel?: number;
+  readonly headingLevel?: number;
 }
 
 /** A full rendered page containing paragraphs. */
 export interface RenderPage {
   /** Paragraphs on this page. */
-  paragraphs: RenderParagraph[];
+  readonly paragraphs: readonly RenderParagraph[];
 }
 
 /** Per-line layout metric for exclusion-mode column positioning. */
@@ -53,8 +59,8 @@ export interface RenderEntry {
   chars: string[];
   /** Break points from the line breaking algorithm. */
   breakPoints: Uint32Array;
-  /** Ruby annotations for this paragraph. */
-  rubyAnnotations: RubyInputAnnotation[];
+  /** Inline annotations for this paragraph (ruby, emphasis, tcy, etc.). */
+  inlineAnnotations: readonly InlineAnnotation[];
   /**
    * Whether this paragraph is a heading.
    * @deprecated Use `headingLevel` instead. When `headingLevel` is set, this field is ignored.

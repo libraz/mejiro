@@ -1,0 +1,197 @@
+/*
+ * mejiro-editor.css — optional editor chrome shared by
+ * @libraz/mejiro-vue and @libraz/mejiro-react editor components.
+ *
+ * Import with the reader chrome:
+ *   import '@libraz/mejiro/render/mejiro-reader.css';
+ *   import '@libraz/mejiro/render/mejiro-editor.css';
+ *
+ * Wrapped in the shared `mejiro.chrome` cascade layer.
+ */
+
+@layer mejiro.base, mejiro.chrome, mejiro.print;
+
+@layer mejiro.chrome {
+  .mejiro-editor {
+    --mejiro-editor-panel: #f5f0e4;
+    --mejiro-editor-line: #d8d0c4;
+    --mejiro-editor-ink: #2a2521;
+
+    height: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    background: var(--mejiro-bg-deep, #1c1915);
+    color: var(--mejiro-editor-ink);
+    font-family: var(--mejiro-font-ui, "Helvetica Neue", system-ui, sans-serif);
+  }
+
+  .mejiro-editor-preview {
+    min-width: 0;
+    min-height: 0;
+    position: relative;
+  }
+
+  .mejiro-editor-preview > .mejiro-reader,
+  .mejiro-editor-preview > .mejiro-reader-drop-zone {
+    height: 100%;
+  }
+
+  .mejiro-editor-panel {
+    min-width: 0;
+    padding: 18px;
+    background: var(--mejiro-editor-panel);
+    border-left: 1px solid rgba(42, 37, 33, 0.16);
+    box-sizing: border-box;
+    overflow: auto;
+  }
+
+  .mejiro-editor-head {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 16px;
+  }
+
+  .mejiro-editor-head span,
+  .mejiro-editor-label {
+    color: var(--mejiro-accent, #8b3a3a);
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .mejiro-editor-head strong {
+    font-family: var(--mejiro-font-body, serif);
+    font-size: 1.05rem;
+    line-height: 1.35;
+  }
+
+  .mejiro-editor-head small {
+    color: var(--mejiro-ink-light, #6b6156);
+    font-size: 0.72rem;
+  }
+
+  .mejiro-editor-section {
+    padding: 14px 0;
+    border-top: 1px solid var(--mejiro-editor-line);
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .mejiro-editor-paragraphs {
+    max-height: 210px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .mejiro-editor-paragraphs button {
+    padding: 9px 10px;
+    border: 1px solid transparent;
+    background: #fff;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .mejiro-editor-paragraphs button.is-active {
+    border-color: rgba(139, 58, 58, 0.45);
+    box-shadow: inset 3px 0 0 var(--mejiro-accent, #8b3a3a);
+  }
+
+  .mejiro-editor-paragraphs span,
+  .mejiro-editor-paragraphs strong {
+    display: block;
+  }
+
+  .mejiro-editor-paragraphs span {
+    color: var(--mejiro-ink-light, #6b6156);
+    font-size: 0.62rem;
+    margin-bottom: 3px;
+  }
+
+  .mejiro-editor-paragraphs strong {
+    font-size: 0.76rem;
+    line-height: 1.45;
+    font-weight: 500;
+  }
+
+  .mejiro-editor textarea,
+  .mejiro-editor input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--mejiro-control-border, #ccc5b8);
+    background: #fff;
+    color: inherit;
+    font: inherit;
+    font-size: 0.78rem;
+    padding: 8px;
+  }
+
+  .mejiro-editor textarea {
+    min-height: 110px;
+    resize: vertical;
+    line-height: 1.7;
+  }
+
+  .mejiro-editor textarea.mejiro-editor-manuscript {
+    min-height: 260px;
+    font-family: var(--mejiro-font-body, serif);
+  }
+
+  .mejiro-editor-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .mejiro-editor button {
+    border: 1px solid var(--mejiro-control-border, #ccc5b8);
+    background: #fff;
+    color: inherit;
+    font: inherit;
+    font-size: 0.74rem;
+    padding: 8px 10px;
+    cursor: pointer;
+  }
+
+  .mejiro-editor button.mejiro-editor-primary,
+  .mejiro-editor button.mejiro-editor-export {
+    background: var(--mejiro-accent, #8b3a3a);
+    border-color: var(--mejiro-accent, #8b3a3a);
+    color: #fff;
+  }
+
+  .mejiro-editor-export {
+    width: 100%;
+    margin-top: 14px;
+  }
+
+  .mejiro-editor-loading,
+  .mejiro-editor-error {
+    position: absolute;
+    left: 18px;
+    bottom: 18px;
+    padding: 8px 10px;
+    background: rgba(245, 240, 228, 0.95);
+    color: var(--mejiro-editor-ink);
+    font-size: 0.74rem;
+  }
+
+  @media (max-width: 900px) {
+    .mejiro-editor {
+      height: auto;
+      min-height: 100%;
+      grid-template-columns: 1fr;
+      grid-template-rows: minmax(640px, 100vh) auto;
+    }
+
+    .mejiro-editor-panel {
+      border-left: 0;
+      border-top: 1px solid rgba(42, 37, 33, 0.16);
+    }
+  }
+} /* end @layer mejiro.chrome */

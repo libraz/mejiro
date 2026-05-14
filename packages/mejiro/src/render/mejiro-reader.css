@@ -1,0 +1,1358 @@
+/*
+ * mejiro-reader.css — optional book/spread chrome shared by
+ * @libraz/mejiro-vue and @libraz/mejiro-react components.
+ *
+ * Import once at app entry:
+ *   import '@libraz/mejiro/render/mejiro-reader.css';
+ *
+ * All visible properties are CSS custom properties prefixed with `--mejiro-`
+ * so apps can theme the reader without overriding rules.
+ *
+ * All rules live inside the `mejiro.chrome` cascade layer so host apps can
+ * override them deterministically (any unlayered rule wins over us).
+ */
+
+@layer mejiro.base, mejiro.chrome, mejiro.print;
+
+@layer mejiro.chrome {
+  .mejiro-reader {
+    /* Default palette = "light" theme. Override per theme below. */
+    --mejiro-bg-deep: #1c1915;
+    --mejiro-bg-paper: #f5f0e4;
+    --mejiro-ink: #2a2521;
+    --mejiro-ink-light: #6b6156;
+    --mejiro-ink-faint: #a89e91;
+    --mejiro-ink-ghost: #c8c0b4;
+    --mejiro-accent: #8b3a3a;
+    --mejiro-accent-soft: #a85c50;
+    --mejiro-border: #d8d0c4;
+    --mejiro-control-bg: #fff;
+    --mejiro-control-border: #ccc5b8;
+    --mejiro-shadow-book:
+      0 1px 2px rgba(0, 0, 0, 0.07), 0 4px 12px rgba(0, 0, 0, 0.1), 0 16px 40px rgba(0, 0, 0, 0.14);
+    --mejiro-font-ui: "Helvetica Neue", system-ui, sans-serif;
+    --mejiro-font-body: serif;
+    --mejiro-transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --mejiro-page-pad-x: 52px;
+    --mejiro-page-pad-y: 56px;
+    --mejiro-page-pad-bottom: 40px;
+
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    font-family: var(--mejiro-font-ui);
+    background: var(--mejiro-bg-deep);
+    color: var(--mejiro-ink);
+    user-select: none;
+  }
+
+  .mejiro-reader [hidden] {
+    display: none;
+  }
+
+  /* ── Theme presets ──
+ * Each preset overrides the palette declared on `.mejiro-reader` above.
+ * `[data-mejiro-theme="auto"]` mirrors the dark palette under the
+ * `prefers-color-scheme: dark` media query and falls back to light otherwise. */
+  .mejiro-reader[data-mejiro-theme="dark"] {
+    --mejiro-bg-deep: #0d0c0a;
+    --mejiro-bg-paper: #181614;
+    --mejiro-ink: #d8d0c4;
+    --mejiro-ink-light: #a89e91;
+    --mejiro-ink-faint: #7d756a;
+    --mejiro-ink-ghost: #5b5448;
+    --mejiro-accent: #c98080;
+    --mejiro-accent-soft: #d89090;
+    --mejiro-border: #2c2925;
+    --mejiro-control-bg: #1f1c19;
+    --mejiro-control-border: #3a3631;
+    --mejiro-shadow-book:
+      0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.45), 0 16px 40px rgba(0, 0, 0, 0.55);
+  }
+
+  .mejiro-reader[data-mejiro-theme="sepia"] {
+    --mejiro-bg-deep: #2a221a;
+    --mejiro-bg-paper: #f4e8d0;
+    --mejiro-ink: #3a2a1a;
+    --mejiro-ink-light: #6b4f30;
+    --mejiro-ink-faint: #9c7d52;
+    --mejiro-ink-ghost: #c6a87a;
+    --mejiro-accent: #8b3a1a;
+    --mejiro-accent-soft: #a85c2a;
+    --mejiro-border: #d6c39a;
+    --mejiro-control-bg: #f9efd9;
+    --mejiro-control-border: #c9b58a;
+  }
+
+  .mejiro-reader[data-mejiro-theme="high-contrast"] {
+    --mejiro-bg-deep: #000000;
+    --mejiro-bg-paper: #ffffff;
+    --mejiro-ink: #000000;
+    --mejiro-ink-light: #1a1a1a;
+    --mejiro-ink-faint: #333333;
+    --mejiro-ink-ghost: #4d4d4d;
+    --mejiro-accent: #b00000;
+    --mejiro-accent-soft: #d63030;
+    --mejiro-border: #000000;
+    --mejiro-control-bg: #ffffff;
+    --mejiro-control-border: #000000;
+    --mejiro-shadow-book: 0 0 0 1px #000000;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    .mejiro-reader[data-mejiro-theme="auto"] {
+      --mejiro-bg-deep: #0d0c0a;
+      --mejiro-bg-paper: #181614;
+      --mejiro-ink: #d8d0c4;
+      --mejiro-ink-light: #a89e91;
+      --mejiro-ink-faint: #7d756a;
+      --mejiro-ink-ghost: #5b5448;
+      --mejiro-accent: #c98080;
+      --mejiro-accent-soft: #d89090;
+      --mejiro-border: #2c2925;
+      --mejiro-control-bg: #1f1c19;
+      --mejiro-control-border: #3a3631;
+      --mejiro-shadow-book:
+        0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.45),
+        0 16px 40px rgba(0, 0, 0, 0.55);
+    }
+  }
+
+  /* ── Header ── */
+  .mejiro-reader-header {
+    background: var(--mejiro-bg-deep);
+    color: #d6cfc5;
+    padding: 0 28px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    z-index: 100;
+    box-sizing: border-box;
+  }
+
+  .mejiro-reader-header-left {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    min-width: 0;
+  }
+
+  .mejiro-reader-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+  }
+
+  .mejiro-reader-logo {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+
+  .mejiro-reader-logo-mark {
+    font-family: var(--mejiro-font-body);
+    font-size: 1.15rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: #e8e0d4;
+  }
+
+  .mejiro-reader-logo-sub {
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #7a7268;
+  }
+
+  .mejiro-reader-btn {
+    background: none;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #b0a898;
+    padding: 4px 12px;
+    font-size: 0.65rem;
+    font-family: var(--mejiro-font-ui);
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: all var(--mejiro-transition);
+    border-radius: 0;
+  }
+
+  .mejiro-reader-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: #d6cfc5;
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .mejiro-reader-btn.is-active {
+    background: rgba(139, 58, 58, 0.12);
+    color: var(--mejiro-accent-soft);
+    border-color: var(--mejiro-accent-soft);
+  }
+
+  .mejiro-reader-btn-arrow {
+    display: inline-block;
+    transition: transform var(--mejiro-transition);
+    font-size: 0.55rem;
+    margin-left: 4px;
+  }
+
+  .mejiro-reader-btn.is-active .mejiro-reader-btn-arrow {
+    transform: rotate(180deg);
+  }
+
+  .mejiro-reader-stats {
+    font-size: 0.62rem;
+    letter-spacing: 0.04em;
+    color: #7a7268;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mejiro-reader-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    background: var(--mejiro-bg-deep);
+    overflow: hidden;
+  }
+
+  /* ── Chapter nav ── */
+  .mejiro-reader-chapter-nav {
+    display: flex;
+    align-items: center;
+  }
+
+  .mejiro-reader-chapter-nav select {
+    padding: 4px 26px 4px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: transparent;
+    color: #c8c0b4;
+    font-size: 0.7rem;
+    font-family: var(--mejiro-font-ui);
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%237a7268'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    max-width: 260px;
+    cursor: pointer;
+    border-radius: 0;
+  }
+
+  .mejiro-reader-chapter-nav select:focus {
+    outline: none;
+    border-color: var(--mejiro-accent-soft);
+  }
+
+  .mejiro-reader-chapter-panel {
+    width: min(320px, 28vw);
+    min-width: 248px;
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0)), #211d18;
+    border-right: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: inset -1px 0 0 rgba(0, 0, 0, 0.18);
+    color: #d6cfc5;
+    overflow: hidden;
+    z-index: 20;
+  }
+
+  .mejiro-reader-chapter-panel-head {
+    padding: 22px 22px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .mejiro-reader-chapter-panel-head strong {
+    color: #eee6d9;
+    font-family: var(--mejiro-font-body);
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .mejiro-reader-chapter-panel-head span {
+    color: #8f877c;
+    font-size: 0.68rem;
+    line-height: 1.5;
+  }
+
+  .mejiro-reader-chapter-panel-kicker {
+    color: var(--mejiro-accent-soft);
+    font-size: 0.58rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
+
+  .mejiro-reader-chapter-list {
+    margin: 0;
+    padding: 10px;
+    list-style: none;
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+
+  .mejiro-reader-chapter-list-item {
+    margin: 0;
+  }
+
+  .mejiro-reader-chapter-card {
+    width: 100%;
+    min-height: 88px;
+    display: grid;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 12px;
+    padding: 13px 12px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: inherit;
+    font-family: var(--mejiro-font-ui);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background var(--mejiro-transition),
+      border-color var(--mejiro-transition),
+      box-shadow var(--mejiro-transition);
+  }
+
+  .mejiro-reader-chapter-card:hover {
+    background: rgba(255, 255, 255, 0.035);
+    border-color: rgba(255, 255, 255, 0.07);
+  }
+
+  .mejiro-reader-chapter-card.is-active {
+    background: rgba(139, 58, 58, 0.16);
+    border-color: rgba(168, 92, 80, 0.48);
+    box-shadow: inset 3px 0 0 var(--mejiro-accent-soft);
+  }
+
+  .mejiro-reader-chapter-number {
+    color: #7d7468;
+    font-size: 0.62rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.6;
+  }
+
+  .mejiro-reader-chapter-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .mejiro-reader-chapter-title {
+    color: #eee6d9;
+    font-family: var(--mejiro-font-body);
+    font-size: 0.88rem;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .mejiro-reader-chapter-preview {
+    color: #a89e91;
+    font-size: 0.68rem;
+    line-height: 1.55;
+  }
+
+  .mejiro-reader-chapter-subheads {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .mejiro-reader-chapter-subheads span {
+    max-width: 100%;
+    padding: 2px 6px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #bda99b;
+    font-size: 0.58rem;
+    line-height: 1.45;
+  }
+
+  @media (max-width: 840px) {
+    .mejiro-reader-body.has-chapter-panel {
+      flex-direction: column;
+    }
+
+    .mejiro-reader-chapter-panel {
+      width: 100%;
+      min-width: 0;
+      max-height: 230px;
+      border-right: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18);
+    }
+
+    .mejiro-reader-chapter-panel-head {
+      padding: 14px 18px 12px;
+    }
+
+    .mejiro-reader-chapter-list {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(240px, 72vw);
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+  }
+
+  /* ── Settings panel ── */
+  .mejiro-reader-settings-panel {
+    background: #f0ebe0;
+    border-bottom: 1px solid var(--mejiro-border);
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    flex-shrink: 0;
+    z-index: 90;
+  }
+
+  .mejiro-reader-settings-panel.is-open {
+    max-height: 200px;
+  }
+
+  .mejiro-reader-settings-inner {
+    padding: 16px 28px 20px;
+    display: flex;
+    gap: 32px;
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: all 0.25s ease 0.08s;
+  }
+
+  .mejiro-reader-settings-panel.is-open .mejiro-reader-settings-inner {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .mejiro-reader-settings-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .mejiro-reader-settings-group-title {
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--mejiro-ink-faint);
+    white-space: nowrap;
+  }
+
+  .mejiro-reader-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .mejiro-reader-control-label {
+    font-size: 0.65rem;
+    color: var(--mejiro-ink-light);
+    white-space: nowrap;
+  }
+
+  .mejiro-reader-control input,
+  .mejiro-reader-control select {
+    padding: 4px 8px;
+    border: 1px solid var(--mejiro-control-border);
+    background: var(--mejiro-control-bg);
+    font-size: 0.72rem;
+    font-family: var(--mejiro-font-ui);
+    color: var(--mejiro-ink);
+    appearance: none;
+    -webkit-appearance: none;
+    border-radius: 0;
+    width: auto;
+  }
+
+  .mejiro-reader-control select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%236b6156'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    padding-right: 22px;
+  }
+
+  .mejiro-reader-control input:focus,
+  .mejiro-reader-control select:focus {
+    outline: none;
+    border-color: var(--mejiro-accent);
+    box-shadow: 0 0 0 2px rgba(139, 58, 58, 0.2);
+  }
+
+  .mejiro-reader-control input[type="number"] {
+    width: 52px;
+  }
+
+  .mejiro-reader-control input.mejiro-reader-control--wide {
+    width: 58px;
+  }
+
+  /* ── Reading surface ── */
+  .mejiro-reader-surface {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      radial-gradient(ellipse at 40% 30%, rgba(40, 35, 28, 0.95) 0%, var(--mejiro-bg-deep) 70%),
+      var(--mejiro-bg-deep);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .mejiro-reader-surface::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 2px,
+      rgba(255, 255, 255, 0.003) 2px,
+      rgba(255, 255, 255, 0.003) 4px
+    );
+    pointer-events: none;
+  }
+
+  /* ── Drop zone ── */
+  .mejiro-reader-drop-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    border: 1.5px dashed rgba(255, 255, 255, 0.08);
+    padding: 56px 40px;
+    width: 400px;
+    cursor: pointer;
+    transition: all var(--mejiro-transition);
+    background: none;
+    font-family: var(--mejiro-font-ui);
+  }
+
+  .mejiro-reader-drop-zone:hover,
+  .mejiro-reader-drop-zone.is-dragover {
+    border-color: var(--mejiro-accent-soft);
+    background: rgba(139, 58, 58, 0.03);
+  }
+
+  .mejiro-reader-drop-zone-icon {
+    font-size: 1.8rem;
+    opacity: 0.35;
+    line-height: 1;
+  }
+
+  .mejiro-reader-drop-zone-text {
+    color: #8a8078;
+    font-size: 0.78rem;
+    text-align: center;
+    line-height: 1.7;
+  }
+
+  .mejiro-reader-drop-zone-text strong {
+    color: #b8ae9e;
+    font-weight: 500;
+  }
+
+  .mejiro-reader-drop-zone-hint {
+    font-size: 0.62rem;
+    color: #6a6258;
+  }
+
+  /* ── Loading ── */
+  .mejiro-reader-loading {
+    color: #7a7268;
+    font-size: 0.78rem;
+    font-family: var(--mejiro-font-body);
+    letter-spacing: 0.1em;
+    animation: mejiro-reader-pulse 1.8s ease-in-out infinite;
+  }
+
+  @keyframes mejiro-reader-pulse {
+    0%,
+    100% {
+      opacity: 0.25;
+    }
+    50% {
+      opacity: 0.7;
+    }
+  }
+
+  /* ── Book + spread ── */
+  .mejiro-reader-book {
+    position: relative;
+  }
+
+  .mejiro-reader-spread {
+    display: flex;
+    flex-direction: row-reverse;
+    position: relative;
+    box-shadow: var(--mejiro-shadow-book);
+    transition: opacity 0.2s ease;
+  }
+
+  .mejiro-reader-spread.is-turning {
+    opacity: 0;
+  }
+
+  /* Respect reduced-motion preferences: skip the page-turn fade and reader
+   * chrome animations. */
+  @media (prefers-reduced-motion: reduce) {
+    .mejiro-reader-spread,
+    .mejiro-reader-spread.is-turning,
+    .mejiro-reader-btn,
+    .mejiro-reader-chapter-card,
+    .mejiro-reader-image-overlay,
+    .mejiro-reader-settings-panel,
+    .mejiro-reader-settings-inner {
+      transition: none;
+      animation: none;
+    }
+    .mejiro-reader-spread.is-turning {
+      opacity: 1;
+    }
+  }
+
+  /* Visually-hidden region for aria-live spread announcements. */
+  .mejiro-reader-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Forced-colors mode (Windows high-contrast): defer to system colors. */
+  @media (forced-colors: active) {
+    .mejiro-reader {
+      background: Canvas;
+      color: CanvasText;
+    }
+    .mejiro-reader-page {
+      background: Canvas;
+      color: CanvasText;
+      border-color: CanvasText;
+    }
+    .mejiro-reader-btn,
+    .mejiro-toc-link,
+    .mejiro-shelf-card {
+      border-color: CanvasText;
+      color: CanvasText;
+    }
+    .mejiro-reader-spread,
+    .mejiro-shelf-cover {
+      box-shadow: none;
+      border: 1px solid CanvasText;
+    }
+  }
+
+  /* Single-page mode: render only the right page, centered. */
+  .mejiro-reader-spread--single {
+    flex-direction: row;
+    justify-content: center;
+  }
+
+  /* Chrome-hidden state (toggled by surface tap). Header and the chapter
+ * panel slide away to maximize the reading surface. The settings panel is
+ * left untouched because it is user-driven. */
+  .mejiro-reader--chrome-hidden .mejiro-reader-header,
+  .mejiro-reader--chrome-hidden .mejiro-reader-chapter-panel {
+    display: none;
+  }
+
+  /* ── Page ── */
+  .mejiro-reader-page {
+    position: relative;
+    background: var(--mejiro-bg-paper);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .mejiro-reader-page::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='256' height='256' filter='url(%23n)' opacity='0.025'/%3E%3C/svg%3E")
+      repeat;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .mejiro-reader-page--right {
+    border-left: 1px solid rgba(0, 0, 0, 0.06);
+  }
+
+  .mejiro-reader-page--right::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 20px;
+    background: linear-gradient(to right, rgba(0, 0, 0, 0.06), transparent);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .mejiro-reader-page--left {
+    border-right: 1px solid rgba(0, 0, 0, 0.06);
+  }
+
+  .mejiro-reader-page--left::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 20px;
+    background: linear-gradient(to left, rgba(0, 0, 0, 0.06), transparent);
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .mejiro-reader-page-rule {
+    position: absolute;
+    top: 28px;
+    left: var(--mejiro-page-pad-x);
+    right: var(--mejiro-page-pad-x);
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      var(--mejiro-accent) 15%,
+      var(--mejiro-accent) 85%,
+      transparent
+    );
+    opacity: 0.18;
+    z-index: 3;
+  }
+
+  .mejiro-reader-page-header {
+    position: absolute;
+    top: 14px;
+    left: var(--mejiro-page-pad-x);
+    right: var(--mejiro-page-pad-x);
+    display: flex;
+    justify-content: space-between;
+    z-index: 3;
+  }
+
+  .mejiro-reader-page-header-title {
+    font-family: var(--mejiro-font-body);
+    font-size: 0.52rem;
+    color: var(--mejiro-ink-ghost);
+    letter-spacing: 0.15em;
+  }
+
+  .mejiro-reader-page-header-num {
+    font-family: var(--mejiro-font-body);
+    font-size: 0.52rem;
+    color: var(--mejiro-ink-ghost);
+    letter-spacing: 0.08em;
+  }
+
+  .mejiro-reader-page-viewport {
+    padding: var(--mejiro-page-pad-y) var(--mejiro-page-pad-x) var(--mejiro-page-pad-bottom);
+  }
+
+  .mejiro-reader-page-clip {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  .mejiro-reader-page-content {
+    writing-mode: vertical-rl;
+    width: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph {
+    writing-mode: vertical-rl;
+    display: inline-block;
+    margin-left: 0.4em;
+    white-space: nowrap;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph:first-child {
+    margin-left: 0;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--heading {
+    font-weight: 700;
+    font-size: 1.4em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--heading + .mejiro-paragraph {
+    margin-left: 1.2em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h1 {
+    font-weight: 700;
+    font-size: 1.6em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h1 + .mejiro-paragraph {
+    margin-left: 1.4em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h2 {
+    font-weight: 700;
+    font-size: 1.4em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h2 + .mejiro-paragraph {
+    margin-left: 1.2em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h3 {
+    font-weight: 700;
+    font-size: 1.2em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h3 + .mejiro-paragraph {
+    margin-left: 1em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h4 {
+    font-weight: 700;
+    font-size: 1.1em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h4 + .mejiro-paragraph {
+    margin-left: 0.8em;
+  }
+
+  .mejiro-reader-page-content ruby,
+  .mejiro-page-slots ruby {
+    ruby-align: center;
+  }
+
+  .mejiro-reader-page-content rt,
+  .mejiro-page-slots rt {
+    font-size: 0.5em;
+    font-weight: 400;
+  }
+
+  .mejiro-reader-exclusion-column {
+    position: absolute;
+    writing-mode: vertical-rl;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  /* ── Continuous scroll mode ── */
+  .mejiro-reader-scroll {
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: flex;
+    justify-content: center;
+    padding: 24px 0;
+    box-sizing: border-box;
+    overscroll-behavior: contain;
+  }
+
+  .mejiro-reader-scroll-track {
+    align-items: center;
+  }
+
+  /* In scroll mode each page sits in a vertical stack — keep the book shadow
+ * but flatten the row-reverse layout used by the paginated spread. */
+  .mejiro-reader-scroll .mejiro-reader-page {
+    box-shadow: var(--mejiro-shadow-book);
+  }
+
+  /* ── Navigation zones ── */
+  .mejiro-reader-nav-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 25%;
+    cursor: pointer;
+    z-index: 10;
+    transition: background 0.15s ease;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+
+  .mejiro-reader-nav-zone:active {
+    background: rgba(0, 0, 0, 0.02);
+  }
+
+  .mejiro-reader-nav-zone--prev {
+    right: 0;
+  }
+
+  .mejiro-reader-nav-zone--next {
+    left: 0;
+  }
+
+  /* ── Page indicator ── */
+  .mejiro-reader-page-indicator {
+    position: absolute;
+    bottom: -24px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--mejiro-font-body);
+    font-size: 0.55rem;
+    color: #7a7268;
+    letter-spacing: 0.12em;
+    z-index: 3;
+    white-space: nowrap;
+  }
+
+  /* ── Image overlay ── */
+  .mejiro-reader-image-overlay {
+    position: absolute;
+    background-color: #ece5d8;
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 3px,
+      rgba(139, 58, 58, 0.06) 3px,
+      rgba(139, 58, 58, 0.06) 3.5px
+    );
+    border: 0.5px solid rgba(139, 58, 58, 0.28);
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.06),
+      0 0 0 0.5px rgba(139, 58, 58, 0.08);
+    cursor: grab;
+    z-index: 20;
+    touch-action: none;
+    overflow: visible;
+    transition:
+      box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+      border-color 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .mejiro-reader-image-overlay:hover {
+    border-color: rgba(139, 58, 58, 0.4);
+    box-shadow:
+      0 1px 4px rgba(0, 0, 0, 0.08),
+      0 0 0 0.5px rgba(139, 58, 58, 0.15);
+  }
+
+  .mejiro-reader-image-overlay.is-dragging {
+    cursor: grabbing;
+    border-color: var(--mejiro-accent-soft);
+    box-shadow:
+      0 3px 12px rgba(0, 0, 0, 0.12),
+      0 0 0 1px rgba(139, 58, 58, 0.18);
+  }
+
+  .mejiro-reader-image-overlay::before {
+    content: "";
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    width: 8px;
+    height: 8px;
+    border-top: 0.5px solid rgba(139, 58, 58, 0.35);
+    border-right: 0.5px solid rgba(139, 58, 58, 0.35);
+    pointer-events: none;
+  }
+
+  .mejiro-reader-image-overlay::after {
+    content: "";
+    position: absolute;
+    bottom: -4px;
+    left: -4px;
+    width: 8px;
+    height: 8px;
+    border-bottom: 0.5px solid rgba(139, 58, 58, 0.35);
+    border-left: 0.5px solid rgba(139, 58, 58, 0.35);
+    pointer-events: none;
+  }
+
+  .mejiro-reader-image-overlay-label {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: none;
+  }
+
+  .mejiro-reader-image-overlay-icon {
+    width: 22px;
+    height: 16px;
+    border: 0.5px solid rgba(139, 58, 58, 0.3);
+    position: relative;
+    opacity: 0.7;
+  }
+
+  .mejiro-reader-image-overlay-icon::before {
+    content: "";
+    position: absolute;
+    bottom: 2px;
+    left: 3px;
+    right: 3px;
+    height: 5px;
+    background: linear-gradient(135deg, rgba(139, 58, 58, 0.12) 40%, rgba(139, 58, 58, 0.06) 100%);
+  }
+
+  .mejiro-reader-image-overlay-icon::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: rgba(139, 58, 58, 0.18);
+  }
+
+  .mejiro-reader-image-overlay-label span {
+    font-family: var(--mejiro-font-body);
+    font-size: 0.48rem;
+    color: var(--mejiro-ink-faint);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+
+  .mejiro-reader-image-overlay-resize {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+    z-index: 21;
+  }
+
+  .mejiro-reader-image-overlay-resize::before {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    border-style: solid;
+    border-width: 0 0 10px 10px;
+    border-color: transparent transparent rgba(139, 58, 58, 0.15) transparent;
+    transition: border-color 0.2s ease;
+  }
+
+  .mejiro-reader-image-overlay-resize:hover::before {
+    border-color: transparent transparent rgba(139, 58, 58, 0.35) transparent;
+  }
+
+  .mejiro-reader-image-overlay-close {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--mejiro-bg-paper);
+    border: 0.5px solid rgba(139, 58, 58, 0.3);
+    cursor: pointer;
+    z-index: 23;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    padding: 0;
+  }
+
+  .mejiro-reader-image-overlay:hover .mejiro-reader-image-overlay-close {
+    opacity: 1;
+  }
+
+  .mejiro-reader-image-overlay-close::before,
+  .mejiro-reader-image-overlay-close::after {
+    content: "";
+    position: absolute;
+    width: 6px;
+    height: 0.5px;
+    background: var(--mejiro-accent);
+  }
+
+  .mejiro-reader-image-overlay-close::before {
+    transform: rotate(45deg);
+  }
+
+  .mejiro-reader-image-overlay-close::after {
+    transform: rotate(-45deg);
+  }
+
+  /* ── Table of contents (MejiroToc) ── */
+  .mejiro-toc {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 20px;
+    font-family: var(--mejiro-font-ui);
+    color: var(--mejiro-ink);
+    background: var(--mejiro-bg-paper);
+    border: 1px solid var(--mejiro-border);
+    border-radius: 6px;
+    max-height: 80vh;
+    overflow: hidden;
+  }
+
+  .mejiro-toc-header {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--mejiro-border);
+  }
+
+  .mejiro-toc-title {
+    font-family: var(--mejiro-font-body);
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+  }
+
+  .mejiro-toc-subtitle {
+    font-size: 0.7rem;
+    color: var(--mejiro-ink-light);
+  }
+
+  .mejiro-toc-search input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--mejiro-control-border);
+    background: var(--mejiro-control-bg);
+    color: var(--mejiro-ink);
+    font-size: 0.78rem;
+    font-family: var(--mejiro-font-ui);
+    border-radius: 4px;
+    box-sizing: border-box;
+  }
+
+  .mejiro-toc-search input:focus {
+    outline: none;
+    border-color: var(--mejiro-accent);
+    box-shadow: 0 0 0 2px rgba(139, 58, 58, 0.2);
+  }
+
+  .mejiro-toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .mejiro-toc-item {
+    margin: 0;
+    padding: 2px 0;
+  }
+
+  .mejiro-toc-link {
+    display: grid;
+    grid-template-columns: 36px 1fr;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 6px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--mejiro-transition);
+  }
+
+  .mejiro-toc-link:hover {
+    background: rgba(0, 0, 0, 0.03);
+  }
+
+  .mejiro-toc-link.is-active {
+    background: rgba(139, 58, 58, 0.1);
+    border-color: var(--mejiro-accent-soft);
+  }
+
+  .mejiro-toc-num {
+    font-size: 0.62rem;
+    color: var(--mejiro-ink-faint);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.6;
+  }
+
+  .mejiro-toc-label {
+    font-family: var(--mejiro-font-body);
+    font-size: 0.88rem;
+    line-height: 1.35;
+  }
+
+  .mejiro-toc-subheads {
+    list-style: none;
+    margin: 4px 0 4px 44px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mejiro-toc-subhead {
+    font-size: 0.7rem;
+    color: var(--mejiro-ink-light);
+  }
+
+  .mejiro-toc-empty {
+    color: var(--mejiro-ink-light);
+    font-size: 0.78rem;
+    padding: 12px 6px;
+  }
+
+  /* ── Shelf (library picker) ── */
+  .mejiro-shelf {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 24px;
+    font-family: var(--mejiro-font-ui);
+    color: var(--mejiro-ink);
+    background: var(--mejiro-bg-paper);
+  }
+
+  .mejiro-shelf-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+
+  .mejiro-shelf-title {
+    font-family: var(--mejiro-font-body);
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--mejiro-ink);
+  }
+
+  .mejiro-shelf-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px;
+  }
+
+  .mejiro-shelf-item {
+    margin: 0;
+  }
+
+  .mejiro-shelf-card {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition:
+      background var(--mejiro-transition),
+      border-color var(--mejiro-transition);
+  }
+
+  .mejiro-shelf-card:hover {
+    background: rgba(0, 0, 0, 0.03);
+    border-color: var(--mejiro-border);
+  }
+
+  .mejiro-shelf-card.is-active {
+    background: rgba(139, 58, 58, 0.08);
+    border-color: var(--mejiro-accent-soft);
+  }
+
+  .mejiro-shelf-cover {
+    display: block;
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    background-color: var(--mejiro-bg-paper);
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+    border: 1px solid var(--mejiro-border);
+  }
+
+  .mejiro-shelf-cover--blank {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent 0,
+      transparent 6px,
+      rgba(0, 0, 0, 0.04) 6px,
+      rgba(0, 0, 0, 0.04) 7px
+    );
+  }
+
+  .mejiro-shelf-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .mejiro-shelf-label {
+    font-family: var(--mejiro-font-body);
+    font-size: 0.85rem;
+    color: var(--mejiro-ink);
+  }
+
+  .mejiro-shelf-author {
+    font-size: 0.7rem;
+    color: var(--mejiro-ink-light);
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 768px) {
+    .mejiro-reader {
+      --mejiro-page-pad-x: 28px;
+      --mejiro-page-pad-y: 40px;
+    }
+
+    .mejiro-reader-header {
+      padding: 0 16px;
+    }
+
+    .mejiro-reader-logo-sub {
+      display: none;
+    }
+
+    .mejiro-reader-settings-inner {
+      padding: 12px 16px 16px;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .mejiro-reader-drop-zone {
+      width: 300px;
+      padding: 40px 24px;
+    }
+  }
+} /* end @layer mejiro.chrome */

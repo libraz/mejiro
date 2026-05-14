@@ -1,32 +1,38 @@
-import type { RubyInputAnnotation } from '../browser/types.js';
+import type { InlineAnnotation } from '../browser/types.js';
 import type { PageSlice } from '../paginate.js';
 import { getLineRanges } from '../paginate.js';
 import type { RenderEntry, RenderLine, RenderPage, RenderSegment } from './types.js';
 
 /**
- * Builds line segments from characters and ruby annotations for a single line.
+ * Builds line segments from characters and inline annotations for a single line.
+ *
+ * Each non-`jukugo` annotation whose start falls within the line opens a new
+ * segment (ruby / emphasis / tcy / em / strong / link / footnote). Annotations
+ * are processed in start-index order; overlapping spans are not supported.
  *
  * @param chars - Character array for the paragraph.
- * @param annotations - Ruby annotations for the paragraph.
+ * @param annotations - Inline annotations for the paragraph.
  * @param lineStart - Start index of the line (inclusive).
  * @param lineEnd - End index of the line (exclusive).
  * @returns Array of render segments for the line.
  */
 function buildLineSegments(
   chars: string[],
-  annotations: RubyInputAnnotation[],
+  annotations: readonly InlineAnnotation[],
   lineStart: number,
   lineEnd: number,
 ): RenderSegment[] {
-  const rubyMap = new Map<number, RubyInputAnnotation>();
-  const rubySkip = new Set<number>();
+  const annMap = new Map<number, InlineAnnotation>();
+  const annSkip = new Set<number>();
 
   for (const ann of annotations) {
-    if (ann.type === 'jukugo') continue;
+    // Jukugo ruby is a span hint for the line breaker — the renderer emits
+    // the per-segment ruby variants that pair with it instead.
+    if (ann.kind === 'ruby' && ann.type === 'jukugo') continue;
     if (ann.startIndex >= lineStart && ann.startIndex < lineEnd) {
-      rubyMap.set(ann.startIndex, ann);
+      annMap.set(ann.startIndex, ann);
       for (let i = ann.startIndex + 1; i < ann.endIndex && i < lineEnd; i++) {
-        rubySkip.add(i);
+        annSkip.add(i);
       }
     }
   }
@@ -35,36 +41,55 @@ function buildLineSegments(
   let textBuffer = '';
   let pos = lineStart;
 
+  function flushText(): void {
+    if (textBuffer) {
+      segments.push({ type: 'text', text: textBuffer });
+      textBuffer = '';
+    }
+  }
+
   while (pos < lineEnd) {
-    if (rubySkip.has(pos)) {
+    if (annSkip.has(pos)) {
       pos++;
       continue;
     }
 
-    const ann = rubyMap.get(pos);
+    const ann = annMap.get(pos);
     if (ann) {
-      if (textBuffer) {
-        segments.push({ type: 'text', text: textBuffer });
-        textBuffer = '';
-      }
+      flushText();
       const baseEnd = Math.min(ann.endIndex, lineEnd);
-      segments.push({
-        type: 'ruby',
-        base: chars.slice(pos, baseEnd).join(''),
-        rubyText: ann.rubyText,
-      });
+      const base = chars.slice(pos, baseEnd).join('');
+      segments.push(toSegment(ann, base));
       pos = baseEnd;
     } else {
-      textBuffer += chars[pos];
+      if (chars[pos] !== '\n') textBuffer += chars[pos];
       pos++;
     }
   }
 
-  if (textBuffer) {
-    segments.push({ type: 'text', text: textBuffer });
-  }
-
+  flushText();
   return segments;
+}
+
+function toSegment(ann: InlineAnnotation, text: string): RenderSegment {
+  switch (ann.kind) {
+    case 'ruby':
+      return { type: 'ruby', base: text, rubyText: ann.rubyText };
+    case 'emphasis':
+      return { type: 'emphasis', text, style: ann.style ?? 'sesame' };
+    case 'tcy':
+      return { type: 'tcy', text };
+    case 'em':
+      return { type: 'em', text };
+    case 'strong':
+      return { type: 'strong', text };
+    case 'link':
+      return ann.title != null
+        ? { type: 'link', text, href: ann.href, title: ann.title }
+        : { type: 'link', text, href: ann.href };
+    case 'footnote':
+      return { type: 'footnote-ref', text, noteId: ann.noteId };
+  }
 }
 
 /**
@@ -85,9 +110,10 @@ export function buildRenderPage(slices: PageSlice[], entries: RenderEntry[]): Re
 
     const lines: RenderLine[] = [];
     for (let li = slice.lineStart; li < slice.lineEnd; li++) {
-      const [charStart, charEnd] = lineRanges[li];
+      const [charStart, rawCharEnd] = lineRanges[li];
+      const charEnd = entry.chars[rawCharEnd - 1] === '\n' ? rawCharEnd - 1 : rawCharEnd;
       lines.push({
-        segments: buildLineSegments(entry.chars, entry.rubyAnnotations, charStart, charEnd),
+        segments: buildLineSegments(entry.chars, entry.inlineAnnotations, charStart, charEnd),
       });
     }
 

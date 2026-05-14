@@ -13,7 +13,7 @@ function makeEntry(charCount: number, breakCount: number, headingLevel?: number)
   return {
     chars: Array.from({ length: charCount }, () => 'あ'),
     breakPoints: new Uint32Array(breakCount),
-    rubyAnnotations: [],
+    inlineAnnotations: [],
     headingLevel,
     isHeading: headingLevel != null,
   };
@@ -137,7 +137,7 @@ describe('buildParagraphMeasures', () => {
     const entry: RenderEntry = {
       chars: Array.from({ length: 5 }, () => 'あ'),
       breakPoints: new Uint32Array(0),
-      rubyAnnotations: [],
+      inlineAnnotations: [],
       isHeading: true,
     };
     const measures = buildParagraphMeasures([entry, makeEntry(20, 2)], {

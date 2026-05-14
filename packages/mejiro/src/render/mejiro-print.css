@@ -1,0 +1,74 @@
+/*
+ * mejiro-print.css — opt-in print styling for MejiroReader and standalone
+ * `mejiro-page` content.
+ *
+ * Import in addition to (after) mejiro-reader.css when print output is a
+ * supported scenario:
+ *
+ *   import '@libraz/mejiro/render/mejiro-print.css';
+ *
+ * Hides the reader chrome, ensures pages flow naturally, and inhibits
+ * background tints so ink usage stays low.
+ *
+ * Wrapped in the `mejiro.print` layer so it sits above `mejiro.chrome`
+ * but stays beneath any unlayered app styles.
+ */
+
+@layer mejiro.base, mejiro.chrome, mejiro.print;
+
+@layer mejiro.print {
+  @media print {
+    /* Hide every chrome surface except the spread content itself. */
+    .mejiro-reader-header,
+    .mejiro-reader-settings-panel,
+    .mejiro-reader-chapter-panel,
+    .mejiro-reader-page-indicator,
+    .mejiro-reader-nav-zone,
+    .mejiro-reader-drop-zone,
+    .mejiro-reader-loading {
+      display: none;
+    }
+
+    /* Reset the deep reader background so the page bleeds onto white paper. */
+    .mejiro-reader,
+    .mejiro-reader-body,
+    .mejiro-reader-surface,
+    .mejiro-reader-scroll {
+      background: #fff;
+      color: #000;
+      box-shadow: none;
+      overflow: visible;
+      max-height: none;
+      height: auto;
+    }
+
+    /* Pages: let each spread land on its own sheet without any decoration. */
+    .mejiro-reader-page,
+    .mejiro-reader-spread {
+      box-shadow: none;
+      border: none;
+      background: #fff;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .mejiro-reader-page::before,
+    .mejiro-reader-page--right::after,
+    .mejiro-reader-page--left::after,
+    .mejiro-reader-page-rule {
+      display: none;
+    }
+
+    /* Continuous-scroll mode: let each page take its own page break. */
+    .mejiro-reader-scroll-track .mejiro-reader-page {
+      page-break-after: always;
+      break-after: page;
+    }
+
+    /* Drop watermarks / overlays that are decorative only. */
+    .mejiro-reader-surface::before,
+    .mejiro-reader-image-overlay {
+      display: none;
+    }
+  }
+} /* end @layer mejiro.print */

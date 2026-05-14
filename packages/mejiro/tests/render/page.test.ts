@@ -7,13 +7,13 @@ function makeEntry(
   text: string,
   breakPoints: number[],
   isHeading = false,
-  rubyAnnotations: RenderEntry['rubyAnnotations'] = [],
+  inlineAnnotations: RenderEntry['inlineAnnotations'] = [],
   headingLevel?: number,
 ): RenderEntry {
   return {
     chars: [...text],
     breakPoints: new Uint32Array(breakPoints),
-    rubyAnnotations,
+    inlineAnnotations,
     isHeading,
     headingLevel,
   };
@@ -56,7 +56,9 @@ describe('buildRenderPage', () => {
   it('handles ruby annotations', () => {
     // 漢字 with ruby かんじ at indices [0,2)
     const entries = [
-      makeEntry('漢字です', [], false, [{ startIndex: 0, endIndex: 2, rubyText: 'かんじ' }]),
+      makeEntry('漢字です', [], false, [
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
+      ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
 
@@ -72,8 +74,8 @@ describe('buildRenderPage', () => {
     // あ[漢字]い[文字]う
     const entries = [
       makeEntry('あ漢字い文字う', [], false, [
-        { startIndex: 1, endIndex: 3, rubyText: 'かんじ' },
-        { startIndex: 4, endIndex: 6, rubyText: 'もじ' },
+        { kind: 'ruby', startIndex: 1, endIndex: 3, rubyText: 'かんじ' },
+        { kind: 'ruby', startIndex: 4, endIndex: 6, rubyText: 'もじ' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
@@ -119,7 +121,7 @@ describe('buildRenderPage', () => {
   it('skips jukugo ruby annotations', () => {
     const entries = [
       makeEntry('漢字です', [], false, [
-        { startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'jukugo' },
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'jukugo' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];

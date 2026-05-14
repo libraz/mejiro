@@ -1,0 +1,18 @@
+/*
+ * mejiro-fonts.css — optional webfont bundle for the demo look.
+ *
+ * Import after the reader chrome to apply Shippori Mincho / Noto Serif JP /
+ * Zen Kaku Gothic New from Google Fonts and rebind the reader's font CSS
+ * variables to them:
+ *
+ *   import '@libraz/mejiro/render/mejiro-fonts.css';
+ *
+ * Skip this file (or override --mejiro-font-body / --mejiro-font-ui) if you
+ * prefer to self-host fonts, use system fonts, or avoid external requests.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;700&family=Shippori+Mincho:wght@400;500;600&family=Zen+Kaku+Gothic+New:wght@400;500&display=swap");
+
+.mejiro-reader {
+  --mejiro-font-ui: "Zen Kaku Gothic New", "Helvetica Neue", system-ui, sans-serif;
+  --mejiro-font-body: "Shippori Mincho", "Noto Serif JP", serif;
+}
