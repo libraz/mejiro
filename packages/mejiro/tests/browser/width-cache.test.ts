@@ -50,4 +50,40 @@ describe('WidthCache', () => {
     expect(cache.size('24px serif')).toBe(1);
     expect(cache.size('unknown')).toBe(0);
   });
+
+  it('reports stats with both font count and codepoint total', () => {
+    const cache = new WidthCache();
+    expect(cache.stats()).toEqual({ fonts: 0, codepoints: 0 });
+    cache.set('16px serif', 0x3042, 16);
+    cache.set('16px serif', 0x3043, 16);
+    cache.set('24px serif', 0x3042, 24);
+    expect(cache.fontCount()).toBe(2);
+    expect(cache.stats()).toEqual({ fonts: 2, codepoints: 3 });
+  });
+
+  it('evicts the least-recently-used font when maxFonts is exceeded', () => {
+    const cache = new WidthCache({ maxFonts: 2 });
+    cache.set('a', 1, 10);
+    cache.set('b', 1, 20);
+    // Touch 'a' so 'b' becomes LRU.
+    cache.get('a', 1);
+    cache.set('c', 1, 30);
+    expect(cache.get('a', 1)).toBe(10);
+    expect(cache.get('b', 1)).toBeUndefined();
+    expect(cache.get('c', 1)).toBe(30);
+    expect(cache.fontCount()).toBe(2);
+  });
+
+  it('evicts the least-recently-used codepoint when maxCodepointsPerFont is exceeded', () => {
+    const cache = new WidthCache({ maxCodepointsPerFont: 2 });
+    cache.set('serif', 1, 10);
+    cache.set('serif', 2, 20);
+    // Touch 1 so 2 becomes LRU.
+    cache.get('serif', 1);
+    cache.set('serif', 3, 30);
+    expect(cache.get('serif', 1)).toBe(10);
+    expect(cache.get('serif', 2)).toBeUndefined();
+    expect(cache.get('serif', 3)).toBe(30);
+    expect(cache.size('serif')).toBe(2);
+  });
 });

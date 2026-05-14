@@ -4,11 +4,21 @@ export { CharMeasurer, deriveRubyFont } from './measure.js';
 export type {
   ChapterLayoutOptions,
   ChapterLayoutResult,
+  FontFamily,
+  InlineAnnotation,
+  InlineEmAnnotation,
+  InlineEmphasisAnnotation,
+  InlineFootnoteAnnotation,
+  InlineLinkAnnotation,
+  InlineRubyAnnotation,
+  InlineStrongAnnotation,
+  InlineTcyAnnotation,
   LayoutOptions,
   MejiroBrowserOptions,
   ParagraphInput,
   ParagraphLayoutResult,
   RubyInputAnnotation,
 } from './types.js';
-export { toFontSpec } from './types.js';
+export { normalizeFontFamily, toFontSpec } from './types.js';
+export type { WidthCacheOptions } from './width-cache.js';
 export { WidthCache } from './width-cache.js';

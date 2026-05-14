@@ -1,15 +1,16 @@
+import { type FontFamily, normalizeFontFamily } from './types.js';
 import { WidthCache } from './width-cache.js';
 
 /**
  * Derives a ruby font spec from a base font family and size by scaling the size.
  *
- * @param fontFamily - CSS font family (e.g. '"Noto Serif JP"').
+ * @param fontFamily - CSS font family (string or array).
  * @param fontSize - Base font size in pixels.
  * @param ratio - Size ratio for ruby text. @defaultValue 0.5
  * @returns CSS font specification for ruby text.
  */
-export function deriveRubyFont(fontFamily: string, fontSize: number, ratio = 0.5): string {
-  return `${fontSize * ratio}px ${fontFamily}`;
+export function deriveRubyFont(fontFamily: FontFamily, fontSize: number, ratio = 0.5): string {
+  return `${fontSize * ratio}px ${normalizeFontFamily(fontFamily)}`;
 }
 
 /**

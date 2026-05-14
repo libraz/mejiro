@@ -7,9 +7,11 @@ import { CharMeasurer, deriveRubyFont } from './measure.js';
 import type {
   ChapterLayoutOptions,
   ChapterLayoutResult,
+  FontFamily,
+  InlineAnnotation,
+  InlineRubyAnnotation,
   LayoutOptions,
   MejiroBrowserOptions,
-  RubyInputAnnotation,
 } from './types.js';
 import { toFontSpec } from './types.js';
 
@@ -41,15 +43,18 @@ export function verticalLineWidth(containerHeight: number, fontSize: number): nu
 }
 
 /**
- * Converts string-based ruby annotations to core RubyAnnotation format
- * by measuring ruby text advances.
+ * Filters inline annotations to ruby variants and measures their advance widths.
+ *
+ * Non-ruby variants (emphasis, tcy, em/strong, link, footnote) are render-only
+ * in v0.5 and bypass the line-breaker's ruby pipeline.
  */
 function buildRubyAnnotations(
-  annotations: RubyInputAnnotation[],
+  annotations: readonly InlineAnnotation[],
   rubyFontSpec: string,
   measurer: CharMeasurer,
 ): RubyAnnotation[] {
-  return annotations.map((ann) => {
+  const rubies = annotations.filter((a): a is InlineRubyAnnotation => a.kind === 'ruby');
+  return rubies.map((ann) => {
     const rubyCps = toCodepoints(ann.rubyText);
     const rubyAdvances = measurer.measureAll(rubyFontSpec, rubyCps);
     return {
@@ -69,12 +74,12 @@ function buildRubyAnnotations(
  */
 export async function layoutText(options: {
   text: string;
-  fontFamily: string;
+  fontFamily: FontFamily;
   fontSize: number;
   lineWidth: number;
   mode?: 'strict' | 'loose';
   enableHanging?: boolean;
-  rubyAnnotations?: RubyInputAnnotation[];
+  inlineAnnotations?: readonly InlineAnnotation[];
 }): Promise<BreakResult> {
   const fontSpec = toFontSpec(options.fontFamily, options.fontSize);
   const loader = new FontLoader();
@@ -85,10 +90,10 @@ export async function layoutText(options: {
   const advances = measurer.measureAll(fontSpec, codepoints);
 
   let rubyAnnotations: RubyAnnotation[] | undefined;
-  if (options.rubyAnnotations?.length) {
+  if (options.inlineAnnotations?.length) {
     const rubyFontSpec = deriveRubyFont(options.fontFamily, options.fontSize);
     await loader.ensureLoaded(rubyFontSpec);
-    rubyAnnotations = buildRubyAnnotations(options.rubyAnnotations, rubyFontSpec, measurer);
+    rubyAnnotations = buildRubyAnnotations(options.inlineAnnotations, rubyFontSpec, measurer);
   }
 
   return computeBreaks({
@@ -137,10 +142,14 @@ export class MejiroBrowser {
     const advances = this.measurer.measureAll(fontSpec, codepoints);
 
     let rubyAnnotations: RubyAnnotation[] | undefined;
-    if (options.rubyAnnotations?.length) {
+    if (options.inlineAnnotations?.length) {
       const rubyFontSpec = deriveRubyFont(fontFamily, fontSize);
       await this.fontLoader.ensureLoaded(rubyFontSpec);
-      rubyAnnotations = buildRubyAnnotations(options.rubyAnnotations, rubyFontSpec, this.measurer);
+      rubyAnnotations = buildRubyAnnotations(
+        options.inlineAnnotations,
+        rubyFontSpec,
+        this.measurer,
+      );
     }
 
     return computeBreaks({
@@ -156,10 +165,10 @@ export class MejiroBrowser {
 
   /**
    * Preloads a font so it is available for subsequent layout calls.
-   * @param fontFamily - CSS font family to preload.
+   * @param fontFamily - CSS font family to preload (string or array).
    * @param fontSize - Font size in pixels (used for the font loading check).
    */
-  async preloadFont(fontFamily?: string, fontSize?: number): Promise<void> {
+  async preloadFont(fontFamily?: FontFamily, fontSize?: number): Promise<void> {
     const family = fontFamily ?? this.options.fixedFontFamily;
     const size = fontSize ?? this.options.fixedFontSize;
     if (!family) throw new Error('fontFamily must be specified');
@@ -192,7 +201,7 @@ export class MejiroBrowser {
         lineWidth,
         mode,
         enableHanging,
-        rubyAnnotations: para.rubyAnnotations?.length ? para.rubyAnnotations : undefined,
+        inlineAnnotations: para.inlineAnnotations?.length ? para.inlineAnnotations : undefined,
         tokenBoundaries: para.tokenBoundaries,
       });
       results.push({ breakResult, chars: [...para.text] });
@@ -221,5 +230,20 @@ export class MejiroBrowser {
    */
   clearCache(fontKey?: string): void {
     this.measurer.getCache().clear(fontKey);
+  }
+
+  /**
+   * Returns the current measurement cache size.
+   * @returns Number of font specs cached and the total number of codepoints
+   *   measured across all fonts.
+   */
+  cacheStats(): { fonts: number; codepoints: number } {
+    return this.measurer.getCache().stats();
+  }
+
+  /** @internal Returns the underlying {@link CharMeasurer} so the higher-level
+   * `MejiroBook` can share it with the layout pipeline. */
+  getMeasurer(): CharMeasurer {
+    return this.measurer;
   }
 }
