@@ -1,11 +1,36 @@
 import type { PageResult } from '@libraz/mejiro/book';
+import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import type { RenderSegment } from '@libraz/mejiro/render';
-import { defineComponent, h, type PropType, type VNode } from 'vue';
+import { defineComponent, Fragment, h, type PropType, type VNode } from 'vue';
 import { MejiroPage } from './MejiroPage.js';
 
-function renderSlotSegment(segment: RenderSegment, key: number): VNode | string {
-  if (segment.type === 'text') return segment.text;
-  return h('ruby', { key }, [segment.base, h('rt', null, segment.rubyText)]);
+function renderSlotSegment(segment: RenderSegment, key: string): VNode | string {
+  switch (segment.type) {
+    case 'text':
+      return h(Fragment, { key }, [segment.text]);
+    case 'ruby':
+      return h('ruby', { key }, [segment.base, h('rt', null, segment.rubyText)]);
+    case 'emphasis':
+      return h(
+        'span',
+        { key, class: `mejiro-emphasis mejiro-emphasis--${segment.style}` },
+        segment.text,
+      );
+    case 'tcy':
+      return h('span', { key, class: 'mejiro-tcy' }, segment.text);
+    case 'em':
+      return h('em', { key }, segment.text);
+    case 'strong':
+      return h('strong', { key }, segment.text);
+    case 'link':
+      return h('a', { key, href: segment.href, title: segment.title }, segment.text);
+    case 'footnote-ref':
+      return h(
+        'a',
+        { key, class: 'mejiro-footnote-ref', href: `#${segment.noteId}` },
+        segment.text,
+      );
+  }
 }
 
 /**
@@ -30,7 +55,7 @@ export const MejiroPageView = defineComponent({
     },
     /** CSS font family for slot-based rendering (used when images are present). */
     fontFamily: {
-      type: String,
+      type: [String, Array] as PropType<FontFamily>,
     },
     /** Line spacing multiplier for slot-based rendering (used when images are present). */
     lineSpacing: {
@@ -44,6 +69,7 @@ export const MejiroPageView = defineComponent({
   setup(props) {
     return () => {
       const { result, fontFamily, lineSpacing, slotMode } = props;
+      const fontFamilyCss = fontFamily != null ? normalizeFontFamily(fontFamily) : undefined;
 
       if (result.hasImages || slotMode) {
         const columns = result.lines
@@ -63,12 +89,12 @@ export const MejiroPageView = defineComponent({
                   top: `${slot.yStart}px`,
                   height: `${slot.height}px`,
                   fontSize: `${line.fontSize}px`,
-                  fontFamily,
+                  fontFamily: fontFamilyCss,
                   lineHeight: lineSpacing,
                   fontWeight: line.headingLevel != null ? '700' : undefined,
                 },
               },
-              line.segments.map((seg, si) => renderSlotSegment(seg, si)),
+              line.segments.map((seg, si) => renderSlotSegment(seg, `${i}-${si}`)),
             );
           })
           .filter(Boolean);
@@ -87,3 +113,5 @@ export const MejiroPageView = defineComponent({
     };
   },
 });
+
+export type MejiroPageViewProps = InstanceType<typeof MejiroPageView>['$props'];

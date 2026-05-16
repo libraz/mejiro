@@ -1,6 +1,6 @@
 import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { computed, type Ref, ref } from 'vue';
+import { computed, onScopeDispose, type Ref, ref } from 'vue';
 
 /** Rectangle describing an image overlay position and size. */
 export interface ImageRect {
@@ -67,6 +67,12 @@ export function useImageOverlay(
 
   const imageRect = ref<ImageRect | null>(null);
   const hasImage = computed(() => imageRect.value !== null);
+  const activeDragCleanups = new Set<() => void>();
+
+  onScopeDispose(() => {
+    for (const cleanup of activeDragCleanups) cleanup();
+    activeDragCleanups.clear();
+  });
 
   function syncToLayout(rect: ImageRect | null): void {
     const lo = layout.value;
@@ -111,13 +117,18 @@ export function useImageOverlay(
         syncToLayout(r);
       });
     };
-    const onUp = () => {
+    let cleanup: () => void;
+    const onUp = () => cleanup();
+    cleanup = () => {
+      cancelAnimationFrame(rafId);
       target.classList.remove('dragging');
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
+      activeDragCleanups.delete(cleanup);
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+    activeDragCleanups.add(cleanup);
   }
 
   function onResizePointerDown(e: PointerEvent): void {
@@ -143,13 +154,18 @@ export function useImageOverlay(
         syncToLayout(r);
       });
     };
-    const onUp = () => {
+    let cleanup: () => void;
+    const onUp = () => cleanup();
+    cleanup = () => {
+      cancelAnimationFrame(rafId);
       target.parentElement?.classList.remove('dragging');
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', onUp);
+      activeDragCleanups.delete(cleanup);
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);
+    activeDragCleanups.add(cleanup);
   }
 
   return {

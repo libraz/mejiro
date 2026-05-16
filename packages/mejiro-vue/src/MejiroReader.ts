@@ -1,0 +1,908 @@
+import type { BookOptions, ReadingAnchor } from '@libraz/mejiro/book';
+import { DEFAULT_BOOK_OPTIONS } from '@libraz/mejiro/book';
+import { normalizeFontFamily } from '@libraz/mejiro/browser';
+import type { EpubBook } from '@libraz/mejiro/epub';
+import {
+  computed,
+  defineComponent,
+  h,
+  onBeforeUnmount,
+  onMounted,
+  type PropType,
+  ref,
+  type VNode,
+  watch,
+} from 'vue';
+import {
+  format as formatMessage,
+  MejiroI18nProvider,
+  type MejiroLocale,
+  type MejiroMessages,
+  resolveMessages,
+  useI18n,
+} from './i18n.js';
+import { MejiroChapterNav } from './MejiroChapterNav.js';
+import { MejiroDropZone } from './MejiroDropZone.js';
+import { MejiroPageIndicator } from './MejiroPageIndicator.js';
+import { MejiroScrollView } from './MejiroScrollView.js';
+import type { EditableSettings, FontChoice } from './MejiroSettingsPanel.js';
+import { MejiroSettingsPanel } from './MejiroSettingsPanel.js';
+import { MejiroSpread } from './MejiroSpread.js';
+import { MejiroStats } from './MejiroStats.js';
+import { useChapterLayout } from './useChapterLayout.js';
+import { useEpub } from './useEpub.js';
+import { useMejiroBook } from './useMejiroBook.js';
+import { useMultiImageOverlay } from './useMultiImageOverlay.js';
+import { useSpread } from './useSpread.js';
+
+export type MejiroChapterNavMode = 'select' | 'panel' | 'both' | 'none';
+
+/**
+ * Reading-flow mode for {@link MejiroReader}.
+ * - `paginated` — two-page spread with page-turn animation (default).
+ * - `scroll` — every page in the chapter stacked in a vertical scroll view.
+ */
+export type MejiroReaderMode = 'paginated' | 'scroll';
+
+/**
+ * Two-page vs single-page rendering of a spread.
+ * - `double` — always render two pages (default).
+ * - `single` — render only the right page, centered.
+ * - `auto` — switch based on the surface aspect ratio (single when portrait).
+ */
+export type MejiroSpreadMode = 'double' | 'single' | 'auto';
+
+/** Built-in reader theme presets. */
+export type MejiroThemeName = 'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto';
+
+/**
+ * Theme configuration for the reader. Either a preset name, or an object
+ * with a preset and an `override` map of CSS custom properties that take
+ * precedence over the preset values.
+ */
+export type MejiroTheme =
+  | MejiroThemeName
+  | {
+      name: MejiroThemeName;
+      override?: Record<string, string>;
+    };
+
+/** Reading position exposed by {@link MejiroReaderHandle.getReadingPosition}. */
+export interface ReadingPosition {
+  chapter: number;
+  spreadIdx: number;
+  totalPages: number;
+  totalSpreads: number;
+}
+
+/**
+ * Event payloads emitted by {@link MejiroReaderHandle.subscribe}.
+ *
+ * Each property maps an event name to its listener signature.
+ */
+export interface MejiroReaderEventMap {
+  /** Fires after the current spread index changes. */
+  spreadChanged: (payload: { chapter: number; spreadIdx: number }) => void;
+  /** Fires when a turn animation begins (before the new spread is shown). */
+  turnStart: (payload: { from: number }) => void;
+  /** Fires after a turn animation completes (the new spread is now shown). */
+  turnEnd: (payload: { to: number }) => void;
+  /** Fires when the reader reaches the last spread of the current chapter. */
+  chapterFinished: (payload: { chapter: number }) => void;
+}
+
+/** Imperative handle exposed via `ref` on {@link MejiroReader}. */
+export interface MejiroReaderHandle {
+  /** Jump to a specific spread (0-based, clamped to [0, totalSpreads − 1]). */
+  goToSpread(index: number): void;
+  /** Advance one spread forward. */
+  next(): void;
+  /** Go back one spread. */
+  prev(): void;
+  /** Jump to a chapter (resets spread index to 0). */
+  goToChapter(index: number): void;
+  /** Read the current reading position. */
+  getReadingPosition(): ReadingPosition;
+  /**
+   * Navigate to a {@link ReadingAnchor}. If the chapter differs from the
+   * current one, the chapter is switched first; once the new layout is ready
+   * the anchor is resolved and the matching spread is opened.
+   */
+  goToAnchor(anchor: ReadingAnchor): void;
+  /**
+   * Returns the {@link ReadingAnchor} at the start of the current spread,
+   * or `null` if the layout is not ready.
+   */
+  getAnchor(): ReadingAnchor | null;
+  /**
+   * Returns the half-open range of {@link ReadingAnchor}s visible on the
+   * current spread. `end` points at the start of the next spread (or the end
+   * of the chapter for the last spread).
+   */
+  getVisibleRange(): { start: ReadingAnchor; end: ReadingAnchor } | null;
+  /**
+   * Updates book options at runtime. Same shape as {@link MejiroBook.setOptions}
+   * — font / size changes re-measure and re-layout asynchronously.
+   */
+  setOptions(partial: Partial<BookOptions>): Promise<void>;
+  /**
+   * Subscribes to a reader lifecycle event. Returns a function that
+   * detaches the listener.
+   */
+  subscribe<E extends keyof MejiroReaderEventMap>(
+    event: E,
+    listener: MejiroReaderEventMap[E],
+  ): () => void;
+}
+
+/**
+ * Full-page EPUB reader component. Composes the rest of the
+ * `@libraz/mejiro-vue` building blocks into a working reader.
+ *
+ * Each feature (settings panel, chapter nav, drop zone, image overlay,
+ * keyboard navigation, page indicator, stats) can be toggled independently
+ * via `enableX` props, or removed in bulk with `bare`. Pass slots to replace
+ * any region with custom UI.
+ *
+ * Imperative navigation is available via `ref` (see
+ * {@link MejiroReaderHandle}):
+ *
+ * ```vue
+ * <script setup lang="ts">
+ * import { ref } from 'vue';
+ * import type { MejiroReaderHandle } from '@libraz/mejiro-vue';
+ * const reader = ref<MejiroReaderHandle | null>(null);
+ * // reader.value?.goToSpread(12);
+ * </script>
+ * <template>
+ *   <MejiroReader ref="reader" />
+ * </template>
+ * ```
+ */
+export const MejiroReader = defineComponent({
+  name: 'MejiroReader',
+  props: {
+    /**
+     * Initial book options. Optional — defaults to {@link DEFAULT_BOOK_OPTIONS}
+     * (`serif` 16px, line spacing 1.8, strict kinsoku, hanging punctuation on).
+     * Spread the defaults to tweak only a few:
+     *
+     * ```ts
+     * { ...DEFAULT_BOOK_OPTIONS, fontFamily: '"Noto Serif JP"', fontSize: 18 }
+     * ```
+     */
+    options: {
+      type: Object as PropType<BookOptions>,
+      default: () => DEFAULT_BOOK_OPTIONS,
+    },
+    /** Font choices displayed in the settings panel. */
+    fonts: { type: Array as PropType<FontChoice[]>, default: undefined },
+    /**
+     * Pre-parsed EPUB to display. Takes precedence over `epubUrl` when both
+     * are supplied. When set, the reader renders this book directly:
+     *
+     * ```vue
+     * <MejiroReader :epub="myEpub" :options="options" />
+     * ```
+     */
+    epub: { type: Object as PropType<EpubBook | null>, default: undefined },
+    /**
+     * URL fetched and parsed on mount. Use this for "just open this book"
+     * scenarios. Ignored when `epub` is supplied.
+     */
+    epubUrl: { type: String, default: undefined },
+    /**
+     * Controlled chapter index. When omitted, the reader manages its own
+     * chapter state and resets to 0 on EPUB change.
+     */
+    chapter: { type: Number, default: undefined },
+    /**
+     * Controlled spread index. When supplied, the reader is driven by this
+     * value and emits `spread-idx-change` on user navigation. Combine with
+     * `useReadingPosition` for save/restore.
+     */
+    spreadIdx: { type: Number, default: undefined },
+    /**
+     * Visual theme preset, or `{ name, override }` to layer custom CSS
+     * variables on top of a preset. @defaultValue 'light'
+     */
+    theme: {
+      type: [String, Object] as PropType<MejiroTheme>,
+      default: 'light',
+    },
+    /**
+     * Reading-flow mode. `paginated` (default) shows one spread at a time;
+     * `scroll` stacks every page in the chapter inside a vertical scroller.
+     */
+    mode: {
+      type: String as PropType<MejiroReaderMode>,
+      default: 'paginated',
+    },
+    /**
+     * Spread layout. `double` renders two pages (default); `single` renders
+     * only the right page; `auto` flips to `single` for portrait viewports.
+     */
+    spreadMode: {
+      type: String as PropType<MejiroSpreadMode>,
+      default: 'double',
+    },
+    /**
+     * Enable surface-tap chrome toggling. Tapping the spread center (away
+     * from buttons) hides the header and chapter panel. @defaultValue true
+     */
+    enableSurfaceTap: { type: Boolean, default: true },
+    /**
+     * Built-in locale for UI strings (`'en'` / `'ja'`). Pair with `messages`
+     * to override individual strings. @defaultValue 'en'
+     */
+    locale: { type: String as PropType<MejiroLocale>, default: undefined },
+    /**
+     * Static HTML rendered as a hydration fallback (typically the output of
+     * `renderEpubStatic`). Shown until the client layout is ready. Also
+     * accepted as a `fallback` slot for richer Vue content.
+     */
+    fallbackHtml: { type: String, default: undefined },
+    /**
+     * Extra options merged into the EPUB `fetch` call (URL mode). Useful
+     * for sending bearer tokens or cookies.
+     */
+    fetchOptions: { type: Object as PropType<RequestInit>, default: undefined },
+    /**
+     * Custom EPUB fetcher used in place of the global `fetch`. Overrides
+     * `fetchOptions` when set.
+     */
+    fetchEpub: {
+      type: Function as PropType<(url: string) => Promise<ArrayBuffer>>,
+      default: undefined,
+    },
+    /**
+     * Partial override of the message catalog. Merged on top of the catalog
+     * selected by `locale`.
+     */
+    messages: { type: Object as PropType<Partial<MejiroMessages>>, default: undefined },
+    /** Title text for the built-in header logo. @defaultValue 'mejiro' */
+    title: { type: String, default: 'mejiro' },
+    /** Subtitle for the header logo. @defaultValue `messages.logoSubtitle` */
+    subtitle: { type: String, default: undefined },
+
+    /**
+     * Shorthand for a chrome-less reader. When `true`, the defaults for
+     * `enableHeader`, `enableChapterNav`, `enableSettings`, `enableStats`,
+     * and `enablePageIndicator` flip from `true` to `false`. Explicitly-passed
+     * enable* props still win, so you can opt parts back in.
+     * @defaultValue false
+     */
+    bare: { type: Boolean, default: false },
+
+    /** Show the built-in header. @defaultValue `!bare` */
+    enableHeader: { type: Boolean as PropType<boolean | undefined>, default: undefined },
+    /**
+     * Show the open-file / drop zone affordance. SaaS-style readers should
+     * keep this off (the host controls which EPUB is delivered); set true to
+     * accept user-supplied books.
+     * @defaultValue false
+     */
+    enableDropZone: { type: Boolean, default: false },
+    /** Show the chapter selector in the header. @defaultValue `!bare` */
+    enableChapterNav: { type: Boolean as PropType<boolean | undefined>, default: undefined },
+    /**
+     * Where to render the built-in chapter navigation.
+     * @defaultValue 'select'
+     */
+    chapterNavMode: {
+      type: String as PropType<MejiroChapterNavMode>,
+      default: 'select',
+    },
+    /** Show the settings panel toggle in the header. @defaultValue `!bare` */
+    enableSettings: { type: Boolean as PropType<boolean | undefined>, default: undefined },
+    /** Show the image-overlay editing/demo button. @defaultValue false */
+    enableImageOverlay: { type: Boolean, default: false },
+    /** Show the stats line in the header. @defaultValue `!bare` */
+    enableStats: { type: Boolean as PropType<boolean | undefined>, default: undefined },
+    /** Bind ArrowLeft/ArrowRight to page navigation. @defaultValue true */
+    enableKeyboard: { type: Boolean, default: true },
+    /** Show the "n / total" indicator below the book. @defaultValue `!bare` */
+    enablePageIndicator: { type: Boolean as PropType<boolean | undefined>, default: undefined },
+  },
+  emits: [
+    'load',
+    'chapter-change',
+    'spread-change',
+    'spread-idx-change',
+    'error',
+    'page-read',
+    'chapter-completed',
+  ],
+  setup(props, { emit, slots, expose }) {
+    const surfaceEl = ref<HTMLElement | null>(null);
+    const settingsOpen = ref(false);
+    const chapter = ref(0);
+    const chromeHidden = ref(false);
+    const autoSingle = ref(false);
+
+    let resizeObserver: ResizeObserver | null = null;
+    function updateAutoSingle(): void {
+      const surface = surfaceEl.value;
+      if (!surface) return;
+      const rect = surface.getBoundingClientRect();
+      autoSingle.value = rect.width < rect.height;
+    }
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === 'Escape' && settingsOpen.value) {
+        settingsOpen.value = false;
+      }
+    }
+    onMounted(() => {
+      window.addEventListener('keydown', onKey);
+    });
+    onBeforeUnmount(() => {
+      window.removeEventListener('keydown', onKey);
+    });
+
+    onMounted(() => {
+      if (props.spreadMode !== 'auto') return;
+      updateAutoSingle();
+      if (typeof ResizeObserver === 'undefined') return;
+      const surface = surfaceEl.value;
+      if (!surface) return;
+      resizeObserver = new ResizeObserver(updateAutoSingle);
+      resizeObserver.observe(surface);
+    });
+    onBeforeUnmount(() => {
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+    });
+    watch(
+      () => props.spreadMode,
+      (next) => {
+        if (next === 'auto') updateAutoSingle();
+      },
+    );
+    const effectiveSingle = computed(
+      () => props.spreadMode === 'single' || (props.spreadMode === 'auto' && autoSingle.value),
+    );
+    const inheritedMessages = useI18n();
+    const resolvedMessages = computed(() => {
+      if (props.locale == null && props.messages == null) return inheritedMessages.value;
+      const base =
+        props.locale != null ? resolveMessages(props.locale, undefined) : inheritedMessages.value;
+      return props.messages ? { ...base, ...props.messages } : base;
+    });
+
+    // `bare` toggles defaults; explicit props always win.
+    const effEnableHeader = computed(() => props.enableHeader ?? !props.bare);
+    const effEnableChapterNav = computed(() => props.enableChapterNav ?? !props.bare);
+    const effEnableSettings = computed(() => props.enableSettings ?? !props.bare);
+    const effEnableStats = computed(() => props.enableStats ?? !props.bare);
+    const effEnablePageIndicator = computed(() => props.enablePageIndicator ?? !props.bare);
+
+    const optionsSource = computed(() => props.options);
+    const { book, options, setOptions } = useMejiroBook(props.options, optionsSource);
+
+    const epub = useEpub({
+      // `epub` takes precedence: skip the URL fetch when a parsed book is supplied.
+      get defaultUrl() {
+        return props.epub !== undefined ? undefined : props.epubUrl;
+      },
+      get fetchOptions() {
+        return props.fetchOptions;
+      },
+      get fetchEpub() {
+        return props.fetchEpub;
+      },
+      onLoad: (b) => {
+        if (props.chapter == null) chapter.value = 0;
+        emit('load', b);
+      },
+    });
+    watch(
+      epub.error,
+      (next) => {
+        if (next) emit('error', next);
+      },
+      { flush: 'sync' },
+    );
+
+    const activeChapter = computed(() => props.chapter ?? chapter.value);
+
+    const layoutCtx = useChapterLayout(book, epub.epub, activeChapter, surfaceEl);
+
+    const spreadCtx = useSpread(layoutCtx.layout, {
+      enableKeyboard: props.enableKeyboard,
+      onChange: (i) => {
+        emit('spread-change', i);
+        emit('spread-idx-change', i);
+      },
+    });
+
+    const imageCtx = useMultiImageOverlay(layoutCtx.layout, spreadCtx.spreadIdx, {
+      onUpdate: () => spreadCtx.refresh(),
+    });
+
+    // Controlled mode: keep the internal EPUB ref in sync with the `epub` prop.
+    // Switching books invalidates the overlay state and the font-width cache —
+    // both grow per-book, and the cache is keyed by font + fontSize so old
+    // entries are not reusable once the book changes. `immediate: true` mirrors
+    // React's `onLoad` which fires on initial mount with a non-null `epub`.
+    watch(
+      () => props.epub,
+      (next, prev) => {
+        if (next === undefined) {
+          if (prev !== undefined) {
+            epub.setEpub(null);
+            imageCtx.clearImages();
+            book.clearCache();
+          }
+          return;
+        }
+        if (next === prev) return;
+        epub.setEpub(next ?? null);
+        if (props.chapter == null) chapter.value = 0;
+        imageCtx.clearImages();
+        book.clearCache();
+        if (next) emit('load', next);
+      },
+      { immediate: true },
+    );
+
+    // Controlled spreadIdx: drive useSpread.goTo from the prop and re-apply
+    // it after layout changes, because useSpread resets to 0 for each layout.
+    watch(
+      [() => props.spreadIdx, () => layoutCtx.layout.value],
+      ([next]) => {
+        if (next == null) return;
+        if (next === spreadCtx.spreadIdx.value) return;
+        spreadCtx.goTo(next);
+      },
+      { immediate: true },
+    );
+
+    function setChapter(i: number): void {
+      if (i === activeChapter.value) return;
+      if (props.chapter == null) chapter.value = i;
+      emit('chapter-change', i);
+    }
+
+    // ── Event bus + anchor handling ──
+    type EventName = keyof MejiroReaderEventMap;
+    // biome-ignore lint/suspicious/noExplicitAny: heterogeneous listener payload
+    const listeners = new Map<EventName, Set<(payload: any) => void>>();
+    function emitReaderEvent<E extends EventName>(
+      event: E,
+      payload: Parameters<MejiroReaderEventMap[E]>[0],
+    ): void {
+      const set = listeners.get(event);
+      if (!set) return;
+      for (const cb of set) cb(payload);
+    }
+
+    const pendingAnchor = ref<ReadingAnchor | null>(null);
+    function tryApplyPendingAnchor(): void {
+      const anchor = pendingAnchor.value;
+      if (!anchor) return;
+      if (anchor.chapter !== activeChapter.value) return;
+      const layout = layoutCtx.layout.value;
+      if (!layout) return;
+      const loc = layout.locateAnchor({
+        paragraph: anchor.paragraph,
+        charIndex: anchor.charIndex,
+      });
+      if (!loc) return;
+      pendingAnchor.value = null;
+      spreadCtx.goTo(loc.spreadIdx);
+    }
+    watch([() => layoutCtx.layout.value, activeChapter], () => tryApplyPendingAnchor());
+
+    // Emit spreadChanged whenever spreadIdx (or chapter) changes, after mount.
+    // Also fires page-read with the dwell of the spread we are leaving, and
+    // chapter-completed on reaching the last spread of the chapter.
+    let mounted = false;
+    let dwell: { anchor: ReadingAnchor; ts: number } | null = null;
+    watch([() => spreadCtx.spreadIdx.value, activeChapter], ([newSpread]) => {
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (mounted && dwell) {
+        emit('page-read', dwell.anchor, now - dwell.ts);
+      }
+      const layout = layoutCtx.layout.value;
+      if (layout) {
+        const inCh = layout.anchorAt(newSpread, 'right');
+        dwell = inCh ? { anchor: { chapter: activeChapter.value, ...inCh }, ts: now } : null;
+      } else {
+        dwell = null;
+      }
+      if (!mounted) {
+        mounted = true;
+        return;
+      }
+      emitReaderEvent('spreadChanged', {
+        chapter: activeChapter.value,
+        spreadIdx: newSpread,
+      });
+      const total = spreadCtx.totalSpreads.value;
+      if (total > 0 && newSpread === total - 1) {
+        emitReaderEvent('chapterFinished', { chapter: activeChapter.value });
+        emit('chapter-completed', activeChapter.value);
+      }
+    });
+
+    // Emit turnStart / turnEnd on the `turning` transition.
+    watch(
+      () => spreadCtx.turning.value,
+      (next, prev) => {
+        if (next && !prev) emitReaderEvent('turnStart', { from: spreadCtx.spreadIdx.value });
+        else if (!next && prev) emitReaderEvent('turnEnd', { to: spreadCtx.spreadIdx.value });
+      },
+    );
+
+    expose({
+      goToSpread: (i: number) => spreadCtx.goTo(i),
+      next: () => spreadCtx.next(),
+      prev: () => spreadCtx.prev(),
+      goToChapter: (i: number) => setChapter(i),
+      getReadingPosition: (): ReadingPosition => ({
+        chapter: activeChapter.value,
+        spreadIdx: spreadCtx.spreadIdx.value,
+        totalPages: spreadCtx.totalPages.value,
+        totalSpreads: spreadCtx.totalSpreads.value,
+      }),
+      goToAnchor: (anchor: ReadingAnchor) => {
+        pendingAnchor.value = anchor;
+        if (anchor.chapter !== activeChapter.value) setChapter(anchor.chapter);
+        tryApplyPendingAnchor();
+      },
+      getAnchor: () => {
+        const layout = layoutCtx.layout.value;
+        if (!layout) return null;
+        const inCh = layout.anchorAt(spreadCtx.spreadIdx.value, 'right');
+        return inCh ? { chapter: activeChapter.value, ...inCh } : null;
+      },
+      getVisibleRange: () => {
+        const layout = layoutCtx.layout.value;
+        if (!layout) return null;
+        const start = layout.anchorAt(spreadCtx.spreadIdx.value, 'right');
+        if (!start) return null;
+        const next = layout.anchorAt(spreadCtx.spreadIdx.value + 1, 'right');
+        let end: { paragraph: number; charIndex: number };
+        if (next) {
+          end = next;
+        } else {
+          const e = epub.epub.value;
+          const ch = e?.chapters[activeChapter.value];
+          const lastP = (ch?.paragraphs.length ?? 1) - 1;
+          const lastText = ch?.paragraphs[lastP]?.text ?? '';
+          end = { paragraph: Math.max(0, lastP), charIndex: [...lastText].length };
+        }
+        return {
+          start: { chapter: activeChapter.value, ...start },
+          end: { chapter: activeChapter.value, ...end },
+        };
+      },
+      setOptions: (partial: Partial<BookOptions>) => setOptions(partial),
+      subscribe: <E extends EventName>(event: E, listener: MejiroReaderEventMap[E]) => {
+        let set = listeners.get(event);
+        if (!set) {
+          set = new Set();
+          listeners.set(event, set);
+        }
+        // biome-ignore lint/suspicious/noExplicitAny: payload type narrows on emit
+        set.add(listener as (payload: any) => void);
+        return () => {
+          // biome-ignore lint/suspicious/noExplicitAny: see above
+          listeners.get(event)?.delete(listener as (payload: any) => void);
+        };
+      },
+    } satisfies MejiroReaderHandle);
+
+    function patchSettings(next: EditableSettings): void {
+      setOptions(next);
+    }
+
+    const editable = computed<EditableSettings>(() => ({
+      fontFamily: options.value.fontFamily,
+      fontSize: options.value.fontSize,
+      lineSpacing: options.value.lineSpacing ?? 1.8,
+      mode: options.value.mode ?? 'strict',
+      enableHanging: options.value.enableHanging ?? true,
+    }));
+
+    const fontLabel = computed(() => {
+      const css = normalizeFontFamily(options.value.fontFamily);
+      const f = props.fonts?.find((x) => x.value === css);
+      const name = f?.label ?? css;
+      return `${name} ${options.value.fontSize}px`;
+    });
+
+    const runningTitleRight = computed(() => {
+      const b = epub.epub.value;
+      if (!b) return '';
+      return b.author ? `${b.author}  ${b.title}` : b.title;
+    });
+
+    const runningTitleLeft = computed(
+      () => epub.epub.value?.chapters[activeChapter.value]?.title ?? '',
+    );
+
+    function renderHeader(): VNode | VNode[] | null {
+      if (!effEnableHeader.value) return null;
+      if (slots.header) return slots.header() as VNode | VNode[];
+
+      const subtitleText = props.subtitle ?? resolvedMessages.value.logoSubtitle;
+      const defaultLogo = h('div', { class: 'mejiro-reader-logo' }, [
+        h('span', { class: 'mejiro-reader-logo-mark' }, props.title),
+        subtitleText ? h('span', { class: 'mejiro-reader-logo-sub' }, subtitleText) : null,
+      ]);
+      const leftChildren: (VNode | VNode[] | null)[] = [
+        slots.logo ? (slots.logo() as VNode | VNode[]) : defaultLogo,
+        epub.epub.value &&
+        effEnableChapterNav.value &&
+        (props.chapterNavMode === 'select' || props.chapterNavMode === 'both')
+          ? h(MejiroChapterNav, {
+              epub: epub.epub.value as EpubBook,
+              chapter: activeChapter.value,
+              'onUpdate:chapter': setChapter,
+            })
+          : null,
+      ];
+
+      const actionChildren: (VNode | null)[] = [
+        effEnableStats.value
+          ? h(MejiroStats, {
+              chapter: epub.epub.value?.chapters[activeChapter.value] ?? null,
+              totalPages: layoutCtx.layout.value?.totalPages ?? 0,
+              elapsedMs: layoutCtx.elapsedMs.value,
+              fontLabel: fontLabel.value,
+            })
+          : null,
+        props.enableDropZone
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: 'mejiro-reader-btn',
+                onClick: () => fileInputEl.value?.click(),
+              },
+              resolvedMessages.value.openButton,
+            )
+          : null,
+        props.enableImageOverlay && epub.epub.value
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: ['mejiro-reader-btn', { 'is-active': imageCtx.hasImages.value }],
+                onClick: () => imageCtx.addImage(),
+              },
+              resolvedMessages.value.imageButton,
+            )
+          : null,
+        effEnableSettings.value
+          ? h(
+              'button',
+              {
+                type: 'button',
+                class: ['mejiro-reader-btn', { 'is-active': settingsOpen.value }],
+                onClick: () => {
+                  settingsOpen.value = !settingsOpen.value;
+                },
+              },
+              [
+                resolvedMessages.value.settingsButton,
+                h('span', { class: 'mejiro-reader-btn-arrow' }, '▾'),
+              ],
+            )
+          : null,
+      ];
+
+      return h('header', { class: 'mejiro-reader-header' }, [
+        h('div', { class: 'mejiro-reader-header-left' }, leftChildren),
+        h('div', { class: 'mejiro-reader-header-actions' }, actionChildren),
+      ]);
+    }
+
+    function renderBody(): VNode {
+      const e = epub.epub.value;
+      const layoutReady =
+        e && layoutCtx.layout.value && spreadCtx.spread.value && layoutCtx.pageWidth.value > 0;
+
+      const children: (VNode | null)[] = [];
+
+      if (!(e || epub.loading.value) && props.enableDropZone) {
+        if (slots.dropZone) {
+          const rendered = slots.dropZone({ load: epub.loadFile });
+          if (Array.isArray(rendered)) children.push(...rendered);
+          else if (rendered) children.push(rendered as VNode);
+        } else {
+          children.push(h(MejiroDropZone, { onFile: (f: File) => void epub.loadFile(f) }));
+        }
+      }
+      if (!layoutReady && (slots.fallback || props.fallbackHtml)) {
+        if (slots.fallback) {
+          const rendered = slots.fallback();
+          if (Array.isArray(rendered)) {
+            children.push(h('div', { class: 'mejiro-reader-fallback' }, rendered));
+          } else if (rendered) {
+            children.push(h('div', { class: 'mejiro-reader-fallback' }, [rendered as VNode]));
+          }
+        } else if (props.fallbackHtml) {
+          children.push(
+            h('div', {
+              class: 'mejiro-reader-fallback',
+              innerHTML: props.fallbackHtml,
+            }),
+          );
+        }
+      }
+      if (epub.loading.value) {
+        if (slots.loading) {
+          const rendered = slots.loading();
+          if (Array.isArray(rendered)) children.push(...rendered);
+          else if (rendered) children.push(rendered as VNode);
+        } else {
+          children.push(
+            h('div', { class: 'mejiro-reader-loading' }, resolvedMessages.value.loading),
+          );
+        }
+      }
+      if (layoutReady && props.mode === 'scroll' && layoutCtx.layout.value) {
+        children.push(
+          h(MejiroScrollView, {
+            layout: layoutCtx.layout.value,
+            pageWidth: layoutCtx.pageWidth.value,
+            pageHeight: layoutCtx.pageHeight.value,
+            contentHeight: layoutCtx.contentHeight.value,
+            fontFamily: options.value.fontFamily,
+            fontSize: options.value.fontSize,
+            lineSpacing: options.value.lineSpacing,
+            scrollToPage: spreadCtx.spreadIdx.value * 2,
+            onVisiblePageChange: (pageIdx: number) => {
+              const target = Math.floor(pageIdx / 2);
+              if (target !== spreadCtx.spreadIdx.value) spreadCtx.goTo(target);
+            },
+          }),
+        );
+      } else if (layoutReady && spreadCtx.spread.value) {
+        const spread = spreadCtx.spread.value;
+        const currentSpread = spreadCtx.spreadIdx.value;
+        const rightPage = currentSpread * 2 + 1;
+        const leftPage = currentSpread * 2 + 2;
+        const showLeft = leftPage <= spread.totalPages;
+        children.push(
+          h(
+            MejiroSpread,
+            {
+              key: `${activeChapter.value}-${spreadCtx.spreadIdx.value}-${layoutCtx.pageWidth.value}x${layoutCtx.pageHeight.value}`,
+              spread,
+              pageWidth: layoutCtx.pageWidth.value,
+              pageHeight: layoutCtx.pageHeight.value,
+              contentHeight: layoutCtx.contentHeight.value,
+              fontFamily: options.value.fontFamily,
+              fontSize: options.value.fontSize,
+              lineSpacing: options.value.lineSpacing,
+              turning: spreadCtx.turning.value,
+              singlePage: effectiveSingle.value,
+              rightHeader: { title: runningTitleRight.value, pageNumber: rightPage },
+              leftHeader: {
+                title: runningTitleLeft.value,
+                pageNumber: showLeft ? leftPage : null,
+              },
+              images: imageCtx.currentImages.value,
+              onPrev: () => spreadCtx.prev(),
+              onNext: () => spreadCtx.next(),
+              onSwipe: (dir: 'next' | 'prev') =>
+                dir === 'next' ? spreadCtx.next() : spreadCtx.prev(),
+              onSurfaceTap: props.enableSurfaceTap
+                ? () => {
+                    chromeHidden.value = !chromeHidden.value;
+                  }
+                : undefined,
+              onImagePointerdown: (id: string, ev: PointerEvent) =>
+                imageCtx.onOverlayPointerDown(id, ev),
+              onImageResizePointerdown: (id: string, ev: PointerEvent) =>
+                imageCtx.onResizePointerDown(id, ev),
+              onImageClose: (id: string) => imageCtx.removeImage(id),
+            },
+            {
+              indicator: () =>
+                effEnablePageIndicator.value
+                  ? h(MejiroPageIndicator, {
+                      current: spreadCtx.spreadIdx.value + 1,
+                      total: spreadCtx.totalSpreads.value,
+                    })
+                  : null,
+            },
+          ),
+        );
+      }
+
+      return h('div', { class: 'mejiro-reader-surface', ref: surfaceEl }, children);
+    }
+
+    const fileInputEl = ref<HTMLInputElement | null>(null);
+
+    const themeName = computed<MejiroThemeName>(() =>
+      typeof props.theme === 'string' ? props.theme : props.theme.name,
+    );
+    const themeStyle = computed<Record<string, string> | undefined>(() =>
+      typeof props.theme === 'string' ? undefined : props.theme.override,
+    );
+
+    return () => {
+      return h(
+        MejiroI18nProvider,
+        { messages: resolvedMessages.value },
+        {
+          default: () =>
+            h(
+              'div',
+              {
+                class: ['mejiro-reader', { 'mejiro-reader--chrome-hidden': chromeHidden.value }],
+                'data-mejiro-theme': themeName.value,
+                style: themeStyle.value,
+              },
+              [
+                renderHeader(),
+                effEnableSettings.value
+                  ? h(MejiroSettingsPanel, {
+                      open: settingsOpen.value,
+                      settings: editable.value,
+                      fonts: props.fonts ?? undefined,
+                      'onUpdate:settings': patchSettings,
+                    })
+                  : null,
+                h(
+                  'div',
+                  {
+                    class: [
+                      'mejiro-reader-body',
+                      {
+                        'has-chapter-panel':
+                          epub.epub.value &&
+                          effEnableChapterNav.value &&
+                          (props.chapterNavMode === 'panel' || props.chapterNavMode === 'both'),
+                      },
+                    ],
+                  },
+                  [
+                    epub.epub.value &&
+                    effEnableChapterNav.value &&
+                    (props.chapterNavMode === 'panel' || props.chapterNavMode === 'both')
+                      ? h(MejiroChapterNav, {
+                          epub: epub.epub.value,
+                          chapter: activeChapter.value,
+                          variant: 'panel',
+                          'onUpdate:chapter': setChapter,
+                        })
+                      : null,
+                    renderBody(),
+                  ],
+                ),
+                // Hidden file input for the header "Open" button.
+                h('input', {
+                  ref: fileInputEl,
+                  type: 'file',
+                  accept: '.epub',
+                  hidden: true,
+                  onChange: (e: Event) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (file) void epub.loadFile(file);
+                  },
+                }),
+                h(
+                  'div',
+                  { class: 'mejiro-reader-sr-only', role: 'status', 'aria-live': 'polite' },
+                  spreadCtx.totalSpreads.value > 0
+                    ? formatMessage(resolvedMessages.value.spreadAnnouncement, {
+                        spread: spreadCtx.spreadIdx.value + 1,
+                        total: spreadCtx.totalSpreads.value,
+                      })
+                    : '',
+                ),
+              ],
+            ),
+        },
+      );
+    };
+  },
+});
+
+export type MejiroReaderProps = InstanceType<typeof MejiroReader>['$props'];

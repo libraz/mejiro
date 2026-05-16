@@ -1,11 +1,33 @@
 import type { RenderLine, RenderPage, RenderSegment } from '@libraz/mejiro/render';
-import { defineComponent, h, type PropType, type VNode } from 'vue';
+import { defineComponent, Fragment, h, type PropType, type VNode } from 'vue';
 
-function renderSegment(segment: RenderSegment, key: number): VNode | string {
-  if (segment.type === 'text') {
-    return segment.text;
+function renderSegment(segment: RenderSegment, key: string): VNode | string {
+  switch (segment.type) {
+    case 'text':
+      return h(Fragment, { key }, [segment.text]);
+    case 'ruby':
+      return h('ruby', { key }, [segment.base, h('rt', null, segment.rubyText)]);
+    case 'emphasis':
+      return h(
+        'span',
+        { key, class: `mejiro-emphasis mejiro-emphasis--${segment.style}` },
+        segment.text,
+      );
+    case 'tcy':
+      return h('span', { key, class: 'mejiro-tcy' }, segment.text);
+    case 'em':
+      return h('em', { key }, segment.text);
+    case 'strong':
+      return h('strong', { key }, segment.text);
+    case 'link':
+      return h('a', { key, href: segment.href, title: segment.title }, segment.text);
+    case 'footnote-ref':
+      return h(
+        'a',
+        { key, class: 'mejiro-footnote-ref', href: `#${segment.noteId}` },
+        segment.text,
+      );
   }
-  return h('ruby', { key }, [segment.base, h('rt', null, segment.rubyText)]);
 }
 
 function renderLine(line: RenderLine, lineIndex: number): (VNode | string)[] {
@@ -14,7 +36,7 @@ function renderLine(line: RenderLine, lineIndex: number): (VNode | string)[] {
     nodes.push(h('br', { key: `br-${lineIndex}` }));
   }
   for (let i = 0; i < line.segments.length; i++) {
-    nodes.push(renderSegment(line.segments[i], i));
+    nodes.push(renderSegment(line.segments[i], `${lineIndex}-${i}`));
   }
   return nodes;
 }
@@ -53,3 +75,5 @@ export const MejiroPage = defineComponent({
     };
   },
 });
+
+export type MejiroPageProps = InstanceType<typeof MejiroPage>['$props'];
