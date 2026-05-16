@@ -1,6 +1,7 @@
 import type { PageResult } from '@libraz/mejiro/book';
+import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import type { RenderSegment } from '@libraz/mejiro/render';
-import type { CSSProperties, ReactNode } from 'react';
+import { type CSSProperties, Fragment, type ReactNode } from 'react';
 import { MejiroPage } from './MejiroPage.js';
 
 /** Props for the MejiroPageView component. */
@@ -8,7 +9,7 @@ export interface MejiroPageViewProps {
   /** Page result from {@link ChapterLayout.getSpread} or {@link ChapterLayout.getPage}. */
   result: PageResult;
   /** CSS font family for slot-based rendering (used when images are present). */
-  fontFamily?: string;
+  fontFamily?: FontFamily;
   /** Line spacing multiplier for slot-based rendering (used when images are present). */
   lineSpacing?: number;
   /**
@@ -23,14 +24,46 @@ export interface MejiroPageViewProps {
   style?: CSSProperties;
 }
 
-function renderSlotSegment(segment: RenderSegment, key: number): ReactNode {
-  if (segment.type === 'text') return segment.text;
-  return (
-    <ruby key={key}>
-      {segment.base}
-      <rt>{segment.rubyText}</rt>
-    </ruby>
-  );
+function renderSlotSegment(segment: RenderSegment, key: string): ReactNode {
+  switch (segment.type) {
+    case 'text':
+      return <Fragment key={key}>{segment.text}</Fragment>;
+    case 'ruby':
+      return (
+        <ruby key={key}>
+          {segment.base}
+          <rt>{segment.rubyText}</rt>
+        </ruby>
+      );
+    case 'emphasis':
+      return (
+        <span key={key} className={`mejiro-emphasis mejiro-emphasis--${segment.style}`}>
+          {segment.text}
+        </span>
+      );
+    case 'tcy':
+      return (
+        <span key={key} className="mejiro-tcy">
+          {segment.text}
+        </span>
+      );
+    case 'em':
+      return <em key={key}>{segment.text}</em>;
+    case 'strong':
+      return <strong key={key}>{segment.text}</strong>;
+    case 'link':
+      return (
+        <a key={key} href={segment.href} title={segment.title}>
+          {segment.text}
+        </a>
+      );
+    case 'footnote-ref':
+      return (
+        <a key={key} className="mejiro-footnote-ref" href={`#${segment.noteId}`}>
+          {segment.text}
+        </a>
+      );
+  }
 }
 
 /**
@@ -56,6 +89,7 @@ export function MejiroPageView({
 }: MejiroPageViewProps): ReactNode {
   if (result.hasImages || slotMode) {
     const rootClass = className ? `mejiro-page-slots ${className}` : 'mejiro-page-slots';
+    const fontFamilyCss = fontFamily != null ? normalizeFontFamily(fontFamily) : undefined;
     return (
       <div className={rootClass} style={{ position: 'relative', ...style }}>
         {result.lines.map((line, i) => {
@@ -70,14 +104,14 @@ export function MejiroPageView({
             top: slot.yStart,
             height: slot.height,
             fontSize: line.fontSize,
-            fontFamily,
+            fontFamily: fontFamilyCss,
             lineHeight: lineSpacing,
             fontWeight: line.headingLevel != null ? 700 : undefined,
           };
           return (
             // biome-ignore lint/suspicious/noArrayIndexKey: lines have no stable ID
             <div key={i} style={colStyle}>
-              {line.segments.map((seg, si) => renderSlotSegment(seg, si))}
+              {line.segments.map((seg, si) => renderSlotSegment(seg, `${i}-${si}`))}
             </div>
           );
         })}

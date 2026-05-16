@@ -1,6 +1,12 @@
 import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { type PointerEvent as ReactPointerEvent, useCallback, useRef, useState } from 'react';
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 /** Rectangle describing an image overlay position and size. */
 export interface ImageRect {
@@ -76,6 +82,15 @@ export function useImageOverlay(
   spreadRef.current = spreadIdx;
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+  const activeDragCleanupsRef = useRef(new Set<() => void>());
+
+  useEffect(
+    () => () => {
+      for (const cleanup of activeDragCleanupsRef.current) cleanup();
+      activeDragCleanupsRef.current.clear();
+    },
+    [],
+  );
 
   const syncToLayout = useCallback(
     (rect: ImageRect | null) => {
@@ -124,13 +139,18 @@ export function useImageOverlay(
           syncToLayout(r);
         });
       };
-      const onUp = () => {
+      let cleanup: () => void;
+      const onUp = () => cleanup();
+      cleanup = () => {
+        cancelAnimationFrame(rafId);
         target.classList.remove('dragging');
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
+        activeDragCleanupsRef.current.delete(cleanup);
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
+      activeDragCleanupsRef.current.add(cleanup);
     },
     [syncToLayout],
   );
@@ -159,13 +179,18 @@ export function useImageOverlay(
           syncToLayout(r);
         });
       };
-      const onUp = () => {
+      let cleanup: () => void;
+      const onUp = () => cleanup();
+      cleanup = () => {
+        cancelAnimationFrame(rafId);
         target.parentElement?.classList.remove('dragging');
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
+        activeDragCleanupsRef.current.delete(cleanup);
       };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onUp);
+      activeDragCleanupsRef.current.add(cleanup);
     },
     [syncToLayout],
   );

@@ -6,5 +6,5 @@ export default defineConfig({
   dts: true,
   clean: true,
   target: 'es2022',
-  external: ['react', 'react/jsx-runtime'],
+  external: ['@libraz/mejiro', '@libraz/mejiro/*', 'react', 'react/jsx-runtime'],
 });

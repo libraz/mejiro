@@ -1,5 +1,5 @@
 import type { RenderLine, RenderPage, RenderSegment } from '@libraz/mejiro/render';
-import type { CSSProperties, ReactNode } from 'react';
+import { type CSSProperties, Fragment, type ReactNode } from 'react';
 
 /** Props for the MejiroPage component. */
 export interface MejiroPageProps {
@@ -11,16 +11,46 @@ export interface MejiroPageProps {
   style?: CSSProperties;
 }
 
-function renderSegment(segment: RenderSegment, key: number): ReactNode {
-  if (segment.type === 'text') {
-    return segment.text;
+function renderSegment(segment: RenderSegment, key: string): ReactNode {
+  switch (segment.type) {
+    case 'text':
+      return <Fragment key={key}>{segment.text}</Fragment>;
+    case 'ruby':
+      return (
+        <ruby key={key}>
+          {segment.base}
+          <rt>{segment.rubyText}</rt>
+        </ruby>
+      );
+    case 'emphasis':
+      return (
+        <span key={key} className={`mejiro-emphasis mejiro-emphasis--${segment.style}`}>
+          {segment.text}
+        </span>
+      );
+    case 'tcy':
+      return (
+        <span key={key} className="mejiro-tcy">
+          {segment.text}
+        </span>
+      );
+    case 'em':
+      return <em key={key}>{segment.text}</em>;
+    case 'strong':
+      return <strong key={key}>{segment.text}</strong>;
+    case 'link':
+      return (
+        <a key={key} href={segment.href} title={segment.title}>
+          {segment.text}
+        </a>
+      );
+    case 'footnote-ref':
+      return (
+        <a key={key} className="mejiro-footnote-ref" href={`#${segment.noteId}`}>
+          {segment.text}
+        </a>
+      );
   }
-  return (
-    <ruby key={key}>
-      {segment.base}
-      <rt>{segment.rubyText}</rt>
-    </ruby>
-  );
 }
 
 function renderLine(line: RenderLine, lineIndex: number): ReactNode[] {
@@ -29,7 +59,7 @@ function renderLine(line: RenderLine, lineIndex: number): ReactNode[] {
     nodes.push(<br key={`br-${lineIndex}`} />);
   }
   for (let i = 0; i < line.segments.length; i++) {
-    nodes.push(renderSegment(line.segments[i], i));
+    nodes.push(renderSegment(line.segments[i], `${lineIndex}-${i}`));
   }
   return nodes;
 }
