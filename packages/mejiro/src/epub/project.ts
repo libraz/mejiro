@@ -6,7 +6,12 @@ import {
   parseManuscript,
   parseManuscriptRuby,
 } from '../manuscript.js';
-import { type EpubExportOptions, generateZip, throwIfAborted } from './editor.js';
+import {
+  type EpubExportOptions,
+  generateZip,
+  resolveAssetData,
+  throwIfAborted,
+} from './editor.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
 export { parseManuscript, parseManuscriptRuby };
@@ -268,7 +273,7 @@ export class EpubProject {
   }
 
   async export(options: EpubExportOptions = {}): Promise<ArrayBuffer> {
-    const { onProgress, signal } = options;
+    const { onProgress, signal, assetResolver } = options;
     throwIfAborted(signal);
 
     const zip = new JSZip();
@@ -293,7 +298,8 @@ export class EpubProject {
     });
     for (const asset of this.assets) {
       throwIfAborted(signal);
-      zip.file(asset.href, toUint8Array(asset.data));
+      const bytes = await resolveAssetData(asset.href, asset, assetResolver, signal);
+      zip.file(asset.href, bytes);
     }
 
     return generateZip(zip, onProgress, signal);

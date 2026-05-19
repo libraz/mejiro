@@ -1,5 +1,9 @@
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
-import { EditableEpub, type EditableEpubBook } from '@libraz/mejiro/epub';
+import {
+  type AssetResolver,
+  EditableEpub,
+  type EditableEpubBook,
+} from '@libraz/mejiro/epub';
 import { computed, defineComponent, h, type PropType, ref, watch } from 'vue';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
@@ -52,6 +56,14 @@ export const MejiroEditor = defineComponent({
      */
     exportPolicy: {
       type: Object as PropType<MejiroExportPolicy>,
+      default: undefined,
+    },
+    /**
+     * Resolves URL-only image assets ({@link EditableImageAsset.url} set,
+     * `data` unset) into bytes at export time. Forwarded to `editor.export()`.
+     */
+    assetResolver: {
+      type: Function as PropType<AssetResolver>,
       default: undefined,
     },
   },
@@ -225,7 +237,8 @@ export const MejiroEditor = defineComponent({
       if (!editor.value) return;
       const policy = props.exportPolicy;
       if (policy?.watermark) applyWatermark(editor.value as EditableEpub, policy.watermark);
-      let buffer = await editor.value.export();
+      const resolver = props.assetResolver;
+      let buffer = await editor.value.export(resolver ? { assetResolver: resolver } : undefined);
       if (policy?.encrypt) buffer = await policy.encrypt(buffer);
       const decision = await props.onBeforeExport?.(buffer);
       emit('export', buffer);

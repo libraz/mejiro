@@ -1,4 +1,5 @@
 import {
+  type AssetResolver,
   type EpubBook,
   EpubProject,
   type EpubProjectMetadata,
@@ -16,6 +17,13 @@ export interface UseEpubProjectOptions {
   metadata?: Partial<EpubProjectMetadata>;
   chapters?: EpubProjectChapterDraft[];
   debounceMs?: number;
+  /**
+   * Resolves URL-only project assets into bytes when the preview or export
+   * pipeline materializes them. Forwarded to `project.export()`. Useful when
+   * cover / illustration assets are registered as remote URLs and you want
+   * the host (not the client) to provide auth headers.
+   */
+  assetResolver?: AssetResolver;
   onPreview?: (book: EpubBook) => void;
   onExport?: (buffer: ArrayBuffer) => void;
 }
@@ -75,6 +83,9 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     [chapters, metadata],
   );
 
+  const assetResolverRef = useRef(options.assetResolver);
+  assetResolverRef.current = options.assetResolver;
+
   useEffect(() => {
     const requestId = ++previewRequestIdRef.current;
     let cancelled = false;
@@ -82,7 +93,10 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const book = await parseEpub(await buildProject().export());
+          const resolver = assetResolverRef.current;
+          const book = await parseEpub(
+            await buildProject().export(resolver ? { assetResolver: resolver } : undefined),
+          );
           if (cancelled || requestId !== previewRequestIdRef.current) return;
           setPreviewBook(book);
           setPreviewError(null);
@@ -189,7 +203,8 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   }, []);
 
   const exportEpub = useCallback(async (): Promise<ArrayBuffer> => {
-    const buffer = await buildProject().export();
+    const resolver = assetResolverRef.current;
+    const buffer = await buildProject().export(resolver ? { assetResolver: resolver } : undefined);
     onExportRef.current?.(buffer);
     return buffer;
   }, [buildProject]);

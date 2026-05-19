@@ -1,4 +1,9 @@
-import { type EpubBook, EpubProject, parseEpub } from '@libraz/mejiro/epub';
+import {
+  type AssetResolver,
+  type EpubBook,
+  EpubProject,
+  parseEpub,
+} from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
@@ -44,6 +49,13 @@ export interface MejiroManuscriptEditorProps {
    * remain driven by the editor.
    */
   previewProps?: ManuscriptPreviewProps;
+  /**
+   * Resolves URL-only project assets (e.g. covers/illustrations registered as
+   * `{ url, ... }`) into bytes at export time. Forwarded to `project.export()`
+   * so authors can register signed-URL references without holding raw bytes
+   * client-side until publish.
+   */
+  assetResolver?: AssetResolver;
   /** Called after export completes. */
   onExport?: (buffer: ArrayBuffer) => void;
 }
@@ -94,6 +106,7 @@ export function MejiroManuscriptEditor({
   author: initialAuthor = '',
   chapters: initialChapters,
   previewProps,
+  assetResolver,
   onExport,
 }: MejiroManuscriptEditorProps): ReactNode {
   const messages = useI18n();
@@ -209,7 +222,7 @@ export function MejiroManuscriptEditor({
         data: await cover.arrayBuffer(),
       });
     }
-    const buffer = await project.export();
+    const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
     onExport?.(buffer);
     downloadEpub(buffer, title);
   }

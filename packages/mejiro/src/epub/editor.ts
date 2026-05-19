@@ -820,6 +820,22 @@ async function resolveAssetBytes(
   return toUint8Array(resolved);
 }
 
+/**
+ * Generic asset-bytes resolver used by both {@link EditableEpub.export} and
+ * `EpubProject.export`. Picks `data` when present, otherwise routes through
+ * `resolver` / `fetch` using `url`.
+ *
+ * Exposed for shared use across the EPUB module.
+ */
+export async function resolveAssetData(
+  assetKey: string,
+  asset: { data?: Uint8Array | ArrayBuffer; url?: string },
+  resolver: AssetResolver | undefined,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array> {
+  return resolveAssetBytes(assetKey, asset as EditableImageAsset, resolver, signal);
+}
+
 async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
   const response = await fetch(url, signal ? { signal } : undefined);
   if (!response.ok) {
