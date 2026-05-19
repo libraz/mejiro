@@ -1,12 +1,14 @@
 # ルビ注釈
 
+> **v0.5 で変更:** ブラウザ / book / render で扱う段落注釈は、`InlineAnnotation` 判別共用体の `kind: 'ruby'` バリアントになりました。フィールド名は `inlineAnnotations` です。ルビを直接書く場合は `kind: 'ruby'` を付けてください。`RubyInputAnnotation` は互換用に `InlineRubyAnnotation` の deprecated エイリアスとして残しています。
+
 ## ルビとは
 
-ルビ注釈（振り仮名）は、本文の文字に沿って小さく表示される文字で、読みを示すために使われます。日本語テキストでは、漢字の読みを示す目的で広く用いられています。
+ルビ（振り仮名）は、本文の文字に添えて小さく表示する読みです。日本語では、漢字の読みを示すためによく使われます。
 
-例えば「漢字」という語において、文字の上や横に小さく表示されるひらがな「かんじ」がルビ注釈です。縦書きレイアウトでは、ルビは親文字の右側に表示されます。
+たとえば「漢字」に添える「かんじ」がルビです。縦書きでは、ルビは親文字の右側に表示されます。
 
-ルビは多くの場面で可読性に不可欠です。児童書、教育教材、法律文書、珍しい漢字や古い読みが使われる文学作品などがその例です。
+児童書、教材、法律文書、古い読みや珍しい漢字を含む文学作品などでは、ルビが読みやすさに大きく効きます。
 
 ## ルビの種類
 
@@ -14,7 +16,7 @@ JLReq（日本語組版処理の要件、W3C）仕様では、3種類のルビ�
 
 ### モノルビ
 
-1つの親文字に1つ以上のルビ文字が対応します。各親文字が独立した注釈を持ちます。
+1 つの親文字に 1 つ以上のルビ文字が対応します。各親文字が独立した注釈を持ちます。
 
 例: 「字」にルビ「じ」。
 
@@ -22,19 +24,19 @@ JLReq（日本語組版処理の要件、W3C）仕様では、3種類のルビ�
 
 ### グループルビ
 
-複数の親文字が1つのルビ注釈を共有し、分割できません。注釈はすべての親文字と一緒に保持される必要があります。
+複数の親文字が 1 つのルビ注釈を共有します。まとまりとして扱うため、途中で分割できません。
 
 例: 「東京」にルビ「とうきょう」。4つのルビ文字が2文字の熟語を1つの単位として注釈します。「東」と「京」の間で改行することはできません。
 
 ### 熟語ルビ
 
-複数の漢字がそれぞれ独自の読みを持ちながら、視覚的には1つのまとまりを形成する熟語です。グループルビとは異なり、熟語ルビは改行時に必要に応じて指定された分割点で分割できます。
+複数の漢字がそれぞれの読みを持ちながら、見た目としては 1 つのまとまりになる形式です。グループルビと違い、熟語ルビは指定した分割点で改行できます。
 
 例: 「東京都」において、東=とう、京=きょう、都=と。分割点により「東」の後および「京」の後での改行が可能ですが、各サブグループのルビテキストは対応する親文字と一緒に保持されます。
 
 ## コアレベル: RubyAnnotation と preprocessRuby()
 
-コアレベルでは、ルビはコードポイント配列と測定済みの送り幅で動作します。コアモジュールは外部依存関係がありません。
+コアレベルでは、ルビもコードポイント配列と計測済みの送り幅で扱います。コアモジュールに外部依存はありません。
 
 ### RubyAnnotation インターフェース
 
@@ -51,10 +53,10 @@ interface RubyAnnotation {
 
 ### preprocessRuby()
 
-`preprocessRuby()` は、ルビテキストの幅を親文字に分配し、ルビグループ内での不正な改行を防ぐためのクラスタIDを生成します。2つの配列を返します:
+`preprocessRuby()` は、ルビテキストの幅を親文字へ分配し、ルビの途中で不自然に改行されないようにクラスタ ID を生成します。返す主な値は次の 2 つです。
 
-- **effectiveAdvances** -- 調整後の送り幅。ルビテキストが親文字より広い場合、超過分が親文字に分配されます。
-- **clusterIds** -- 同じクラスタIDを持つ文字は行をまたいで分割されません。グループルビではすべての親文字に1つのクラスタIDが割り当てられます。熟語ルビでは分割点の間にサブグループクラスタが作成されます。
+- **effectiveAdvances** -- 調整後の送り幅。ルビテキストが親文字より広い場合、はみ出す分を親文字側へ分配します。
+- **clusterIds** -- 同じクラスタ ID を持つ文字は行をまたいで分割されません。グループルビではすべての親文字に同じクラスタ ID が付きます。熟語ルビでは、分割点ごとにサブグループを作ります。
 
 幅の分配はJLReqの規則に従います:
 
@@ -82,7 +84,7 @@ const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotat
 // clusterIds: [0, 0, 2, 3, 4] -- インデックス0と1が同じクラスタを共有（グループルビ）
 ```
 
-実際には `preprocessRuby()` を直接呼び出すことはほとんどありません。`LayoutInput` に `rubyAnnotations` を渡して `computeBreaks()` を呼び出すと、関数内部で `preprocessRuby()` が呼ばれ、結果の実効送り幅とクラスタIDが改行処理に使用されます。
+実際には `preprocessRuby()` を直接呼び出すことはほとんどありません。`LayoutInput` にコアレベルの `rubyAnnotations` を渡して `computeBreaks()` を呼び出すと、関数内部で `preprocessRuby()` が呼ばれ、結果の実効送り幅とクラスタIDが改行処理に使用されます。
 
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
@@ -105,14 +107,15 @@ const result = computeBreaks({
 // 改行はグループクラスタリングを尊重: インデックス0と1は分割されない。
 ```
 
-## ブラウザレベル: RubyInputAnnotation
+## ブラウザレベル: InlineRubyAnnotation
 
-ブラウザ層は、より扱いやすい文字列ベースの注釈インターフェースを提供します。コードポイント変換と送り幅の測定は自動的に行われます。
+ブラウザ層では、文字列ベースの注釈インターフェースを使えます。コードポイントへの変換と送り幅の測定は自動で行われます。
 
-### RubyInputAnnotation インターフェース
+### InlineRubyAnnotation インターフェース
 
 ```ts
-interface RubyInputAnnotation {
+interface InlineRubyAnnotation {
+  kind: 'ruby';
   startIndex: number;   // 親文字テキスト文字列の文字インデックス
   endIndex: number;     // 終了インデックス（含まない）
   rubyText: string;     // プレーンな文字列としてのルビテキスト
@@ -121,7 +124,7 @@ interface RubyInputAnnotation {
 }
 ```
 
-`MejiroBrowser.layout()` または `layoutChapter()` に `rubyAnnotations` を渡すと、ブラウザ層が自動的に以下を行います:
+`MejiroBrowser.layout()` または `layoutChapter()` に `inlineAnnotations` を渡すと、ブラウザ層が自動的に以下を行います:
 
 1. ルビテキスト文字列を `Uint32Array` のコードポイントに変換。
 2. `Canvas.measureText()` を使用してルビ文字の送り幅を測定。
@@ -138,7 +141,8 @@ const result = await mejiro.layout({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineWidth: 200,
-  rubyAnnotations: [{
+  inlineAnnotations: [{
+    kind: 'ruby',
     startIndex: 0,
     endIndex: 2,
     rubyText: 'かんじ',
@@ -154,7 +158,8 @@ const chapterResult = await mejiro.layoutChapter({
   paragraphs: [
     {
       text: '漢字を読む',
-      rubyAnnotations: [{
+      inlineAnnotations: [{
+        kind: 'ruby',
         startIndex: 0,
         endIndex: 2,
         rubyText: 'かんじ',
@@ -163,7 +168,7 @@ const chapterResult = await mejiro.layoutChapter({
     },
     {
       text: '名前はまだ無い',
-      rubyAnnotations: [],
+      inlineAnnotations: [],
     },
   ],
   fontFamily: '"Noto Serif JP"',
@@ -174,7 +179,7 @@ const chapterResult = await mejiro.layoutChapter({
 
 ## EPUB からのルビ
 
-EPUBファイルを解析する際、`extractRubyContent()` 関数はXHTMLコンテンツ内の `<ruby><rt>` 要素を自動的に検出し、各段落に対して `RubyInputAnnotation[]` を生成します。
+EPUBファイルを解析する際、`extractRubyContent()` 関数はXHTMLコンテンツ内の `<ruby><rt>` 要素を自動的に検出し、各段落の `inlineAnnotations` にルビ用の `InlineAnnotation` を追加します。
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -182,7 +187,7 @@ import { parseEpub } from '@libraz/mejiro/epub';
 const book = await parseEpub(buffer);
 const paragraph = book.chapters[0].paragraphs[0];
 // paragraph.text   -- ルビコンテンツを除去した親文字テキスト
-// paragraph.rubyAnnotations -- テキストへの文字インデックスを持つ RubyInputAnnotation[]
+// paragraph.inlineAnnotations -- テキストへの文字インデックスを持つ InlineAnnotation[]
 ```
 
 エクストラクタは一般的なHTMLルビマークアップパターンをすべて処理します:
@@ -235,4 +240,4 @@ React および Vue コンポーネントパッケージ（`@libraz/mejiro-react
 - [コアコンセプト](02-core-concepts.md) -- アーキテクチャとデータフロー
 - [改行処理](03-line-breaking.md) -- 禁則処理とぶら下げ組み
 - [ブラウザ統合](05-browser-integration.md) -- MejiroBrowser クラス
-- [APIリファレンス](10-api-reference.md) -- 完全なAPI一覧
+- [API リファレンス](10-api-reference.md) -- 公開 API 一覧

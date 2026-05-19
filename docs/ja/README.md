@@ -1,6 +1,6 @@
 # mejiro ドキュメント
 
-Web向け日本語縦書き組版エンジン — 改行処理、禁則処理、ぶら下げ組み、ルビ（振り仮名）、ページネーション。
+mejiro は、Web で日本語の縦書きを扱うための組版エンジンです。改行、禁則処理、ぶら下げ、ルビ、ページ分割、EPUB の読み書き、静的レンダリング、React / Vue 向けのリーダー・エディタコンポーネントをまとめて扱えます。
 
 ## ドキュメント
 
@@ -10,33 +10,36 @@ Web向け日本語縦書き組版エンジン — 改行処理、禁則処理、
 | 02 | [コアコンセプト](02-core-concepts.md) | アーキテクチャ、データフロー、TypedArray |
 | 03 | [改行処理](03-line-breaking.md) | computeBreaks、禁則処理、ぶら下げ組み |
 | 04 | [ルビ](04-ruby.md) | ルビ（振り仮名）注釈 |
-| 05 | [ブラウザ統合](05-browser-integration.md) | MejiroBrowser、フォント計測 |
-| 06 | [EPUB](06-epub.md) | EPUB解析とルビ抽出 |
-| 07 | [ページネーションとレンダリング](07-pagination-and-rendering.md) | paginate、buildRenderPage、CSS |
-| 08 | [ReactとVue](08-react-and-vue.md) | フレームワークコンポーネント |
-| 09 | [応用](09-advanced.md) | カスタム禁則、トークン境界、パフォーマンス、画像除外、見開きレイアウト |
-| 10 | [APIリファレンス](10-api-reference.md) | 完全なAPIリファレンス |
+| 05 | [ブラウザ統合](05-browser-integration.md) | MejiroBrowser とフォント計測 |
+| 06 | [EPUB](06-epub.md) | EPUB の解析、編集、ルビ抽出 |
+| 07 | [ページ分割とレンダリング](07-pagination-and-rendering.md) | paginate、buildRenderPage、CSS |
+| 08 | [React と Vue](08-react-and-vue.md) | React / Vue コンポーネント |
+| 09 | [応用](09-advanced.md) | カスタム禁則、トークン境界、パフォーマンス、画像回り込み、見開きレイアウト |
+| 10 | [API リファレンス](10-api-reference.md) | 公開 API 一覧 |
 
 ## 何を読むべきか
 
-**EPUBを素早くレイアウトしたい（推奨）**
-→ [はじめに](01-getting-started.md) → [APIリファレンス](10-api-reference.md) の `MejiroBook`
+**まず EPUB を縦書きで表示したい**
+→ [はじめに](01-getting-started.md) → [API リファレンス](10-api-reference.md) の `MejiroBook`
 
-**ReactやVueで縦書きテキストを表示したい**
-→ [はじめに](01-getting-started.md) → [ReactとVue](08-react-and-vue.md)
+**React や Vue でリーダーを組み込みたい**
+→ [はじめに](01-getting-started.md) → [React と Vue](08-react-and-vue.md)
 
 **改行アルゴリズムを理解したい**
 → [コアコンセプト](02-core-concepts.md) → [改行処理](03-line-breaking.md)
 
-**EPUBを縦書きで表示したい**
-→ [はじめに](01-getting-started.md) → [EPUB](06-epub.md) → [ページネーションとレンダリング](07-pagination-and-rendering.md)
+**EPUB の中身や変換の流れを知りたい**
+→ [EPUB](06-epub.md) → [ページ分割とレンダリング](07-pagination-and-rendering.md)
 
 **ブラウザなしでコアエンジンを使いたい**
 → [コアコンセプト](02-core-concepts.md) → [応用](09-advanced.md)
 
-**画像の周りにテキストを流し込みたい**
-→ [APIリファレンス](10-api-reference.md) の `MejiroBook` + `layout.setImages()`、または低レベル制御は[応用](09-advanced.md)
+**画像の周りにテキストを回り込ませたい**
+→ [API リファレンス](10-api-reference.md) の `MejiroBook` + `layout.setImages()`、または低レベル制御は [応用](09-advanced.md)
+
+**v0.5 のリーダー / エディタ UI を確認したい**
+→ [React と Vue](08-react-and-vue.md) → [API リファレンス](10-api-reference.md)
 
 ---
 
-[← READMEに戻る](../../README_ja.md)
+[← README に戻る](../../README_ja.md)

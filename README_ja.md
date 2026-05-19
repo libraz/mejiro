@@ -4,9 +4,9 @@
 [![npm](https://img.shields.io/npm/v/@libraz/mejiro)](https://www.npmjs.com/package/@libraz/mejiro)
 [![codecov](https://codecov.io/gh/libraz/mejiro/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/mejiro)
 [![License](https://img.shields.io/github/license/libraz/mejiro)](https://github.com/libraz/mejiro/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-Web向け日本語縦書き組版エンジン。改行処理、禁則処理、ぶら下げ組み、ルビ（振り仮名）前処理、画像除外（テキスト回り込み）、ページネーションを提供します。コアエンジンはDOM非依存です。
+mejiro は、Web で日本語の縦書きを扱うための組版エンジンです。改行、禁則処理、ぶら下げ、ルビ、画像の回り込み、ページ分割、EPUB の読み書きに対応し、React / Vue 向けのリーダー・エディタコンポーネントも提供します。コア部分は DOM に依存しないため、ブラウザ以外の環境でも使えます。
 
 <p align="center">
   <img src="docs/images/wagahai.jpg" alt="mejiro デモ — 夏目漱石「吾輩は猫である」縦書き表示" width="640">
@@ -20,14 +20,17 @@ npm install @libraz/mejiro   # or yarn / pnpm / bun
 
 ## 概要
 
-mejiroは、ブラウザでの日本語縦書きテキスト（`writing-mode: vertical-rl`）レンダリングに必要な構成要素を提供します。コアエンジンはTypedArrayと純粋な数値計算で動作するため、高速・決定的・ポータブルです。ブラウザ固有の処理（フォント計測、Canvas API）は別サブパスに分離し、EPUB解析は第3のサブパスとして利用できます。
+mejiro は、日本語縦書き（`writing-mode: vertical-rl`）をアプリケーションに組み込むための部品をまとめたライブラリです。低レベルの改行計算だけを使うことも、EPUB を読み込んで見開きページとして表示することもできます。
+
+コアエンジンは TypedArray と数値計算だけで動くようにしてあり、DOM や Canvas には依存しません。フォント計測などブラウザ固有の処理、EPUB の解析・生成、React / Vue コンポーネントは、それぞれ別のエントリポイントから利用できます。
 
 ```
-@libraz/mejiro          コア: 改行・禁則・ぶら下げ・ルビ・画像除外・ページネーション
-@libraz/mejiro/browser  ブラウザ: フォント計測・幅キャッシュ・レイアウト統合
-@libraz/mejiro/epub     EPUB: 解析・ルビ抽出
-@libraz/mejiro/render   レンダー: レイアウトデータ → フレームワーク非依存のページ構造 + CSS
-@libraz/mejiro/book     ブック: 高レベルAPI — レイアウト・ページネーション・画像除外を1クラスに統合
+@libraz/mejiro          コア: 改行、禁則、ぶら下げ、ルビ、画像回り込み、ページ分割
+@libraz/mejiro/browser  ブラウザ: フォント計測、幅キャッシュ、レイアウト補助
+@libraz/mejiro/epub     EPUB: 解析、編集、書き戻し、原稿からの EPUB 生成
+@libraz/mejiro/render   レンダリング: レイアウト結果をページ構造と CSS に変換
+@libraz/mejiro/book     ブック: レイアウト、ページ分割、画像回り込みをまとめた高レベル API
+@libraz/mejiro/image    画像: ブラウザでのデコード、縮小、再エンコード
 ```
 
 ## アーキテクチャ
@@ -35,22 +38,22 @@ mejiroは、ブラウザでの日本語縦書きテキスト（`writing-mode: ve
 ```
 アプリケーション（React / Vue / vanilla DOM）
        ↓
-  @libraz/mejiro/book     高レベル: MejiroBook → レイアウト・ページネーション・画像除外
+  @libraz/mejiro/book     MejiroBook で章をレイアウトし、ページや見開きを取得
        ↓
-  @libraz/mejiro/render   レイアウトデータ → RenderPage構造 + CSS
+  @libraz/mejiro/render   RenderPage 構造と CSS に変換
        ↓
-  @libraz/mejiro/epub     EPUB → テキスト + ルビ注釈
+  @libraz/mejiro/epub     EPUB から本文とルビ注釈を取り出す
        ↓
-  @libraz/mejiro/browser  フォント計測 + ルビフォント導出
+  @libraz/mejiro/browser  フォントを読み込み、文字幅を計測
        ↓
-  @libraz/mejiro          改行 + 禁則 + ぶら下げ + ルビ + ページネーション
+  @libraz/mejiro          改行、禁則、ぶら下げ、ルビ、ページ分割
 ```
 
-- **コア**は外部依存ゼロ
-- **ブラウザ**はCanvas APIとFontFace APIを使用
-- **EPUB**は`jszip`に依存
-- **レンダー**はレイアウト結果をフレームワーク非依存の`RenderPage`データ構造に変換
-- **ブック**は全レイヤーを `MejiroBook` → `ChapterLayout` → `SpreadResult` のシンプルなワークフローに統合
+- **コア**は外部依存なしで使えます。
+- **ブラウザ層**は Canvas API と FontFace API を使って文字幅を計測します。
+- **EPUB 層**は `jszip` を使って EPUB を読み書きします。
+- **レンダリング層**はレイアウト結果を、フレームワークに依存しない `RenderPage` へ変換します。
+- **ブック層**を使うと、`MejiroBook` → `ChapterLayout` → `SpreadResult` の流れで章や見開きを扱えます。
 
 ## クイックスタート
 
@@ -65,16 +68,16 @@ const mejiro = new MejiroBrowser({
 
 const text = '吾輩は猫である。名前はまだ無い。';
 
-// 1. テキストをレイアウト（fontFamily/fontSizeはインスタンスのデフォルトを使用）
+// 1. テキストをレイアウトする（fontFamily / fontSize はインスタンスの設定を使う）
 const result = await mejiro.layout({
   text,
-  lineWidth: mejiro.verticalLineWidth(600), // コンテナ高さから実効行幅を算出
+  lineWidth: mejiro.verticalLineWidth(600), // コンテナの高さから実際に使う行幅を求める
 });
 
 // 2. 行範囲を取得 → [[start, end), ...]
 const lines = getLineRanges(result.breakPoints, text.length);
 
-// 3. 幅400pxのページに分割
+// 3. 幅 400px のページに分ける
 const pages = paginate(400, [
   { lineCount: lines.length, linePitch: 16 * 1.8, gapBefore: 0 },
 ]);
@@ -93,58 +96,58 @@ const book = new MejiroBook({
   headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// コンテナ要素からページサイズを自動計算
+// 表示領域からページサイズを計算する
 book.computePageSize(document.querySelector('.reading-surface')!);
 
 const epub = await parseEpub(epubArrayBuffer);
 const layout = await book.layoutChapter(epub.chapters[0]);
 
-// 見開きページを取得
+// 最初の見開きを取得する
 const spread = layout.getSpread(0);
 // spread.right.page → RenderPage（段落 → 行 → セグメント）
 // spread.right.lines / spread.right.slots → 絶対配置用
 // spread.totalPages → 総ページ数
 
-// 画像配置とテキスト回り込み（更新済みのspreadを返す）
+// 画像を置いて、回り込み後の見開きを取得する
 const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
 ```
 
 ## API
 
-完全なAPIリファレンスは [APIリファレンス](docs/ja/10-api-reference.md) を参照してください。
-詳細なガイドと使用例は [ドキュメント](docs/ja/) を参照してください。
+詳しい型やオプションは [API リファレンス](docs/ja/10-api-reference.md) を参照してください。使い方のガイドは [ドキュメント](docs/ja/) にまとめています。
 
 | サブパス | 説明 |
 |---|---|
-| `@libraz/mejiro` | コア: `computeBreaks()`、`ExclusionEngine`、`toCodepoints()`、禁則、ぶら下げ、ルビ、ページネーション |
-| `@libraz/mejiro/browser` | ブラウザ: `MejiroBrowser`クラス、フォント計測、幅キャッシュ |
-| `@libraz/mejiro/epub` | EPUB: `parseEpub()`、ルビ抽出 |
-| `@libraz/mejiro/render` | レンダー: `buildRenderPage()`、`buildParagraphMeasures()`、`mejiro.css` |
-| `@libraz/mejiro/book` | ブック: `MejiroBook`、`ChapterLayout`、`DEFAULT_HEADING_STYLES`、`DEFAULT_PAGE_PADDING` — 高レベルのレイアウト・ページネーション・画像除外 |
-| `@libraz/mejiro-react` | React: `<MejiroPageView>`、`useImageOverlay`フック（実験的） |
-| `@libraz/mejiro-vue` | Vue: `<MejiroPageView>`、`useImageOverlay`コンポーザブル（実験的） |
+| `@libraz/mejiro` | 改行計算、禁則、ぶら下げ、ルビ、ページ分割、画像回り込みの低レベル API |
+| `@libraz/mejiro/browser` | `MejiroBrowser`、フォント計測、文字幅キャッシュ |
+| `@libraz/mejiro/epub` | `parseEpub()`、`EditableEpub`、`EpubProject`、`parseManuscript` |
+| `@libraz/mejiro/render` | `buildRenderPage()`、`buildParagraphMeasures()`、`renderEpubStatic()`、各種 CSS |
+| `@libraz/mejiro/book` | `MejiroBook`、`ChapterLayout`、検索、アンカー、スナップショット、読書時間の推定 |
+| `@libraz/mejiro/image` | `prepareImage(file, opts?)` — 画像のデコード・縮小・再エンコード |
+| `@libraz/mejiro-react` | React 用のリーダー、エディタ、棚表示、TOC、各種 hooks |
+| `@libraz/mejiro-vue` | Vue 用のリーダー、エディタ、棚表示、TOC、各種 composables |
 
 ## 禁則処理
 
-禁則処理は、特定の文字が行頭・行末に配置されることを禁止する日本語組版ルールです。[JIS X 4051](https://www.jisc.go.jp/app/jis/general/GnrJISNumberNameSearchList?show&jisStdNo=X4051)（日本語文書の組版方法）および[JLREQ](https://www.w3.org/TR/jlreq/)（日本語組版処理の要件）で定義されています。
+禁則処理は、句読点や括弧などが行頭・行末に来ないようにする日本語組版のルールです。[JIS X 4051](https://www.jisc.go.jp/app/jis/general/GnrJISNumberNameSearchList?show&jisStdNo=X4051) や [JLREQ](https://www.w3.org/TR/jlreq/) で整理されています。
 
-mejiroは2つのモードでこれを実装しています。
+mejiro では、用途に合わせて 2 つのモードを選べます。
 
-- **Strict**（デフォルト）— 閉じ括弧、句読点、小書き仮名、長音記号、踊り字の行頭配置を禁止。開き括弧の行末配置を禁止。
-- **Loose** — Strictと同じですが、小書き仮名と長音記号（`ー`）の行頭配置を許可。狭い段組みに有用。
+- **Strict**（デフォルト）— 閉じ括弧、句読点、小書き仮名、長音記号、踊り字が行頭に来ないようにし、開き括弧が行末に来ないようにします。
+- **Loose** — Strict を少し緩め、小書き仮名と長音記号（`ー`）の行頭配置を許可します。狭い段組みで詰まりを減らしたい場合に向いています。
 
-**ぶら下げ組み**（`。` `、` `，` `．`）は、次の行に送る代わりに行末外側にはみ出すことができます。
+**ぶら下げ組み**にも対応しています。`。` `、` `，` `．` は、次の行に送らず、行末の外側へ少しはみ出して配置できます。
 
-カスタム禁則ルールはコアの `computeBreaks()` APIを直接使用する場合に `LayoutInput.kinsokuRules` で指定可能です。禁則文字一覧、JIS X 4051 / JLREQ対応状況表、カスタムルールの例は[改行処理](docs/ja/03-line-breaking.md)を参照してください。
+独自の禁則ルールを使いたい場合は、コアの `computeBreaks()` に `LayoutInput.kinsokuRules` を渡してください。禁則文字の一覧、JIS X 4051 / JLREQ との対応、カスタムルールの例は [改行処理](docs/ja/03-line-breaking.md) にあります。
 
 ## 設計方針
 
-- **TypedArrayベースのコア** — コードポイントに`Uint32Array`、アドバンスに`Float32Array`を使用。ホットパスでの文字列操作を排除。
-- **O(n)改行アルゴリズム** — 禁則バックトラック付きの単一パス貪欲法。動的計画法のオーバーヘッドなし。
-- **前処理としてのルビ** — ルビ注釈をメインループ前に実効アドバンスとクラスタIDに解決。改行アルゴリズム本体は変更不要。
-- **画像除外** — `ExclusionEngine` と `SpreadExclusionEngine` が任意配置の画像に対する列ごとのテキスト配置を計算。単一ページまたは見開き2ページにわたるノド自動処理とリアルタイムのドラッグ＆ドロップをサポート。
-- **決定的** — 同一入力に対して常に同一出力。
-- **関心の分離** — コアは純粋な計算（DOM・Canvas不要）。ブラウザ層が計測を担当。EPUB層が解析を担当。レンダー層がフレームワーク非依存のデータを生成。最終的なDOM出力は利用者の責務。
+- **TypedArray ベースのコア** — コードポイントは `Uint32Array`、文字送りは `Float32Array` で扱い、改行計算のホットパスでは文字列処理を避けています。
+- **O(n) の改行アルゴリズム** — 禁則処理のためのバックトラックを含む、単一パスの貪欲法です。動的計画法は使っていません。
+- **ルビは前処理で扱う** — ルビの幅を本文側の文字送りへ反映してから改行計算に渡すため、改行アルゴリズム本体を複雑にしません。
+- **画像回り込み** — `ExclusionEngine` と `SpreadExclusionEngine` が、ページ内または見開き内の画像位置に応じて列ごとの配置を計算します。
+- **決定的な出力** — 同じ入力からは常に同じ結果を返します。
+- **役割を分ける** — コアは計算だけを担当し、ブラウザ層は計測、EPUB 層は読み書き、レンダリング層は表示用データの生成を担当します。
 
 ## ライセンス
 
@@ -153,4 +156,3 @@ mejiroは2つのモードでこれを実装しています。
 ## 作者
 
 - libraz <libraz@libraz.net>
-

@@ -39,7 +39,7 @@ interface LayoutInput {
   mode?: KinsokuMode;                     // 'strict' (default) | 'loose'
   enableHanging?: boolean;                // Default: true
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
-  rubyAnnotations?: RubyAnnotation[];     // Ruby preprocessing (see 04-ruby.md)
+  rubyAnnotations?: RubyAnnotation[];       // Core-level ruby preprocessing (see 04-ruby.md)
   tokenBoundaries?: Uint32Array | readonly number[]; // Preferred break positions
   kinsokuRules?: KinsokuRules;            // Custom prohibition rules
 }
@@ -53,7 +53,7 @@ interface LayoutInput {
 | `mode`             | No       | `'strict'` | Kinsoku processing mode. See section 4.                            |
 | `enableHanging`    | No       | `true`     | Whether to allow hanging punctuation. See section 5.               |
 | `clusterIds`       | No       | --         | Cluster IDs for indivisible character groups. See section 6.       |
-| `rubyAnnotations`  | No       | --         | Ruby annotations. Triggers ruby preprocessing before line breaking. |
+| `rubyAnnotations`  | No       | --         | Core-level ruby annotations. Triggers ruby preprocessing before line breaking. |
 | `tokenBoundaries`  | No       | --         | Indices of the last codepoint in each token. The algorithm prefers breaking at these positions. Use `tokenLengthsToBoundaries()` to convert from morphological analyzer output. |
 | `kinsokuRules`     | No       | --         | Custom kinsoku rules. Overrides the built-in rules entirely.       |
 

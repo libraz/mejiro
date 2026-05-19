@@ -79,7 +79,7 @@ const result = await mejiro.layout({
   lineWidth: verticalLineWidth(600, 16),
   mode: 'strict',
   enableHanging: true,
-  rubyAnnotations: [],
+  inlineAnnotations: [],
   tokenBoundaries: undefined,
 });
 // result: BreakResult { breakPoints, hangingAdjustments?, effectiveAdvances? }
@@ -95,7 +95,7 @@ const result = await mejiro.layout({
 | `lineWidth` | `number` | (required) | Available line width in px. |
 | `mode` | `'strict' \| 'loose'` | `'strict'` | Kinsoku processing mode. |
 | `enableHanging` | `boolean` | `true` | Enable hanging punctuation. |
-| `rubyAnnotations` | `RubyInputAnnotation[]` | `[]` | Ruby (furigana) annotations using string-based indices. |
+| `inlineAnnotations` | `InlineAnnotation[]` | `[]` | Inline ruby / emphasis / tcy / link annotations using string-based indices. |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | Token boundary indices for improved line breaking. |
 
 ## 5. layoutChapter() -- Multiple Paragraphs
@@ -109,7 +109,7 @@ const result = await mejiro.layoutChapter({
     { text: '吾輩は猫である。名前はまだ無い。' },
     {
       text: '漢字を読む',
-      rubyAnnotations: [{ startIndex: 0, endIndex: 2, rubyText: 'かんじ' }],
+      inlineAnnotations: [{ kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' }],
     },
   ],
   fontFamily: '"Noto Serif JP"',
@@ -139,7 +139,7 @@ const result = await mejiro.layoutChapter({
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `text` | `string` | (required) | Paragraph text. |
-| `rubyAnnotations` | `RubyInputAnnotation[]` | `[]` | Ruby annotations for this paragraph. |
+| `inlineAnnotations` | `InlineAnnotation[]` | `[]` | Inline annotations for this paragraph. |
 | `fontFamily` | `string` | (inherited) | Override the base font family for this paragraph. |
 | `fontSize` | `number` | (inherited) | Override the base font size for this paragraph. |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | Token boundary indices. |

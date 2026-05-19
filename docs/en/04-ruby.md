@@ -1,5 +1,7 @@
 # Ruby Annotations
 
+> **Changed in v0.5:** Browser/book/render paragraph annotations are now the `kind: 'ruby'` variant of the `InlineAnnotation` discriminated union. The field name is `inlineAnnotations`, and ruby literals must include `kind: 'ruby'`. `RubyInputAnnotation` remains as a deprecated alias for `InlineRubyAnnotation`.
+
 ## What is Ruby?
 
 Ruby annotations (振り仮名 / furigana) are small characters placed alongside base text to indicate pronunciation. They are common in Japanese text, where they provide readings for kanji characters.
@@ -82,7 +84,7 @@ const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotat
 // clusterIds: [0, 0, 2, 3, 4] -- indices 0 and 1 share a cluster (group ruby)
 ```
 
-In practice, you rarely call `preprocessRuby()` directly. When you pass `rubyAnnotations` in a `LayoutInput` to `computeBreaks()`, the function calls `preprocessRuby()` internally and uses the resulting effective advances and cluster IDs during line breaking.
+In practice, you rarely call `preprocessRuby()` directly. When you pass core-level `rubyAnnotations` in a `LayoutInput` to `computeBreaks()`, the function calls `preprocessRuby()` internally and uses the resulting effective advances and cluster IDs during line breaking.
 
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
@@ -105,14 +107,15 @@ const result = computeBreaks({
 // Line breaks respect group clustering: indices 0 and 1 will not be split.
 ```
 
-## Browser Level: RubyInputAnnotation
+## Browser Level: InlineRubyAnnotation
 
 The browser layer provides a string-based annotation interface that is easier to work with. Codepoint conversion and advance measurement are handled automatically.
 
-### RubyInputAnnotation Interface
+### InlineRubyAnnotation Interface
 
 ```ts
-interface RubyInputAnnotation {
+interface InlineRubyAnnotation {
+  kind: 'ruby';
   startIndex: number;   // Character index in base text string
   endIndex: number;     // End index (exclusive)
   rubyText: string;     // Ruby text as a plain string
@@ -121,7 +124,7 @@ interface RubyInputAnnotation {
 }
 ```
 
-When you call `MejiroBrowser.layout()` or `layoutChapter()` with `rubyAnnotations`, the browser layer automatically:
+When you call `MejiroBrowser.layout()` or `layoutChapter()` with `inlineAnnotations`, the browser layer automatically:
 
 1. Converts the ruby text string to a `Uint32Array` of codepoints.
 2. Measures ruby character advance widths using `Canvas.measureText()`.
@@ -138,7 +141,8 @@ const result = await mejiro.layout({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineWidth: 200,
-  rubyAnnotations: [{
+  inlineAnnotations: [{
+    kind: 'ruby',
     startIndex: 0,
     endIndex: 2,
     rubyText: 'かんじ',
@@ -154,7 +158,8 @@ const chapterResult = await mejiro.layoutChapter({
   paragraphs: [
     {
       text: '漢字を読む',
-      rubyAnnotations: [{
+      inlineAnnotations: [{
+        kind: 'ruby',
         startIndex: 0,
         endIndex: 2,
         rubyText: 'かんじ',
@@ -163,7 +168,7 @@ const chapterResult = await mejiro.layoutChapter({
     },
     {
       text: '名前はまだ無い',
-      rubyAnnotations: [],
+      inlineAnnotations: [],
     },
   ],
   fontFamily: '"Noto Serif JP"',
@@ -174,7 +179,7 @@ const chapterResult = await mejiro.layoutChapter({
 
 ## Ruby from EPUB
 
-When parsing EPUB files, the `extractRubyContent()` function automatically detects `<ruby><rt>` elements in XHTML content and produces `RubyInputAnnotation[]` for each paragraph.
+When parsing EPUB files, the `extractRubyContent()` function automatically detects `<ruby><rt>` elements in XHTML content and adds ruby `InlineAnnotation` entries to each paragraph.
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -182,7 +187,7 @@ import { parseEpub } from '@libraz/mejiro/epub';
 const book = await parseEpub(buffer);
 const paragraph = book.chapters[0].paragraphs[0];
 // paragraph.text   -- base text with ruby content stripped out
-// paragraph.rubyAnnotations -- RubyInputAnnotation[] with character indices into text
+// paragraph.inlineAnnotations -- InlineAnnotation[] with character indices into text
 ```
 
 The extractor handles all common HTML ruby markup patterns:

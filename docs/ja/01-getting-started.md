@@ -1,6 +1,8 @@
 # はじめに
 
-このガイドでは、mejiro のインストールから最初の日本語縦書きテキストの表示までを説明します。推奨アプローチは高レベルの `MejiroBook` API で、フォント読み込み・改行処理・ページ分割・レンダリングをわずか数ステップで実現できます。React と Vue 向けのフレームワークコンポーネントも用意されており、ブラウザ API 不要のヘッドレスコアも利用可能です。
+このガイドでは、mejiro をインストールして、最初の縦書きページを表示するところまでを扱います。まずは高レベル API の `MejiroBook` を使うのが一番簡単です。フォント読み込み、改行処理、ページ分割、表示用データの生成までを数ステップで進められます。
+
+React / Vue 向けのコンポーネントもあります。ブラウザ API を使わずに、改行計算だけを行うヘッドレスな使い方もできます。
 
 ## インストール
 
@@ -20,26 +22,30 @@ pnpm add @libraz/mejiro
 bun add @libraz/mejiro
 ```
 
-React または Vue を使用する場合は、対応するコンポーネントパッケージも合わせてインストールしてください:
+React または Vue で使う場合は、対応するコンポーネントパッケージも入れてください:
 
 ```bash
 # React
-npm install @libraz/mejiro-react
+npm install @libraz/mejiro @libraz/mejiro-react react
+npm install -D @types/react
 
 # Vue
-npm install @libraz/mejiro-vue
+npm install @libraz/mejiro @libraz/mejiro-vue vue
 ```
+
+React を TypeScript プロジェクトで使う場合は、利用する React バージョンに合う `@types/react >= 18` もインストールしてください。
+Vue の peer dependency は `vue >= 3.3` です。
 
 ## クイックスタート: EPUB リーダー（推奨）
 
-この例では `MejiroBook` を使って EPUB ファイルを読み込み、見出しスタイル付きで章をレイアウトし、見開きページをレンダリングします。mejiro を始める最もシンプルな方法です。
+この例では `MejiroBook` で EPUB を読み込み、最初の章を見開きページとして表示します。mejiro を試すなら、まずこの流れから始めるのが分かりやすいです。
 
 ```ts
 import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import '@libraz/mejiro/render/mejiro.css';
 
-// 1. Create a MejiroBook instance
+// 1. MejiroBook を作成する
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
@@ -47,25 +53,25 @@ const book = new MejiroBook({
   headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// 2. Compute page size from a container element
+// 2. 表示領域からページサイズを計算する
 const container = document.getElementById('reader')!;
 const { pageWidth, pageHeight } = book.computePageSize(container);
 
-// 3. Load and parse an EPUB file
+// 3. EPUB を読み込んで解析する
 const response = await fetch('/book.epub');
 const epub = await parseEpub(await response.arrayBuffer());
 
-// 4. Lay out the first chapter
+// 4. 最初の章をレイアウトする
 const layout = await book.layoutChapter(epub.chapters[0]);
 
-// 5. Get a two-page spread (right page + left page)
+// 5. 最初の見開き（右ページ + 左ページ）を取得する
 const spread = layout.getSpread(0);
 
-// spread.right  — PageResult for the right page
-// spread.left   — PageResult for the left page
-// spread.totalPages — total page count
+// spread.right  — 右ページの PageResult
+// spread.left   — 左ページの PageResult
+// spread.totalPages — 総ページ数
 
-// 6. Render with DOM (example for the right page)
+// 6. DOM で表示する（右ページだけの例）
 const pageEl = document.createElement('div');
 pageEl.style.width = `${pageWidth}px`;
 pageEl.style.height = `${pageHeight}px`;
@@ -118,12 +124,12 @@ const layout = await book.layoutChapter({
 | `await book.layoutChapter(chapter)` | 章をレイアウト（フォント読み込み＋改行処理＋ページ分割） |
 | `layout.getSpread(index)` | 見開きページの結果を取得 |
 | `layout.totalPages` | 総ページ数 |
-| `layout.syncImages(index, images)` | 画像除外ゾーンを設定しテキストをリフロー |
+| `layout.syncImages(index, images)` | 画像回り込みを設定し、テキストを再レイアウト |
 | `layout.resize({ pageWidth, lineWidth })` | ウィンドウリサイズ時のリフロー |
 
 ## クイックスタート: React
 
-`@libraz/mejiro-react` パッケージは、高レベル API の `PageResult` をレンダリングする `MejiroPageView` コンポーネントを提供します。
+`@libraz/mejiro-react` パッケージには、高レベル API の `PageResult` を表示する `MejiroPageView` コンポーネントがあります。
 
 ```tsx
 import { useEffect, useRef, useState } from 'react';
@@ -131,7 +137,6 @@ import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-react';
-import '@libraz/mejiro/render/mejiro.css';
 
 // Create once outside the component so the cache persists across renders
 const book = new MejiroBook({
@@ -183,11 +188,11 @@ function Reader() {
 }
 ```
 
-`MejiroPageView` は `PageResult`（`layout.getSpread()` または `layout.getPage()` から取得）を受け取り、CSS 縦書きモードと画像がある場合のスロットベースレンダリングを自動的に切り替えます。
+`MejiroPageView` は `PageResult`（`layout.getSpread()` または `layout.getPage()` から取得）を受け取り、通常の CSS 縦書き表示と、画像がある場合のスロットベース表示を自動で切り替えます。
 
 ## クイックスタート: Vue
 
-`@libraz/mejiro-vue` パッケージは、Vue 3 向けの同等の `MejiroPageView` コンポーネントを提供します。
+`@libraz/mejiro-vue` パッケージにも、Vue 3 向けの `MejiroPageView` コンポーネントがあります。
 
 ```vue
 <script setup lang="ts">
@@ -196,7 +201,6 @@ import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { SpreadResult } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
-import '@libraz/mejiro/render/mejiro.css';
 
 // Create once so the cache persists
 const book = new MejiroBook({
@@ -254,7 +258,7 @@ const lineSpacing = 1.8;
 
 ## クイックスタート: コアのみ
 
-ブラウザベースのフォント計測が不要な場合（例: Node.js スクリプトや、すでに文字の送り幅を持っている場合）は、コアモジュールを直接使用できます。外部依存はゼロで、ブラウザ API も必要ありません。
+ブラウザでのフォント計測が不要な場合、たとえば Node.js スクリプトで使う場合や、すでに文字ごとの送り幅を持っている場合は、コアモジュールを直接使えます。外部依存はなく、ブラウザ API も必要ありません。
 
 ```ts
 import { computeBreaks, toCodepoints, getLineRanges } from '@libraz/mejiro';
@@ -274,7 +278,7 @@ const lines = getLineRanges(result.breakPoints, text.length);
 
 `toCodepoints` は文字列を Unicode コードポイントの `Uint32Array` に変換します（サロゲートペアを正しく処理します）。`computeBreaks` は禁則処理とぶら下げ組みの規則を含む O(n) の貪欲法改行アルゴリズムを実行し、改行位置のインデックスを返します。`getLineRanges` はそれらの改行位置を、イテレーション可能な行範囲に変換します。
 
-`MejiroBrowser`、`buildParagraphMeasures`、`paginate`、`buildRenderPage` などの低レベル API については、[API リファレンス](10-api-reference.md)を参照してください。
+`MejiroBrowser`、`buildParagraphMeasures`、`paginate`、`buildRenderPage` などの低レベル API は [API リファレンス](10-api-reference.md) にまとめています。
 
 ## 次のステップ
 

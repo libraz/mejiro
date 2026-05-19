@@ -1,10 +1,10 @@
 # ブラウザ統合
 
-このドキュメントでは、mejiroのブラウザ固有レイヤー（`@libraz/mejiro/browser`）について説明します。フォントの読み込み、文字幅の計測、およびブラウザ上で日本語縦書きテキストをレイアウトするための高レベルAPIを提供します。
+このページでは、ブラウザ向けのレイヤーである `@libraz/mejiro/browser` を説明します。フォントの読み込み、文字幅の計測、ブラウザ上での縦書きレイアウト補助を担当します。
 
 ## 1. MejiroBrowserクラス
 
-`MejiroBrowser`はブラウザベースのレイアウトのメインエントリーポイントです。フォントの読み込み、文字幅のキャッシュ、レイアウト計算を管理します。インスタンスを作成し、レイアウト呼び出し間で再利用することで、幅キャッシュの恩恵を受けられます。
+`MejiroBrowser` は、ブラウザ上でレイアウトするときの基本 API です。フォント読み込み、文字幅キャッシュ、改行計算への橋渡しを行います。インスタンスを使い回すと、文字幅キャッシュも再利用できます。
 
 ```ts
 import { MejiroBrowser } from '@libraz/mejiro/browser';
@@ -12,7 +12,7 @@ import { MejiroBrowser } from '@libraz/mejiro/browser';
 const mejiro = new MejiroBrowser();
 ```
 
-コンストラクタオプションを渡すことで、以降のすべてのレイアウト呼び出しに適用される固定のデフォルト値を設定できます:
+コンストラクタオプションを渡すと、以降のレイアウト呼び出しで使うデフォルト値を設定できます。
 
 ```ts
 const mejiro = new MejiroBrowser({
@@ -30,11 +30,11 @@ const mejiro = new MejiroBrowser({
 | `fixedFontSize` | `number` | すべてのレイアウトに適用されるデフォルトのフォントサイズ（px単位）。 |
 | `strictFontCheck` | `boolean` | `true`の場合、フォント読み込み時にフォールバックが検出されるとエラーをスローします。 |
 
-`fixedFontFamily`と`fixedFontSize`が設定されている場合、個別の`layout()`や`layoutChapter()`呼び出しではそれらを省略できます。
+`fixedFontFamily` と `fixedFontSize` を設定しておくと、個別の `layout()` や `layoutChapter()` ではそれらを省略できます。
 
 ## 2. フォント読み込み
 
-文字計測で正確な結果を得るには、事前にフォントを読み込んでおく必要があります。`MejiroBrowser`は`layout()`および`layoutChapter()`内で自動的にフォントを読み込みますが、最初のレイアウト呼び出し時のレイテンシを避けるために、明示的にフォントをプリロードすることも可能です:
+正確に文字幅を測るには、対象フォントが読み込まれている必要があります。`MejiroBrowser` は `layout()` / `layoutChapter()` の中でフォントを自動読み込みしますが、初回レイアウトの待ち時間を減らしたい場合は、事前にプリロードできます。
 
 ```ts
 await mejiro.preloadFont('"Noto Serif JP"', 16);
@@ -79,7 +79,7 @@ const result = await mejiro.layout({
   lineWidth: verticalLineWidth(600, 16),
   mode: 'strict',
   enableHanging: true,
-  rubyAnnotations: [],
+  inlineAnnotations: [],
   tokenBoundaries: undefined,
 });
 // result: BreakResult { breakPoints, hangingAdjustments?, effectiveAdvances? }
@@ -95,7 +95,7 @@ const result = await mejiro.layout({
 | `lineWidth` | `number` | (必須) | 利用可能な行幅（px単位）。 |
 | `mode` | `'strict' \| 'loose'` | `'strict'` | 禁則処理モード。 |
 | `enableHanging` | `boolean` | `true` | ぶら下げ組みを有効にする。 |
-| `rubyAnnotations` | `RubyInputAnnotation[]` | `[]` | 文字列ベースのインデックスを使用したルビ（振り仮名）注釈。 |
+| `inlineAnnotations` | `InlineAnnotation[]` | `[]` | 文字列ベースのインデックスを使用したルビ・圏点・縦中横・リンク等の注釈。 |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | 改行改善のためのトークン境界インデックス。 |
 
 ## 5. layoutChapter() -- 複数段落
@@ -109,7 +109,7 @@ const result = await mejiro.layoutChapter({
     { text: '吾輩は猫である。名前はまだ無い。' },
     {
       text: '漢字を読む',
-      rubyAnnotations: [{ startIndex: 0, endIndex: 2, rubyText: 'かんじ' }],
+      inlineAnnotations: [{ kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' }],
     },
   ],
   fontFamily: '"Noto Serif JP"',
@@ -139,14 +139,14 @@ const result = await mejiro.layoutChapter({
 | フィールド | 型 | デフォルト | 説明 |
 |-------|------|---------|-------------|
 | `text` | `string` | (必須) | 段落テキスト。 |
-| `rubyAnnotations` | `RubyInputAnnotation[]` | `[]` | この段落のルビ注釈。 |
+| `inlineAnnotations` | `InlineAnnotation[]` | `[]` | この段落のインライン注釈。 |
 | `fontFamily` | `string` | (継承) | この段落のベースフォントファミリーを上書きする。 |
 | `fontSize` | `number` | (継承) | この段落のベースフォントサイズを上書きする。 |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | トークン境界インデックス。 |
 
 ## 6. verticalLineWidth()
 
-縦書きテキストレイアウトのための有効な行幅を計算します。Canvas水平計測とCSS縦書きレンダリングの差異を補正するため、コンテナの高さから半角分の文字幅を差し引きます。
+縦書きレイアウトで実際に使う行幅を計算します。Canvas の水平計測と CSS 縦書き表示の差を吸収するため、コンテナの高さからフォントサイズの半分を安全マージンとして差し引きます。
 
 ```ts
 import { verticalLineWidth } from '@libraz/mejiro/browser';
@@ -178,7 +178,7 @@ const result = await layoutText({
 });
 ```
 
-単発の利用シーンに便利です。繰り返しレイアウトを行う場合は、代わりに`MejiroBrowser`を使用してください。幅キャッシュを再利用し、冗長なフォント読み込みと計測を回避できます。
+一度だけレイアウトしたい場合に便利です。何度もレイアウトする場合は `MejiroBrowser` を使ってください。幅キャッシュを再利用でき、フォント読み込みや計測の重複を避けられます。
 
 ## 8. その他のエクスポート
 

@@ -34,7 +34,7 @@ Bridges the gap between the core engine's typed arrays and the browser's string-
 
 ### EPUB (`@libraz/mejiro/epub`)
 
-Parses EPUB files and extracts text with ruby (furigana) annotations. The parsing pipeline follows the EPUB specification: ZIP -> `container.xml` -> OPF package document -> spine order -> XHTML content documents. Ruby annotations (`<ruby>` / `<rt>` elements) are extracted and converted into the `RubyInputAnnotation` format that the browser layer accepts. Depends on `jszip` for ZIP extraction.
+Parses EPUB files and extracts text with inline annotations. The parsing pipeline follows the EPUB specification: ZIP -> `container.xml` -> OPF package document -> spine order -> XHTML content documents. Ruby annotations (`<ruby>` / `<rt>` elements) are extracted as `InlineAnnotation` entries with `kind: 'ruby'`. Depends on `jszip` for ZIP extraction.
 
 ### Render (`@libraz/mejiro/render`)
 

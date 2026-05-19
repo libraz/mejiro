@@ -1,19 +1,19 @@
-# ページネーションとレンダリング
+# ページ分割とレンダリング
 
-> **ヒント:** ほとんどのアプリケーションでは、`@libraz/mejiro/book` の [`MejiroBook`](10-api-reference.md) が推奨されるアプローチです。レイアウト、ページネーション、画像除外を1つの高レベルAPIで処理します。以下の手動パイプラインは、より細かな制御が必要な場合に有用です。
+> **ヒント:** ほとんどのアプリケーションでは、`@libraz/mejiro/book` の [`MejiroBook`](10-api-reference.md) から使うのがおすすめです。レイアウト、ページ分割、画像回り込みを 1 つの高レベル API で扱えます。このページの手動パイプラインは、より細かく制御したい場合に使います。
 
-行分割の計算後、次のステップは以下の通りです。
+行分割が終わったあとの流れは次のとおりです。
 
 1. 段落メジャーの構築（行送り、間隔）
-2. ページネーション -- 行を固定サイズのページに分配する
-3. レンダーページの構築 -- ページスライスを描画可能なデータに変換する
-4. DOMへのレンダリング（vanilla JS、React、またはVue）
+2. ページ分割 -- 行を固定サイズのページへ割り当てる
+3. レンダーページの構築 -- ページスライスを表示用データに変換する
+4. DOM への描画（vanilla JS、React、Vue）
 
-本ドキュメントではステップ1〜3とvanilla DOMレンダリングについて説明します。ReactおよびVueコンポーネントについては[React & Vue](./08-react-and-vue.md)を参照してください。
+このページではステップ 1〜3 と vanilla DOM での表示を説明します。React / Vue コンポーネントは [React と Vue](./08-react-and-vue.md) を参照してください。
 
 ## 1. RenderEntry
 
-`RenderEntry`はレイアウト結果とレンダリングパイプラインの橋渡しです。`layoutChapter()`の出力から段落ごとに1つ構築します。
+`RenderEntry` は、レイアウト結果をレンダリング処理へ渡すための中間データです。`layoutChapter()` の出力から段落ごとに 1 つ作ります。
 
 ```ts
 import type { RenderEntry } from '@libraz/mejiro/render';
@@ -21,7 +21,7 @@ import type { RenderEntry } from '@libraz/mejiro/render';
 const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  rubyAnnotations: p.rubyAnnotations,
+  inlineAnnotations: p.inlineAnnotations,
   isHeading: !!p.headingLevel,
 }));
 ```
@@ -30,12 +30,12 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 |-------|------|-------------|
 | `chars` | `string[]` | 段落テキストの文字配列（書記素クラスター）。 |
 | `breakPoints` | `Uint32Array` | 行分割アルゴリズムによる分割位置。 |
-| `rubyAnnotations` | `RubyInputAnnotation[]` | この段落のルビ注釈。 |
+| `inlineAnnotations` | `InlineAnnotation[]` | この段落のルビ・圏点・縦中横・リンク等の注釈。 |
 | `isHeading` | `boolean` | この段落が見出しかどうか。 |
 
 ## 2. buildParagraphMeasures()
 
-レンダーエントリを`paginate()`で使用する`ParagraphMeasure[]`に変換します。各段落が見出しか本文かに基づいて、行送り（フォントサイズ x 行高さ）および段落間の間隔を計算します。
+`RenderEntry` を、`paginate()` に渡す `ParagraphMeasure[]` へ変換します。見出しと本文の違いを考慮して、行送り（フォントサイズ x 行高さ）と段落間の間隔を計算します。
 
 ```ts
 import { buildParagraphMeasures } from '@libraz/mejiro/render';
@@ -61,7 +61,7 @@ const measures = buildParagraphMeasures(entries, {
 
 ### ParagraphMeasure
 
-返される各`ParagraphMeasure`には以下が含まれます。
+返される各 `ParagraphMeasure` には次の情報が入ります。
 
 | フィールド | 型 | 説明 |
 |-------|------|-------------|
@@ -71,7 +71,7 @@ const measures = buildParagraphMeasures(entries, {
 
 ## 3. paginate()
 
-固定ブロックサイズのページに段落の行を分配します。ページ境界で必要に応じて段落を分割します。
+固定サイズのページへ段落の行を割り当てます。ページ境界では、必要に応じて段落を途中で分割します。
 
 ```ts
 import { paginate } from '@libraz/mejiro';
@@ -104,7 +104,7 @@ interface PageSlice {
 
 ## 4. buildRenderPage()
 
-ページスライスとレンダーエントリを、フレームワーク非依存の`RenderPage`データ構造に変換します。レンダリングに直接使用できます。
+ページスライスと `RenderEntry` を、フレームワークに依存しない `RenderPage` データ構造へ変換します。React、Vue、vanilla DOM などからそのまま表示に使えます。
 
 ```ts
 import { buildRenderPage } from '@libraz/mejiro/render';
@@ -122,6 +122,7 @@ interface RenderPage {
 interface RenderParagraph {
   lines: RenderLine[];
   isHeading: boolean;
+  headingLevel?: number;
 }
 
 interface RenderLine {
@@ -130,10 +131,16 @@ interface RenderLine {
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string };
+  | { type: 'ruby'; base: string; rubyText: string }
+  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
+  | { type: 'tcy'; text: string }
+  | { type: 'em'; text: string }
+  | { type: 'strong'; text: string }
+  | { type: 'link'; text: string; href: string; title?: string }
+  | { type: 'footnote-ref'; text: string; noteId: string };
 ```
 
-各行はセグメントに分割されます。`text`セグメントはプレーンテキストを含み、`ruby`セグメントはベース文字列とそのルビ（ふりがな）読みを含みます。この構造はHTML `<ruby>` / `<rt>` 要素に直接マッピングされます。
+各行はセグメントに分割されます。`text` はプレーンテキスト、`ruby` はベース文字列とルビ（ふりがな）読みを表し、その他のセグメントは傍点、縦中横、意味的な強調、リンク、脚注参照を表します。
 
 ## 5. mejiro.css
 
@@ -155,9 +162,9 @@ import '@libraz/mejiro/render/mejiro.css';
 | `.mejiro-page ruby` | `ruby-align: center`。 |
 | `.mejiro-page rt` | `font-size: 0.5em; font-weight: 400`。 |
 
-## 6. Vanilla DOMレンダリング
+## 6. Vanilla DOM で表示する
 
-フレームワークを使わずに`RenderPage`をDOMにレンダリングする方法です。
+フレームワークを使わずに、`RenderPage` を DOM へ描画する例です。
 
 ```ts
 function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
@@ -193,7 +200,7 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
 
 ## 7. 完全な例
 
-テキストからレンダリング済みページまでの完全なパイプラインです。
+テキストから表示用ページを作るまでの一連の流れです。
 
 ```ts
 import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
@@ -217,23 +224,23 @@ const result = await mejiro.layoutChapter({
   lineWidth: mejiro.verticalLineWidth(600),
 });
 
-// 3. レンダーエントリを構築
+// 3. RenderEntry を作る
 const entries: RenderEntry[] = [
   {
     chars: result.paragraphs[0].chars,
     breakPoints: result.paragraphs[0].breakResult.breakPoints,
-    rubyAnnotations: [],
+    inlineAnnotations: [],
     isHeading: true,
   },
   {
     chars: result.paragraphs[1].chars,
     breakPoints: result.paragraphs[1].breakResult.breakPoints,
-    rubyAnnotations: [],
+    inlineAnnotations: [],
     isHeading: false,
   },
 ];
 
-// 4. メジャーを構築しページネーション
+// 4. 段落メジャーを作り、ページ分割する
 const measures = buildParagraphMeasures(entries, {
   fontSize: 16,
   lineHeight: 1.8,

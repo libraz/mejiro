@@ -21,7 +21,7 @@ import type { RenderEntry } from '@libraz/mejiro/render';
 const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  rubyAnnotations: p.rubyAnnotations,
+  inlineAnnotations: p.inlineAnnotations,
   isHeading: !!p.headingLevel,
 }));
 ```
@@ -30,7 +30,7 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 |-------|------|-------------|
 | `chars` | `string[]` | Character array (grapheme clusters) of the paragraph text. |
 | `breakPoints` | `Uint32Array` | Break points from the line breaking algorithm. |
-| `rubyAnnotations` | `RubyInputAnnotation[]` | Ruby annotations for this paragraph. |
+| `inlineAnnotations` | `InlineAnnotation[]` | Inline ruby / emphasis / tcy / link annotations for this paragraph. |
 | `isHeading` | `boolean` | Whether this paragraph is a heading. |
 
 ## 2. buildParagraphMeasures()
@@ -122,6 +122,7 @@ interface RenderPage {
 interface RenderParagraph {
   lines: RenderLine[];
   isHeading: boolean;
+  headingLevel?: number;
 }
 
 interface RenderLine {
@@ -130,10 +131,16 @@ interface RenderLine {
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string };
+  | { type: 'ruby'; base: string; rubyText: string }
+  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
+  | { type: 'tcy'; text: string }
+  | { type: 'em'; text: string }
+  | { type: 'strong'; text: string }
+  | { type: 'link'; text: string; href: string; title?: string }
+  | { type: 'footnote-ref'; text: string; noteId: string };
 ```
 
-Each line is split into segments. A `text` segment contains plain text; a `ruby` segment contains a base string and its ruby (furigana) reading. This structure maps directly to HTML `<ruby>` / `<rt>` elements.
+Each line is split into segments. `text` contains plain text, `ruby` contains a base string and its ruby (furigana) reading, and other segment types represent inline emphasis, tate-chu-yoko, semantic emphasis, links, and footnote references.
 
 ## 5. mejiro.css
 
@@ -222,13 +229,13 @@ const entries: RenderEntry[] = [
   {
     chars: result.paragraphs[0].chars,
     breakPoints: result.paragraphs[0].breakResult.breakPoints,
-    rubyAnnotations: [],
+    inlineAnnotations: [],
     isHeading: true,
   },
   {
     chars: result.paragraphs[1].chars,
     breakPoints: result.paragraphs[1].breakResult.breakPoints,
-    rubyAnnotations: [],
+    inlineAnnotations: [],
     isHeading: false,
   },
 ];

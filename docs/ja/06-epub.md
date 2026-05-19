@@ -1,10 +1,10 @@
-# EPUB解析
+# EPUB解析と生成
 
-`@libraz/mejiro/epub` サブパスエクスポートは、EPUBファイルをルビ注釈付きの構造化データに変換し、レイアウトおよびレンダリングに利用できる関数を提供します。
+`@libraz/mejiro/epub` は、EPUB を扱うためのエントリポイントです。EPUB ファイルを本文とインライン注釈の構造化データへ変換し、既存 EPUB の編集・書き戻しや、原稿テキストからの EPUB 3 生成にも使えます。
 
 ## parseEpub()
 
-EPUB解析のメインエントリーポイントです。EPUBファイル（ZIPアーカイブ）を含む `ArrayBuffer` を受け取り、`EpubBook` に解決されるPromiseを返します。
+`parseEpub()` は EPUB 解析の基本 API です。EPUB ファイル（ZIP アーカイブ）を含む `ArrayBuffer` を受け取り、`EpubBook` を返します。
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -17,7 +17,7 @@ console.log(book.chapters.length);
 
 ## 内部フロー
 
-以下の図は、`parseEpub()` がEPUBファイルを構造化された段落データに変換する流れを示しています。
+`parseEpub()` は、おおまかに次の流れで EPUB を段落データへ変換します。
 
 ```mermaid
 flowchart LR
@@ -27,15 +27,15 @@ flowchart LR
     XHTML -->|extractRubyContent| AP["AnnotatedParagraph[]\n(テキスト + ルビ)"]
 ```
 
-処理手順:
+処理手順は次のとおりです。
 
-1. **ZIP展開** -- JSZipを使用してEPUBファイルを展開します。
+1. **ZIP 展開** -- JSZip で EPUB ファイルを展開します。
 2. **container.xml** -- `META-INF/container.xml` を読み取り、ルートファイルパス（OPFファイル）を特定します。
-3. **OPF解析** -- OPFファイルを解析し、メタデータ（`dc:title`、`dc:creator`）とスパイン（コンテンツ文書の読み順）を抽出します。マニフェストマップ（idからhrefへの対応）を構築し、スパインのitemrefをファイルパスに解決します。
-4. **XHTML抽出** -- スパインの各項目について、対応するXHTMLコンテンツ文書をZIPアーカイブから読み取ります。
-5. **段落抽出** -- `extractRubyContent()` が各XHTML文書のDOMを走査し、本文テキストとルビ注釈を `AnnotatedParagraph[]` に収集します。各文書で最初に見つかった見出し要素（`h1`、`h2`、`h3`）が章タイトルとして使用されます。
+3. **OPF 解析** -- OPF ファイルを解析し、メタデータ（`dc:title`、`dc:creator`）と spine（コンテンツ文書の読み順）を取り出します。manifest の id から href への対応を作り、spine の itemref をファイルパスへ解決します。
+4. **XHTML 抽出** -- spine の各項目について、対応する XHTML コンテンツ文書を ZIP から読み取ります。
+5. **段落抽出** -- `extractRubyContent()` が各 XHTML 文書の DOM を走査し、本文テキストとルビ注釈を `AnnotatedParagraph[]` にまとめます。各文書で最初に見つかった見出し要素（`h1`、`h2`、`h3`）を章タイトルとして使います。
 
-抽出後に段落が空の章（段落がない章）は結果から除外されます。
+段落が 1 つもない章は結果から除外されます。
 
 ## データモデル
 
@@ -52,27 +52,30 @@ interface EpubChapter {
 }
 
 interface AnnotatedParagraph {
-  text: string;                          // 本文テキスト（ルビテキストは除去済み）
-  rubyAnnotations: RubyInputAnnotation[]; // 文字列インデックス付きルビ注釈
-  headingLevel?: number;                  // h1-h6要素の場合は1-6
+  text: string;                             // 本文テキスト（ルビテキストは除去済み）
+  inlineAnnotations: InlineAnnotation[];    // ルビ / 圏点 / 縦中横 / リンク / 注
+  headingLevel?: number;                    // h1-h6要素の場合は1-6
 }
 ```
 
-`RubyInputAnnotation` は `@libraz/mejiro/browser` で定義されており、以下の構造を持ちます。
+ルビは `@libraz/mejiro/browser` の `InlineAnnotation` 判別共用体のうち、`kind: 'ruby'` バリアントとして表現されます。
 
 ```ts
-interface RubyInputAnnotation {
-  startIndex: number;          // 本文テキスト内の開始インデックス（バイトではなく文字インデックス）
-  endIndex: number;            // 終了インデックス（排他的）
-  rubyText: string;            // ルビテキスト文字列
-  type?: 'mono' | 'group' | 'jukugo';  // デフォルトは'mono'
-  jukugoSplitPoints?: number[];         // 熟語ルビ専用
+interface InlineRubyAnnotation {
+  kind: 'ruby';
+  startIndex: number;                  // 文字インデックス（バイトではない）
+  endIndex: number;                    // 排他的
+  rubyText: string;
+  type?: 'mono' | 'group' | 'jukugo';
+  jukugoSplitPoints?: number[];
 }
 ```
+
+原稿テキストから生成する場合は `parseManuscript(text, { dialect })` でルビ・傍点・縦中横などのインライン注釈をまとめて抽出します。各方言で認識される記法の一覧は本ページ後半の「[原稿記法（parseManuscript）の方言対応表](#原稿記法parsemanuscriptの方言対応表)」を参照してください。
 
 ## extractRubyContent()
 
-XHTML文字列から段落を抽出する低レベル関数です。`parseEpub()` 内部で使用されますが、直接利用することも可能です。
+XHTML 文字列から段落を抽出する低レベル関数です。`parseEpub()` の内部でも使われていますが、直接呼び出すこともできます。
 
 ```ts
 import { extractRubyContent } from '@libraz/mejiro/epub';
@@ -85,7 +88,9 @@ const xhtml = `<html><body>
 
 const paragraphs = extractRubyContent(xhtml);
 // paragraphs[0].text === '漢字を読む'
-// paragraphs[0].rubyAnnotations === [{ startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' }]
+// paragraphs[0].inlineAnnotations === [
+//   { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' }
+// ]
 // paragraphs[1].text === '第二章'
 // paragraphs[1].headingLevel === 2
 // paragraphs[2].text === '本文です。'
@@ -93,7 +98,7 @@ const paragraphs = extractRubyContent(xhtml);
 
 ### ブロックレベル要素
 
-以下の要素が段落の境界を生成します: `p`、`div`、`h1`--`h6`、`blockquote`、`li`、`dt`、`dd`、`figcaption`。
+次の要素を段落の境界として扱います: `p`、`div`、`h1`--`h6`、`blockquote`、`li`、`dt`、`dd`、`figcaption`。
 
 XHTML文書にブロックレベル要素が含まれない場合、body全体が単一の段落として扱われます。
 
@@ -108,7 +113,7 @@ XHTML文書にブロックレベル要素が含まれない場合、body全体�
 
 ### 文字インデックス
 
-`RubyInputAnnotation` のインデックスは文字インデックスです（UTF-16コードユニットではなくUnicode文字を数えます）。サロゲートペアは1文字として数えられます。
+`InlineRubyAnnotation` のインデックスは文字インデックスです（UTF-16コードユニットではなくUnicode文字を数えます）。サロゲートペアは1文字として数えられます。
 
 ## EPUBファイルの読み込み方法
 
@@ -148,7 +153,7 @@ const book = await parseEpub(buffer);
 
 ## EPUBとレイアウトの組み合わせ
 
-EPUB解析からレイアウト、レンダリング用ページデータ生成までの完全なパイプラインを示す例です。
+EPUB の解析からレイアウト、表示用ページデータの生成までをつなげた例です。
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -168,7 +173,7 @@ const chapter = book.chapters[0];
 const result = await mejiro.layoutChapter({
   paragraphs: chapter.paragraphs.map((p) => ({
     text: p.text,
-    rubyAnnotations: p.rubyAnnotations,
+    inlineAnnotations: p.inlineAnnotations,
     fontSize: p.headingLevel ? 22 : undefined,
   })),
   lineWidth: mejiro.verticalLineWidth(600),
@@ -177,7 +182,7 @@ const result = await mejiro.layoutChapter({
 const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  rubyAnnotations: p.rubyAnnotations,
+  inlineAnnotations: p.inlineAnnotations,
   isHeading: !!p.headingLevel,
 }));
 
@@ -186,9 +191,144 @@ const pages = paginate(400, measures);
 const renderPage = buildRenderPage(pages[0], entries);
 ```
 
+## 既存EPUBの編集
+
+既存パッケージを変更して再エクスポートする場合は、`parseEditableEpub()` / `EditableEpub` を使います。
+
+```ts
+import { parseEditableEpub } from '@libraz/mejiro/epub';
+
+const editor = await parseEditableEpub(buffer);
+
+editor.updateParagraph(0, 2, {
+  text: '差し替え後の本文',
+  inlineAnnotations: [
+    { kind: 'ruby', startIndex: 5, endIndex: 7, rubyText: 'ほんぶん', type: 'group' },
+  ],
+});
+
+const nextBuffer = await editor.export({
+  onProgress(stage, ratio) {
+    console.log(stage, ratio);
+  },
+});
+```
+
+編集可能な章は `chapter.blocks` にブロック単位の本文を持ち、段落ブロックと画像ブロックが同じ階層に並びます。旧来の段落配列は読み取り互換のために投影されますが、新しいエディタコードでは `EditableEpub` のメソッド経由でブロックを更新してください。
+
+### v0.5: blocks 主体 API への移行ガイド
+
+`v0.5` で `EditableEpubChapter` の正本は `blocks: EditableBlock[]`（段落ブロック `EditableParagraphBlock` と画像ブロック `EditableImageBlock` の混在配列）になりました。`paragraphs` / `paragraphRefs` / `images` は読み取り互換用の deprecated プロパティで、各ミューテーションの後に `blocks` から自動再生成されます。**`v0.6` でこの3プロパティは削除予定**のため、新規実装では下表のとおり `blocks` ベースの API に置き換えてください。
+
+| v0.4 / 旧 API | v0.5 推奨 API | 備考 |
+|---------------|---------------|------|
+| `chapter.paragraphs[i]` の直接書き換え | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` は画像ブロックを除いた段落投影のインデックス。 |
+| `chapter.paragraphs.splice(i, 0, p)` で挿入 | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` は `chapter.blocks` のインデックス。末尾は `chapter.blocks.length`。 |
+| `chapter.paragraphs.splice(i, 1)` で削除 | `editor.deleteBlock(chapterIdx, blockId)` | 段落・画像どちらも削除可能。画像の場合、最後の参照が消えれば `imageAssets` も削除されます。 |
+| 段落の途中で分割 | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | 戻り値は `[leftId, rightId]`。境界をまたぐ注釈は破棄されます。 |
+| 隣接段落のマージ | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` は `leftId` の直後でなければなりません。 |
+| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | 戻り値は `assetKey`。v0.4 シェイプ（`{ href, mediaType, ... }`）もしばらく受け付けますが将来削除予定。 |
+| `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | block id でも asset key でも指定可能。 |
+| 画像 alt / caption の書き換え | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | |
+| 段落/画像の並べ替え | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` は移動先の `blocks` インデックス。 |
+| `paragraphRefs[i].tagName` 参照 | （廃止） | 元 XHTML タグの追跡は廃止。書き戻し時のタグは `paragraphKind` / `headingLevel` から決定されます。 |
+
+#### 段落投影 vs blocks インデックスの違い
+
+`updateParagraph` / `setInlineAnnotations` は「段落のみを数えた連番」を受け取ります。一方 `insertParagraph` / `moveBlock` などは「画像も含めた `blocks` 配列のインデックス」を受け取ります。両者が混在する操作では `chapter.blocks` を直接走査するのが確実です。
+
+```ts
+for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
+  if (block.kind === 'paragraph' && block.text.includes(query)) {
+    editor.updateParagraph(0, paragraphIndexOf(editor.book.chapters[0], index), {
+      text: block.text.replaceAll(query, replacement),
+    });
+  }
+}
+```
+
+#### Undo/redo・トランザクション・進捗
+
+`v0.5` では `editor.transaction(fn)` で複数操作を1ステップとしてまとめ、`editor.undo()` / `editor.redo()` / `editor.history` で履歴を扱えます。`editor.export({ onProgress, signal })` は進捗コールバックと `AbortSignal` を受け付けるため、ブラウザ上で大きな EPUB を書き出す際の UX 改善や中断にそのまま使えます。
+
+## 原稿テキストからEPUBを生成
+
+`EpubProject` は章ドラフトから新しい EPUB 3 パッケージを生成します。原稿内のルビは `｜漢字《かんじ》` のような青空文庫風記法で書けます。
+
+```ts
+import { EpubProject } from '@libraz/mejiro/epub';
+
+const project = new EpubProject({
+  metadata: {
+    title: '新しい作品',
+    creators: [{ name: '作者名', role: 'aut' }],
+    language: 'ja',
+  },
+  chapters: [
+    {
+      title: '第一話',
+      body: 'これは｜漢字《かんじ》のルビ例です。\n\n本文を続けます。',
+    },
+  ],
+});
+
+project.addChapter({ title: '第二話', body: '続きの本文です。' });
+const epubBuffer = await project.export();
+```
+
+## 原稿記法（parseManuscript）の方言対応表
+
+`parseManuscript(text, options)` は原稿1段落分のテキストを受け取り、`text`（本文）と `inlineAnnotations`（インライン注釈の配列）に分解します。`options.dialect` で受け付ける記法のセットを切り替えます（デフォルトは `'mejiro'`）。
+
+```ts
+import { parseManuscript } from '@libraz/mejiro/epub';
+
+parseManuscript('｜漢字《かんじ》を読む');                       // dialect 省略 = 'mejiro'
+parseManuscript('｜漢字《かんじ》を読む', { dialect: 'narou' });
+parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
+```
+
+`EpubProject.fromManuscript()` および `<MejiroManuscriptEditor>` / `useManuscriptDraft()` は内部で `parseManuscript()` を呼び出すため、これらに `dialect` を渡すと原稿全体の解釈を切り替えられます。
+
+### 方言別の対応表
+
+| 記法 | 入力例 | 出力される注釈 | `mejiro`（既定） | `narou` | `kakuyomu` |
+|------|--------|---------------|:--:|:--:|:--:|
+| パイプ式ルビ | `｜漢字《かんじ》` | `kind: 'ruby'` | ✅ | ✅ | ✅ |
+| 自動ルビ（漢字直後の《》） | `漢字《かんじ》` | `kind: 'ruby'` | ✅ | ✅ | ✅ |
+| 傍点（圏点） | `《《重要》》` | `kind: 'emphasis'`（`style: 'sesame'`） | ✅ | — | — |
+| 縦中横 | `〔20〕` | `kind: 'tcy'` | ✅ | — | — |
+| 脚注参照 | `[[#note-1]]` | `kind: 'footnote'` | ✅ | — | — |
+| リンク | `[本書](https://example.com)` | `kind: 'link'` | ✅ | — | — |
+| 強調 | `**強い**` | `kind: 'strong'` | ✅ | — | — |
+| 弱強調 | `*斜体*` | `kind: 'em'` | ✅ | — | — |
+
+`narou` / `kakuyomu` は両方とも「青空文庫互換のルビのみ」を解釈する設定で、両者の挙動は現状同一です。投稿サイトからコピーされた原稿をそのまま EPUB 化したい場合や、`*` や `[]` を本文記号として残したい場合に選択してください。`narou` / `kakuyomu` で `**text**` や `〔20〕` を書いた場合、本文文字としてそのまま残ります（注釈は付きません）。
+
+### 記法の挙動と制約
+
+- **自動ルビ**: 親文字は `Script=Han`（漢字）または `々〆ヶ` の連続のみ対象です。ひらがな・カタカナ・記号には自動ルビが付きません。明示的にルビを付けたい場合は `｜...《...》`（パイプ式）を使ってください。
+- **パイプ式ルビ**: 親文字に制約はありません。括弧の優先順位は「パイプ式 → 自動ルビ」の順なので、ひらがな等にルビを振りたい場合は `｜` を先頭に置きます。
+- **傍点（圏点）**: `《《...》》` の対応する閉じ括弧が見つからない場合は本文としてそのまま残ります。出力は `style: 'sesame'`（ゴマ点）です。他のスタイル（黒丸 `dot` 等）を使う場合は直接 `InlineAnnotation` を構築してください。
+- **縦中横**: 内容は半角英数字と `!`、`?` のみで構成され、`〔...〕` 全体が6文字以内（括弧含む）であることが条件です。日本語混在や長い文字列はそのまま本文に残ります。
+- **脚注参照**: 出力本文には `*<id>`（例: `*note-1`）が挿入され、対応する `kind: 'footnote'` 注釈が付与されます。脚注本体（参照先）の管理はアプリ側で行ってください。
+- **リンク**: `[label](href)` および `[label](href "title")` を受け付けます。`href` は空白を含まないトークン1つで、`title` 部分はダブルクォートで囲みます。
+- **強調 / 弱強調**: `**` が `*` より優先されます。`***text***`（混在）は素直にはネストされない（外側の `**` で `strong` になり、内側に余分な `*` が残る）ため、複合表現は `InlineAnnotation` を直接構築してください。
+
+### 受信した原稿からインライン注釈だけ取り出す
+
+旧 API の `parseManuscriptRuby()` はルビのみを返す薄いラッパーですが、`v0.6` で削除予定です。新規コードでは `parseManuscript()` の結果から必要な `kind` を絞り込んでください。
+
+```ts
+import { parseManuscript } from '@libraz/mejiro/epub';
+
+const { text, inlineAnnotations } = parseManuscript(rawText, { dialect: 'narou' });
+const rubyOnly = inlineAnnotations.filter((ann) => ann.kind === 'ruby');
+```
+
 ## 依存関係
 
-`@libraz/mejiro/epub` モジュールは、ZIP展開に [JSZip](https://stuk.github.io/jszip/) を使用し、XML/XHTML解析に `DOMParser` を使用しています（`DOMParser` はすべてのブラウザと、happy-domやjsdomなどのDOM実装を提供するサーバーサイドランタイムで利用可能です）。
+`@libraz/mejiro/epub` は、ZIP 展開に [JSZip](https://stuk.github.io/jszip/) を使い、XML / XHTML 解析に `DOMParser` を使います。`DOMParser` はブラウザのほか、happy-dom や jsdom などの DOM 実装を入れたサーバーサイドランタイムでも使えます。
 
 ---
 

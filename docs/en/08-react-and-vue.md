@@ -1,8 +1,6 @@
 # React and Vue Components
 
-> **Note:** `@libraz/mejiro-react` and `@libraz/mejiro-vue` are experimental. Their API may change in future releases.
-
-Both packages provide two components and an image overlay hook/composable:
+Both packages provide reader, editor, shelf, TOC, page, and overlay components plus hooks/composables:
 
 - **`MejiroPageView`** (recommended) -- Renders a `PageResult` from the high-level `MejiroBook` API, with automatic slot-based rendering when images are present.
 - **`useImageOverlay`** -- Hook (React) / composable (Vue) for draggable/resizable image overlays with real-time text reflow.
@@ -13,9 +11,114 @@ Both packages provide two components and an image overlay hook/composable:
 ### Installation
 
 ```bash
-npm install @libraz/mejiro @libraz/mejiro-react
-# peerDependency: react >=18
+npm install @libraz/mejiro @libraz/mejiro-react react
+npm install -D @types/react
 ```
+
+Peer dependencies: `react >= 18`; TypeScript projects should install `@types/react >= 18` matching their React version.
+
+### Choosing a component
+
+- **`<MejiroReader>`** -- the all-in-one reader. Hand it an EPUB and you get a working viewer with header, chapter nav, settings panel, paged spreads, page turns, and keyboard bindings out of the box. Start here for "public reading page" use cases such as a novel-submission site.
+- **`<MejiroEditor>` / `<MejiroManuscriptEditor>`** -- editors for an existing EPUB and for plain-text manuscripts respectively. Pair with `useEditableEpub` / `useEpubProject` when you want headless state with your own UI.
+- **`<MejiroPageView>`** -- per-page renderer. Use it when you need to embed pages inside a custom layout (comment column, share buttons, etc.) instead of the bundled reader chrome.
+- **`<MejiroPage>`** -- lowest-level renderer for a single `RenderPage` under CSS `writing-mode: vertical-rl`. Use it when you drive paginate / buildRenderPage yourself.
+
+### MejiroReader (full reader)
+
+There are three mutually exclusive source modes, enforced by a TypeScript discriminated union:
+
+```tsx
+import { MejiroReader } from '@libraz/mejiro-react';
+
+// 1. Fetch and open from a URL (shortest path)
+<MejiroReader epubUrl="/books/sample.epub" />
+
+// 2. Pass an already-parsed EpubBook (e.g. parsed on the server)
+<MejiroReader epub={epubBook} />
+
+// 3. Let the reader collect a file via drop zone / file picker
+<MejiroReader enableDropZone />
+```
+
+Use `bare` to strip all chrome at once, and reintroduce individual pieces with `enableHeader` / `enableChapterNav` / `enableSettings` / etc.:
+
+```tsx
+<MejiroReader epubUrl="/books/sample.epub" bare enableChapterNav />
+```
+
+#### MejiroReader imperative handle
+
+`ref` exposes `MejiroReaderHandle` so the host can drive navigation from custom buttons or persist the reading position to a backend.
+
+```tsx
+import { useRef } from 'react';
+import type { MejiroReaderHandle } from '@libraz/mejiro-react';
+
+const reader = useRef<MejiroReaderHandle>(null);
+
+<MejiroReader ref={reader} epubUrl="/books/sample.epub" />
+
+reader.current?.goToSpread(12);
+```
+
+| Method | Signature | Purpose |
+|--------|-----------|---------|
+| `goToSpread` | `(index: number) => void` | Jump to a spread index (clamped to range). |
+| `next` | `() => void` | Advance one spread. |
+| `prev` | `() => void` | Go back one spread. |
+| `goToChapter` | `(index: number) => void` | Switch chapter; resets the spread index to 0. |
+| `getReadingPosition` | `() => ReadingPosition` | Returns `{ chapter, spreadIdx, totalPages, totalSpreads }`. |
+| `goToAnchor` | `(anchor: ReadingAnchor) => void` | Navigate to a `ReadingAnchor`; switches chapters first if needed. |
+| `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the current spread, or `null` before layout is ready. |
+| `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the next spread (or end of chapter). |
+| `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
+| `subscribe` | `(event, listener) => () => void` | Subscribe to a lifecycle event; the returned function detaches the listener. |
+
+Lifecycle events available via `subscribe`:
+
+| Event | Payload | Fires |
+|-------|---------|-------|
+| `spreadChanged` | `{ chapter, spreadIdx }` | After the current spread index changes. |
+| `turnStart` | `{ from }` | When a turn animation begins, before the new spread is shown. |
+| `turnEnd` | `{ to }` | When a turn animation completes. |
+| `chapterFinished` | `{ chapter }` | When the reader reaches the last spread of a chapter. Mirrors the `onChapterCompleted` prop. |
+
+#### Persisting the reading position
+
+`useReadingPosition` stores positions as a `ReadingAnchor` (`{ chapter, paragraph, charIndex }`). Unlike a spread index, anchors survive font-size changes and viewport resizes because they reference logical content, so they round-trip cleanly through any reflow.
+
+```tsx
+import { useEffect, useRef } from 'react';
+import {
+  MejiroReader,
+  useReadingPosition,
+  type MejiroReaderHandle,
+} from '@libraz/mejiro-react';
+
+const reader = useRef<MejiroReaderHandle>(null);
+const { position, save } = useReadingPosition({
+  key: `mejiro:position:${bookId}`,
+  // Defaults to `window.localStorage`. For server-backed persistence,
+  // pass a custom { getItem, setItem, removeItem } implementation.
+});
+
+// Restore the saved anchor once after mount.
+useEffect(() => {
+  if (position) reader.current?.goToAnchor(position);
+}, [position]);
+
+<MejiroReader
+  ref={reader}
+  epubUrl={url}
+  onSpreadChange={() => {
+    const anchor = reader.current?.getAnchor();
+    if (anchor) save(anchor);
+  }}
+/>
+```
+
+`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). Wrap your network calls in that shape for server-side persistence.
 
 ### MejiroPageView (Recommended)
 
@@ -41,7 +144,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-react';
-import '@libraz/mejiro/render/mejiro.css';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
@@ -203,9 +305,38 @@ For the low-level `MejiroPage` component and manual pagination, see the [API Ref
 ### Installation
 
 ```bash
-npm install @libraz/mejiro @libraz/mejiro-vue
-# peerDependency: vue >=3.3
+npm install @libraz/mejiro @libraz/mejiro-vue vue
 ```
+
+Peer dependency: `vue >= 3.3`.
+
+### Choosing a component
+
+Same layering as the React package — `<MejiroReader>` is the all-in-one reader, `<MejiroEditor>` / `<MejiroManuscriptEditor>` are editors, `<MejiroPageView>` renders a single page, and `<MejiroPage>` is the lowest-level renderer for one `RenderPage`.
+
+### MejiroReader (full reader)
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue';
+import { MejiroReader, type MejiroReaderHandle } from '@libraz/mejiro-vue';
+
+const reader = ref<MejiroReaderHandle | null>(null);
+
+function jump(): void {
+  reader.value?.goToSpread(12);
+}
+</script>
+
+<template>
+  <MejiroReader ref="reader" epub-url="/books/sample.epub" />
+  <button @click="jump">Jump to spread 12</button>
+</template>
+```
+
+Source props mirror the React package: `epub-url`, `epub`, or neither (the reader renders its own drop zone). `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
+
+Persisting the reading position uses the `useReadingPosition` composable together with the controlled props (`:spread-idx` + `@update:spread-idx`).
 
 ### MejiroPageView (Recommended)
 
@@ -230,7 +361,6 @@ import { computed, onMounted, ref } from 'vue';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
-import '@libraz/mejiro/render/mejiro.css';
 
 const props = defineProps<{ paragraphs: { text: string }[] }>();
 
@@ -417,6 +547,6 @@ Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS class
 ## Related Documentation
 
 - [Getting Started](./01-getting-started.md) -- Installation and basic usage
-- [Book API](./09-book-api.md) -- MejiroBook, ChapterLayout, image exclusion
+- [Book API](./10-api-reference.md) -- MejiroBook, ChapterLayout, image exclusion
 - [Pagination & Rendering](./07-pagination-and-rendering.md) -- Low-level paginate, buildRenderPage, CSS
 - [API Reference](./10-api-reference.md) -- Complete API listing

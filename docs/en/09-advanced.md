@@ -60,7 +60,7 @@ Always use `buildKinsokuRules()` to create rules -- it generates the lookup sets
 
 ## 2. Token Boundaries (Morphological Analysis Integration)
 
-The `tokenBoundaries` option lets you integrate morphological analyzers (such as MeCab, kuromoji, or Sudachi) to prefer natural word boundaries for line breaks.
+The `tokenBoundaries` option lets you integrate morphological analyzers (MeCab, kuromoji, Sudachi, or [`@libraz/suzume`](https://github.com/libraz/suzume), among others) to prefer natural word boundaries for line breaks. For browser-only deployments, Suzume's WASM build fits in roughly 360KB gzipped; pick MeCab / Sudachi server-side when dictionary accuracy matters more than footprint.
 
 ### Basic Usage
 
@@ -199,6 +199,7 @@ interface RenderPage {
 interface RenderParagraph {
   lines: RenderLine[];
   isHeading: boolean;
+  headingLevel?: number;
 }
 
 interface RenderLine {
@@ -207,7 +208,13 @@ interface RenderLine {
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string };
+  | { type: 'ruby'; base: string; rubyText: string }
+  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
+  | { type: 'tcy'; text: string }
+  | { type: 'em'; text: string }
+  | { type: 'strong'; text: string }
+  | { type: 'link'; text: string; href: string; title?: string }
+  | { type: 'footnote-ref'; text: string; noteId: string };
 ```
 
 ### Canvas Rendering
@@ -381,6 +388,193 @@ const { slots, lineWidths } = computeExclusionSlots({
   ],
 });
 ```
+
+---
+
+## 7. Integration guide for novel-posting sites
+
+mejiro covers the "read / write / take away as EPUB" portion of a Japanese novel-posting platform. The table below shows where mejiro's responsibility ends and the host application's begins.
+
+| Site capability | What mejiro provides | What the application owns |
+|-----------------|----------------------|---------------------------|
+| Manuscript submission form | `<MejiroManuscriptEditor>` / `useManuscriptDraft` / `parseManuscript()` | Auth, server transport, draft sharing |
+| Vertical reading view | `<MejiroReader>` / `useReadingPosition` | Comments, ratings, share UI |
+| EPUB authoring per chapter / per work | `EpubProject.fromManuscript()` / `EditableEpub` | When to build, how to deliver, signed URLs |
+| Editing existing EPUBs | `<MejiroEditor>` / `useEditableEpub` | File ACLs, revision management |
+| In-chapter search | `ChapterLayout.findText()` | Cross-work search (see below) |
+| Reading-position persistence | `ReadingAnchor` / `useReadingPosition` | Server DB, device sync |
+| Work metadata schema | `EpubProjectMetadata` type | DB columns, edit UI |
+
+A typical wiring looks like:
+
+```
+[Author] ──→ MejiroManuscriptEditor ──→ EpubProject ──→ server save
+                                                 └→ EPUB export (optional)
+
+[Reader] ──→ MejiroReader  ←──── server API (metadata + chapters or EPUB URL)
+                ↑               ↓
+        useReadingPosition ←→ server DB (ReadingAnchor JSON)
+```
+
+### 7.1 Wiring up the submission flow
+
+Use `useManuscriptDraft` for local draft state and `useEpubProject` for "chapter drafts → EPUB". The shortest path to server persistence is to POST the draft chapters and the project metadata that `buildProject()` returns.
+
+```tsx
+import { useEpubProject } from '@libraz/mejiro-react';
+
+const project = useEpubProject({
+  metadata: { title: draft.title, language: 'ja' },
+  chapters: draft.chapters, // [{ id, title, body }]
+  debounceMs: 400,
+  onPreview(book) {
+    // Receives an EpubBook one level up from the manuscript text.
+  },
+});
+
+async function save() {
+  const built = project.buildProject();
+  await fetch(`/api/works/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      metadata: built.metadata,
+      chapters: project.chapters, // Persist the input drafts verbatim
+    }),
+  });
+}
+```
+
+The least surprising DB schema is to dump `EpubProjectMetadata` (`title`, `creators`, `subjects`, `language`, `description`, ...) and `chapters: { id, title, body }[]` straight into JSON columns. Inline notation — ruby, emphasis dots, tate-chu-yoko — survives inside `body` as `parseManuscript` markers (`｜漢字《かんじ》`, `《《重要》》`, `〔20〕`, ...).
+
+### 7.2 Reading flow (public page)
+
+"Pass the URL" is the shortest path. When the server stores EPUBs as files, hand the URL via `epubUrl`. When metadata comes from a separate API and the EPUB is streamed, parse it first and pass the resulting `EpubBook` via `epub`.
+
+```tsx
+<MejiroReader epubUrl={`/api/works/${slug}/epub`} bare enableChapterNav enableSettings />
+```
+
+#### 7.2.1 Authenticated EPUB delivery
+
+For works that require login, attach cookies or a bearer token through `fetchOptions`, or replace the loader entirely with `fetchEpub`:
+
+```tsx
+<MejiroReader
+  epubUrl={url}
+  fetchOptions={{ credentials: 'include' }}
+  // or
+  fetchEpub={async (u) => {
+    const res = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(await res.text());
+    return res.arrayBuffer();
+  }}
+/>
+```
+
+#### 7.2.2 First paint under SSR
+
+Paginated layout depends on Canvas/FontFace and therefore runs on the client. `renderEpubStatic(chapter)` returns a plain `writing-mode: vertical-rl` HTML string with no measurement; piping that into the `fallback` prop keeps real text on screen until the client reader hydrates.
+
+```tsx
+// Next.js App Router — server component
+import { parseEpub } from '@libraz/mejiro/epub';
+import { renderEpubStatic } from '@libraz/mejiro/render';
+
+export default async function ReaderPage({ params }: { params: { slug: string } }) {
+  const buf = await fetchEpubBuffer(params.slug);
+  const book = await parseEpub(buf);
+  // renderEpubStatic() output is built from parseEpub() results with every
+  // text and attribute already passed through escapeHtml / escapeAttr, so
+  // forwarding the string from a server component carries no XSS risk.
+  const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
+  return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
+}
+
+// Client component
+'use client';
+import { MejiroReader } from '@libraz/mejiro-react';
+
+// `initialHtml` must come from a trusted source (your own server, via
+// renderEpubStatic). For user-supplied HTML, sanitize with DOMPurify
+// before passing it into the fallback wrapper below.
+function StaticFallback({ html }: { html: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+export function ReaderClient({ slug, initialHtml }: Props) {
+  return (
+    <MejiroReader
+      epubUrl={`/api/works/${slug}/epub`}
+      fallback={<StaticFallback html={initialHtml} />}
+    />
+  );
+}
+```
+
+`renderEpubStatic()` skips measurement and pagination and lets the browser's native vertical-rl flow do the layout. Because it escapes content internally, EPUBs round-tripped through `parseEpub()` are XSS-safe. The output is also crawlable, so it doubles as a search-engine target and a slow-network placeholder.
+
+### 7.3 Persisting the reading position to a server
+
+`useReadingPosition` only needs a `localStorage`-shaped backend (`getItem` / `setItem` / `removeItem`), so wrapping a server endpoint is straightforward. The value stored is a `ReadingAnchor` (`{ chapter, paragraph, charIndex }`) as JSON, which survives font-size and viewport changes that would otherwise invalidate spread indices.
+
+```ts
+const remoteStorage: ReadingPositionStorage = {
+  getItem(k) {
+    return cachedSnapshot[k] ?? null; // Prefetched at startup
+  },
+  setItem(k, v) {
+    cachedSnapshot[k] = v;
+    void fetch(`/api/reading-position/${encodeURIComponent(k)}`, {
+      method: 'PUT',
+      body: v,
+      keepalive: true,
+    });
+  },
+  removeItem(k) {
+    delete cachedSnapshot[k];
+    void fetch(`/api/reading-position/${encodeURIComponent(k)}`, { method: 'DELETE' });
+  },
+};
+
+const { position, save } = useReadingPosition({
+  key: `mejiro:position:${userId}:${bookId}`,
+  storage: remoteStorage,
+  throttleMs: 1000,
+});
+```
+
+For multi-device sync, prefer to compare against the server's latest `updatedAt` inside `storage.setItem` so the conflict logic stays self-contained.
+
+### 7.4 Delivering image assets
+
+`EditableEpub` / `EditableImageBlock` hold image bytes as `Uint8Array`. When a posting site stores images in external object storage (S3 / CloudFront / R2), the practical pattern is: **save** — extract `EditableImageAsset.data`, upload it to storage, and persist only the URL in the DB; **deliver** — fetch from the external URL and refill `data` right before assembling the EPUB. mejiro does not currently expose a hook to reference external URLs directly from a reading session.
+
+For high-volume catalogs, run two pipelines: (a) read-only — assemble an EPUB binary per request and pass it to `<MejiroReader>`; (b) editor-only — work with full `Uint8Array` bytes in memory. A direct `assetResolver` hook is under consideration.
+
+### 7.5 Cross-work search
+
+`ChapterLayout.findText()` only searches **the current chapter**. To implement work-wide, author-wide, or site-wide full-text search, maintain a separate index on the server (Meilisearch / Elasticsearch / PostgreSQL `pg_trgm` / SQLite FTS5) and convert hits into `ReadingAnchor` form (`{ chapter, paragraph, charIndex }`) before handing them to the reader. If your primary store is MySQL, [MygramDB](https://github.com/libraz/mygram-db) — an in-memory n-gram index that syncs via MySQL binlog replication — keeps MySQL as the source of truth while delivering sub-millisecond CJK full-text search.
+
+```ts
+// Search API returns ReadingAnchor hits
+const hits = await searchApi(query); // [{ workId, anchor: ReadingAnchor, snippet }]
+
+// Jump to a hit
+const reader = useRef<MejiroReaderHandle>(null);
+reader.current?.goToAnchor(hits[0].anchor);
+```
+
+Indexing the same source the reader sees keeps `charIndex` consistent — pick either `EpubProjectChapterDraft.body` (raw manuscript notation) or the paragraph text extracted by `parseEpub()`.
+
+### 7.6 Out of scope
+
+| Concern | Recommended approach |
+|---------|---------------------|
+| Real-time collaboration / conflict resolution (CRDT/OT) | `EditableEpub` assumes a single editor. Drive multi-author flows on the plain-text `body` layer via Yjs / Automerge, then feed the result into `EpubProject` on save. |
+| Version history / diffs | Paragraph IDs (`EditableParagraphBlock.id`) are stable across edits — diff against them in your own version store. |
+| Comments / ratings / reports | Not included in `<MejiroReader>`. `ReadingAnchor` ranges work well as primary keys for "comments anchored to a position in the text". |
+| Auth / billing / notifications | Entirely the host's responsibility. |
+| Image upload / preview | `prepareImage()` (`@libraz/mejiro/image`) handles client-side decoding and downscaling; the upload itself is up to the host. |
 
 ---
 

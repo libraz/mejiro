@@ -116,6 +116,14 @@ Converts break points into `[start, end)` character index pairs per line.
 
 Converts morphological analyzer token lengths to boundary indices for `LayoutInput.tokenBoundaries`.
 
+### Text Helpers
+
+| Export | Signature |
+|---|---|
+| `formatDialogueLineBreaks` | `(text: string) => string` |
+
+Normalizes manuscript line breaks around Japanese dialogue quotes without creating extra blank lines.
+
 ### Image Exclusion
 
 **`ExclusionEngine`** — Manages image exclusion zones for text layout:
@@ -156,6 +164,15 @@ Convenience function. Equivalent to creating an `ExclusionEngine`, adding all im
 
 Low-level API. Computes per-line widths by subtracting exclusion zones from the base width.
 
+### Overlay Helpers
+
+| Export | Signature |
+|---|---|
+| `moveImageOverlayRect` | `(rect: ImageOverlayRect, deltaX: number, deltaY: number) => ImageOverlayRect` |
+| `resizeImageOverlayRect` | `(rect: ImageOverlayRect, deltaX: number, deltaY: number, minSize?: number) => ImageOverlayRect` |
+
+Pure helpers used by image overlay UIs to move and resize overlay rectangles without mutating the input.
+
 ### Types
 
 **`LayoutInput`** -- Input for `computeBreaks()`:
@@ -167,7 +184,7 @@ Low-level API. Computes per-line widths by subtracting exclusion zones from the 
 - `mode?: KinsokuMode` -- `'strict'` (default) or `'loose'`
 - `enableHanging?: boolean` -- Enable hanging punctuation (default: `true`)
 - `clusterIds?: Uint32Array` -- Indivisible character groups
-- `rubyAnnotations?: RubyAnnotation[]` -- Ruby annotations
+- `rubyAnnotations?: RubyAnnotation[]` -- Core-level ruby annotations used by the line breaker
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- Preferred break positions
 - `kinsokuRules?: KinsokuRules` -- Custom prohibition rules
 
@@ -212,6 +229,11 @@ Low-level API. Computes per-line widths by subtracting exclusion zones from the 
 - `x: number` / `y: number` — Position from content area origin (px)
 - `w: number` / `h: number` — Size (px)
 
+**`ImageOverlayRect`** — UI overlay rectangle:
+
+- `x: number` / `y: number` — Overlay position (px)
+- `w: number` / `h: number` — Overlay size (px)
+
 **`ColumnSlot`** — Per-column rendering slot:
 
 - `xPos: number` — Offset from right edge of content area (px)
@@ -255,7 +277,7 @@ Low-level API. Computes per-line widths by subtracting exclusion zones from the 
 
 | Export | Signature |
 |---|---|
-| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, rubyAnnotations? }) => Promise<BreakResult>` |
+| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, inlineAnnotations? }) => Promise<BreakResult>` |
 
 Standalone one-shot layout function. Creates a temporary `MejiroBrowser` instance, measures the text, and computes breaks in a single call.
 
@@ -271,6 +293,7 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 - `CharMeasurer` -- Character measurement via Canvas.measureText with codepoint caching
 - `WidthCache` -- `Map<fontKey, Map<codepoint, width>>`
 - `deriveRubyFont(fontFamily: string, fontSize: number): string` -- Ruby font spec (half-size)
+- `normalizeFontFamily(fontFamily: FontFamily): string` -- Normalize a string or family-name array to a CSS font-family string
 - `toFontSpec(fontFamily: string, fontSize: number): string` -- CSS font spec
 
 ### Types
@@ -289,7 +312,7 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 - `lineWidth: number`
 - `mode?: KinsokuMode`
 - `enableHanging?: boolean`
-- `rubyAnnotations?: RubyInputAnnotation[]`
+- `inlineAnnotations?: readonly InlineAnnotation[]`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
 
 **`ChapterLayoutOptions`**:
@@ -313,26 +336,36 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 **`ParagraphInput`**:
 
 - `text: string`
-- `rubyAnnotations?: RubyInputAnnotation[]`
+- `inlineAnnotations?: readonly InlineAnnotation[]`
 - `fontFamily?: string`
 - `fontSize?: number`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
 
-**`RubyInputAnnotation`**:
+**`InlineAnnotation` / `InlineRubyAnnotation`**:
 
+- `kind: 'ruby' | 'emphasis' | 'tcy' | 'em' | 'strong' | 'link' | 'footnote'`
 - `startIndex: number`
 - `endIndex: number`
-- `rubyText: string`
-- `type?: 'mono' | 'group' | 'jukugo'`
-- `jukugoSplitPoints?: number[]`
+- Ruby variant: `rubyText: string`, `type?: 'mono' | 'group' | 'jukugo'`, `jukugoSplitPoints?: number[]`
+
+`RubyInputAnnotation` remains as a deprecated alias of `InlineRubyAnnotation`.
 
 ---
 
-## `@libraz/mejiro/epub` — EPUB Parsing
+## `@libraz/mejiro/epub` — EPUB Parsing and Authoring
 
 | Export | Signature |
 |---|---|
 | `parseEpub` | `(buffer: ArrayBuffer) => Promise<EpubBook>` |
+| `parseEditableEpub` | `(buffer: ArrayBuffer) => Promise<EditableEpub>` |
+| `EditableEpub` | Class for block-level paragraph/image editing and export |
+| `exportEditableEpub` | `(book: EditableEpub \| EditableEpubBook, options?: EpubExportOptions) => Promise<ArrayBuffer>` |
+| `updateEpubParagraph` | Update a paragraph block in an editable EPUB book |
+| `setEpubInlineAnnotations` | Replace inline annotations for a paragraph block |
+| `addEpubChapterImage` | Insert an image block and asset into an editable chapter. Accepts v0.5 `{ filename, data, ... }` and deprecated v0.4 `{ href, mediaType, afterParagraph }` inputs. |
+| `EpubProject` | Class for creating a new EPUB 3 package from manuscript chapters |
+| `parseManuscript` | Parse manuscript text into paragraphs and inline annotations |
+| `parseManuscriptRuby` | Parse Aozora-style ruby notation in one text fragment |
 
 Parses an EPUB file into structured chapters with ruby annotations.
 
@@ -358,8 +391,15 @@ Extracts paragraphs and ruby annotations from an XHTML document string.
 **`AnnotatedParagraph`**:
 
 - `text: string`
-- `rubyAnnotations: RubyInputAnnotation[]`
+- `inlineAnnotations: readonly InlineAnnotation[]`
 - `headingLevel?: number`
+
+**`EditableBlock`**:
+
+- Paragraph block: `{ kind: 'paragraph'; id; text; inlineAnnotations; paragraphKind?; headingLevel? }`
+- Image block: `{ kind: 'image'; id; assetKey; alt?; caption?; placement? }`
+
+**`EpubProjectMetadata`** includes `title`, `subtitle`, `description`, `language`, `identifier`, `publisher`, `rights`, `date`, `modified`, `creators`, `contributors`, `subjects`, `series`, `collections`, and legacy `author`.
 
 ---
 
@@ -374,13 +414,26 @@ Computes paragraph measures for pagination.
 | Export | Signature |
 |---|---|
 | `buildRenderPage` | `(slices: PageSlice[], entries: RenderEntry[]) => RenderPage` |
+| `renderEpubStatic` | `(chapter: { paragraphs: BookParagraph[] }, options?: RenderEpubStaticOptions) => string` |
+| `buildLineMetrics` | `(entries: RenderEntry[], options: MeasureOptions) => LineMetricsResult` |
+| `packPageLines` | `(metrics: LineMetric[], startIdx: number, pageWidth: number) => number` |
+| `buildColumnSlots` | `(metrics: LineMetric[], startIdx: number, count: number, columnHeight: number) => ColumnSlot[]` |
+| `adjustExclusionSlots` | `(slots: ColumnSlot[], metrics: LineMetric[], startIdx: number, basePitch: number) => ColumnSlot[]` |
+| `getImageXOffset` | `(offsets: Float32Array, spreadStartLine: number, col: number) => number` |
+| `findPhysicalColumn` | `(offsets: Float32Array, spreadStartLine: number, fromRight: number, basePitch: number) => number` |
 
-Converts page slices + entries into a renderable page structure.
+Converts page slices + entries into a renderable page structure. `renderEpubStatic`
+returns framework-agnostic HTML for a single chapter, suitable for SSR fallback
+markup before the client reader hydrates.
+The metric/slot helpers are low-level utilities for slot-based rendering and image-exclusion layout.
 
 ### CSS
 
 ```ts
 import '@libraz/mejiro/render/mejiro.css';
+import '@libraz/mejiro/render/mejiro-reader.css';
+import '@libraz/mejiro/render/mejiro-editor.css';
+import '@libraz/mejiro/render/mejiro-print.css';
 ```
 
 ### Types
@@ -389,8 +442,9 @@ import '@libraz/mejiro/render/mejiro.css';
 
 - `chars: string[]`
 - `breakPoints: Uint32Array`
-- `rubyAnnotations: RubyInputAnnotation[]`
+- `inlineAnnotations: readonly InlineAnnotation[]`
 - `isHeading: boolean`
+- `kind?: ParagraphKind`
 
 **`RenderPage`**:
 
@@ -400,6 +454,7 @@ import '@libraz/mejiro/render/mejiro.css';
 
 - `lines: RenderLine[]`
 - `isHeading: boolean`
+- `headingLevel?: number`
 
 **`RenderLine`**:
 
@@ -407,7 +462,14 @@ import '@libraz/mejiro/render/mejiro.css';
 
 **`RenderSegment`**:
 
-- `{ type: 'text'; text: string } | { type: 'ruby'; base: string; rubyText: string }`
+- `{ type: 'text'; text: string }`
+- `{ type: 'ruby'; base: string; rubyText: string }`
+- `{ type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }`
+- `{ type: 'tcy'; text: string }`
+- `{ type: 'em'; text: string }`
+- `{ type: 'strong'; text: string }`
+- `{ type: 'link'; text: string; href: string; title?: string }`
+- `{ type: 'footnote-ref'; text: string; noteId: string }`
 
 **`MeasureOptions`**:
 
@@ -428,6 +490,8 @@ The recommended entry point for most applications. Orchestrates font loading, la
 | Export | Description |
 |---|---|
 | `DEFAULT_HEADING_STYLES` | Default heading style overrides for levels 1–4 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... }`) |
+| `DEFAULT_BOOK_OPTIONS` | Default font, spacing, kinsoku, and heading options |
+| `DEFAULT_PAGE_GEOMETRY` | Default page size/line width before container measurement |
 | `DEFAULT_PAGE_PADDING` | Default page padding values in pixels (`{ x: 52, y: 56, bottom: 40 }`) |
 
 ### MejiroBook
@@ -435,10 +499,11 @@ The recommended entry point for most applications. Orchestrates font loading, la
 **`MejiroBook`** — Main orchestrator class:
 
 - `constructor(options: BookOptions)` — Create with font, spacing, and heading configuration
-- `setOptions(options: Partial<BookOptions>): void` — Update options (existing layouts are not affected)
+- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. Font family / size changes re-measure asynchronously; other option changes apply synchronously.
 - `setPageSize(size: PageSize): void` — Set page geometry (must be called before `layoutChapter`)
-- `computePageSize(container: HTMLElement, padding?): { pageWidth, pageHeight, contentHeight }` — Compute page dimensions from a container element and apply them via `setPageSize`. Uses a 1.45 aspect ratio with min 280×400 and max height 780.
+- `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — Compute page dimensions from a container element and apply them via `setPageSize`. Uses a 1.45 aspect ratio with min 280×400, max height 780, default padding, and overridable header/gutter reservations.
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — Lay out a chapter (compatible with `EpubChapter`)
+- `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — Restore a layout snapshot without measuring again
 - `clearCache(fontKey?: string): void` — Clear the character width measurement cache
 
 ### ChapterLayout
@@ -450,9 +515,21 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — Update geometry; re-breaks lines if `lineWidth` changes
 - `setImages(spreadIndex: number, images: BookImage[]): void` — Set image exclusions for a spread (empty array removes)
 - `clearImages(): void` — Remove all image exclusions
-- `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — Set or clear images and return the updated spread (combines `setImages`/`clearImages` + `getSpread`)
+- `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — Set images for a spread, or clear that spread when `images` is empty/omitted, then return the updated spread
 - `getSpread(spreadIndex: number): SpreadResult` — Get layout data for a two-page spread
 - `getPage(pageIndex: number): PageResult` — Get layout data for a single page
+- `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — **Scope is the current `ChapterLayout` only.** Walks the chapter's paragraphs and returns hits as `SearchMatch` (an `AnchorLocation` extended with the match length, etc.). For cross-chapter or cross-book search (e.g. a novel-site search index), keep an external full-text index server-side (Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5) and hand the resolved anchors to `MejiroReaderHandle.goToAnchor()` to navigate to the hit.
+- `coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null` — Convert a reading anchor to spread/page coordinates
+- `anchorAtCoord(spreadIdx: number, x: number, y: number): InChapterAnchor | null` — Convert coordinates back to an anchor
+- `selectionRects(range: AnchorRange): AnchorRect[]` — Build highlight rectangles for a text range
+- `snapshot(): ChapterLayoutSnapshot` — Serialize layout data for SSR/build caches
+
+### Reading Time
+
+| Export | Signature |
+|---|---|
+| `estimateReadingTime` | `(chapter: { paragraphs: BookParagraph[] }, options?: ReadingTimeOptions) => number` |
+| `formatReadingTime` | `(ms: number, locale?: 'ja' | 'en') => string` |
 
 ### Types
 
@@ -476,8 +553,9 @@ The recommended entry point for most applications. Orchestrates font loading, la
 **`BookParagraph`**:
 
 - `text: string`
-- `rubyAnnotations?: RubyInputAnnotation[]`
+- `inlineAnnotations?: readonly InlineAnnotation[]`
 - `headingLevel?: number`
+- `kind?: ParagraphKind` — `'body'` (default) / `'heading'` / `'blockquote'` / `'sceneBreak'` / `'pre'` / `'figure'`
 
 **`BookImage`**:
 
@@ -500,19 +578,43 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 **`PageLine`**:
 
-- `segments: RenderSegment[]` — Text and ruby segments
+- `segments: RenderSegment[]` — Text and inline annotation segments
 - `headingLevel?: number` — Heading level (undefined for body)
 - `fontSize: number` — Computed font size (px, accounts for heading scale)
 
 ---
 
-## `@libraz/mejiro-react` — React Component (Experimental)
+## `@libraz/mejiro/image` — Image Helpers
+
+| Export | Signature |
+|---|---|
+| `prepareImage` | `(file: Blob, options?: PrepareImageOptions) => Promise<PrepareImageResult>` |
+
+Decodes a browser image file, optionally downscales it, re-encodes it, and returns binary data plus dimensions for EPUB embedding.
+
+---
+
+## `@libraz/mejiro-react` — React Component
 
 ```bash
-npm install @libraz/mejiro-react  # peerDep: react >=18
+npm install @libraz/mejiro @libraz/mejiro-react react
+npm install -D @types/react
 ```
 
-**`MejiroPageView`** -- Recommended. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
+Peer dependencies: `react >= 18`; TypeScript projects should install `@types/react >= 18` matching their React version.
+
+Main components: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, `MejiroPageView`, `MejiroPage`, `MejiroSpread`, `MejiroSettingsPanel`, `MejiroChapterNav`, `MejiroStats`, `MejiroDropZone`, and `MejiroImageOverlay`.
+
+Hooks: `useEpub`, `useEditableEpub`, `useEpubProject`, `useLibrary`, `useManuscriptDraft`, `useMejiroBook`, `useChapterLayout`, `useSpread`, `useReadingPosition`, `useI18n`, `useImageOverlay`, and `useMultiImageOverlay`.
+
+Common headless editor returns:
+
+- `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport? })` returns `editor`, `book`, `previewBook`, `loading`, `exporting`, `error`, `revision`, `history`, `selection`, `selectedParagraph`, `setSelection`, `loadBuffer`, `loadFile`, `loadUrl`, `updateParagraph`, `setInlineAnnotations`, `addImage({ filename, data, ... })`, `undo`, `redo`, and `exportEpub(options?)`.
+- `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` returns `epub`, `loading`, `error`, `loadBuffer`, `loadFile`, `loadUrl`, and `setEpub`.
+- `useEpubProject({ metadata?, chapters?, debounceMs?, onPreview?, onExport? })` returns project metadata/chapter state plus `setMetadata`, `setChapters`, `setSelectedChapter`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `previewBook`, `previewError`, `previewing`, `buildProject`, and `exportEpub`.
+- `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` returns draft chapter state plus add/remove/reorder/patch helpers.
+
+**`MejiroPageView`** -- Recommended lower-level page renderer. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
 
 Props:
 
@@ -542,13 +644,21 @@ Props:
 
 ---
 
-## `@libraz/mejiro-vue` — Vue Component (Experimental)
+## `@libraz/mejiro-vue` — Vue Component
 
 ```bash
-npm install @libraz/mejiro-vue  # peerDep: vue >=3.3
+npm install @libraz/mejiro @libraz/mejiro-vue vue
 ```
 
-**`MejiroPageView`** -- Recommended. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
+Peer dependency: `vue >= 3.3`.
+
+Main components and composables mirror the React package: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, page/spread/chrome components, and `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay`.
+
+Public component prop types are exported for the same component set, including `MejiroReaderProps`, `MejiroEditorProps`, `MejiroManuscriptEditorProps`, `MejiroPageViewProps`, `MejiroSpreadProps`, `MejiroSettingsPanelProps`, and the other `Mejiro*Props` aliases.
+
+The Vue composables expose the same operations as the React hooks. Reactive state is returned as `Ref` / `ComputedRef` values.
+
+**`MejiroPageView`** -- Recommended lower-level page renderer. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
 
 Props:
 

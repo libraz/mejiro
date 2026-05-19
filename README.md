@@ -4,9 +4,9 @@
 [![npm](https://img.shields.io/npm/v/@libraz/mejiro)](https://www.npmjs.com/package/@libraz/mejiro)
 [![codecov](https://codecov.io/gh/libraz/mejiro/branch/main/graph/badge.svg)](https://codecov.io/gh/libraz/mejiro)
 [![License](https://img.shields.io/github/license/libraz/mejiro)](https://github.com/libraz/mejiro/blob/main/LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-Japanese vertical text layout engine for the web. Handles line breaking, kinsoku shori (禁則処理), hanging punctuation, ruby (furigana) preprocessing, image exclusion (text wrapping), and pagination — all with zero DOM dependencies in the core.
+Japanese vertical text layout engine for the web — line breaking, kinsoku shori (禁則処理), hanging punctuation, ruby (furigana) preprocessing, image exclusion (text wrapping), EPUB parsing/authoring, and ready-to-use reader/editor components for React and Vue. The core engine has zero DOM dependencies.
 
 <p align="center">
   <img src="docs/images/wagahai.jpg" alt="mejiro demo — Natsume Soseki &quot;I Am a Cat&quot; rendered in vertical text" width="640">
@@ -25,9 +25,10 @@ mejiro provides the building blocks for rendering Japanese vertical text (`writi
 ```
 @libraz/mejiro          Core: line breaking, kinsoku, hanging, ruby, image exclusion, pagination
 @libraz/mejiro/browser  Browser: font measurement, width caching, layout integration
-@libraz/mejiro/epub     EPUB: parsing, ruby extraction
+@libraz/mejiro/epub     EPUB: parsing, editable write-back, manuscript authoring
 @libraz/mejiro/render   Render: layout data → framework-agnostic page structure + CSS
 @libraz/mejiro/book     Book: high-level API — layout, pagination, image exclusion in one class
+@libraz/mejiro/image    Image: browser-side decode / downscale / re-encode helpers
 ```
 
 ## Architecture
@@ -118,11 +119,12 @@ For detailed guides with examples, see [Documentation](docs/en/).
 |---|---|
 | `@libraz/mejiro` | Core: `computeBreaks()`, `ExclusionEngine`, `toCodepoints()`, kinsoku, hanging, ruby, pagination |
 | `@libraz/mejiro/browser` | Browser: `MejiroBrowser` class, font measurement, width caching |
-| `@libraz/mejiro/epub` | EPUB: `parseEpub()`, ruby extraction |
-| `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `mejiro.css` |
-| `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout`, `DEFAULT_HEADING_STYLES`, `DEFAULT_PAGE_PADDING` — high-level layout, pagination, and image exclusion |
-| `@libraz/mejiro-react` | React: `<MejiroPageView>`, `useImageOverlay` hook (experimental) |
-| `@libraz/mejiro-vue` | Vue: `<MejiroPageView>`, `useImageOverlay` composable (experimental) |
+| `@libraz/mejiro/epub` | EPUB: `parseEpub()`, `EditableEpub`, `EpubProject`, `parseManuscript` |
+| `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `renderEpubStatic()`, `mejiro.css` / `mejiro-reader.css` / `mejiro-editor.css` / `mejiro-print.css` |
+| `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout`, `estimateReadingTime` — high-level layout, pagination, image exclusion, search, anchors, snapshots |
+| `@libraz/mejiro/image` | `prepareImage(file, opts?)` — decode / downscale / re-encode before embedding |
+| `@libraz/mejiro-react` | React: `<MejiroReader>` / `<MejiroEditor>` / `<MejiroManuscriptEditor>` / `<MejiroShelf>` / `<MejiroToc>` + `useEpub` / `useLibrary` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` |
+| `@libraz/mejiro-vue` | Vue: same component and composable set as React |
 
 ## Kinsoku Shori (禁則処理)
 
@@ -153,4 +155,3 @@ Custom kinsoku rules can be passed via `LayoutInput.kinsokuRules` when using the
 ## Authors
 
 - libraz <libraz@libraz.net>
-

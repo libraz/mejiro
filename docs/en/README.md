@@ -1,6 +1,6 @@
 # mejiro Documentation
 
-Japanese vertical text layout engine for the web — line breaking, kinsoku shori (禁則処理), hanging punctuation, ruby (furigana), and pagination.
+Japanese vertical text layout engine for the web — line breaking, kinsoku shori (禁則処理), hanging punctuation, ruby (furigana), pagination, EPUB parsing/authoring, static rendering, and reader/editor components for React and Vue.
 
 ## Documentation
 
@@ -36,6 +36,9 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 
 **I want to flow text around images**
 → `MejiroBook` + `layout.setImages()` in [API Reference](10-api-reference.md), or [Advanced](09-advanced.md) for low-level control
+
+**I want the v0.5 reader/editor surface**
+→ [React & Vue](08-react-and-vue.md) → [API Reference](10-api-reference.md)
 
 ---
 

@@ -24,11 +24,15 @@ If you are using React or Vue, install the corresponding component package as we
 
 ```bash
 # React
-npm install @libraz/mejiro-react
+npm install @libraz/mejiro @libraz/mejiro-react react
+npm install -D @types/react
 
 # Vue
-npm install @libraz/mejiro-vue
+npm install @libraz/mejiro @libraz/mejiro-vue vue
 ```
+
+For React, TypeScript projects should install `@types/react >= 18` matching their React version.
+For Vue, the peer dependency is `vue >= 3.3`.
 
 ## Quick Start: EPUB Reader (Recommended)
 
@@ -131,7 +135,6 @@ import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-react';
-import '@libraz/mejiro/render/mejiro.css';
 
 // Create once outside the component so the cache persists across renders
 const book = new MejiroBook({
@@ -196,7 +199,6 @@ import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { SpreadResult } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
-import '@libraz/mejiro/render/mejiro.css';
 
 // Create once so the cache persists
 const book = new MejiroBook({

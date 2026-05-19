@@ -1,6 +1,6 @@
-# APIリファレンス
+# API リファレンス
 
-> **注意:** 本ドキュメントは公開APIの全体を網羅しています。パラメータの詳細やデフォルト値については、パッケージに含まれるTypeScript型定義も参照してください。
+> **注意:** このページは公開 API の一覧です。パラメータの詳細やデフォルト値は、パッケージに含まれる TypeScript 型定義もあわせて確認してください。
 
 ---
 
@@ -94,7 +94,7 @@
 
 クラスタ境界を考慮して、指定位置での分割が許可されるかどうかを判定します。
 
-### ページネーション
+### ページ分割
 
 | エクスポート | シグネチャ |
 |---|---|
@@ -116,9 +116,17 @@
 
 形態素解析器のトークン長を`LayoutInput.tokenBoundaries`用の境界インデックスに変換します。
 
-### 画像除外
+### テキスト補助
 
-**`ExclusionEngine`** — テキストレイアウトにおける画像除外ゾーンの管理:
+| エクスポート | シグネチャ |
+|---|---|
+| `formatDialogueLineBreaks` | `(text: string) => string` |
+
+原稿テキスト内の日本語会話括弧の前後に自然な改行を入れ、余分な空行を作らないよう正規化します。
+
+### 画像回り込み
+
+**`ExclusionEngine`** — テキストが避ける矩形領域の管理:
 
 - `constructor(geometry: ExclusionPageGeometry)`
 - `setGeometry(geometry: ExclusionPageGeometry): void` — ページジオメトリの更新
@@ -130,7 +138,7 @@
 - `imageCount: number` — 画像数（getter）
 - `compute(): { slots: ColumnSlot[]; lineWidths: Float32Array }` — 列ごとのスロットと行幅を計算
 
-**`SpreadExclusionEngine`** — 見開き2ページにわたる画像除外の管理:
+**`SpreadExclusionEngine`** — 見開き 2 ページにわたる回り込み領域の管理:
 
 - `constructor(geometry: SpreadGeometry)`
 - `setGeometry(geometry: SpreadGeometry): void` — 見開きジオメトリの更新
@@ -156,6 +164,15 @@
 
 低レベルAPI。除外ゾーンを基準幅から差し引いて行ごとの幅を計算する。
 
+### オーバーレイ補助
+
+| エクスポート | シグネチャ |
+|---|---|
+| `moveImageOverlayRect` | `(rect: ImageOverlayRect, deltaX: number, deltaY: number) => ImageOverlayRect` |
+| `resizeImageOverlayRect` | `(rect: ImageOverlayRect, deltaX: number, deltaY: number, minSize?: number) => ImageOverlayRect` |
+
+画像オーバーレイUIで、入力を変更せずに矩形を移動・リサイズする純粋関数です。
+
 ### 型定義
 
 **`LayoutInput`** -- `computeBreaks()`の入力:
@@ -167,7 +184,7 @@
 - `mode?: KinsokuMode` -- `'strict'`（デフォルト）または`'loose'`
 - `enableHanging?: boolean` -- ぶら下げ組みを有効にする（デフォルト: `true`）
 - `clusterIds?: Uint32Array` -- 不可分文字グループ
-- `rubyAnnotations?: RubyAnnotation[]` -- ルビ注釈
+- `rubyAnnotations?: RubyAnnotation[]` -- 改行処理で使用するコアレベルのルビ注釈
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- 優先分割位置
 - `kinsokuRules?: KinsokuRules` -- カスタム禁則ルール
 
@@ -192,11 +209,11 @@
 - `type?: 'mono' | 'group' | 'jukugo'`
 - `jukugoSplitPoints?: number[]`
 
-**`ParagraphMeasure`** -- ページネーション入力:
+**`ParagraphMeasure`** -- ページ分割の入力:
 
 - `lineCount: number` / `linePitch: number` / `gapBefore: number`
 
-**`PageSlice`** -- ページネーション出力:
+**`PageSlice`** -- ページ分割の出力:
 
 - `paragraphIndex: number` / `lineStart: number` / `lineEnd: number`
 
@@ -211,6 +228,11 @@
 
 - `x: number` / `y: number` — コンテンツ領域原点からの位置（px）
 - `w: number` / `h: number` — サイズ（px）
+
+**`ImageOverlayRect`** — UIオーバーレイ矩形:
+
+- `x: number` / `y: number` — オーバーレイ位置（px）
+- `w: number` / `h: number` — オーバーレイサイズ（px）
 
 **`ColumnSlot`** — 列ごとの描画スロット:
 
@@ -255,7 +277,7 @@
 
 | エクスポート | シグネチャ |
 |---|---|
-| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, rubyAnnotations? }) => Promise<BreakResult>` |
+| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, inlineAnnotations? }) => Promise<BreakResult>` |
 
 スタンドアロンのワンショットレイアウト関数。一時的な`MejiroBrowser`インスタンスを作成し、テキストを計測し、分割を計算します。
 
@@ -271,6 +293,7 @@
 - `CharMeasurer` -- Canvas.measureTextによる文字計測（コードポイントキャッシュ付き）
 - `WidthCache` -- `Map<fontKey, Map<codepoint, width>>`
 - `deriveRubyFont(fontFamily: string, fontSize: number): string` -- ルビフォント仕様（半分サイズ）
+- `normalizeFontFamily(fontFamily: FontFamily): string` -- 文字列またはフォントファミリー配列を CSS font-family 文字列へ正規化
 - `toFontSpec(fontFamily: string, fontSize: number): string` -- CSSフォント仕様
 
 ### 型定義
@@ -289,7 +312,7 @@
 - `lineWidth: number`
 - `mode?: KinsokuMode`
 - `enableHanging?: boolean`
-- `rubyAnnotations?: RubyInputAnnotation[]`
+- `inlineAnnotations?: readonly InlineAnnotation[]`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
 
 **`ChapterLayoutOptions`**:
@@ -313,26 +336,36 @@
 **`ParagraphInput`**:
 
 - `text: string`
-- `rubyAnnotations?: RubyInputAnnotation[]`
+- `inlineAnnotations?: readonly InlineAnnotation[]`
 - `fontFamily?: string`
 - `fontSize?: number`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
 
-**`RubyInputAnnotation`**:
+**`InlineAnnotation` / `InlineRubyAnnotation`**:
 
+- `kind: 'ruby' | 'emphasis' | 'tcy' | 'em' | 'strong' | 'link' | 'footnote'`
 - `startIndex: number`
 - `endIndex: number`
-- `rubyText: string`
-- `type?: 'mono' | 'group' | 'jukugo'`
-- `jukugoSplitPoints?: number[]`
+- ルビ variant: `rubyText: string`、`type?: 'mono' | 'group' | 'jukugo'`、`jukugoSplitPoints?: number[]`
+
+`RubyInputAnnotation` は `InlineRubyAnnotation` の deprecated エイリアスとして残っています。
 
 ---
 
-## `@libraz/mejiro/epub` — EPUB解析
+## `@libraz/mejiro/epub` — EPUB解析と生成
 
 | エクスポート | シグネチャ |
 |---|---|
 | `parseEpub` | `(buffer: ArrayBuffer) => Promise<EpubBook>` |
+| `parseEditableEpub` | `(buffer: ArrayBuffer) => Promise<EditableEpub>` |
+| `EditableEpub` | 段落/画像ブロックを編集して再エクスポートするクラス |
+| `exportEditableEpub` | `(book: EditableEpub \| EditableEpubBook, options?: EpubExportOptions) => Promise<ArrayBuffer>` |
+| `updateEpubParagraph` | 編集可能EPUB内の段落ブロックを更新 |
+| `setEpubInlineAnnotations` | 段落ブロックのインライン注釈を置換 |
+| `addEpubChapterImage` | 編集可能章に画像ブロックとアセットを追加。v0.5 の `{ filename, data, ... }` と、非推奨の v0.4 `{ href, mediaType, afterParagraph }` 入力を受け付けます。 |
+| `EpubProject` | 原稿章から新規 EPUB 3 パッケージを生成するクラス |
+| `parseManuscript` | 原稿テキストを段落とインライン注釈へ変換 |
+| `parseManuscriptRuby` | 1つのテキスト片の青空文庫風ルビ記法を解析 |
 
 EPUBファイルをルビ注釈付きの構造化されたチャプターに解析します。
 
@@ -358,29 +391,49 @@ XHTMLドキュメント文字列から段落とルビ注釈を抽出します。
 **`AnnotatedParagraph`**:
 
 - `text: string`
-- `rubyAnnotations: RubyInputAnnotation[]`
+- `inlineAnnotations: readonly InlineAnnotation[]`
 - `headingLevel?: number`
+
+**`EditableBlock`**:
+
+- 段落ブロック: `{ kind: 'paragraph'; id; text; inlineAnnotations; paragraphKind?; headingLevel? }`
+- 画像ブロック: `{ kind: 'image'; id; assetKey; alt?; caption?; placement? }`
+
+**`EpubProjectMetadata`** は `title`、`subtitle`、`description`、`language`、`identifier`、`publisher`、`rights`、`date`、`modified`、`creators`、`contributors`、`subjects`、`series`、`collections`、互換用 `author` を持ちます。
 
 ---
 
-## `@libraz/mejiro/render` — レンダーデータ
+## `@libraz/mejiro/render` — レンダリングデータ
 
 | エクスポート | シグネチャ |
 |---|---|
 | `buildParagraphMeasures` | `(entries: RenderEntry[], options: MeasureOptions) => ParagraphMeasure[]` |
 
-ページネーション用の段落計測値を計算します。
+ページ分割に使う段落計測値を計算します。
 
 | エクスポート | シグネチャ |
 |---|---|
 | `buildRenderPage` | `(slices: PageSlice[], entries: RenderEntry[]) => RenderPage` |
+| `renderEpubStatic` | `(chapter: { paragraphs: BookParagraph[] }, options?: RenderEpubStaticOptions) => string` |
+| `buildLineMetrics` | `(entries: RenderEntry[], options: MeasureOptions) => LineMetricsResult` |
+| `packPageLines` | `(metrics: LineMetric[], startIdx: number, pageWidth: number) => number` |
+| `buildColumnSlots` | `(metrics: LineMetric[], startIdx: number, count: number, columnHeight: number) => ColumnSlot[]` |
+| `adjustExclusionSlots` | `(slots: ColumnSlot[], metrics: LineMetric[], startIdx: number, basePitch: number) => ColumnSlot[]` |
+| `getImageXOffset` | `(offsets: Float32Array, spreadStartLine: number, col: number) => number` |
+| `findPhysicalColumn` | `(offsets: Float32Array, spreadStartLine: number, fromRight: number, basePitch: number) => number` |
 
-ページスライスとエントリをレンダリング可能なページ構造に変換します。
+ページスライスとエントリをレンダリング可能なページ構造に変換します。`renderEpubStatic`
+は単一 chapter の HTML 文字列を返し、クライアント reader が hydrate する前の
+SSR fallback markup として使えます。
+metric / slot helpers は、スロットベース表示と画像回り込みレイアウト向けの低レベルユーティリティです。
 
 ### CSS
 
 ```ts
 import '@libraz/mejiro/render/mejiro.css';
+import '@libraz/mejiro/render/mejiro-reader.css';
+import '@libraz/mejiro/render/mejiro-editor.css';
+import '@libraz/mejiro/render/mejiro-print.css';
 ```
 
 ### 型定義
@@ -389,8 +442,9 @@ import '@libraz/mejiro/render/mejiro.css';
 
 - `chars: string[]`
 - `breakPoints: Uint32Array`
-- `rubyAnnotations: RubyInputAnnotation[]`
+- `inlineAnnotations: readonly InlineAnnotation[]`
 - `isHeading: boolean`
+- `kind?: ParagraphKind`
 
 **`RenderPage`**:
 
@@ -400,6 +454,7 @@ import '@libraz/mejiro/render/mejiro.css';
 
 - `lines: RenderLine[]`
 - `isHeading: boolean`
+- `headingLevel?: number`
 
 **`RenderLine`**:
 
@@ -407,7 +462,14 @@ import '@libraz/mejiro/render/mejiro.css';
 
 **`RenderSegment`**:
 
-- `{ type: 'text'; text: string } | { type: 'ruby'; base: string; rubyText: string }`
+- `{ type: 'text'; text: string }`
+- `{ type: 'ruby'; base: string; rubyText: string }`
+- `{ type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }`
+- `{ type: 'tcy'; text: string }`
+- `{ type: 'em'; text: string }`
+- `{ type: 'strong'; text: string }`
+- `{ type: 'link'; text: string; href: string; title?: string }`
+- `{ type: 'footnote-ref'; text: string; noteId: string }`
 
 **`MeasureOptions`**:
 
@@ -421,13 +483,15 @@ import '@libraz/mejiro/render/mejiro.css';
 
 ## `@libraz/mejiro/book` — 高レベルAPI
 
-ほとんどのアプリケーションに推奨されるエントリポイントです。フォント読み込み、レイアウト、ページネーション、画像除外をシンプルなクラスベースのAPIで統合します。
+ほとんどのアプリケーションでは、この API から使うのがおすすめです。フォント読み込み、レイアウト、ページ分割、画像回り込みをクラスベースの API でまとめて扱えます。
 
 ### 定数
 
 | エクスポート | 説明 |
 |---|---|
 | `DEFAULT_HEADING_STYLES` | レベル1–4のデフォルト見出しスタイル（`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... }`） |
+| `DEFAULT_BOOK_OPTIONS` | フォント、行間、禁則、見出しのデフォルト |
+| `DEFAULT_PAGE_GEOMETRY` | コンテナ計測前のデフォルトページサイズ/行幅 |
 | `DEFAULT_PAGE_PADDING` | デフォルトのページパディング値（px）（`{ x: 52, y: 56, bottom: 40 }`） |
 
 ### MejiroBook
@@ -435,24 +499,37 @@ import '@libraz/mejiro/render/mejiro.css';
 **`MejiroBook`** — メインオーケストレータークラス:
 
 - `constructor(options: BookOptions)` — フォント、行間、見出し設定で作成
-- `setOptions(options: Partial<BookOptions>): void` — オプションを更新（既存のレイアウトには影響しない）
+- `setOptions(options: Partial<BookOptions>): Promise<void>` — オプションを更新し、保持中のレイアウトへ反映。フォントファミリー/サイズ変更時は非同期で再計測し、それ以外の変更は同期的に適用される。
 - `setPageSize(size: PageSize): void` — ページジオメトリを設定（`layoutChapter`の前に呼び出す必要あり）
-- `computePageSize(container: HTMLElement, padding?): { pageWidth, pageHeight, contentHeight }` — コンテナ要素からページサイズを自動計算し`setPageSize`を内部で呼び出す。アスペクト比1.45、最小280×400、最大高さ780。
+- `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — コンテナ要素からページサイズを自動計算し`setPageSize`を内部で呼び出す。アスペクト比1.45、最小280×400、最大高さ780、デフォルトpadding、上書き可能なヘッダー/ガター予約を使用。
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — 章をレイアウト（`EpubChapter`と互換）
+- `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — 計測なしでレイアウトスナップショットを復元
 - `clearCache(fontKey?: string): void` — 文字幅計測キャッシュをクリア
 
 ### ChapterLayout
 
-**`ChapterLayout`** — レイアウト済みの章のページネーションと画像除外を管理:
+**`ChapterLayout`** — レイアウト済みの章のページ分割と画像回り込みを管理:
 
 - `totalPages: number` — 総ページ数（getter、遅延計算をトリガー）
-- `hasImages: boolean` — 画像除外が設定されているか
+- `hasImages: boolean` — 画像回り込みが設定されているか
 - `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — ジオメトリを更新。`lineWidth`変更時は改行を再計算
-- `setImages(spreadIndex: number, images: BookImage[]): void` — スプレッドの画像除外を設定（空配列で削除）
-- `clearImages(): void` — すべての画像除外を削除
-- `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — 画像を設定またはクリアし、更新済みスプレッドを返す（`setImages`/`clearImages` + `getSpread`の統合）
+- `setImages(spreadIndex: number, images: BookImage[]): void` — スプレッドの画像回り込みを設定（空配列で削除）
+- `clearImages(): void` — すべての画像回り込みを削除
+- `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — スプレッドの画像を設定し、`images` が空/未指定の場合はそのスプレッドの画像を削除して、更新済みスプレッドを返す
 - `getSpread(spreadIndex: number): SpreadResult` — 見開きのレイアウトデータを取得
 - `getPage(pageIndex: number): PageResult` — 単一ページのレイアウトデータを取得
+- `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — **このメソッドは現在の `ChapterLayout` 1 章分のみを検索範囲とします**（章の `paragraphs` を順に走査し、ヒットを `SearchMatch`（= `AnchorLocation` + `length` 等）で返します）。書籍内の他章や、複数作品にまたがるサイト全体検索を実装する場合は、サーバ側で別の全文検索エンジン（Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5 など）にインデックスを保持し、見つかったアンカーを `MejiroReaderHandle.goToAnchor()` に渡して該当箇所へジャンプさせる構成を推奨します。
+- `coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null` — 読書アンカーを見開き/ページ座標へ変換
+- `anchorAtCoord(spreadIdx: number, x: number, y: number): InChapterAnchor | null` — 座標をアンカーへ変換
+- `selectionRects(range: AnchorRange): AnchorRect[]` — テキスト範囲のハイライト矩形を生成
+- `snapshot(): ChapterLayoutSnapshot` — SSR/ビルドキャッシュ向けにレイアウトデータをシリアライズ
+
+### 読書時間
+
+| エクスポート | シグネチャ |
+|---|---|
+| `estimateReadingTime` | `(chapter: { paragraphs: BookParagraph[] }, options?: ReadingTimeOptions) => number` |
+| `formatReadingTime` | `(ms: number, locale?: 'ja' | 'en') => string` |
 
 ### 型定義
 
@@ -476,8 +553,9 @@ import '@libraz/mejiro/render/mejiro.css';
 **`BookParagraph`**:
 
 - `text: string`
-- `rubyAnnotations?: RubyInputAnnotation[]`
+- `inlineAnnotations?: readonly InlineAnnotation[]`
 - `headingLevel?: number`
+- `kind?: ParagraphKind` — `'body'`（デフォルト）/ `'heading'` / `'blockquote'` / `'sceneBreak'` / `'pre'` / `'figure'`
 
 **`BookImage`**:
 
@@ -496,23 +574,47 @@ import '@libraz/mejiro/render/mejiro.css';
 - `page: RenderPage` — 段落構造データ（CSS `vertical-rl` レンダリング用）
 - `lines: PageLine[]` — フラットな行リスト（スロットベースの絶対配置レンダリング用）
 - `slots: ColumnSlot[]` — 行ごとの位置とサイズ
-- `hasImages: boolean` — このページに画像除外があるか
+- `hasImages: boolean` — このページに画像回り込みがあるか
 
 **`PageLine`**:
 
-- `segments: RenderSegment[]` — テキストとルビのセグメント
+- `segments: RenderSegment[]` — テキストとインライン注釈のセグメント
 - `headingLevel?: number` — 見出しレベル（本文はundefined）
 - `fontSize: number` — 計算済みフォントサイズ（px、見出しスケール反映済み）
 
 ---
 
-## `@libraz/mejiro-react` — Reactコンポーネント（実験的）
+## `@libraz/mejiro/image` — 画像ヘルパー
+
+| エクスポート | シグネチャ |
+|---|---|
+| `prepareImage` | `(file: Blob, options?: PrepareImageOptions) => Promise<PrepareImageResult>` |
+
+ブラウザ画像ファイルをデコードし、必要に応じて縮小・再エンコードして、EPUB埋め込み用のバイナリデータと寸法を返します。
+
+---
+
+## `@libraz/mejiro-react` — Reactコンポーネント
 
 ```bash
-npm install @libraz/mejiro-react  # peerDep: react >=18
+npm install @libraz/mejiro @libraz/mejiro-react react
+npm install -D @types/react
 ```
 
-**`MejiroPageView`** -- 推奨。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
+peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用する React バージョンに合う `@types/react >= 18` もインストールしてください。
+
+主要コンポーネント: `MejiroReader`、`MejiroEditor`、`MejiroManuscriptEditor`、`MejiroShelf`、`MejiroToc`、`MejiroScrollView`、`MejiroSelectionLayer`、`MejiroPageView`、`MejiroPage`、`MejiroSpread`、`MejiroSettingsPanel`、`MejiroChapterNav`、`MejiroStats`、`MejiroDropZone`、`MejiroImageOverlay`。
+
+hooks: `useEpub`、`useEditableEpub`、`useEpubProject`、`useLibrary`、`useManuscriptDraft`、`useMejiroBook`、`useChapterLayout`、`useSpread`、`useReadingPosition`、`useI18n`、`useImageOverlay`、`useMultiImageOverlay`。
+
+主なヘッドレス編集APIの戻り値:
+
+- `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport? })` は `editor`、`book`、`previewBook`、`loading`、`exporting`、`error`、`revision`、`history`、`selection`、`selectedParagraph`、`setSelection`、`loadBuffer`、`loadFile`、`loadUrl`、`updateParagraph`、`setInlineAnnotations`、`addImage({ filename, data, ... })`、`undo`、`redo`、`exportEpub(options?)` を返します。
+- `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` は `epub`、`loading`、`error`、`loadBuffer`、`loadFile`、`loadUrl`、`setEpub` を返します。
+- `useEpubProject({ metadata?, chapters?, debounceMs?, onPreview?, onExport? })` はプロジェクトのメタデータ/章状態に加えて、`setMetadata`、`setChapters`、`setSelectedChapter`、`addChapter`、`removeChapter`、`patchChapter`、`reorderChapters`、`previewBook`、`previewError`、`previewing`、`buildProject`、`exportEpub` を返します。
+- `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` は原稿章状態と追加/削除/並べ替え/更新ヘルパーを返します。
+
+**`MejiroPageView`** -- 低レベルページレンダラー。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
 
 Props:
 
@@ -542,13 +644,21 @@ Props:
 
 ---
 
-## `@libraz/mejiro-vue` — Vueコンポーネント（実験的）
+## `@libraz/mejiro-vue` — Vueコンポーネント
 
 ```bash
-npm install @libraz/mejiro-vue  # peerDep: vue >=3.3
+npm install @libraz/mejiro @libraz/mejiro-vue vue
 ```
 
-**`MejiroPageView`** -- 推奨。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
+peer dependency: `vue >= 3.3`。
+
+主要コンポーネントと composables は React パッケージとほぼ同じです。`MejiroReader`、`MejiroEditor`、`MejiroManuscriptEditor`、`MejiroShelf`、`MejiroToc`、`MejiroScrollView`、`MejiroSelectionLayer`、ページ / 見開き / chrome 系コンポーネント、および `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay` を利用できます。
+
+同じコンポーネント群の props 型も公開しています。`MejiroReaderProps`、`MejiroEditorProps`、`MejiroManuscriptEditorProps`、`MejiroPageViewProps`、`MejiroSpreadProps`、`MejiroSettingsPanelProps`、その他の `Mejiro*Props` aliases を利用できます。
+
+Vue composables は React hooks と同じ操作を公開します。リアクティブな状態は `Ref` / `ComputedRef` として返ります。
+
+**`MejiroPageView`** -- 低レベルページレンダラー。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
 
 Props:
 
