@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mejiro iframe embed example</title>
+    <style>
+      html, body { margin: 0; background: #faf7ef; color: #1f1a14; font-family: system-ui, sans-serif; }
+      .page { max-width: 760px; margin: 0 auto; padding: 48px 24px 80px; line-height: 1.75; }
+      .kicker { font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase; color: #8b3a3a; }
+      h1 { font-family: 'Shippori Mincho', 'Noto Serif JP', serif; font-weight: 500; font-size: 1.9rem; margin: 8px 0 28px; }
+      code { font-size: 0.85em; background: rgba(0,0,0,0.06); padding: 0 4px; border-radius: 2px; }
+      .frame { display: block; width: 100%; height: 600px; border: 0; box-shadow: 0 14px 36px rgba(0,0,0,0.18); }
+      .caption { margin-top: 8px; font-size: 0.72rem; color: #6b6156; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <!--
+      This is a plain HTML page — no Vue / React / build step required.
+      The mejiro reader is dropped in via a single <iframe>. The iframe's
+      content is the `reader.html` entry built from this same project.
+
+      In a real site, you'd publish the reader build to a static host (CDN,
+      GitHub Pages, Cloudflare Pages) and point the `src=` at that URL plus
+      a `?epub=` query string.
+    -->
+    <article class="page">
+      <span class="kicker">External host page</span>
+      <h1>iframe で mejiro を埋め込む</h1>
+      <p>
+        以下は静的HTMLの中に <code>&lt;iframe&gt;</code> 一つで mejiro reader を
+        ロードした例です。親ページは Vue / React に依存しません。
+      </p>
+      <iframe
+        class="frame"
+        src="reader.html?epub=/neko.epub"
+        title="mejiro reader"
+        loading="lazy"
+        allow="fullscreen"
+      ></iframe>
+      <p class="caption">
+        <code>&lt;iframe src="reader.html?epub=/neko.epub" /&gt;</code>
+      </p>
+      <p>
+        URL の <code>?epub=</code> パラメータに EPUB の URL を指定すると、
+        iframe 内のリーダーがそれを取得して開きます。
+      </p>
+    </article>
+  </body>
+</html>

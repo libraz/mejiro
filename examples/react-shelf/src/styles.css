@@ -1,0 +1,63 @@
+/*
+ * The bundled mejiro-reader.css already styles `.mejiro-shelf*` cards.
+ * This file only contains the page chrome and "+ Add EPUB" action.
+ */
+
+.shelf {
+  width: 100%;
+  height: 100%;
+  padding: 48px 36px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  background:
+    radial-gradient(ellipse at 30% 0%, rgba(60, 50, 38, 0.6) 0%, transparent 70%), #1c1915;
+  color: #d6cfc5;
+  font-family: "Zen Kaku Gothic New", system-ui, sans-serif;
+}
+
+.shelf-actions {
+  max-width: 960px;
+  margin: 32px auto 0;
+  display: flex;
+  justify-content: center;
+}
+
+.add-btn {
+  background: rgba(255, 255, 255, 0.02);
+  color: #b0a898;
+  border: 1.5px dashed rgba(255, 255, 255, 0.18);
+  padding: 14px 28px;
+  font: inherit;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.add-btn:hover:not(:disabled) {
+  border-color: #a85c50;
+  background: rgba(139, 58, 58, 0.06);
+  color: #d6cfc5;
+}
+
+.add-btn:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.back-btn {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #d6cfc5;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.32);
+}

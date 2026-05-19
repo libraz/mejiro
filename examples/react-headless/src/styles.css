@@ -1,0 +1,45 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.bar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: #f0eadb;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  font-size: 0.78rem;
+}
+
+.title {
+  font-family: "Shippori Mincho", "Noto Serif JP", serif;
+  letter-spacing: 0.04em;
+}
+
+.nav-info {
+  font-variant-numeric: tabular-nums;
+  color: #6b6156;
+  font-size: 0.7rem;
+}
+
+.surface {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(ellipse at 30% 0%, rgba(60, 50, 38, 0.06) 0%, transparent 70%), #faf6ec;
+  overflow: hidden;
+}
+
+.loading {
+  color: #8a8078;
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+}
