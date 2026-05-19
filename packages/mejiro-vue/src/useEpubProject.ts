@@ -1,4 +1,5 @@
 import {
+  type AssetResolver,
   type EpubBook,
   EpubProject,
   type EpubProjectMetadata,
@@ -16,6 +17,11 @@ export interface UseEpubProjectOptions {
   metadata?: Partial<EpubProjectMetadata>;
   chapters?: EpubProjectChapterDraft[];
   debounceMs?: number;
+  /**
+   * Resolves URL-only project assets into bytes when the preview or export
+   * pipeline materializes them. Forwarded to `project.export()`.
+   */
+  assetResolver?: AssetResolver;
   onPreview?: (book: EpubBook) => void;
   onExport?: (buffer: ArrayBuffer) => void;
 }
@@ -79,7 +85,10 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       const timer = setTimeout(() => {
         void (async () => {
           try {
-            const book = await parseEpub(await buildProject().export());
+            const resolver = options.assetResolver;
+            const book = await parseEpub(
+              await buildProject().export(resolver ? { assetResolver: resolver } : undefined),
+            );
             if (requestId !== previewRequestId) return;
             previewBook.value = book;
             previewError.value = null;
@@ -172,7 +181,8 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   }
 
   async function exportEpub(): Promise<ArrayBuffer> {
-    const buffer = await buildProject().export();
+    const resolver = options.assetResolver;
+    const buffer = await buildProject().export(resolver ? { assetResolver: resolver } : undefined);
     options.onExport?.(buffer);
     return buffer;
   }

@@ -1,4 +1,9 @@
-import { type EpubBook, EpubProject, parseEpub } from '@libraz/mejiro/epub';
+import {
+  type AssetResolver,
+  type EpubBook,
+  EpubProject,
+  parseEpub,
+} from '@libraz/mejiro/epub';
 import { computed, defineComponent, h, type PropType, ref, watch } from 'vue';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
@@ -43,6 +48,15 @@ export const MejiroManuscriptEditor = defineComponent({
      */
     previewProps: {
       type: Object as PropType<ManuscriptPreviewProps>,
+      default: undefined,
+    },
+    /**
+     * Resolves URL-only project assets (cover / illustration registered as
+     * `{ url, ... }`) into bytes at export time. Forwarded to
+     * `project.export()`.
+     */
+    assetResolver: {
+      type: Function as PropType<AssetResolver>,
       default: undefined,
     },
   },
@@ -147,7 +161,8 @@ export const MejiroManuscriptEditor = defineComponent({
           data: await cover.value.arrayBuffer(),
         });
       }
-      const buffer = await project.export();
+      const resolver = props.assetResolver;
+      const buffer = await project.export(resolver ? { assetResolver: resolver } : undefined);
       emit('export', buffer);
       downloadEpub(buffer, title.value);
     }
