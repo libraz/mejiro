@@ -2,7 +2,7 @@
  * Fetches 「吾輩は猫である」from Aozora Bunko and converts it to EPUB
  * with proper <ruby><rt> annotations.
  *
- * Usage: npx tsx scripts/fetch-demo-epub.ts
+ * Usage: yarn fetch-demo-epub
  *
  * Output: packages/mejiro-demo/public/neko.epub
  */

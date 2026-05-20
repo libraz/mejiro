@@ -8,6 +8,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "esModuleInterop": true,
+    "ignoreDeprecations": "6.0",
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
@@ -16,6 +17,7 @@
   "include": [],
   "references": [
     { "path": "packages/mejiro" },
+    { "path": "packages/mejiro-cli" },
     { "path": "packages/mejiro-react" },
     { "path": "packages/mejiro-vue" }
   ]

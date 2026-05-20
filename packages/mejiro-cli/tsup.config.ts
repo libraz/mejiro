@@ -5,5 +5,6 @@ export default defineConfig({
   format: ['esm'],
   clean: true,
   target: 'es2022',
+  external: ['@libraz/mejiro'],
   banner: { js: '#!/usr/bin/env node' },
 });
