@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, DEFAULT_PAGE_PADDING, MejiroBook } from '@libraz/mejiro/book';
-import type { EpubBook } from '@libraz/mejiro/epub';
-import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
-import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue';
+import { formatDialogueLineBreaks } from '@libraz/mejiro';
+import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import type { InlineAnnotation } from '@libraz/mejiro/browser';
+import type { EpubProjectChapterDraft, MejiroChapterNavMode } from '@libraz/mejiro-vue';
+import { MejiroReader, useEditableEpub, useEpubProject } from '@libraz/mejiro-vue';
+import { computed, onMounted, ref, watch } from 'vue';
 
 const FONTS = [
   { value: "'Shippori Mincho', serif", label: 'Shippori Mincho' },
@@ -13,275 +13,501 @@ const FONTS = [
   { value: 'serif', label: 'System Serif' },
 ];
 
-const book = new MejiroBook({
+const options = {
   fontFamily: FONTS[0].value,
   fontSize: 16,
   lineSpacing: 1.9,
   headingStyles: DEFAULT_HEADING_STYLES,
+};
+
+type DemoMode = 'viewer' | 'create' | 'edit';
+const demoModes: DemoMode[] = ['viewer', 'create', 'edit'];
+const mode = ref<DemoMode>('viewer');
+
+const enableChapterNav = ref(true);
+const enableHeader = ref(true);
+const enableDropZone = ref(true);
+const enableSettings = ref(true);
+const enableImageOverlay = ref(true);
+const enableStats = ref(true);
+const enableKeyboard = ref(true);
+const enablePageIndicator = ref(true);
+const chapterNavMode = ref<MejiroChapterNavMode>('panel');
+const chapterNavModes: MejiroChapterNavMode[] = ['select', 'panel', 'both', 'none'];
+
+const chromeOptions = [
+  { key: 'enableHeader', model: enableHeader },
+  { key: 'enableDropZone', model: enableDropZone },
+  { key: 'enableChapterNav', model: enableChapterNav },
+  { key: 'enableSettings', model: enableSettings },
+  { key: 'enableImageOverlay', model: enableImageOverlay },
+  { key: 'enableStats', model: enableStats },
+  { key: 'enableKeyboard', model: enableKeyboard },
+  { key: 'enablePageIndicator', model: enablePageIndicator },
+];
+
+const headerDependentOptions = ['enableSettings', 'enableImageOverlay', 'enableStats'];
+const effectiveChapterNavMode = computed<MejiroChapterNavMode>(() => {
+  if (!enableChapterNav.value) return 'none';
+  if (!enableHeader.value && chapterNavMode.value === 'select') return 'none';
+  if (!enableHeader.value && chapterNavMode.value === 'both') return 'panel';
+  return chapterNavMode.value;
 });
+const modeDisabled = (nextMode: MejiroChapterNavMode) =>
+  !enableChapterNav.value ||
+  (!enableHeader.value && (nextMode === 'select' || nextMode === 'both'));
 
-const epub = ref<EpubBook | null>(null);
-const layout = shallowRef<ChapterLayout | null>(null);
-const spread = ref<SpreadResult | null>(null);
-const spreadIdx = ref(0);
-const chapter = ref(0);
-const loading = ref(false);
-const turning = ref(false);
-const settingsOpen = ref(false);
-const fontFamily = ref(FONTS[0].value);
-const fontSize = ref(16);
-const lineSpacing = ref(1.9);
-const mode = ref<'strict' | 'loose'>('strict');
-const hanging = ref(true);
-const stats = ref('');
-const pageW = ref(0);
-const pageH = ref(0);
-const surfaceEl = ref<HTMLDivElement | null>(null);
-const fileEl = ref<HTMLInputElement | null>(null);
+const defaultBody = `これは｜漢字《かんじ》のルビ例です。
 
-// Image overlay composable — manages imageRect, drag, and resize internally
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, (s) => {
-    spread.value = s;
-  });
+小説投稿サイトから貼り付けた原稿を章に分け、EPUBとして整理します。`;
 
-const contentH = computed(() => pageH.value - DEFAULT_PAGE_PADDING.y - DEFAULT_PAGE_PADDING.bottom);
-const totalSpreads = computed(() => (spread.value ? Math.ceil(spread.value.totalPages / 2) : 0));
-const currentPage = computed(() => spreadIdx.value * 2);
-const fontStyle = computed(() => ({
-  fontSize: `${fontSize.value}px`,
-  fontFamily: fontFamily.value,
-  lineHeight: `${lineSpacing.value}`,
-}));
-const runningTitleRight = computed(() => {
-  if (!epub.value) return '';
-  return epub.value.author ? `${epub.value.author}  ${epub.value.title}` : epub.value.title;
-});
-const runningTitleLeft = computed(() => epub.value?.chapters[chapter.value]?.title ?? '');
-
-async function loadEpub(buf: ArrayBuffer) {
-  loading.value = true;
-  try {
-    epub.value = await parseEpub(buf);
-    chapter.value = 0;
-    spreadIdx.value = 0;
-    imageRect.value = null;
-  } finally {
-    loading.value = false;
-  }
+function defaultChapter(index = 0): EpubProjectChapterDraft {
+  return {
+    id: `chapter-${Date.now()}-${index}`,
+    title: index === 0 ? '第一話' : `第${index + 1}話`,
+    body: index === 0 ? defaultBody : '',
+  };
 }
 
-// Default EPUB
-onMounted(async () => {
-  const res = await fetch('/neko.epub');
-  if (res.ok) loadEpub(await res.arrayBuffer());
+const project = useEpubProject({
+  metadata: { title: '新しい作品', author: '作者名' },
+  chapters: [defaultChapter()],
 });
+const projectMetadata = project.metadata;
+const projectChapters = project.chapters;
+const projectSelectedChapter = project.selectedChapter;
+const projectCurrentChapter = project.currentChapter;
+const projectPreviewError = project.previewError;
+const projectPreviewing = project.previewing;
 
-// Layout chapter
-watch(
-  [epub, chapter, fontFamily, fontSize, lineSpacing, mode, hanging],
-  async () => {
-    if (!epub.value) return;
-    const ch = epub.value.chapters[chapter.value];
-    if (!ch) return;
-    if (!surfaceEl.value) return;
-
-    book.setOptions({
-      fontFamily: fontFamily.value,
-      fontSize: fontSize.value,
-      lineSpacing: lineSpacing.value,
-      mode: mode.value,
-      enableHanging: hanging.value,
-    });
-    const { pageWidth, pageHeight } = book.computePageSize(surfaceEl.value);
-    pageW.value = pageWidth;
-    pageH.value = pageHeight;
-
-    const t0 = performance.now();
-    layout.value = await book.layoutChapter(ch);
-    const elapsed = performance.now() - t0;
-    spreadIdx.value = 0;
-    imageRect.value = null;
-
-    const totalChars = ch.paragraphs.reduce((s, p) => s + p.text.length, 0);
-    const totalRuby = ch.paragraphs.reduce((s, p) => s + p.rubyAnnotations.length, 0);
-    const fontLabel = FONTS.find((f) => f.value === fontFamily.value)?.label ?? '';
-    stats.value = [
-      `${totalChars}ch`,
-      `${layout.value.totalPages}pp`,
-      totalRuby > 0 ? `${totalRuby}ruby` : null,
-      `${fontLabel} ${fontSize.value}px`,
-      `${elapsed.toFixed(0)}ms`,
-    ]
-      .filter(Boolean)
-      .join(' / ');
-  },
-  { immediate: true },
+const editable = useEditableEpub();
+const editableEditor = editable.editor;
+const editableLoading = editable.loading;
+const editableError = editable.error;
+const editableSelection = editable.selection;
+const editText = ref('');
+const rubyStart = ref(0);
+const rubyEnd = ref(0);
+const rubyText = ref('');
+const imageInput = ref<HTMLInputElement | null>(null);
+const editTextarea = ref<HTMLTextAreaElement | null>(null);
+const paragraphFilter = ref('');
+const editBook = editable.book;
+const editChapter = computed(
+  () => editBook.value?.chapters[editableSelection.value.chapter] ?? null,
+);
+const editParagraph = editable.selectedParagraph;
+const selectedEditChapter = computed(() => editableSelection.value.chapter);
+const filteredParagraphs = computed(() => {
+  const query = paragraphFilter.value.trim();
+  if (!editChapter.value) return [];
+  return editChapter.value.paragraphs
+    .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
+    .filter(({ paragraph }) => !query || paragraph.text.includes(query));
+});
+const previewBook = computed(() =>
+  mode.value === 'create'
+    ? project.previewBook.value
+    : mode.value === 'edit'
+      ? editable.previewBook.value
+      : null,
+);
+const previewChapter = computed(() =>
+  mode.value === 'create'
+    ? Math.min(
+        projectSelectedChapter.value,
+        Math.max(0, (previewBook.value?.chapters.length ?? 1) - 1),
+      )
+    : mode.value === 'edit'
+      ? selectedEditChapter.value
+      : undefined,
 );
 
-// Update spread
-watch([layout, spreadIdx], () => {
-  if (layout.value && !imageRect.value) spread.value = layout.value.getSpread(spreadIdx.value);
+watch(editParagraph, (paragraph) => {
+  editText.value = paragraph?.text ?? '';
+  rubyStart.value = 0;
+  rubyEnd.value = 0;
+  rubyText.value = '';
 });
-
-function navigate(delta: number) {
-  const next = spreadIdx.value + delta;
-  if (next < 0 || next >= totalSpreads.value) return;
-  turning.value = true;
-  setTimeout(() => {
-    spreadIdx.value = next;
-    turning.value = false;
-  }, 180);
-}
-
-function onFileChange(e: Event) {
-  const file = (e.target as HTMLInputElement).files?.[0];
-  if (file) file.arrayBuffer().then(loadEpub);
-}
-
-function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'ArrowLeft') navigate(1);
-  if (e.key === 'ArrowRight') navigate(-1);
-}
-
-function onResize() {
-  if (!(surfaceEl.value && layout.value)) return;
-  // computePageSize calculates dimensions and updates book's internal page size
-  const { pageWidth, pageHeight, contentHeight } = book.computePageSize(surfaceEl.value);
-  pageW.value = pageWidth;
-  pageH.value = pageHeight;
-  layout.value.resize({
-    pageWidth,
-    // Derive line width from content height using the same formula as verticalLineWidth
-    lineWidth: contentHeight - fontSize.value * 0.5,
-  });
-  // Re-sync images to reflow with new dimensions
-  const images = imageRect.value
-    ? [{ x: imageRect.value.x, y: imageRect.value.y, w: imageRect.value.w, h: imageRect.value.h }]
-    : undefined;
-  spread.value = layout.value.syncImages(spreadIdx.value, images);
-}
 
 onMounted(() => {
-  window.addEventListener('keydown', onKeydown);
-  window.addEventListener('resize', onResize);
+  void editable.loadUrl('/neko.epub');
 });
-onUnmounted(() => {
-  window.removeEventListener('keydown', onKeydown);
-  window.removeEventListener('resize', onResize);
-});
+
+function downloadEpub(buffer: ArrayBuffer, title: string): void {
+  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${title || 'book'}.epub`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function updateEditText(nextText: string): void {
+  editText.value = nextText;
+  editable.updateParagraph(nextText);
+}
+
+function codePointIndexAtOffset(text: string, offset: number): number {
+  return [...text.slice(0, offset)].length;
+}
+
+function syncRubySelection(el: HTMLTextAreaElement): void {
+  const start = codePointIndexAtOffset(el.value, el.selectionStart);
+  const end = codePointIndexAtOffset(el.value, el.selectionEnd);
+  rubyStart.value = Math.min(start, end);
+  rubyEnd.value = Math.max(start, end);
+}
+
+function applyRuby(): void {
+  if (!(editParagraph.value && rubyText.value.trim())) return;
+  const len = [...editText.value].length;
+  const start = Math.max(0, Math.min(rubyStart.value, len));
+  const end = Math.max(start, Math.min(rubyEnd.value, len));
+  if (end <= start) return;
+  const nextInline: InlineAnnotation[] = [
+    ...editParagraph.value.inlineAnnotations.filter(
+      (ann) => ann.endIndex <= start || ann.startIndex >= end,
+    ),
+    {
+      kind: 'ruby',
+      startIndex: start,
+      endIndex: end,
+      rubyText: rubyText.value.trim(),
+      type: end - start === 1 ? ('mono' as const) : ('group' as const),
+    },
+  ].sort((a, b) => a.startIndex - b.startIndex);
+  editable.updateParagraph(editText.value, nextInline);
+  rubyText.value = '';
+}
+
+function adjustDialogueLineBreaks(): void {
+  updateEditText(formatDialogueLineBreaks(editText.value));
+}
+
+function setEditSelection(chapter: number, paragraph: number): void {
+  editable.setSelection({ chapter, paragraph });
+}
+
+async function addImage(file: File): Promise<void> {
+  if (!editChapter.value) return;
+  editable.addImage({
+    filename: file.name,
+    mediaType: file.type || 'application/octet-stream',
+    data: await file.arrayBuffer(),
+    alt: file.name,
+    afterBlockId: paragraphBlockId(editChapter.value, editableSelection.value.paragraph),
+  });
+}
+
+function paragraphBlockId(
+  chapter: NonNullable<typeof editBook.value>['chapters'][number],
+  paragraphIndex: number,
+): string | undefined {
+  let current = 0;
+  for (const block of chapter.blocks) {
+    if (block.kind !== 'paragraph') continue;
+    if (current === paragraphIndex) return block.id;
+    current++;
+  }
+  return undefined;
+}
+
+function setPreviewChapter(nextChapter: number): void {
+  if (mode.value === 'create') {
+    project.setSelectedChapter(nextChapter);
+    return;
+  }
+  if (mode.value === 'edit') {
+    setEditSelection(nextChapter, 0);
+  }
+}
 </script>
 
 <template>
-  <header>
-    <div class="header-left">
-      <div class="logo">
-        <span class="logo-mark">mejiro</span>
-        <span class="logo-sub">Vue Demo</span>
-      </div>
-      <div v-if="epub" class="chapter-nav">
-        <select :value="chapter" @change="chapter = Number(($event.target as HTMLSelectElement).value); spreadIdx = 0">
-          <option v-for="(ch, i) in epub.chapters" :key="i" :value="i">{{ ch.title ?? `Chapter ${i + 1}` }}</option>
-        </select>
-      </div>
-    </div>
-    <div class="header-actions">
-      <span class="stats">{{ stats }}</span>
-      <button class="btn-header" @click="fileEl?.click()">Open</button>
-      <button :class="['btn-header', { active: hasImage }]" @click="toggleImage">Image</button>
-      <button :class="['btn-header', { active: settingsOpen }]" @click="settingsOpen = !settingsOpen">
-        Settings<span class="arrow">&#9662;</span>
-      </button>
-    </div>
-  </header>
+  <div class="demo-shell">
+    <main class="demo-preview">
+      <MejiroReader
+        v-if="mode === 'viewer'"
+        key="viewer"
+        :options="options"
+        :fonts="FONTS"
+        epub-url="/neko.epub"
+        subtitle="Vue Viewer"
+        :enable-header="enableHeader"
+        :enable-drop-zone="enableDropZone"
+        :enable-chapter-nav="enableChapterNav"
+        :chapter-nav-mode="effectiveChapterNavMode"
+        :enable-settings="enableHeader && enableSettings"
+        :enable-image-overlay="enableHeader && enableImageOverlay"
+        :enable-stats="enableHeader && enableStats"
+        :enable-keyboard="enableKeyboard"
+        :enable-page-indicator="enablePageIndicator"
+      />
+      <MejiroReader
+        v-else-if="previewBook"
+        :key="mode"
+        :options="options"
+        :fonts="FONTS"
+        :epub="previewBook"
+        :chapter="previewChapter"
+        :subtitle="mode === 'create' ? 'Create Preview' : 'Edit Preview'"
+        chapter-nav-mode="panel"
+        :enable-image-overlay="false"
+        @chapter-change="setPreviewChapter"
+      />
+      <div v-else class="demo-empty">Loading preview...</div>
+    </main>
 
-  <div :class="['settings-panel', { open: settingsOpen }]">
-    <div class="settings-inner">
-      <div class="settings-group">
-        <span class="settings-group-title">Font</span>
-        <div class="control">
-          <select :value="fontFamily" @change="fontFamily = ($event.target as HTMLSelectElement).value">
-            <option v-for="f in FONTS" :key="f.value" :value="f.value">{{ f.label }}</option>
-          </select>
-        </div>
-        <div class="control">
-          <label class="control-label">Size</label>
-          <input type="number" :value="fontSize" min="10" max="48" @change="fontSize = Number(($event.target as HTMLInputElement).value)" />
-        </div>
+    <aside class="demo-options" aria-label="Demo options">
+      <div class="demo-tabs" role="tablist" aria-label="Demo modes">
+        <button
+          v-for="tab in demoModes"
+          :key="tab"
+          type="button"
+          :class="{ 'is-active': mode === tab }"
+          @click="mode = tab"
+        >
+          {{ tab }}
+        </button>
       </div>
-      <div class="settings-group">
-        <span class="settings-group-title">Layout</span>
-        <div class="control">
-          <label class="control-label">Kinsoku</label>
-          <select :value="mode" @change="mode = ($event.target as HTMLSelectElement).value as 'strict' | 'loose'">
-            <option value="strict">Strict</option>
-            <option value="loose">Loose</option>
-          </select>
-        </div>
-        <div class="control">
-          <label class="control-label">Hanging</label>
-          <select :value="String(hanging)" @change="hanging = ($event.target as HTMLSelectElement).value === 'true'">
-            <option value="true">On</option>
-            <option value="false">Off</option>
-          </select>
-        </div>
-        <div class="control">
-          <label class="control-label">行間</label>
-          <input class="line-spacing" type="number" :value="lineSpacing" min="1.0" max="3.0" step="0.1" @change="lineSpacing = Number(($event.target as HTMLInputElement).value)" />
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <div ref="surfaceEl" class="reading-surface">
-    <div v-if="!epub && !loading" class="drop-zone" @click="fileEl?.click()">
-      <div class="drop-zone-icon">&#x1F4D6;</div>
-      <div class="drop-zone-text"><strong>Drop an EPUB file here</strong><br>or click to browse</div>
-      <div class="drop-zone-hint">Supports EPUB with furigana / ruby</div>
-    </div>
-    <div v-if="loading" class="loading-indicator">Loading...</div>
-    <div v-if="epub && spread && pageW > 0" class="book">
-      <div :class="['spread', { turning }]">
-        <div class="page-container page-right" :style="{ width: `${pageW}px`, height: `${pageH}px`, overflow: hasImage ? 'visible' : undefined }">
-          <div class="page-rule" />
-          <div class="page-header">
-            <span class="page-header-title">{{ runningTitleRight }}</span>
-            <span class="page-header-num">{{ currentPage + 1 }}</span>
-          </div>
-          <div class="page-viewport">
-            <div class="page-clip" :style="{ height: `${contentH}px` }">
-              <MejiroPageView :result="spread.right" :slot-mode="hasImage" class="page-content" :style="{ ...fontStyle, height: `${contentH}px` }" :font-family="fontFamily" :line-spacing="lineSpacing" />
-            </div>
-          </div>
-          <div
-            v-if="imageRect"
-            class="image-overlay visible"
-            :style="{ left: `${imageRect.x}px`, top: `${imageRect.y}px`, width: `${imageRect.w}px`, height: `${imageRect.h}px`, cursor: 'grab', touchAction: 'none' }"
-            @pointerdown="onOverlayPointerDown"
+      <template v-if="mode === 'viewer'">
+        <div class="demo-options-head">
+          <span>Reader props</span>
+          <strong>Built-in chrome</strong>
+        </div>
+        <div class="demo-toggle-grid">
+          <label
+            v-for="option in chromeOptions"
+            :key="option.key"
+            class="demo-toggle"
+            :class="{ 'is-disabled': headerDependentOptions.includes(option.key) && !enableHeader }"
           >
-            <div class="image-overlay-label"><div class="image-overlay-icon" /><span>Image</span></div>
-            <div class="image-overlay-resize" @pointerdown="onResizePointerDown" />
-            <div class="image-overlay-close" @pointerdown.stop.prevent="toggleImage" />
+            <input
+              v-model="option.model.value"
+              type="checkbox"
+              :disabled="headerDependentOptions.includes(option.key) && !enableHeader"
+            />
+            <span>{{ option.key }}</span>
+          </label>
+        </div>
+        <div class="demo-option-group">
+          <span class="demo-option-label">chapterNavMode</span>
+          <div class="demo-segments">
+            <button
+              v-for="navMode in chapterNavModes"
+              :key="navMode"
+              type="button"
+              :class="{ 'is-active': chapterNavMode === navMode }"
+              :disabled="modeDisabled(navMode)"
+              @click="chapterNavMode = navMode"
+            >
+              {{ navMode }}
+            </button>
           </div>
         </div>
-        <div class="page-container page-left" :style="{ width: `${pageW}px`, height: `${pageH}px` }">
-          <div class="page-rule" />
-          <div class="page-header">
-            <span class="page-header-title">{{ runningTitleLeft }}</span>
-            <span class="page-header-num">{{ currentPage + 2 <= spread.totalPages ? currentPage + 2 : '' }}</span>
+        <pre>&lt;MejiroReader
+  :enable-header="{{ enableHeader }}"
+  :enable-drop-zone="{{ enableDropZone }}"
+  :enable-chapter-nav="{{ enableChapterNav }}"
+  chapter-nav-mode="{{ effectiveChapterNavMode }}"
+  :enable-settings="{{ enableHeader && enableSettings }}"
+  :enable-image-overlay="{{ enableHeader && enableImageOverlay }}"
+  :enable-stats="{{ enableHeader && enableStats }}"
+  :enable-keyboard="{{ enableKeyboard }}"
+  :enable-page-indicator="{{ enablePageIndicator }}"
+/&gt;</pre>
+      </template>
+
+      <template v-if="mode === 'create'">
+        <div class="demo-options-head">
+          <span>New EPUB</span>
+          <strong>Manuscript workspace</strong>
+        </div>
+        <div class="demo-form">
+          <label>
+            <span>Title</span>
+            <input
+              :value="projectMetadata.title"
+              @input="project.setMetadata({ title: ($event.target as HTMLInputElement).value })"
+            />
+          </label>
+          <label>
+            <span>Author</span>
+            <input
+              :value="projectMetadata.author ?? ''"
+              @input="project.setMetadata({ author: ($event.target as HTMLInputElement).value })"
+            />
+          </label>
+        </div>
+        <div class="mejiro-editor-section">
+          <div class="demo-section-title">
+            <span class="demo-option-label">Chapters</span>
+            <small>{{ projectChapters.length }} items</small>
           </div>
-          <div class="page-viewport">
-            <div class="page-clip" :style="{ height: `${contentH}px` }">
-              <MejiroPageView :result="spread.left" :slot-mode="hasImage" class="page-content" :style="{ ...fontStyle, height: `${contentH}px` }" :font-family="fontFamily" :line-spacing="lineSpacing" />
+          <div class="mejiro-editor-paragraphs demo-list">
+            <button
+              v-for="(chapter, index) in projectChapters"
+              :key="chapter.id"
+              type="button"
+              :class="{ 'is-active': projectSelectedChapter === index }"
+              @click="project.setSelectedChapter(index)"
+            >
+              <span>Chapter {{ index + 1 }}</span>
+              <strong>{{ chapter.title || 'Untitled' }}</strong>
+            </button>
+          </div>
+          <div class="demo-action-row">
+            <button type="button" @click="project.addChapter()">Add chapter</button>
+            <button type="button" @click="project.removeChapter()">Remove</button>
+          </div>
+        </div>
+        <div v-if="projectCurrentChapter" class="demo-form">
+          <label>
+            <span>Chapter title</span>
+            <input
+              :value="projectCurrentChapter.title"
+              @input="
+                project.patchChapter(projectSelectedChapter, {
+                  title: ($event.target as HTMLInputElement).value,
+                })
+              "
+            />
+          </label>
+          <label>
+            <span>Draft</span>
+            <textarea
+              class="demo-manuscript"
+              :value="projectCurrentChapter.body"
+              @input="
+                project.patchChapter(projectSelectedChapter, {
+                  body: ($event.target as HTMLTextAreaElement).value,
+                })
+              "
+            />
+          </label>
+        </div>
+        <div v-if="projectPreviewError" class="demo-error">
+          {{ projectPreviewError.message }}
+        </div>
+        <button
+          type="button"
+          class="mejiro-editor-export"
+          @click="
+            project
+              .exportEpub()
+              .then((buffer) => downloadEpub(buffer, projectMetadata.title))
+          "
+        >
+          Export EPUB{{ projectPreviewing ? ' (previewing)' : '' }}
+        </button>
+      </template>
+
+      <template v-if="mode === 'edit'">
+        <div class="demo-options-head">
+          <span>Existing EPUB</span>
+          <strong>{{ editableEditor?.title ?? 'Loading sample' }}</strong>
+          <small v-if="editableEditor?.author">{{ editableEditor.author }}</small>
+        </div>
+        <template v-if="editBook">
+          <div class="mejiro-editor-section">
+            <div class="demo-section-title">
+              <span class="demo-option-label">Chapter</span>
+              <small>{{ editBook.chapters[selectedEditChapter]?.paragraphs.length ?? 0 }} paragraphs</small>
+            </div>
+            <select
+              class="demo-select"
+              :value="selectedEditChapter"
+              @change="
+                setEditSelection(Number(($event.target as HTMLSelectElement).value), 0)
+              "
+            >
+              <option
+                v-for="(chapter, chapterIndex) in editBook.chapters"
+                :key="chapter.href"
+                :value="chapterIndex"
+              >
+                {{ chapter.title ?? `Chapter ${chapterIndex + 1}` }}
+              </option>
+            </select>
+            <input v-model="paragraphFilter" class="demo-search" placeholder="Filter paragraphs" />
+            <div class="mejiro-editor-paragraphs demo-list demo-list-compact">
+              <button
+                v-for="{ paragraph, paragraphIndex } in filteredParagraphs"
+                :key="`${editChapter?.href}-${paragraphIndex}`"
+                type="button"
+                :class="{ 'is-active': editableSelection.paragraph === paragraphIndex }"
+                @click="
+                  setEditSelection(selectedEditChapter, paragraphIndex)
+                "
+              >
+                <span>Paragraph {{ paragraphIndex + 1 }}</span>
+                <strong>{{ paragraph.text.slice(0, 56) }}</strong>
+              </button>
             </div>
           </div>
-        </div>
-        <div class="nav-zone nav-zone--prev" @click="navigate(-1)" />
-        <div class="nav-zone nav-zone--next" @click="navigate(1)" />
-        <div class="page-indicator">{{ spreadIdx + 1 }} / {{ totalSpreads }}</div>
-      </div>
-    </div>
+          <div class="demo-form">
+            <label>
+              <span>Proofread</span>
+              <textarea
+                ref="editTextarea"
+                :value="editText"
+                @input="updateEditText(($event.target as HTMLTextAreaElement).value)"
+                @select="syncRubySelection($event.target as HTMLTextAreaElement)"
+              />
+            </label>
+            <div class="demo-sync-note">Preview updates automatically.</div>
+            <button type="button" class="mejiro-editor-primary" @click="adjustDialogueLineBreaks">
+              Adjust dialogue line breaks
+            </button>
+          </div>
+          <div class="mejiro-editor-section">
+            <span class="demo-option-label">Furigana</span>
+            <div class="demo-ruby-target">
+              {{
+                rubyEnd > rubyStart
+                  ? [...editText].slice(rubyStart, rubyEnd).join('')
+                  : 'Select text in the proofread field'
+              }}
+            </div>
+            <input v-model="rubyText" placeholder="よみがな" />
+            <button type="button" class="mejiro-editor-primary" @click="applyRuby">
+              Add furigana to selection
+            </button>
+          </div>
+          <div class="mejiro-editor-section">
+            <span class="demo-option-label">Images</span>
+            <button type="button" @click="imageInput?.click()">Insert image after paragraph</button>
+            <input
+              ref="imageInput"
+              type="file"
+              accept="image/*"
+              hidden
+              @change="
+                ($event.target as HTMLInputElement).files?.[0] &&
+                  addImage(($event.target as HTMLInputElement).files![0])
+              "
+            />
+          </div>
+          <button
+            type="button"
+            class="mejiro-editor-export"
+            @click="
+              editable
+                .exportEpub()
+                .then(
+                  (buffer) =>
+                    buffer && downloadEpub(buffer, editableEditor?.title || 'edited'),
+                )
+            "
+          >
+            Export EPUB
+          </button>
+        </template>
+        <div v-if="editableLoading" class="demo-empty">Loading editor...</div>
+        <div v-if="editableError" class="demo-error">{{ editableError.message }}</div>
+      </template>
+    </aside>
   </div>
-
-  <input ref="fileEl" type="file" accept=".epub" hidden @change="onFileChange" />
 </template>

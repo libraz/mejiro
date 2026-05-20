@@ -1,3 +1,4 @@
+import '@libraz/mejiro/render/mejiro-reader.css';
 import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
@@ -22,11 +23,19 @@ const navPrev = document.getElementById('navPrev') as HTMLDivElement;
 const navNext = document.getElementById('navNext') as HTMLDivElement;
 const stats = document.getElementById('stats') as HTMLDivElement;
 const fileInput = document.getElementById('fileInput') as HTMLInputElement;
+const readerHeader = document.getElementById('readerHeader') as HTMLElement;
 const openFileBtn = document.getElementById('openFile') as HTMLButtonElement;
 const settingsToggle = document.getElementById('settingsToggle') as HTMLButtonElement;
 const settingsPanel = document.getElementById('settingsPanel') as HTMLDivElement;
+const readerBody = document.getElementById('readerBody') as HTMLDivElement;
 const chapterNav = document.getElementById('chapterNav') as HTMLDivElement;
 const chapterSelect = document.getElementById('chapterSelect') as HTMLSelectElement;
+const chapterPanel = document.getElementById('chapterPanel') as HTMLElement;
+const readerOptionInputs = Array.from(
+  document.querySelectorAll<HTMLInputElement>('[data-reader-option]'),
+);
+const chapterNavModeControls = document.getElementById('chapterNavModeControls') as HTMLDivElement;
+const readerOptionsCode = document.getElementById('readerOptionsCode') as HTMLPreElement;
 const fontFamilySelect = document.getElementById('fontFamily') as HTMLSelectElement;
 const fontSizeInput = document.getElementById('fontSize') as HTMLInputElement;
 const modeSelect = document.getElementById('mode') as HTMLSelectElement;
@@ -50,6 +59,11 @@ let currentPage = 0;
 let totalPages = 0;
 let layout: ChapterLayout | null = null;
 let updateTimer: ReturnType<typeof setTimeout> | null = null;
+let chapterNavMode: 'select' | 'panel' | 'both' | 'none' = 'panel';
+const readerOptions: Record<string, boolean> = Object.fromEntries(
+  readerOptionInputs.map((input) => [input.dataset.readerOption ?? '', input.checked]),
+);
+const headerDependentOptions = new Set(['enableSettings', 'enableImageOverlay', 'enableStats']);
 
 // ── Image overlay state ──
 interface ImagePlacement {
@@ -73,18 +87,203 @@ function currentSpreadImages(): ImagePlacement[] {
 
 // ── Settings toggle ──
 settingsToggle.addEventListener('click', () => {
-  settingsPanel.classList.toggle('open');
-  settingsToggle.classList.toggle('active');
+  settingsPanel.classList.toggle('is-open');
+  settingsToggle.classList.toggle('is-active');
 });
+
+function textPreview(text: string, max = 72): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, max - 1)}...`;
+}
+
+function renderChapterPanel(): void {
+  if (!currentBook) {
+    chapterPanel.replaceChildren();
+    return;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'mejiro-reader-chapter-panel-head';
+  const kicker = document.createElement('span');
+  kicker.className = 'mejiro-reader-chapter-panel-kicker';
+  kicker.textContent = 'Contents';
+  const title = document.createElement('strong');
+  title.textContent = currentBook.title;
+  head.append(kicker, title);
+  if (currentBook.author) {
+    const author = document.createElement('span');
+    author.textContent = currentBook.author;
+    head.appendChild(author);
+  }
+
+  const list = document.createElement('ol');
+  list.className = 'mejiro-reader-chapter-list';
+
+  currentBook.chapters.forEach((ch, i) => {
+    const chTitle = ch.title ?? `Chapter ${i + 1}`;
+    const preview = ch.paragraphs.find((p) => !p.headingLevel && p.text.trim())?.text;
+    const headings = ch.paragraphs
+      .filter((p) => p.headingLevel && p.text.trim() && p.text.trim() !== chTitle)
+      .slice(0, 3);
+
+    const item = document.createElement('li');
+    item.className = 'mejiro-reader-chapter-list-item';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `mejiro-reader-chapter-card${i === currentChapter ? ' is-active' : ''}`;
+    if (i === currentChapter) button.setAttribute('aria-current', 'true');
+    button.addEventListener('click', () => {
+      currentChapter = i;
+      currentPage = 0;
+      chapterSelect.value = String(i);
+      renderChapterPanel();
+      updateReaderOptionsDemo();
+      render();
+    });
+
+    const number = document.createElement('span');
+    number.className = 'mejiro-reader-chapter-number';
+    number.textContent = String(i + 1).padStart(2, '0');
+
+    const main = document.createElement('span');
+    main.className = 'mejiro-reader-chapter-main';
+    const titleEl = document.createElement('span');
+    titleEl.className = 'mejiro-reader-chapter-title';
+    titleEl.textContent = chTitle;
+    main.appendChild(titleEl);
+
+    if (preview) {
+      const previewEl = document.createElement('span');
+      previewEl.className = 'mejiro-reader-chapter-preview';
+      previewEl.textContent = textPreview(preview);
+      main.appendChild(previewEl);
+    }
+
+    if (headings.length > 0) {
+      const subheads = document.createElement('span');
+      subheads.className = 'mejiro-reader-chapter-subheads';
+      for (const heading of headings) {
+        const subhead = document.createElement('span');
+        subhead.textContent = textPreview(heading.text, 30);
+        subheads.appendChild(subhead);
+      }
+      main.appendChild(subheads);
+    }
+
+    button.append(number, main);
+    item.appendChild(button);
+    list.appendChild(item);
+  });
+
+  chapterPanel.replaceChildren(head, list);
+}
+
+function optionEnabled(key: string): boolean {
+  return readerOptions[key] ?? true;
+}
+
+function optionDisabled(key: string): boolean {
+  return headerDependentOptions.has(key) && !optionEnabled('enableHeader');
+}
+
+function effectiveOption(key: string): boolean {
+  return optionDisabled(key) ? false : optionEnabled(key);
+}
+
+function effectiveChapterNavMode(): typeof chapterNavMode {
+  if (!optionEnabled('enableChapterNav')) return 'none';
+  if (!optionEnabled('enableHeader') && chapterNavMode === 'select') return 'none';
+  if (!optionEnabled('enableHeader') && chapterNavMode === 'both') return 'panel';
+  return chapterNavMode;
+}
+
+function modeDisabled(mode: typeof chapterNavMode): boolean {
+  return (
+    !optionEnabled('enableChapterNav') ||
+    (!optionEnabled('enableHeader') && (mode === 'select' || mode === 'both'))
+  );
+}
+
+function updateReaderOptionsDemo(): void {
+  const chapterEnabled = optionEnabled('enableChapterNav');
+  const activeChapterNavMode = effectiveChapterNavMode();
+  const showSelect = Boolean(
+    currentBook &&
+      chapterEnabled &&
+      (activeChapterNavMode === 'select' || activeChapterNavMode === 'both'),
+  );
+  const showPanel = Boolean(
+    currentBook &&
+      chapterEnabled &&
+      (activeChapterNavMode === 'panel' || activeChapterNavMode === 'both'),
+  );
+
+  readerHeader.hidden = !effectiveOption('enableHeader');
+  openFileBtn.hidden = !effectiveOption('enableDropZone');
+  dropZone.hidden = Boolean(
+    currentBook || loadingEl.hidden === false || !effectiveOption('enableDropZone'),
+  );
+  chapterNav.hidden = !showSelect;
+  chapterPanel.hidden = !showPanel;
+  readerBody.classList.toggle('has-chapter-panel', showPanel);
+  settingsToggle.hidden = !effectiveOption('enableSettings');
+  if (!effectiveOption('enableSettings')) {
+    settingsPanel.classList.remove('is-open');
+    settingsToggle.classList.remove('is-active');
+  }
+  imageToggle.hidden = !effectiveOption('enableImageOverlay');
+  stats.hidden = !effectiveOption('enableStats');
+  pageIndicator.hidden = !effectiveOption('enablePageIndicator');
+  readerOptionsCode.textContent = `<MejiroReader
+  enableHeader={${effectiveOption('enableHeader')}}
+  enableDropZone={${effectiveOption('enableDropZone')}}
+  enableChapterNav={${chapterEnabled}}
+  chapterNavMode="${activeChapterNavMode}"
+  enableSettings={${effectiveOption('enableSettings')}}
+  enableImageOverlay={${effectiveOption('enableImageOverlay')}}
+  enableStats={${effectiveOption('enableStats')}}
+  enableKeyboard={${effectiveOption('enableKeyboard')}}
+  enablePageIndicator={${effectiveOption('enablePageIndicator')}}
+/>`;
+
+  for (const input of readerOptionInputs) {
+    const key = input.dataset.readerOption ?? '';
+    input.disabled = optionDisabled(key);
+    input.closest('label')?.classList.toggle('is-disabled', optionDisabled(key));
+  }
+  for (const button of chapterNavModeControls.querySelectorAll('button')) {
+    const mode = button.getAttribute('data-mode') as typeof chapterNavMode;
+    button.disabled = modeDisabled(mode);
+    button.classList.toggle('is-active', mode === chapterNavMode);
+  }
+}
+
+for (const input of readerOptionInputs) {
+  input.addEventListener('change', () => {
+    const key = input.dataset.readerOption;
+    if (!key) return;
+    readerOptions[key] = input.checked;
+    updateReaderOptionsDemo();
+  });
+}
+chapterNavModeControls.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-mode]');
+  if (!(button && !button.disabled)) return;
+  chapterNavMode = button.dataset.mode as typeof chapterNavMode;
+  updateReaderOptionsDemo();
+});
+updateReaderOptionsDemo();
 
 // ── Image overlay management ──
 function createImageOverlay(x: number, y: number): ImagePlacement {
   const el = document.createElement('div');
-  el.className = 'image-overlay visible';
+  el.className = 'mejiro-reader-image-overlay';
   el.innerHTML = `
-    <div class="image-overlay-label"><div class="image-overlay-icon"></div><span>Image</span></div>
-    <div class="image-overlay-resize"></div>
-    <div class="image-overlay-close"></div>
+    <div class="mejiro-reader-image-overlay-label"><div class="mejiro-reader-image-overlay-icon"></div><span>Image</span></div>
+    <div class="mejiro-reader-image-overlay-resize"></div>
+    <div class="mejiro-reader-image-overlay-close"></div>
   `;
   pageRight.appendChild(el);
 
@@ -104,7 +303,7 @@ function removeImageOverlay(placement: ImagePlacement): void {
     spreadImageMap.delete(Math.floor(currentPage / 2));
   }
   if (spreadImageMap.size === 0) {
-    imageToggle.classList.remove('active');
+    imageToggle.classList.remove('is-active');
     pageRight.style.overflow = '';
   }
   syncImagesToLayout();
@@ -119,8 +318,12 @@ function applyOverlayStyle(p: ImagePlacement): void {
 }
 
 function setupOverlayDrag(placement: ImagePlacement): void {
-  const resizeEl = placement.el.querySelector('.image-overlay-resize') as HTMLDivElement;
-  const closeEl = placement.el.querySelector('.image-overlay-close') as HTMLDivElement;
+  const resizeEl = placement.el.querySelector(
+    '.mejiro-reader-image-overlay-resize',
+  ) as HTMLDivElement;
+  const closeEl = placement.el.querySelector(
+    '.mejiro-reader-image-overlay-close',
+  ) as HTMLDivElement;
   let dragging = false;
   let resizing = false;
   let startX = 0;
@@ -140,7 +343,7 @@ function setupOverlayDrag(placement: ImagePlacement): void {
     startX = e.clientX;
     startY = e.clientY;
     startVal = { x: placement.x, y: placement.y, w: placement.w, h: placement.h };
-    placement.el.classList.add('dragging');
+    placement.el.classList.add('is-dragging');
     resizeEl.setPointerCapture(e.pointerId);
   });
 
@@ -151,7 +354,7 @@ function setupOverlayDrag(placement: ImagePlacement): void {
     startX = e.clientX;
     startY = e.clientY;
     startVal = { x: placement.x, y: placement.y, w: placement.w, h: placement.h };
-    placement.el.classList.add('dragging');
+    placement.el.classList.add('is-dragging');
     placement.el.setPointerCapture(e.pointerId);
   });
 
@@ -174,7 +377,7 @@ function setupOverlayDrag(placement: ImagePlacement): void {
   const onUp = () => {
     dragging = false;
     resizing = false;
-    placement.el.classList.remove('dragging');
+    placement.el.classList.remove('is-dragging');
   };
 
   placement.el.addEventListener('pointermove', onMove);
@@ -208,7 +411,7 @@ function scheduleReflow(): void {
 // ── Image toggle button ──
 imageToggle.addEventListener('click', () => {
   if (!currentBook) return;
-  imageToggle.classList.add('active');
+  imageToggle.classList.add('is-active');
   pageRight.style.overflow = 'visible';
   const list = currentSpreadImages();
   const last = list[list.length - 1];
@@ -229,16 +432,16 @@ fileInput.addEventListener('change', () => {
 // ── Drag and drop ──
 dropZone.addEventListener('dragover', (e) => {
   e.preventDefault();
-  dropZone.classList.add('dragover');
+  dropZone.classList.add('is-dragover');
 });
 
 dropZone.addEventListener('dragleave', () => {
-  dropZone.classList.remove('dragover');
+  dropZone.classList.remove('is-dragover');
 });
 
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
-  dropZone.classList.remove('dragover');
+  dropZone.classList.remove('is-dragover');
   const file = e.dataTransfer?.files[0];
   if (file?.name.endsWith('.epub')) loadEpubFile(file);
 });
@@ -260,6 +463,8 @@ lineSpacingInput.addEventListener('input', debouncedRender);
 chapterSelect.addEventListener('change', () => {
   currentChapter = Number(chapterSelect.value);
   currentPage = 0;
+  renderChapterPanel();
+  updateReaderOptionsDemo();
   render();
 });
 
@@ -268,7 +473,7 @@ navPrev.addEventListener('click', () => navigateSpread(-1));
 navNext.addEventListener('click', () => navigateSpread(1));
 
 document.addEventListener('keydown', (e) => {
-  if (!currentBook) return;
+  if (!(currentBook && effectiveOption('enableKeyboard'))) return;
   if (e.key === 'ArrowLeft') navigateSpread(1);
   else if (e.key === 'ArrowRight') navigateSpread(-1);
 });
@@ -277,26 +482,26 @@ function navigateSpread(delta: number): void {
   const next = currentPage + delta * 2;
   if (next < 0 || next >= totalPages) return;
 
-  spread.classList.add('turning');
+  spread.classList.add('is-turning');
   setTimeout(() => {
     hideSpreadOverlays();
     currentPage = next;
     showSpreadOverlays();
     renderCurrentSpread();
-    spread.classList.remove('turning');
+    spread.classList.remove('is-turning');
   }, 180);
 }
 
 function hideSpreadOverlays(): void {
   for (const img of currentSpreadImages()) {
-    img.el.classList.remove('visible');
+    img.el.hidden = true;
   }
 }
 
 function showSpreadOverlays(): void {
   const list = currentSpreadImages();
   for (const img of list) {
-    img.el.classList.add('visible');
+    img.el.hidden = false;
     if (!img.el.parentElement) pageRight.appendChild(img.el);
   }
   pageRight.style.overflow = list.length > 0 ? 'visible' : '';
@@ -305,7 +510,7 @@ function showSpreadOverlays(): void {
 // ── Page sizing ──
 
 function applyPageSize(): void {
-  const surface = document.querySelector('.reading-surface') as HTMLElement;
+  const surface = document.querySelector('.mejiro-reader-surface') as HTMLElement;
   const { pageWidth, pageHeight, contentHeight } = book.computePageSize(surface);
   for (const page of [pageRight, pageLeft]) {
     page.style.width = `${pageWidth}px`;
@@ -325,15 +530,54 @@ function applyFont(el: HTMLElement): void {
 // ── Rendering ──
 
 function renderSegmentToDOM(parent: Node, segment: RenderSegment): void {
-  if (segment.type === 'text') {
-    parent.appendChild(document.createTextNode(segment.text));
-  } else {
-    const ruby = document.createElement('ruby');
-    ruby.appendChild(document.createTextNode(segment.base));
-    const rt = document.createElement('rt');
-    rt.textContent = segment.rubyText;
-    ruby.appendChild(rt);
-    parent.appendChild(ruby);
+  switch (segment.type) {
+    case 'text':
+    case 'tcy':
+      parent.appendChild(document.createTextNode(segment.text));
+      return;
+    case 'ruby': {
+      const ruby = document.createElement('ruby');
+      ruby.appendChild(document.createTextNode(segment.base));
+      const rt = document.createElement('rt');
+      rt.textContent = segment.rubyText;
+      ruby.appendChild(rt);
+      parent.appendChild(ruby);
+      return;
+    }
+    case 'emphasis': {
+      const span = document.createElement('span');
+      span.className = `mejiro-emphasis mejiro-emphasis--${segment.style}`;
+      span.textContent = segment.text;
+      parent.appendChild(span);
+      return;
+    }
+    case 'em': {
+      const em = document.createElement('em');
+      em.textContent = segment.text;
+      parent.appendChild(em);
+      return;
+    }
+    case 'strong': {
+      const strong = document.createElement('strong');
+      strong.textContent = segment.text;
+      parent.appendChild(strong);
+      return;
+    }
+    case 'link': {
+      const link = document.createElement('a');
+      link.href = segment.href;
+      if (segment.title) link.title = segment.title;
+      link.textContent = segment.text;
+      parent.appendChild(link);
+      return;
+    }
+    case 'footnote-ref': {
+      const ref = document.createElement('a');
+      ref.className = 'mejiro-footnote-ref';
+      ref.href = `#${segment.noteId}`;
+      ref.textContent = segment.text;
+      parent.appendChild(ref);
+    }
   }
 }
 
@@ -378,7 +622,7 @@ function renderSlotPage(contentEl: HTMLElement, result: PageResult): void {
     if (slot.height <= 0) continue;
 
     const col = document.createElement('div');
-    col.className = 'exclusion-column';
+    col.className = 'mejiro-reader-exclusion-column';
     col.style.right = `${slot.xPos}px`;
     col.style.top = `${slot.yStart}px`;
     col.style.height = `${slot.height}px`;
@@ -444,9 +688,9 @@ async function loadEpubFile(file: File): Promise<void> {
 }
 
 async function loadEpubBuffer(buffer: ArrayBuffer): Promise<void> {
-  dropZone.classList.add('hidden');
-  bookEl.classList.remove('visible');
-  loadingEl.classList.add('visible');
+  dropZone.hidden = true;
+  bookEl.hidden = true;
+  loadingEl.hidden = false;
   stats.textContent = '';
 
   try {
@@ -461,14 +705,16 @@ async function loadEpubBuffer(buffer: ArrayBuffer): Promise<void> {
       option.textContent = ch.title ?? `Chapter ${i + 1}`;
       chapterSelect.appendChild(option);
     });
-    chapterNav.classList.add('visible');
+    renderChapterPanel();
+    updateReaderOptionsDemo();
 
-    loadingEl.classList.remove('visible');
-    bookEl.classList.add('visible');
+    loadingEl.hidden = true;
+    bookEl.hidden = false;
     render();
   } catch (err) {
-    loadingEl.classList.remove('visible');
-    dropZone.classList.remove('hidden');
+    loadingEl.hidden = true;
+    currentBook = null;
+    updateReaderOptionsDemo();
     console.error('Failed to parse EPUB:', err);
     alert(`Failed to parse EPUB: ${err instanceof Error ? err.message : err}`);
   }
@@ -513,7 +759,10 @@ async function render(): Promise<void> {
   renderCurrentSpread();
 
   const totalChars = chapter.paragraphs.reduce((s, p) => s + p.text.length, 0);
-  const totalRuby = chapter.paragraphs.reduce((s, p) => s + p.rubyAnnotations.length, 0);
+  const totalRuby = chapter.paragraphs.reduce(
+    (s, p) => s + p.inlineAnnotations.filter((a) => a.kind === 'ruby').length,
+    0,
+  );
   const fontName = fontFamilySelect.options[fontFamilySelect.selectedIndex].text;
   stats.textContent = [
     `${totalChars}ch`,
