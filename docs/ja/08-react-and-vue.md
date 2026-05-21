@@ -69,7 +69,7 @@ reader.current?.goToSpread(12);
 | `prev` | `() => void` | 1 見開き戻す。 |
 | `goToChapter` | `(index: number) => void` | 章へ移動し、見開きを 0 にリセット。 |
 | `getReadingPosition` | `() => ReadingPosition` | 現在の `{ chapter, spreadIdx, totalPages, totalSpreads }` を取得。 |
-| `goToAnchor` | `(anchor: ReadingAnchor) => void` | `ReadingAnchor` へ移動。章が異なれば章を切り替えてからアンカー解決。 |
+| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | `ReadingAnchor` へ移動。章が異なれば章を切り替えてからアンカー解決。Promise は見開きが適用された時点で resolve。続けて別の `goToAnchor` が呼ばれた場合、先の Promise は即座に resolve（supersede）。アンマウント時も resolve するので `await` がハングしません。 |
 | `getAnchor` | `() => ReadingAnchor \| null` | 現在の見開き先頭の `ReadingAnchor`。レイアウト未確定時は `null`。 |
 | `getVisibleRange` | `() => { start, end } \| null` | 見開きに表示中のアンカー半開区間（`end` は次見開き先頭または章末）。 |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | フォントや行間などを実行時変更。再計測・再レイアウトを伴います。 |
@@ -118,7 +118,21 @@ useEffect(() => {
 />
 ```
 
-`storage` は `localStorage` 互換の最小インターフェース（`getItem` / `setItem` / `removeItem`）を持つ任意の実装を受け付けます。サーバへ非同期書き込みする場合はラッパーを書いてください。
+`storage` は `localStorage` 互換の最小インターフェース（`getItem` / `setItem` / `removeItem`）を持つ任意の実装を受け付けます。サーバへ非同期書き込みする場合は、`storage` を局所的なメモリミラーにしつつ `onChange` でサーバへ送る形が定石です。
+
+```tsx
+const { position, save } = useReadingPosition({
+  key: `mejiro:position:${bookId}`,
+  onChange: (next) => {
+    if (next) void fetch(`/api/books/${bookId}/position`, {
+      method: 'PUT',
+      body: JSON.stringify(next),
+    });
+  },
+});
+```
+
+`onChange` は `save()` / `clear()` の直後に同期的に呼ばれます（初回ハイドレートでは発火しません）。ローカル永続化（`storage`）は debounce されたままなので、サーバ側で別レートに調整したい場合はこちらに任せます。
 
 ### MejiroPageView（推奨）
 
@@ -513,7 +527,62 @@ const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerD
 
 ---
 
-## 3. スタイリング
+## 3. MejiroEditor と MejiroManuscriptEditor の使い分け
+
+「投稿サイトに採用する」観点で **どちらのエディタを選ぶか** を整理した表です。フレームワークを問わず同じ判定基準で選べます。
+
+| 観点 | `MejiroEditor` | `MejiroManuscriptEditor` |
+|---|---|---|
+| 入力 | 既存の EPUB（パース済み `EpubBook` または URL） | 原稿テキスト（章の `body` 配列） |
+| 編集の単位 | 段落・インライン注釈（ルビ等）・章メタデータ・画像差し込み | 章本文（mejiro 記法のテキスト）・タイトル・著者・カバー |
+| 出力 | 編集後の EPUB（バイト） | 原稿チャプター配列 → EPUB へエクスポート |
+| 状態管理フック | `useEditableEpub` | `useManuscriptDraft` |
+| プレビュー | 段落単位のリスト + Reader 同期 | 章単位のテキストエディタ + 装飾付き `MejiroReader` |
+| ノーテーション補助 | 段落の選択範囲にルビ／注釈を当てる | `MejiroNotationHighlighter` 連携のテキストエディタ・圏点／TCY／em／strong ボタン |
+| 想定ユースケース | 既刊 EPUB の校正・差し替え、編集者向けワークフロー | 新規執筆、小説投稿サイト、原稿アップロード → 公開 |
+| ヘッドレス分解 | `useEditableEpub` で UI を自前化可 | `useManuscriptDraft` + `MejiroReader(manuscript=...)` で UI 自前化可 |
+| controlled モード | `useEditableEpub` のセレクション等を外部 state に同期 | `title` / `author` / `cover` をそれぞれ controlled prop 化可（React: `onXxxChange` を渡す／ Vue: `v-model:xxx`） |
+
+判断のショートカット:
+
+- **「すでに EPUB を出版済みで、後から本文を直したい」** → `MejiroEditor`
+- **「新規執筆／投稿フォームから連載 → 公開」** → `MejiroManuscriptEditor`
+- **「サイト側でタイトル・著者欄を別の場所で編集している（メタデータは外部 state）」** → `MejiroManuscriptEditor` を controlled モードで使う
+
+### MejiroManuscriptEditor の controlled モード
+
+`title` / `author` / `cover` は uncontrolled（初期値）と controlled（親が所有）の両方を sane なまま使えます。`onXxxChange`（React）または `v-model:xxx`（Vue）を付けると controlled に切り替わり、親が prop を更新するまで入力値は親側の値に追従します。
+
+```tsx
+// React: 投稿フォームの状態と統合する例
+const [title, setTitle] = useState('');
+const [author, setAuthor] = useState('');
+const [cover, setCover] = useState<File | null>(null);
+
+<MejiroManuscriptEditor
+  title={title}
+  onTitleChange={setTitle}
+  author={author}
+  onAuthorChange={setAuthor}
+  cover={cover}
+  onCoverChange={setCover}
+/>
+```
+
+```vue
+<!-- Vue: v-model パターン -->
+<MejiroManuscriptEditor
+  v-model:title="title"
+  v-model:author="author"
+  v-model:cover="cover"
+/>
+```
+
+ハンドラを付けないと従来通りエディタ内部で状態管理されます（既存コードは変更不要）。
+
+---
+
+## 4. スタイリング
 
 `MejiroPageView` と `MejiroPage` は、どちらも `mejiro-` プレフィックス付きの CSS クラスを使います。必要に応じてスタイルシートで上書きできます。
 
@@ -540,6 +609,132 @@ const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerD
   font-size: 0.45em;
   color: #666;
 }
+```
+
+---
+
+## 5. フルカスタムエディタを組む
+
+`MejiroManuscriptEditor` は便利な完成品ですが、投稿サイトに本格採用するなら **プリミティブから組み立てる**のが筋です。以下の素材を組み合わせれば EPUB を経由しない原稿エディタが書けます。
+
+| 必要なもの | API |
+|---|---|
+| 原稿の状態管理 (章配列・autosave) | `useManuscriptDraft({ onAutosave, autosaveDelay })` |
+| 1 章をプレビュー用にレイアウト | `useManuscriptLayout(book, chapter, surfaceRef, { dialect })` |
+| 装飾付きプレビュー (チャプタナビ・設定込み) | `<MejiroReader manuscript={chapters} dialect="mejiro" />` |
+| 自前 textarea のルビ/圏点ハイライト | `<MejiroNotationHighlighter value onChange />` |
+| 完成時の EPUB 書き出し | `EpubProject.fromManuscript(...).export(...)` |
+
+### MejiroReader を原稿でそのまま駆動する
+
+EPUB の ZIP 経由を完全に外す最短経路です。`manuscript` を渡すだけで、装飾付きの Reader が直接プレビューになります。
+
+```tsx
+import { MejiroReader, useManuscriptDraft } from '@libraz/mejiro-react';
+
+function MyEditor() {
+  const draft = useManuscriptDraft({
+    onAutosave: async (chapters) => {
+      await fetch('/api/draft', { method: 'PUT', body: JSON.stringify(chapters) });
+    },
+  });
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100vh' }}>
+      <MejiroReader
+        manuscript={draft.chapters.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
+        chapter={draft.selected}
+        onChapterChange={draft.setSelected}
+        dialect="mejiro"
+      />
+      <YourSidePanel draft={draft} />
+    </div>
+  );
+}
+```
+
+### `useManuscriptLayout` で MejiroSpread を直接動かす
+
+Reader のクロームを切って、見開きだけ自分の UI に埋め込みたいときに使います。
+
+```tsx
+import { useMejiroBook, useManuscriptLayout, MejiroSpread } from '@libraz/mejiro-react';
+import { useRef } from 'react';
+
+function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
+  const { book } = useMejiroBook({ fontFamily: '"Noto Serif JP"', fontSize: 16 });
+  const surface = useRef<HTMLDivElement>(null);
+  const layout = useManuscriptLayout(book, chapter, surface);
+  return (
+    <div ref={surface} style={{ height: '100%' }}>
+      {layout.layout && (
+        <MejiroSpread
+          spread={layout.layout.getSpread(0)}
+          pageWidth={layout.pageWidth}
+          pageHeight={layout.pageHeight}
+          contentHeight={layout.contentHeight}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+### 原稿入力 textarea にルビ可視化を載せる
+
+`MejiroNotationHighlighter` は textarea 背後にオーバーレイを置き、ルビ/圏点/縦中横/em/strong/リンク/脚注の各トークンを背景色で示します。textarea は完全にインタラクティブなまま使えます。
+
+```tsx
+import { MejiroNotationHighlighter } from '@libraz/mejiro-react';
+import { useState } from 'react';
+
+function Notation() {
+  const [text, setText] = useState('｜漢字《かんじ》のルビ例です。');
+  return <MejiroNotationHighlighter value={text} onChange={setText} dialect="mejiro" />;
+}
+```
+
+CSS 変数で色を上書きできます。
+
+```css
+.mejiro-notation-token[data-token="ruby"] { background: rgba(255, 200, 200, 0.55); }
+```
+
+## 6. 章ハイライト / コメント / しおり
+
+`useAnnotations` と `MejiroReader` の `annotations` prop を組み合わせると、永続化付きハイライトを 10 行ほどで実装できます。
+
+```tsx
+import { MejiroReader, useAnnotations, useReadingPosition } from '@libraz/mejiro-react';
+import { useRef } from 'react';
+
+function Reader({ bookId, epub }) {
+  const handle = useRef<MejiroReaderHandle>(null);
+  const { annotations, add, remove } = useAnnotations({ key: `mejiro:ann:${bookId}` });
+  return (
+    <MejiroReader
+      ref={handle}
+      epub={epub}
+      annotations={annotations}
+      onPageRead={(anchor) => console.log('read', anchor)}
+    />
+  );
+}
+```
+
+`annotations` は `{ chapter, start, end, color? }` の配列。Reader は現在の章のものだけ自動でハイライト rect に変換して `MejiroSpread` に渡します。`useAnnotations` の `storage` オプションはサーバ送信に置き換え可能です (`useReadingPosition` と同じ interface)。
+
+サーバ同期するなら、`onChange` で確定後の全件を受け取って送ると 1 行で書けます（初回ハイドレートでは発火しません）。
+
+```tsx
+const { annotations, add, remove } = useAnnotations({
+  key: `mejiro:ann:${bookId}`,
+  onChange: (next) => {
+    void fetch(`/api/books/${bookId}/annotations`, {
+      method: 'PUT',
+      body: JSON.stringify(next),
+    });
+  },
+});
 ```
 
 ---

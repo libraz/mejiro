@@ -69,7 +69,7 @@ reader.current?.goToSpread(12);
 | `prev` | `() => void` | Go back one spread. |
 | `goToChapter` | `(index: number) => void` | Switch chapter; resets the spread index to 0. |
 | `getReadingPosition` | `() => ReadingPosition` | Returns `{ chapter, spreadIdx, totalPages, totalSpreads }`. |
-| `goToAnchor` | `(anchor: ReadingAnchor) => void` | Navigate to a `ReadingAnchor`; switches chapters first if needed. |
+| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`; switches chapters first if needed. The promise resolves once the spread is applied. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
 | `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the current spread, or `null` before layout is ready. |
 | `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the next spread (or end of chapter). |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
@@ -118,7 +118,21 @@ useEffect(() => {
 />
 ```
 
-`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). Wrap your network calls in that shape for server-side persistence.
+`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). For async, server-backed persistence, the idiomatic pattern is to leave `storage` pointing at an in-memory mirror and use `onChange` to forward each mutation:
+
+```tsx
+const { position, save } = useReadingPosition({
+  key: `mejiro:position:${bookId}`,
+  onChange: (next) => {
+    if (next) void fetch(`/api/books/${bookId}/position`, {
+      method: 'PUT',
+      body: JSON.stringify(next),
+    });
+  },
+});
+```
+
+`onChange` fires synchronously after `save()` or `clear()` (never on initial hydration or `key` changes). Local persistence stays on its own debounce, so you can pick a different rate for the network call without coordinating throttles.
 
 ### MejiroPageView (Recommended)
 
@@ -513,7 +527,62 @@ For the low-level `MejiroPage` component and manual pagination, see the [API Ref
 
 ---
 
-## 3. Styling
+## 3. MejiroEditor vs MejiroManuscriptEditor
+
+When adopting mejiro for a posting site, the two editors trade off across the same axes regardless of framework:
+
+| Axis | `MejiroEditor` | `MejiroManuscriptEditor` |
+|---|---|---|
+| Input | A parsed `EpubBook` (or URL) | Manuscript text (chapter `body` array) |
+| Edit granularity | Paragraphs, inline annotations (ruby), chapter metadata, image insertion | Chapter body text (mejiro notation), title, author, cover |
+| Output | A re-serialized EPUB (bytes) | Manuscript chapter array → exported to EPUB |
+| State hook | `useEditableEpub` | `useManuscriptDraft` |
+| Preview | Paragraph list + Reader synced to selection | Chapter body textarea + Reader driven by the manuscript |
+| Notation aids | Ruby/annotation tools applied to paragraph selections | `MejiroNotationHighlighter` + emphasis-dot / TCY / em / strong buttons |
+| Intended use | Proofing published EPUBs, editorial workflows | New writing, novel posting sites, draft-to-publish pipelines |
+| Headless decomposition | `useEditableEpub` lets you replace the UI | `useManuscriptDraft` + `MejiroReader(manuscript=...)` lets you replace the UI |
+| Controlled mode | Drive `useEditableEpub` selection from external state | `title` / `author` / `cover` are individually controllable (React: pass `onXxxChange`; Vue: use `v-model:xxx`) |
+
+Quick decision:
+
+- **"Already shipped an EPUB and need to patch the text"** → `MejiroEditor`
+- **"New writing or a posting form that publishes after each draft"** → `MejiroManuscriptEditor`
+- **"Site already has the title/author fields edited elsewhere"** → `MejiroManuscriptEditor` in controlled mode
+
+### MejiroManuscriptEditor controlled mode
+
+`title` / `author` / `cover` work as both uncontrolled (initial value) and controlled (parent-owned) props. Attaching `onXxxChange` (React) or `v-model:xxx` (Vue) flips that field into controlled mode — the input value tracks the prop until the parent updates it.
+
+```tsx
+// React: wiring the editor into a post-form's shared state
+const [title, setTitle] = useState('');
+const [author, setAuthor] = useState('');
+const [cover, setCover] = useState<File | null>(null);
+
+<MejiroManuscriptEditor
+  title={title}
+  onTitleChange={setTitle}
+  author={author}
+  onAuthorChange={setAuthor}
+  cover={cover}
+  onCoverChange={setCover}
+/>
+```
+
+```vue
+<!-- Vue: v-model pattern -->
+<MejiroManuscriptEditor
+  v-model:title="title"
+  v-model:author="author"
+  v-model:cover="cover"
+/>
+```
+
+Without handlers the fields stay uncontrolled, so existing usage keeps working unchanged.
+
+---
+
+## 4. Styling
 
 Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS classes. Override them in your stylesheet:
 
@@ -540,6 +609,132 @@ Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS class
   font-size: 0.45em;
   color: #666;
 }
+```
+
+---
+
+## 5. Building a fully custom editor
+
+`MejiroManuscriptEditor` is a finished component, but if you're embedding mejiro in a posting site you'll usually want to **assemble the editor from primitives**. The pieces below let you skip the EPUB ZIP round-trip entirely.
+
+| What you need | API |
+|---|---|
+| Draft state (chapter array + autosave) | `useManuscriptDraft({ onAutosave, autosaveDelay })` |
+| Lay out a single manuscript chapter for preview | `useManuscriptLayout(book, chapter, surfaceRef, { dialect })` |
+| Full-chrome preview (chapter nav + settings) | `<MejiroReader manuscript={chapters} dialect="mejiro" />` |
+| Notation highlight overlay for an editing textarea | `<MejiroNotationHighlighter value onChange />` |
+| Final EPUB export | `EpubProject.fromManuscript(...).export(...)` |
+
+### Drive MejiroReader from manuscript chapters directly
+
+The shortest path to a full-chrome preview without going through a real EPUB. Pass `manuscript` to the same Reader you'd ship to readers.
+
+```tsx
+import { MejiroReader, useManuscriptDraft } from '@libraz/mejiro-react';
+
+function MyEditor() {
+  const draft = useManuscriptDraft({
+    onAutosave: async (chapters) => {
+      await fetch('/api/draft', { method: 'PUT', body: JSON.stringify(chapters) });
+    },
+  });
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100vh' }}>
+      <MejiroReader
+        manuscript={draft.chapters.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
+        chapter={draft.selected}
+        onChapterChange={draft.setSelected}
+        dialect="mejiro"
+      />
+      <YourSidePanel draft={draft} />
+    </div>
+  );
+}
+```
+
+### Drive MejiroSpread directly with `useManuscriptLayout`
+
+Skip the Reader chrome entirely and embed only the spread in your own UI.
+
+```tsx
+import { useMejiroBook, useManuscriptLayout, MejiroSpread } from '@libraz/mejiro-react';
+import { useRef } from 'react';
+
+function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
+  const { book } = useMejiroBook({ fontFamily: '"Noto Serif JP"', fontSize: 16 });
+  const surface = useRef<HTMLDivElement>(null);
+  const layout = useManuscriptLayout(book, chapter, surface);
+  return (
+    <div ref={surface} style={{ height: '100%' }}>
+      {layout.layout && (
+        <MejiroSpread
+          spread={layout.layout.getSpread(0)}
+          pageWidth={layout.pageWidth}
+          pageHeight={layout.pageHeight}
+          contentHeight={layout.contentHeight}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+### Add notation highlighting to your manuscript textarea
+
+`MejiroNotationHighlighter` places an overlay behind a textarea and tints the background of manuscript notation tokens (ruby, emphasis dots, tate-chu-yoko, em/strong, links, footnotes). The textarea stays fully interactive.
+
+```tsx
+import { MejiroNotationHighlighter } from '@libraz/mejiro-react';
+import { useState } from 'react';
+
+function Notation() {
+  const [text, setText] = useState('｜漢字《かんじ》 is a ruby example.');
+  return <MejiroNotationHighlighter value={text} onChange={setText} dialect="mejiro" />;
+}
+```
+
+Override the per-token colors via CSS variables on `.mejiro-notation-token`:
+
+```css
+.mejiro-notation-token[data-token="ruby"] { background: rgba(255, 200, 200, 0.55); }
+```
+
+## 6. Highlights / comments / bookmarks
+
+Pair `useAnnotations` with the `annotations` prop on `MejiroReader` to persist highlights with about ten lines of glue.
+
+```tsx
+import { MejiroReader, useAnnotations } from '@libraz/mejiro-react';
+import { useRef } from 'react';
+
+function Reader({ bookId, epub }) {
+  const handle = useRef<MejiroReaderHandle>(null);
+  const { annotations, add, remove } = useAnnotations({ key: `mejiro:ann:${bookId}` });
+  return (
+    <MejiroReader
+      ref={handle}
+      epub={epub}
+      annotations={annotations}
+      onPageRead={(anchor) => console.log('read', anchor)}
+    />
+  );
+}
+```
+
+`annotations` is an array of `{ chapter, start, end, color? }`. The Reader filters by current chapter, computes highlight rectangles via `ChapterLayout.selectionRects`, and forwards them to `MejiroSpread`. The `storage` option follows the same interface as `useReadingPosition`, so swapping `localStorage` for a server-backed store is a drop-in change.
+
+For asynchronous server sync, use `onChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration):
+
+```tsx
+const { annotations, add, remove } = useAnnotations({
+  key: `mejiro:ann:${bookId}`,
+  onChange: (next) => {
+    void fetch(`/api/books/${bookId}/annotations`, {
+      method: 'PUT',
+      body: JSON.stringify(next),
+    });
+  },
+});
 ```
 
 ---

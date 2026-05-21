@@ -121,8 +121,11 @@ Converts morphological analyzer token lengths to boundary indices for `LayoutInp
 | Export | Signature |
 |---|---|
 | `formatDialogueLineBreaks` | `(text: string) => string` |
+| `tokenizeManuscriptSource` | `(text: string, dialect?: ManuscriptDialect) => ManuscriptToken[]` |
 
-Normalizes manuscript line breaks around Japanese dialogue quotes without creating extra blank lines.
+`formatDialogueLineBreaks` normalizes manuscript line breaks around Japanese dialogue quotes without creating extra blank lines.
+
+`tokenizeManuscriptSource` reports notation token ranges (ruby, emphasis, TCY, em, strong, link, footnote) in **source positions**, unlike `parseManuscript` whose annotation positions are in the rendered plain text. Powers the bundled `MejiroNotationHighlighter`.
 
 ### Image Exclusion
 
@@ -366,6 +369,7 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 | `EpubProject` | Class for creating a new EPUB 3 package from manuscript chapters |
 | `parseManuscript` | Parse manuscript text into paragraphs and inline annotations |
 | `parseManuscriptRuby` | Parse Aozora-style ruby notation in one text fragment |
+| `manuscriptToEpubBook` | `(chapters, options?) => EpubBook`. Synthesizes an `EpubBook` from manuscript chapters without a ZIP round-trip — designed for live preview. |
 
 Parses an EPUB file into structured chapters with ruby annotations.
 
@@ -603,9 +607,9 @@ npm install -D @types/react
 
 Peer dependencies: `react >= 18`; TypeScript projects should install `@types/react >= 18` matching their React version.
 
-Main components: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, `MejiroPageView`, `MejiroPage`, `MejiroSpread`, `MejiroSettingsPanel`, `MejiroChapterNav`, `MejiroStats`, `MejiroDropZone`, and `MejiroImageOverlay`.
+Main components: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroNotationHighlighter`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, `MejiroPageView`, `MejiroPage`, `MejiroSpread`, `MejiroSettingsPanel`, `MejiroChapterNav`, `MejiroStats`, `MejiroDropZone`, and `MejiroImageOverlay`.
 
-Hooks: `useEpub`, `useEditableEpub`, `useEpubProject`, `useLibrary`, `useManuscriptDraft`, `useMejiroBook`, `useChapterLayout`, `useSpread`, `useReadingPosition`, `useI18n`, `useImageOverlay`, and `useMultiImageOverlay`.
+Hooks: `useEpub`, `useEditableEpub`, `useEpubProject`, `useLibrary`, `useManuscriptDraft`, `useManuscriptLayout`, `useAnnotations`, `useMejiroBook`, `useChapterLayout`, `useSpread`, `useReadingPosition`, `useI18n`, `useImageOverlay`, and `useMultiImageOverlay`.
 
 Common headless editor returns:
 
@@ -613,6 +617,15 @@ Common headless editor returns:
 - `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` returns `epub`, `loading`, `error`, `loadBuffer`, `loadFile`, `loadUrl`, and `setEpub`.
 - `useEpubProject({ metadata?, chapters?, debounceMs?, onPreview?, onExport? })` returns project metadata/chapter state plus `setMetadata`, `setChapters`, `setSelectedChapter`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `previewBook`, `previewError`, `previewing`, `buildProject`, and `exportEpub`.
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` returns draft chapter state plus add/remove/reorder/patch helpers.
+- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce? })` lays out a single manuscript chapter directly, with no EPUB ZIP round-trip. Returns `{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute }` (same shape as `useChapterLayout`). Designed for live preview surfaces.
+- `useAnnotations({ key, storage?, throttleMs?, onChange? })` persists highlights / bookmarks / comments. Returns `{ annotations, add, remove, update, clear }`. `storage` follows the same `getItem` / `setItem` / `removeItem` interface as `useReadingPosition`. `onChange(next)` fires synchronously after `add` / `remove` / `update` / `clear` (skipped on initial hydration and no-ops) — handy for forwarding each mutation to a server.
+- `useReadingPosition({ key, storage?, throttleMs?, onChange? })` exposes the same `onChange(next | null)` hook, fired right after `save` / `clear`.
+
+**`MejiroReader` manuscript source** -- A fourth source mode alongside `epub` / `epubUrl`. Pass `manuscript: ManuscriptChapter[]` plus `dialect?: ManuscriptDialect` and the Reader renders the chapters directly, skipping the EPUB ZIP entirely.
+
+**`MejiroReader` `annotations` prop** -- Pass an array of `{ chapter, start, end, color? }` and the Reader converts entries on the current chapter into highlight rectangles via `ChapterLayout.selectionRects`, forwarding them to `MejiroSpread`. Typically paired with `useAnnotations`, but any shape that satisfies the structural type works.
+
+**`MejiroNotationHighlighter`** -- Textarea wrapped with an overlay that tints notation tokens (ruby, emphasis, TCY, em, strong, link, footnote). Props: `{ value, onChange, dialect?, wrapperClassName?, ... }` plus textarea attributes (forwarded). Override per-token colors via CSS on `.mejiro-notation-token[data-token="…"]`.
 
 **`MejiroPageView`** -- Recommended lower-level page renderer. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
 
@@ -652,7 +665,7 @@ npm install @libraz/mejiro @libraz/mejiro-vue vue
 
 Peer dependency: `vue >= 3.3`.
 
-Main components and composables mirror the React package: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, page/spread/chrome components, and `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay`.
+Main components and composables mirror the React package: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroNotationHighlighter`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, page/spread/chrome components, and `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useManuscriptLayout` / `useAnnotations` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay`.
 
 Public component prop types are exported for the same component set, including `MejiroReaderProps`, `MejiroEditorProps`, `MejiroManuscriptEditorProps`, `MejiroPageViewProps`, `MejiroSpreadProps`, `MejiroSettingsPanelProps`, and the other `Mejiro*Props` aliases.
 

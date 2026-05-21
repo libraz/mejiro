@@ -121,8 +121,11 @@
 | エクスポート | シグネチャ |
 |---|---|
 | `formatDialogueLineBreaks` | `(text: string) => string` |
+| `tokenizeManuscriptSource` | `(text: string, dialect?: ManuscriptDialect) => ManuscriptToken[]` |
 
-原稿テキスト内の日本語会話括弧の前後に自然な改行を入れ、余分な空行を作らないよう正規化します。
+`formatDialogueLineBreaks` は原稿テキスト内の日本語会話括弧の前後に自然な改行を入れ、余分な空行を作らないよう正規化します。
+
+`tokenizeManuscriptSource` は原稿記法 (ルビ / 圏点 / TCY / em / strong / link / footnote) のトークン位置を **source 文字列上**で返します（`parseManuscript` がレンダー後位置を返すのと対照的）。`MejiroNotationHighlighter` の内部実装と同じです。
 
 ### 画像回り込み
 
@@ -366,6 +369,7 @@
 | `EpubProject` | 原稿章から新規 EPUB 3 パッケージを生成するクラス |
 | `parseManuscript` | 原稿テキストを段落とインライン注釈へ変換 |
 | `parseManuscriptRuby` | 1つのテキスト片の青空文庫風ルビ記法を解析 |
+| `manuscriptToEpubBook` | `(chapters, options?) => EpubBook`。原稿章を `EpubBook` に合成（ZIP 経由なし、ライブプレビュー用） |
 
 EPUBファイルをルビ注釈付きの構造化されたチャプターに解析します。
 
@@ -603,9 +607,9 @@ npm install -D @types/react
 
 peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用する React バージョンに合う `@types/react >= 18` もインストールしてください。
 
-主要コンポーネント: `MejiroReader`、`MejiroEditor`、`MejiroManuscriptEditor`、`MejiroShelf`、`MejiroToc`、`MejiroScrollView`、`MejiroSelectionLayer`、`MejiroPageView`、`MejiroPage`、`MejiroSpread`、`MejiroSettingsPanel`、`MejiroChapterNav`、`MejiroStats`、`MejiroDropZone`、`MejiroImageOverlay`。
+主要コンポーネント: `MejiroReader`、`MejiroEditor`、`MejiroManuscriptEditor`、`MejiroNotationHighlighter`、`MejiroShelf`、`MejiroToc`、`MejiroScrollView`、`MejiroSelectionLayer`、`MejiroPageView`、`MejiroPage`、`MejiroSpread`、`MejiroSettingsPanel`、`MejiroChapterNav`、`MejiroStats`、`MejiroDropZone`、`MejiroImageOverlay`。
 
-hooks: `useEpub`、`useEditableEpub`、`useEpubProject`、`useLibrary`、`useManuscriptDraft`、`useMejiroBook`、`useChapterLayout`、`useSpread`、`useReadingPosition`、`useI18n`、`useImageOverlay`、`useMultiImageOverlay`。
+hooks: `useEpub`、`useEditableEpub`、`useEpubProject`、`useLibrary`、`useManuscriptDraft`、`useManuscriptLayout`、`useAnnotations`、`useMejiroBook`、`useChapterLayout`、`useSpread`、`useReadingPosition`、`useI18n`、`useImageOverlay`、`useMultiImageOverlay`。
 
 主なヘッドレス編集APIの戻り値:
 
@@ -613,6 +617,15 @@ hooks: `useEpub`、`useEditableEpub`、`useEpubProject`、`useLibrary`、`useMan
 - `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` は `epub`、`loading`、`error`、`loadBuffer`、`loadFile`、`loadUrl`、`setEpub` を返します。
 - `useEpubProject({ metadata?, chapters?, debounceMs?, onPreview?, onExport? })` はプロジェクトのメタデータ/章状態に加えて、`setMetadata`、`setChapters`、`setSelectedChapter`、`addChapter`、`removeChapter`、`patchChapter`、`reorderChapters`、`previewBook`、`previewError`、`previewing`、`buildProject`、`exportEpub` を返します。
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` は原稿章状態と追加/削除/並べ替え/更新ヘルパーを返します。
+- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce? })` は単一の原稿章を直接レイアウトする hook。`{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute }` を返します（`useChapterLayout` と同形）。EPUB を経由しないライブプレビュー用。
+- `useAnnotations({ key, storage?, throttleMs?, onChange? })` はハイライト / しおり / コメントを永続化する hook。`{ annotations, add, remove, update, clear }` を返します。`storage` は `useReadingPosition` と同じ interface (`getItem` / `setItem` / `removeItem`)。`onChange(next)` は `add` / `remove` / `update` / `clear` の直後に同期的に発火（初回ハイドレートと no-op 時は呼ばれません）。サーバ同期のフックポイントに使えます。
+- `useReadingPosition({ key, storage?, throttleMs?, onChange? })` の `onChange(next | null)` も同様に `save` / `clear` 直後に発火。
+
+**`MejiroReader` の `manuscript` source** -- `epub` / `epubUrl` に加えて第 4 のソースモードとして、`manuscript: ManuscriptChapter[]` と `dialect?: ManuscriptDialect` を渡せば EPUB ZIP を経由せず原稿を直接プレビューできます。
+
+**`MejiroReader` の `annotations` prop** -- `{ chapter, start, end, color? }` の配列を渡すと、現在の章のものが自動でハイライト rect に変換されて見開きに描画されます。`useAnnotations` と組み合わせるのが基本ですが、自前で配列を組み立てても問題ありません。
+
+**`MejiroNotationHighlighter`** -- 原稿記法 (ルビ / 圏点 / 縦中横 / em / strong / link / footnote) を textarea 背後のオーバーレイで色分け表示するコンポーネント。`{ value, onChange, dialect?, wrapperClassName?, ... }` を受け取り、textarea プロパティはそのまま透過します。色は `.mejiro-notation-token[data-token="ruby"]` などの CSS で上書き可能。
 
 **`MejiroPageView`** -- 低レベルページレンダラー。`ChapterLayout`からの`PageResult`をレンダリング。CSS vertical-rlとスロットベースレンダリングを自動切替。
 
@@ -652,7 +665,7 @@ npm install @libraz/mejiro @libraz/mejiro-vue vue
 
 peer dependency: `vue >= 3.3`。
 
-主要コンポーネントと composables は React パッケージとほぼ同じです。`MejiroReader`、`MejiroEditor`、`MejiroManuscriptEditor`、`MejiroShelf`、`MejiroToc`、`MejiroScrollView`、`MejiroSelectionLayer`、ページ / 見開き / chrome 系コンポーネント、および `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay` を利用できます。
+主要コンポーネントと composables は React パッケージとほぼ同じです。`MejiroReader`、`MejiroEditor`、`MejiroManuscriptEditor`、`MejiroNotationHighlighter`、`MejiroShelf`、`MejiroToc`、`MejiroScrollView`、`MejiroSelectionLayer`、ページ / 見開き / chrome 系コンポーネント、および `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useManuscriptLayout` / `useAnnotations` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay` を利用できます。
 
 同じコンポーネント群の props 型も公開しています。`MejiroReaderProps`、`MejiroEditorProps`、`MejiroManuscriptEditorProps`、`MejiroPageViewProps`、`MejiroSpreadProps`、`MejiroSettingsPanelProps`、その他の `Mejiro*Props` aliases を利用できます。
 
