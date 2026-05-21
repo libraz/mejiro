@@ -70,6 +70,13 @@ export { MejiroSpread, type MejiroSpreadProps, type PageHeaderData } from './Mej
 export { MejiroStats, type MejiroStatsProps } from './MejiroStats.js';
 export { MejiroToc, type MejiroTocProps } from './MejiroToc.js';
 export type {
+  Annotation,
+  AnnotationsStorage,
+  UseAnnotationsOptions,
+  UseAnnotationsReturn,
+} from './useAnnotations.js';
+export { useAnnotations } from './useAnnotations.js';
+export type {
   PageDimensions,
   UseChapterLayoutOptions,
   UseChapterLayoutReturn,
@@ -106,6 +113,12 @@ export type {
   UseManuscriptDraftReturn,
 } from './useManuscriptDraft.js';
 export { useManuscriptDraft } from './useManuscriptDraft.js';
+export type {
+  ManuscriptPageDimensions,
+  UseManuscriptLayoutOptions,
+  UseManuscriptLayoutReturn,
+} from './useManuscriptLayout.js';
+export { useManuscriptLayout } from './useManuscriptLayout.js';
 export type { UseMejiroBookReturn } from './useMejiroBook.js';
 export { useMejiroBook } from './useMejiroBook.js';
 export type {
