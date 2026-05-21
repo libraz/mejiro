@@ -120,6 +120,8 @@ export interface MejiroMessages {
   readonly manuscriptEm: string;
   /** Manuscript editor strong button label. */
   readonly manuscriptStrong: string;
+  /** ARIA label for the chapter drag handle. Placeholders: `{title}`. */
+  readonly manuscriptReorderHandle: string;
 }
 
 /** Built-in English catalog (the default). */
@@ -183,6 +185,7 @@ export const enMessages: MejiroMessages = {
   manuscriptTcy: 'Tate-chu-yoko',
   manuscriptEm: 'Em',
   manuscriptStrong: 'Strong',
+  manuscriptReorderHandle: 'Reorder {title}',
 };
 
 /** Built-in Japanese catalog. */
@@ -246,6 +249,7 @@ export const jaMessages: MejiroMessages = {
   manuscriptTcy: '縦中横',
   manuscriptEm: '強調',
   manuscriptStrong: '太字',
+  manuscriptReorderHandle: '{title} の順番を変更',
 };
 
 /** Built-in locale identifiers. */

@@ -16,10 +16,16 @@
     --mejiro-editor-panel: #f5f0e4;
     --mejiro-editor-line: #d8d0c4;
     --mejiro-editor-ink: #2a2521;
+    /* Width of the side panel (manuscript controls). Override on the host to
+     * tighten or widen the editing column, or set to 100% on small screens. */
+    --mejiro-editor-panel-width: 360px;
+    /* Which side the panel sits on. `right` (default) places the preview on
+     * the left; flip to `left` to mirror the layout for right-handed editing. */
+    --mejiro-editor-panel-side: right;
 
     height: 100%;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-columns: minmax(0, 1fr) var(--mejiro-editor-panel-width);
     background: var(--mejiro-bg-deep, #1c1915);
     color: var(--mejiro-editor-ink);
     font-family: var(--mejiro-font-ui, "Helvetica Neue", system-ui, sans-serif);
@@ -43,6 +49,20 @@
     border-left: 1px solid rgba(42, 37, 33, 0.16);
     box-sizing: border-box;
     overflow: auto;
+  }
+
+  .mejiro-editor[data-panel-side="left"] {
+    grid-template-columns: var(--mejiro-editor-panel-width) minmax(0, 1fr);
+  }
+
+  .mejiro-editor[data-panel-side="left"] .mejiro-editor-preview {
+    order: 2;
+  }
+
+  .mejiro-editor[data-panel-side="left"] .mejiro-editor-panel {
+    order: 1;
+    border-left: 0;
+    border-right: 1px solid rgba(42, 37, 33, 0.16);
   }
 
   .mejiro-editor-head {
@@ -97,6 +117,18 @@
     font-family: inherit;
   }
 
+  .mejiro-editor-paragraphs button[draggable="true"] {
+    cursor: grab;
+  }
+
+  .mejiro-editor-paragraphs button[draggable="true"]:active {
+    cursor: grabbing;
+  }
+
+  .mejiro-editor-paragraphs button[data-dragging] {
+    opacity: 0.5;
+  }
+
   .mejiro-editor-paragraphs button.is-active {
     border-color: rgba(139, 58, 58, 0.45);
     box-shadow: inset 3px 0 0 var(--mejiro-accent, #8b3a3a);
@@ -135,6 +167,77 @@
     min-height: 110px;
     resize: vertical;
     line-height: 1.7;
+  }
+
+  /* Notation highlighter — overlay that tints the background of manuscript
+   * notation tokens behind the editing textarea. */
+  .mejiro-notation-highlighter {
+    position: relative;
+    display: block;
+    min-height: 110px;
+  }
+
+  .mejiro-notation-overlay,
+  .mejiro-notation-textarea {
+    margin: 0;
+    border: 1px solid var(--mejiro-control-border, #ccc5b8);
+    padding: 8px;
+    font: inherit;
+    font-size: 0.78rem;
+    line-height: 1.7;
+    box-sizing: border-box;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  .mejiro-notation-overlay {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    color: transparent;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .mejiro-notation-textarea {
+    position: relative;
+    width: 100%;
+    background: transparent;
+    color: inherit;
+    resize: vertical;
+  }
+
+  .mejiro-notation-token {
+    border-radius: 2px;
+  }
+
+  .mejiro-notation-token[data-token="ruby"] {
+    background: rgba(255, 200, 200, 0.55);
+  }
+
+  .mejiro-notation-token[data-token="emphasis"] {
+    background: rgba(255, 230, 130, 0.55);
+  }
+
+  .mejiro-notation-token[data-token="tcy"] {
+    background: rgba(170, 230, 230, 0.6);
+  }
+
+  .mejiro-notation-token[data-token="em"] {
+    background: rgba(170, 200, 255, 0.5);
+  }
+
+  .mejiro-notation-token[data-token="strong"] {
+    background: rgba(255, 180, 200, 0.65);
+  }
+
+  .mejiro-notation-token[data-token="link"] {
+    background: rgba(180, 230, 255, 0.55);
+  }
+
+  .mejiro-notation-token[data-token="footnote"] {
+    background: rgba(220, 220, 220, 0.7);
   }
 
   .mejiro-editor textarea.mejiro-editor-manuscript {
@@ -182,16 +285,24 @@
   }
 
   @media (max-width: 900px) {
-    .mejiro-editor {
+    .mejiro-editor,
+    .mejiro-editor[data-panel-side="left"] {
       height: auto;
       min-height: 100%;
       grid-template-columns: 1fr;
       grid-template-rows: minmax(640px, 100vh) auto;
     }
 
-    .mejiro-editor-panel {
+    .mejiro-editor-panel,
+    .mejiro-editor[data-panel-side="left"] .mejiro-editor-panel {
       border-left: 0;
+      border-right: 0;
       border-top: 1px solid rgba(42, 37, 33, 0.16);
+    }
+
+    .mejiro-editor[data-panel-side="left"] .mejiro-editor-preview,
+    .mejiro-editor[data-panel-side="left"] .mejiro-editor-panel {
+      order: initial;
     }
   }
 } /* end @layer mejiro.chrome */

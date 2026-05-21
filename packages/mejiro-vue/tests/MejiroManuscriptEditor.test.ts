@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 
-import type { EpubBook } from '@libraz/mejiro/epub';
 import { fireEvent, render, waitFor } from '@testing-library/vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
@@ -10,8 +9,10 @@ const epubMocks = vi.hoisted(() => ({
   setCover: vi.fn(),
 }));
 
-vi.mock('@libraz/mejiro/epub', () => {
+vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@libraz/mejiro/epub')>();
   return {
+    ...actual,
     // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
     EpubProject: {
       fromManuscript: vi.fn(() => ({
@@ -20,14 +21,6 @@ vi.mock('@libraz/mejiro/epub', () => {
         assets: [] as unknown[],
       })),
     },
-    parseEpub: vi.fn(
-      async () =>
-        ({
-          title: 'Manuscript',
-          author: '',
-          chapters: [{ title: 'Ch1', paragraphs: [{ text: 'a', inlineAnnotations: [] }] }],
-        }) as EpubBook,
-    ),
   };
 });
 
@@ -101,11 +94,58 @@ describe('MejiroManuscriptEditor (Vue)', () => {
     expect(hasImageBtn).toBe(false);
   });
 
-  it('falls back to a valid cover asset filename when the upload name has no safe characters', async () => {
-    const { container } = render(MejiroManuscriptEditor);
-    await fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
-      target: { files: [new File(['cover'], '💥', { type: 'image/png' })] },
+  it('uses `title` / `author` props as initial values when no update listeners are attached', () => {
+    const { container } = render(MejiroManuscriptEditor, {
+      props: { title: 'From Parent', author: 'Author X' },
     });
+    const inputs = Array.from(container.querySelectorAll('.mejiro-editor-panel input')).map(
+      (input) => (input as HTMLInputElement).value,
+    );
+    expect(inputs).toContain('From Parent');
+    expect(inputs).toContain('Author X');
+  });
+
+  it('controlled mode: parent owns the title via v-model:title', async () => {
+    const onUpdateTitle = vi.fn();
+    const { container, rerender } = render(MejiroManuscriptEditor, {
+      props: { title: 'Step 1', 'onUpdate:title': onUpdateTitle },
+    });
+    const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
+    expect(titleInput.value).toBe('Step 1');
+    await fireEvent.update(titleInput, 'User typed');
+    expect(onUpdateTitle).toHaveBeenLastCalledWith('User typed');
+    await rerender({ title: 'Step 2', 'onUpdate:title': onUpdateTitle });
+    expect((container.querySelector('.mejiro-editor-panel input') as HTMLInputElement).value).toBe(
+      'Step 2',
+    );
+  });
+
+  it('controlled mode: `cover` + onUpdate:cover fires when the file picker selects a file', async () => {
+    const onUpdateCover = vi.fn();
+    const { container } = render(MejiroManuscriptEditor, {
+      props: { 'onUpdate:cover': onUpdateCover },
+    });
+    const fileInput = container.querySelector(
+      '.mejiro-editor-panel input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(['cover'], 'cover.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    await fireEvent.change(fileInput);
+    expect(onUpdateCover).toHaveBeenCalledWith(file);
+  });
+
+  it('falls back to a valid cover asset filename when the upload name has no safe characters', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob://stub');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
+    const { container } = render(MejiroManuscriptEditor);
+    const input = container.querySelector(
+      '.mejiro-editor-panel input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(['cover'], '💥', { type: 'image/png' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    await fireEvent.change(input);
+    await fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
 
     await waitFor(() => {
       expect(epubMocks.setCover).toHaveBeenCalledWith(
@@ -115,5 +155,8 @@ describe('MejiroManuscriptEditor (Vue)', () => {
         }),
       );
     });
+
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
   });
 });

@@ -1,7 +1,6 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
-import type { EpubBook } from '@libraz/mejiro/epub';
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,8 +9,10 @@ const epubMocks = vi.hoisted(() => ({
   setCover: vi.fn(),
 }));
 
-vi.mock('@libraz/mejiro/epub', () => {
+vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@libraz/mejiro/epub')>();
   return {
+    ...actual,
     // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
     EpubProject: {
       fromManuscript: vi.fn(() => ({
@@ -20,14 +21,6 @@ vi.mock('@libraz/mejiro/epub', () => {
         assets: [] as unknown[],
       })),
     },
-    parseEpub: vi.fn(
-      async () =>
-        ({
-          title: 'Manuscript',
-          author: '',
-          chapters: [{ title: 'Ch1', paragraphs: [{ text: 'a', inlineAnnotations: [] }] }],
-        }) as EpubBook,
-    ),
   };
 });
 
@@ -99,11 +92,86 @@ describe('MejiroManuscriptEditor (React)', () => {
     expect(hasImageBtn).toBe(false);
   });
 
+  it('uses `title` / `author` props as initial values when no onChange handlers are provided', () => {
+    const { container } = render(<MejiroManuscriptEditor title="From Parent" author="Author X" />);
+    const inputs = Array.from(container.querySelectorAll('input')).map(
+      (input) => (input as HTMLInputElement).value,
+    );
+    expect(inputs).toContain('From Parent');
+    expect(inputs).toContain('Author X');
+  });
+
+  it('uncontrolled mode: input edits stay local even when the title prop changes later', () => {
+    const { container, rerender } = render(<MejiroManuscriptEditor title="Initial" />);
+    const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
+    fireEvent.change(titleInput, { target: { value: 'User edit' } });
+    expect((container.querySelector('.mejiro-editor-panel input') as HTMLInputElement).value).toBe(
+      'User edit',
+    );
+    // Parent prop change after a user edit overwrites the user's value
+    // because the editor syncs uncontrolled state from prop changes.
+    rerender(<MejiroManuscriptEditor title="Parent overwrite" />);
+    expect((container.querySelector('.mejiro-editor-panel input') as HTMLInputElement).value).toBe(
+      'Parent overwrite',
+    );
+  });
+
+  it('controlled mode: parent owns the title via `title` + `onTitleChange`', () => {
+    const onTitleChange = vi.fn();
+    const { container, rerender } = render(
+      <MejiroManuscriptEditor title="Step 1" onTitleChange={onTitleChange} />,
+    );
+    const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
+    expect(titleInput.value).toBe('Step 1');
+    fireEvent.change(titleInput, { target: { value: 'User typed' } });
+    expect(onTitleChange).toHaveBeenLastCalledWith('User typed');
+    // Parent ignores onTitleChange — the controlled value stays "Step 1".
+    expect((container.querySelector('.mejiro-editor-panel input') as HTMLInputElement).value).toBe(
+      'Step 1',
+    );
+    // Parent applies the next value.
+    rerender(<MejiroManuscriptEditor title="Step 2" onTitleChange={onTitleChange} />);
+    expect((container.querySelector('.mejiro-editor-panel input') as HTMLInputElement).value).toBe(
+      'Step 2',
+    );
+  });
+
+  it('controlled mode: `author` + `onAuthorChange` mirrors the title pattern', () => {
+    const onAuthorChange = vi.fn();
+    const { container } = render(
+      <MejiroManuscriptEditor author="Author A" onAuthorChange={onAuthorChange} />,
+    );
+    const inputs = container.querySelectorAll('.mejiro-editor-panel input');
+    const authorInput = inputs[1] as HTMLInputElement;
+    expect(authorInput.value).toBe('Author A');
+    fireEvent.change(authorInput, { target: { value: 'Author B' } });
+    expect(onAuthorChange).toHaveBeenLastCalledWith('Author B');
+  });
+
+  it('controlled mode: `cover` + `onCoverChange` fires when the file picker selects a file', () => {
+    const onCoverChange = vi.fn();
+    const { container } = render(<MejiroManuscriptEditor onCoverChange={onCoverChange} />);
+    const fileInput = container.querySelector(
+      '.mejiro-editor-panel input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(['cover'], 'cover.png', { type: 'image/png' });
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    fireEvent.change(fileInput);
+    expect(onCoverChange).toHaveBeenCalledWith(file);
+  });
+
   it('falls back to a valid cover asset filename when the upload name has no safe characters', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob://stub');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+
     const { container } = render(<MejiroManuscriptEditor />);
-    fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
-      target: { files: [new File(['cover'], '💥', { type: 'image/png' })] },
-    });
+    const input = container.querySelector(
+      '.mejiro-editor-panel input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(['cover'], '💥', { type: 'image/png' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    fireEvent.change(input);
+    fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
 
     await waitFor(() => {
       expect(epubMocks.setCover).toHaveBeenCalledWith(
@@ -113,5 +181,8 @@ describe('MejiroManuscriptEditor (React)', () => {
         }),
       );
     });
+
+    createObjectURL.mockRestore();
+    revokeObjectURL.mockRestore();
   });
 });

@@ -1,9 +1,10 @@
-import { type AssetResolver, type EpubBook, EpubProject, parseEpub } from '@libraz/mejiro/epub';
+import { type AssetResolver, EpubProject } from '@libraz/mejiro/epub';
 import { computed, defineComponent, h, type PropType, ref, watch } from 'vue';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroReader } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
+import { useManuscriptDraft } from './useManuscriptDraft.js';
 
 export interface ManuscriptEditorChapter {
   id: string;
@@ -14,7 +15,8 @@ export interface ManuscriptEditorChapter {
 /**
  * Subset of {@link MejiroReader} props that the manuscript editor passes
  * through to the live preview. Properties driven by the editor itself
- * (`epub`, `fonts`) are ignored if supplied here.
+ * (`manuscript`, `fonts`, `chapter`, `onChapterChange`) are ignored if
+ * supplied here.
  */
 export interface ManuscriptPreviewProps {
   subtitle?: string;
@@ -33,13 +35,37 @@ export const MejiroManuscriptEditor = defineComponent({
   name: 'MejiroManuscriptEditor',
   props: {
     fonts: { type: Array as PropType<FontChoice[]>, default: undefined },
+    /**
+     * Title. When `onUpdate:title` is listened to (`v-model:title="…"`),
+     * this is the controlled value. Otherwise it is the initial value and
+     * the editor manages its own title state.
+     */
     title: { type: String, default: undefined },
-    author: { type: String, default: '' },
+    /**
+     * Author. Controlled via `v-model:author="…"`; otherwise treated as
+     * the initial value.
+     */
+    author: { type: String, default: undefined },
+    /**
+     * Cover image. Controlled via `v-model:cover="…"`; otherwise treated
+     * as the initial cover. Setting `null` clears the cover.
+     */
+    cover: { type: Object as PropType<File | null>, default: null },
     chapters: { type: Array as PropType<ManuscriptEditorChapter[]>, default: undefined },
     /**
+     * Called whenever the chapter draft settles (debounced by `autosaveDelay`).
+     * Use to persist drafts to localStorage, IndexedDB, or upload to a server.
+     */
+    onAutosave: {
+      type: Function as PropType<(chapters: ManuscriptEditorChapter[]) => void | Promise<void>>,
+      default: undefined,
+    },
+    /** Autosave debounce in milliseconds. @defaultValue 800 */
+    autosaveDelay: { type: Number, default: undefined },
+    /**
      * Props forwarded to the embedded {@link MejiroReader} preview. Lets
-     * hosts customize subtitle / chapterNavMode / etc.; `epub` and `fonts`
-     * remain driven by the editor.
+     * hosts customize subtitle / chapterNavMode / etc.; `manuscript`, `fonts`,
+     * `chapter`, and `onChapterChange` remain driven by the editor.
      */
     previewProps: {
       type: Object as PropType<ManuscriptPreviewProps>,
@@ -55,68 +81,72 @@ export const MejiroManuscriptEditor = defineComponent({
       default: undefined,
     },
   },
-  emits: ['export'],
+  emits: {
+    export: (_buffer: ArrayBuffer) => true,
+    'update:title': (_next: string) => true,
+    'update:author': (_next: string) => true,
+    'update:cover': (_next: File | null) => true,
+  },
   setup(props, { emit }) {
     const messages = useI18n();
     const coverInput = ref<HTMLInputElement | null>(null);
     const title = ref(props.title ?? messages.value.manuscriptDefaultTitle);
-    const author = ref(props.author);
-    const chapters = ref<ManuscriptEditorChapter[]>(
-      props.chapters?.length ? [...props.chapters] : [defaultChapter(messages.value)],
-    );
-    const selected = ref(0);
-    const cover = ref<File | null>(null);
-    const preview = ref<EpubBook | null>(null);
-    const error = ref<Error | null>(null);
+    const author = ref(props.author ?? '');
+    const cover = ref<File | null>(props.cover ?? null);
     const bodyTextareaRef = ref<HTMLTextAreaElement | null>(null);
-    const current = computed(() => chapters.value[selected.value] ?? chapters.value[0]);
 
-    function buildProject(): EpubProject {
-      const project = EpubProject.fromManuscript({
-        metadata: { title: title.value, author: author.value || undefined },
-        chapters: chapters.value.map((chapter) => ({
-          id: chapter.id,
-          title: chapter.title || messages.value.untitled,
-          body: chapter.body,
-        })),
-      });
-      if (cover.value) {
-        project.setCover({
-          href: coverAssetHref(cover.value),
-          mediaType: cover.value.type || undefined,
-          data: new Uint8Array(),
-        });
-      }
-      return project;
-    }
-
+    // Sync internal refs when the parent updates the prop — covers both
+    // uncontrolled (parent occasionally resets) and controlled (v-model).
     watch(
-      [title, author, chapters, cover],
-      () => {
-        let cancelled = false;
-        const timer = setTimeout(() => {
-          void (async () => {
-            try {
-              preview.value = await parseEpub(await buildProject().export());
-              error.value = null;
-            } catch (err) {
-              if (!cancelled) error.value = err instanceof Error ? err : new Error(String(err));
-            }
-          })();
-        }, 250);
-        return () => {
-          cancelled = true;
-          clearTimeout(timer);
-        };
+      () => props.title,
+      (next) => {
+        if (next !== undefined) title.value = next;
       },
-      { immediate: true, deep: true },
+    );
+    watch(
+      () => props.author,
+      (next) => {
+        if (next !== undefined) author.value = next;
+      },
+    );
+    watch(
+      () => props.cover,
+      (next) => {
+        cover.value = next;
+      },
     );
 
-    function patchChapter(index: number, patch: Partial<ManuscriptEditorChapter>): void {
-      chapters.value = chapters.value.map((chapter, i) =>
-        i === index ? { ...chapter, ...patch } : chapter,
-      );
+    function setTitle(next: string): void {
+      title.value = next;
+      emit('update:title', next);
     }
+    function setAuthor(next: string): void {
+      author.value = next;
+      emit('update:author', next);
+    }
+    function setCover(next: File | null): void {
+      cover.value = next;
+      emit('update:cover', next);
+    }
+
+    const draft = useManuscriptDraft({
+      initialChapters: props.chapters?.length
+        ? [...props.chapters]
+        : [defaultChapter(messages.value)],
+      onAutosave: props.onAutosave,
+      autosaveDelay: props.autosaveDelay,
+    });
+    const chapters = draft.chapters;
+    const selected = draft.selected;
+    const draggingIndex = ref<number | null>(null);
+    const current = computed(() => chapters.value[selected.value] ?? chapters.value[0]);
+    const manuscript = computed(() =>
+      chapters.value.map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title || messages.value.untitled,
+        body: chapter.body,
+      })),
+    );
 
     function wrapSelection(open: string, close: string): void {
       const el = bodyTextareaRef.value;
@@ -126,7 +156,9 @@ export const MejiroManuscriptEditor = defineComponent({
       const before = el.value.slice(0, start);
       const middle = el.value.slice(start, end);
       const after = el.value.slice(end);
-      patchChapter(selected.value, { body: `${before}${open}${middle}${close}${after}` });
+      draft.patchChapter(selected.value, {
+        body: `${before}${open}${middle}${close}${after}`,
+      });
       requestAnimationFrame(() => {
         const target = bodyTextareaRef.value;
         if (!target) return;
@@ -135,21 +167,16 @@ export const MejiroManuscriptEditor = defineComponent({
       });
     }
 
-    function addChapter(): void {
-      chapters.value = [...chapters.value, defaultChapter(messages.value, chapters.value.length)];
-      selected.value = chapters.value.length - 1;
-    }
-
-    function removeChapter(): void {
-      if (chapters.value.length <= 1) return;
-      chapters.value = chapters.value.filter((_, index) => index !== selected.value);
-      selected.value = Math.max(0, Math.min(selected.value, chapters.value.length - 1));
-    }
-
     async function exportEpub(): Promise<void> {
-      const project = buildProject();
+      const project = EpubProject.fromManuscript({
+        metadata: { title: title.value, author: author.value || undefined },
+        chapters: chapters.value.map((chapter) => ({
+          id: chapter.id,
+          title: chapter.title || messages.value.untitled,
+          body: chapter.body,
+        })),
+      });
       if (cover.value) {
-        project.assets.length = 0;
         project.setCover({
           href: coverAssetHref(cover.value),
           mediaType: cover.value.type || undefined,
@@ -165,18 +192,17 @@ export const MejiroManuscriptEditor = defineComponent({
     return () =>
       h('div', { class: 'mejiro-editor mejiro-manuscript-editor' }, [
         h('main', { class: 'mejiro-editor-preview' }, [
-          preview.value
-            ? h(MejiroReader, {
-                subtitle: messages.value.manuscriptPreviewSubtitle,
-                chapterNavMode: 'panel',
-                ...(props.previewProps ?? {}),
-                // Editor-driven, always override.
-                epub: preview.value,
-                fonts: props.fonts ?? undefined,
-                enableImageOverlay: false,
-              })
-            : null,
-          error.value ? h('div', { class: 'mejiro-editor-error' }, error.value.message) : null,
+          h(MejiroReader, {
+            subtitle: messages.value.manuscriptPreviewSubtitle,
+            chapterNavMode: 'panel',
+            ...(props.previewProps ?? {}),
+            // Editor-driven, always overrides any previewProps.
+            manuscript: manuscript.value,
+            fonts: props.fonts ?? undefined,
+            chapter: selected.value,
+            'onChapter-change': draft.setSelected,
+            enableImageOverlay: false,
+          }),
         ]),
         h('aside', { class: 'mejiro-editor-panel' }, [
           h('div', { class: 'mejiro-editor-head' }, [
@@ -189,13 +215,13 @@ export const MejiroManuscriptEditor = defineComponent({
             h('input', {
               value: title.value,
               onInput: (event: Event) => {
-                title.value = (event.target as HTMLInputElement).value;
+                setTitle((event.target as HTMLInputElement).value);
               },
             }),
             h('input', {
               value: author.value,
               onInput: (event: Event) => {
-                author.value = (event.target as HTMLInputElement).value;
+                setAuthor((event.target as HTMLInputElement).value);
               },
             }),
             h(
@@ -209,7 +235,7 @@ export const MejiroManuscriptEditor = defineComponent({
               accept: 'image/*',
               hidden: true,
               onChange: (event: Event) => {
-                cover.value = (event.target as HTMLInputElement).files?.[0] ?? null;
+                setCover((event.target as HTMLInputElement).files?.[0] ?? null);
               },
             }),
           ]),
@@ -225,8 +251,30 @@ export const MejiroManuscriptEditor = defineComponent({
                     type: 'button',
                     key: chapter.id,
                     class: { 'is-active': selected.value === index },
-                    onClick: () => {
-                      selected.value = index;
+                    draggable: true,
+                    'aria-label': format(messages.value.manuscriptReorderHandle, {
+                      title: chapter.title || messages.value.untitled,
+                    }),
+                    'data-dragging': draggingIndex.value === index ? '' : undefined,
+                    onClick: () => draft.setSelected(index),
+                    onDragstart: (event: DragEvent) => {
+                      draggingIndex.value = index;
+                      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+                    },
+                    onDragend: () => {
+                      draggingIndex.value = null;
+                    },
+                    onDragover: (event: DragEvent) => {
+                      if (draggingIndex.value === null || draggingIndex.value === index) return;
+                      event.preventDefault();
+                      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+                    },
+                    onDrop: (event: DragEvent) => {
+                      event.preventDefault();
+                      if (draggingIndex.value !== null && draggingIndex.value !== index) {
+                        draft.reorderChapters(draggingIndex.value, index);
+                      }
+                      draggingIndex.value = null;
                     },
                   },
                   [
@@ -239,12 +287,20 @@ export const MejiroManuscriptEditor = defineComponent({
             h('div', { class: 'mejiro-editor-grid' }, [
               h(
                 'button',
-                { type: 'button', onClick: addChapter },
+                {
+                  type: 'button',
+                  onClick: () =>
+                    draft.addChapter({
+                      title: format(messages.value.manuscriptDefaultChapterTitle, {
+                        n: chapters.value.length + 1,
+                      }),
+                    }),
+                },
                 messages.value.manuscriptAddChapter,
               ),
               h(
                 'button',
-                { type: 'button', onClick: removeChapter },
+                { type: 'button', onClick: () => draft.removeChapter(selected.value) },
                 messages.value.manuscriptRemove,
               ),
             ]),
@@ -255,7 +311,7 @@ export const MejiroManuscriptEditor = defineComponent({
                 h('input', {
                   value: current.value.title,
                   onInput: (event: Event) => {
-                    patchChapter(selected.value, {
+                    draft.patchChapter(selected.value, {
                       title: (event.target as HTMLInputElement).value,
                     });
                   },
@@ -289,7 +345,7 @@ export const MejiroManuscriptEditor = defineComponent({
                   class: 'mejiro-editor-manuscript',
                   value: current.value.body,
                   onInput: (event: Event) => {
-                    patchChapter(selected.value, {
+                    draft.patchChapter(selected.value, {
                       body: (event.target as HTMLTextAreaElement).value,
                     });
                   },
@@ -308,11 +364,11 @@ export const MejiroManuscriptEditor = defineComponent({
 
 export type MejiroManuscriptEditorProps = InstanceType<typeof MejiroManuscriptEditor>['$props'];
 
-function defaultChapter(messages: MejiroMessages, index = 0): ManuscriptEditorChapter {
+function defaultChapter(messages: MejiroMessages): ManuscriptEditorChapter {
   return {
-    id: `chapter-${Date.now()}-${index}`,
-    title: format(messages.manuscriptDefaultChapterTitle, { n: index + 1 }),
-    body: index === 0 ? messages.manuscriptDefaultBody : '',
+    id: `chapter-${Date.now()}-0`,
+    title: format(messages.manuscriptDefaultChapterTitle, { n: 1 }),
+    body: messages.manuscriptDefaultBody,
   };
 }
 

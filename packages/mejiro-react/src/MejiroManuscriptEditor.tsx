@@ -1,9 +1,10 @@
-import { type AssetResolver, type EpubBook, EpubProject, parseEpub } from '@libraz/mejiro/epub';
+import { type AssetResolver, EpubProject } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroReader } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
+import { useManuscriptDraft } from './useManuscriptDraft.js';
 
 export interface ManuscriptEditorChapter {
   id: string;
@@ -14,7 +15,8 @@ export interface ManuscriptEditorChapter {
 /**
  * Subset of {@link MejiroReader} props that the manuscript editor passes
  * through to the live preview. Properties driven by the editor itself
- * (`epub`, `fonts`) are ignored if supplied here.
+ * (`manuscript`, `fonts`, `chapter`, `onChapterChange`) are ignored if
+ * supplied here.
  */
 export interface ManuscriptPreviewProps {
   subtitle?: string;
@@ -32,16 +34,42 @@ export interface ManuscriptPreviewProps {
 export interface MejiroManuscriptEditorProps {
   /** Font choices passed to the preview reader. */
   fonts?: FontChoice[];
-  /** Initial title. */
+  /**
+   * Title. When `onTitleChange` is supplied, this is the controlled value
+   * (changes propagate from parent to the input). Otherwise it is the
+   * initial value and the editor manages its own title state.
+   */
   title?: string;
-  /** Initial author. */
+  /** Called whenever the title input changes. Enables controlled mode. */
+  onTitleChange?: (title: string) => void;
+  /**
+   * Author. Controlled when `onAuthorChange` is supplied; otherwise treated
+   * as the initial value.
+   */
   author?: string;
+  /** Called whenever the author input changes. Enables controlled mode. */
+  onAuthorChange?: (author: string) => void;
+  /**
+   * Cover image. Controlled when `onCoverChange` is supplied; otherwise
+   * treated as the initial cover. Setting `null` clears the cover.
+   */
+  cover?: File | null;
+  /** Called whenever the cover changes. Enables controlled mode. */
+  onCoverChange?: (cover: File | null) => void;
   /** Initial chapters. */
   chapters?: ManuscriptEditorChapter[];
   /**
+   * Called whenever the chapter draft settles (debounced by
+   * {@link MejiroManuscriptEditorProps.autosaveDelay}). Use to persist drafts
+   * to localStorage, IndexedDB, or upload to a server.
+   */
+  onAutosave?: (chapters: ManuscriptEditorChapter[]) => void | Promise<void>;
+  /** Autosave debounce in milliseconds. @defaultValue 800 */
+  autosaveDelay?: number;
+  /**
    * Props forwarded to the embedded {@link MejiroReader} preview. Lets
-   * hosts customize subtitle / chapterNavMode / etc.; `epub` and `fonts`
-   * remain driven by the editor.
+   * hosts customize subtitle / chapterNavMode / etc.; `manuscript`, `fonts`,
+   * `chapter`, and `onChapterChange` remain driven by the editor.
    */
   previewProps?: ManuscriptPreviewProps;
   /**
@@ -53,14 +81,6 @@ export interface MejiroManuscriptEditorProps {
   assetResolver?: AssetResolver;
   /** Called after export completes. */
   onExport?: (buffer: ArrayBuffer) => void;
-}
-
-function defaultChapter(messages: MejiroMessages, index = 0): ManuscriptEditorChapter {
-  return {
-    id: `chapter-${Date.now()}-${index}`,
-    title: format(messages.manuscriptDefaultChapterTitle, { n: index + 1 }),
-    body: index === 0 ? messages.manuscriptDefaultBody : '',
-  };
 }
 
 function downloadEpub(buffer: ArrayBuffer, title: string): void {
@@ -94,12 +114,26 @@ function coverAssetHref(file: File): string {
   return `OPS/Images/${filename && !/^\.+$/u.test(filename) ? filename : `cover${coverExtension(file.type)}`}`;
 }
 
+function defaultChapter(messages: MejiroMessages): ManuscriptEditorChapter {
+  return {
+    id: `chapter-${Date.now()}-0`,
+    title: format(messages.manuscriptDefaultChapterTitle, { n: 1 }),
+    body: messages.manuscriptDefaultBody,
+  };
+}
+
 /** Manuscript-to-EPUB editor for author drafts from posting sites. */
 export function MejiroManuscriptEditor({
   fonts,
-  title: initialTitle,
-  author: initialAuthor = '',
+  title: titleProp,
+  onTitleChange,
+  author: authorProp,
+  onAuthorChange,
+  cover: coverProp,
+  onCoverChange,
   chapters: initialChapters,
+  onAutosave,
+  autosaveDelay,
   previewProps,
   assetResolver,
   onExport,
@@ -107,72 +141,67 @@ export function MejiroManuscriptEditor({
   const messages = useI18n();
   const coverInputRef = useRef<HTMLInputElement | null>(null);
   const bodyTextareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [title, setTitle] = useState(initialTitle ?? messages.manuscriptDefaultTitle);
-  const [author, setAuthor] = useState(initialAuthor);
-  const [chapters, setChapters] = useState<ManuscriptEditorChapter[]>(
-    initialChapters?.length ? initialChapters : [defaultChapter(messages)],
-  );
-  const [selected, setSelected] = useState(0);
-  const [cover, setCover] = useState<File | null>(null);
-  const [preview, setPreview] = useState<EpubBook | null>(null);
-  const [error, setError] = useState<Error | null>(null);
 
-  const current = chapters[selected] ?? chapters[0];
+  const titleControlled = onTitleChange !== undefined;
+  const authorControlled = onAuthorChange !== undefined;
+  const coverControlled = onCoverChange !== undefined;
+  const [titleState, setTitleState] = useState(titleProp ?? messages.manuscriptDefaultTitle);
+  const [authorState, setAuthorState] = useState(authorProp ?? '');
+  const [coverState, setCoverState] = useState<File | null>(coverProp ?? null);
+  const title = titleControlled ? (titleProp ?? '') : titleState;
+  const author = authorControlled ? (authorProp ?? '') : authorState;
+  const cover = coverControlled ? (coverProp ?? null) : coverState;
 
-  const buildProject = useCallback((): EpubProject => {
-    const project = EpubProject.fromManuscript({
-      metadata: { title, author: author || undefined },
-      chapters: chapters.map((chapter) => ({
-        id: chapter.id,
-        title: chapter.title || messages.untitled,
-        body: chapter.body,
-      })),
-    });
-    if (cover) {
-      project.setCover({
-        href: coverAssetHref(cover),
-        mediaType: cover.type || undefined,
-        data: new Uint8Array(),
-      });
-    }
-    return project;
-  }, [title, author, chapters, cover, messages.untitled]);
-
+  // Sync internal state when the parent updates an uncontrolled prop from
+  // outside (rare, but harmless if the parent occasionally swaps values).
   useEffect(() => {
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (async () => {
-        try {
-          const buffer = await buildProject().export();
-          const book = await parseEpub(buffer);
-          if (!cancelled) {
-            setPreview(book);
-            setError(null);
-          }
-        } catch (err) {
-          if (!cancelled) setError(err instanceof Error ? err : new Error(String(err)));
-        }
-      })();
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [buildProject]);
+    if (!titleControlled && titleProp !== undefined) setTitleState(titleProp);
+  }, [titleControlled, titleProp]);
+  useEffect(() => {
+    if (!authorControlled && authorProp !== undefined) setAuthorState(authorProp);
+  }, [authorControlled, authorProp]);
+  useEffect(() => {
+    if (!coverControlled && coverProp !== undefined) setCoverState(coverProp);
+  }, [coverControlled, coverProp]);
 
-  function patchChapter(index: number, patch: Partial<ManuscriptEditorChapter>): void {
-    setChapters((currentChapters) =>
-      currentChapters.map((chapter, i) => (i === index ? { ...chapter, ...patch } : chapter)),
-    );
-  }
+  const setTitle = useCallback(
+    (next: string) => {
+      if (!titleControlled) setTitleState(next);
+      onTitleChange?.(next);
+    },
+    [titleControlled, onTitleChange],
+  );
+  const setAuthor = useCallback(
+    (next: string) => {
+      if (!authorControlled) setAuthorState(next);
+      onAuthorChange?.(next);
+    },
+    [authorControlled, onAuthorChange],
+  );
+  const setCover = useCallback(
+    (next: File | null) => {
+      if (!coverControlled) setCoverState(next);
+      onCoverChange?.(next);
+    },
+    [coverControlled, onCoverChange],
+  );
 
-  function addChapter(): void {
-    setChapters((currentChapters) => {
-      const next = [...currentChapters, defaultChapter(messages, currentChapters.length)];
-      setSelected(next.length - 1);
-      return next;
-    });
-  }
+  const draft = useManuscriptDraft({
+    initialChapters: initialChapters?.length ? initialChapters : [defaultChapter(messages)],
+    onAutosave,
+    autosaveDelay,
+  });
+  const {
+    chapters,
+    selected,
+    setSelected,
+    patchChapter,
+    addChapter,
+    removeChapter,
+    reorderChapters,
+  } = draft;
+  const current = chapters[selected] ?? chapters[0];
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
 
   /**
    * Wraps the current textarea selection in the given notation. When no
@@ -189,7 +218,6 @@ export function MejiroManuscriptEditor({
     const after = el.value.slice(end);
     const next = `${before}${open}${middle}${close}${after}`;
     patchChapter(selected, { body: next });
-    // Restore selection on next tick.
     requestAnimationFrame(() => {
       if (!bodyTextareaRef.current) return;
       const caret = start + open.length + middle.length;
@@ -198,19 +226,16 @@ export function MejiroManuscriptEditor({
     });
   }
 
-  function removeChapter(index: number): void {
-    setChapters((currentChapters) => {
-      if (currentChapters.length <= 1) return currentChapters;
-      const next = currentChapters.filter((_, i) => i !== index);
-      setSelected(Math.max(0, Math.min(index, next.length - 1)));
-      return next;
+  const exportEpub = useCallback(async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title, author: author || undefined },
+      chapters: chapters.map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title || messages.untitled,
+        body: chapter.body,
+      })),
     });
-  }
-
-  async function exportEpub(): Promise<void> {
-    const project = buildProject();
     if (cover) {
-      project.assets.length = 0;
       project.setCover({
         href: coverAssetHref(cover),
         mediaType: cover.type || undefined,
@@ -220,22 +245,25 @@ export function MejiroManuscriptEditor({
     const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
     onExport?.(buffer);
     downloadEpub(buffer, title);
-  }
+  }, [assetResolver, author, chapters, cover, messages.untitled, onExport, title]);
 
   return (
     <div className="mejiro-editor mejiro-manuscript-editor">
       <main className="mejiro-editor-preview">
-        {preview && (
-          <MejiroReader
-            subtitle={messages.manuscriptPreviewSubtitle}
-            chapterNavMode="panel"
-            {...previewProps}
-            epub={preview}
-            fonts={fonts}
-            enableImageOverlay={false}
-          />
-        )}
-        {error && <div className="mejiro-editor-error">{error.message}</div>}
+        <MejiroReader
+          subtitle={messages.manuscriptPreviewSubtitle}
+          chapterNavMode="panel"
+          {...previewProps}
+          manuscript={chapters.map((chapter) => ({
+            id: chapter.id,
+            title: chapter.title || messages.untitled,
+            body: chapter.body,
+          }))}
+          fonts={fonts}
+          chapter={selected}
+          onChapterChange={setSelected}
+          enableImageOverlay={false}
+        />
       </main>
       <aside className="mejiro-editor-panel">
         <div className="mejiro-editor-head">
@@ -266,7 +294,29 @@ export function MejiroManuscriptEditor({
                 type="button"
                 key={chapter.id}
                 className={selected === index ? 'is-active' : ''}
+                draggable
+                aria-label={format(messages.manuscriptReorderHandle, {
+                  title: chapter.title || messages.untitled,
+                })}
                 onClick={() => setSelected(index)}
+                onDragStart={(event) => {
+                  setDraggingIndex(index);
+                  event.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragEnd={() => setDraggingIndex(null)}
+                onDragOver={(event) => {
+                  if (draggingIndex === null || draggingIndex === index) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (draggingIndex !== null && draggingIndex !== index) {
+                    reorderChapters(draggingIndex, index);
+                  }
+                  setDraggingIndex(null);
+                }}
+                data-dragging={draggingIndex === index ? '' : undefined}
               >
                 <span>{format(messages.chapterN, { n: index + 1 })}</span>
                 <strong>{chapter.title || messages.untitled}</strong>
@@ -274,7 +324,16 @@ export function MejiroManuscriptEditor({
             ))}
           </div>
           <div className="mejiro-editor-grid">
-            <button type="button" onClick={addChapter}>
+            <button
+              type="button"
+              onClick={() =>
+                addChapter({
+                  title: format(messages.manuscriptDefaultChapterTitle, {
+                    n: chapters.length + 1,
+                  }),
+                })
+              }
+            >
               {messages.manuscriptAddChapter}
             </button>
             <button type="button" onClick={() => removeChapter(selected)}>
