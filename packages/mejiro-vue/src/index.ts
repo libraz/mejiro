@@ -35,6 +35,10 @@ export {
   MejiroManuscriptEditor,
   type MejiroManuscriptEditorProps,
 } from './MejiroManuscriptEditor.js';
+export {
+  MejiroNotationHighlighter,
+  type MejiroNotationHighlighterProps,
+} from './MejiroNotationHighlighter.js';
 export { MejiroPage, type MejiroPageProps } from './MejiroPage.js';
 export { MejiroPageIndicator, type MejiroPageIndicatorProps } from './MejiroPageIndicator.js';
 export { MejiroPageView, type MejiroPageViewProps } from './MejiroPageView.js';
