@@ -3,7 +3,13 @@ import { formatDialogueLineBreaks } from '@libraz/mejiro';
 import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import type { EpubProjectChapterDraft, MejiroChapterNavMode } from '@libraz/mejiro-vue';
-import { MejiroReader, useEditableEpub, useEpubProject } from '@libraz/mejiro-vue';
+import {
+  MejiroNotationHighlighter,
+  MejiroReader,
+  useEditableEpub,
+  useEpubProject,
+  useManuscriptDraft,
+} from '@libraz/mejiro-vue';
 import { computed, onMounted, ref, watch } from 'vue';
 
 const FONTS = [
@@ -20,9 +26,34 @@ const options = {
   headingStyles: DEFAULT_HEADING_STYLES,
 };
 
-type DemoMode = 'viewer' | 'create' | 'edit';
-const demoModes: DemoMode[] = ['viewer', 'create', 'edit'];
+type DemoMode = 'viewer' | 'create' | 'edit' | 'custom';
+const demoModes: DemoMode[] = ['viewer', 'create', 'edit', 'custom'];
 const mode = ref<DemoMode>('viewer');
+
+const customDraft = useManuscriptDraft({
+  initialChapters: [
+    {
+      id: 'custom-1',
+      title: '第一話',
+      body:
+        '｜縦書き《たてがき》は、漢字とかな、そして《《圏点》》までを一行に同居させたい体裁です。\n\n' +
+        '〔20〕世紀の小説投稿サイトでは、原稿はテキストで貼り、組版は読み手側に委ねるのが普通でした。\n\n' +
+        'いまや *em* も **strong** も [リンク](https://example.com) も、原稿の段階で見えるべきです。',
+    },
+    { id: 'custom-2', title: '第二話', body: '次の章の本文をここに書きます。' },
+  ],
+});
+const customChapters = customDraft.chapters;
+const customSelected = customDraft.selected;
+const customManuscript = computed(() =>
+  customChapters.value.map((chapter) => ({
+    id: chapter.id,
+    title: chapter.title,
+    body: chapter.body,
+  })),
+);
+const customCurrentBody = computed(() => customChapters.value[customSelected.value]?.body ?? '');
+const customCurrentTitle = computed(() => customChapters.value[customSelected.value]?.title ?? '');
 
 const enableChapterNav = ref(true);
 const enableHeader = ref(true);
@@ -243,6 +274,18 @@ function setPreviewChapter(nextChapter: number): void {
         :enable-stats="enableHeader && enableStats"
         :enable-keyboard="enableKeyboard"
         :enable-page-indicator="enablePageIndicator"
+      />
+      <MejiroReader
+        v-else-if="mode === 'custom'"
+        key="custom"
+        :options="options"
+        :fonts="FONTS"
+        subtitle="Custom Editor Preview"
+        chapter-nav-mode="panel"
+        :manuscript="customManuscript"
+        :chapter="customSelected"
+        :enable-image-overlay="false"
+        @chapter-change="customDraft.setSelected"
       />
       <MejiroReader
         v-else-if="previewBook"
@@ -507,6 +550,63 @@ function setPreviewChapter(nextChapter: number): void {
         </template>
         <div v-if="editableLoading" class="demo-empty">Loading editor...</div>
         <div v-if="editableError" class="demo-error">{{ editableError.message }}</div>
+      </template>
+
+      <template v-if="mode === 'custom'">
+        <div class="demo-options-head">
+          <span>Fully custom editor</span>
+          <strong>
+            useManuscriptDraft + MejiroReader (manuscript source) + MejiroNotationHighlighter
+          </strong>
+          <small>
+            Skips the EPUB round-trip entirely — the Reader on the left is driven straight from
+            the chapter array on the right.
+          </small>
+        </div>
+        <div class="mejiro-editor-section">
+          <span class="demo-option-label">Chapters</span>
+          <div class="mejiro-editor-paragraphs demo-list demo-list-compact">
+            <button
+              v-for="(chapter, index) in customChapters"
+              :key="chapter.id"
+              type="button"
+              :class="{ 'is-active': customSelected === index }"
+              @click="customDraft.setSelected(index)"
+            >
+              <span>{{ `#${index + 1}` }}</span>
+              <strong>{{ chapter.title || 'Untitled' }}</strong>
+            </button>
+          </div>
+          <div class="demo-button-row">
+            <button
+              type="button"
+              @click="customDraft.addChapter({ title: `第${customChapters.length + 1}話` })"
+            >
+              Add chapter
+            </button>
+            <button type="button" @click="customDraft.removeChapter(customSelected)">
+              Remove
+            </button>
+          </div>
+        </div>
+        <div class="mejiro-editor-section">
+          <span class="demo-option-label">Chapter title</span>
+          <input
+            class="demo-search"
+            :value="customCurrentTitle"
+            @input="
+              customDraft.patchChapter(customSelected, {
+                title: ($event.target as HTMLInputElement).value,
+              })
+            "
+          />
+          <span class="demo-option-label">Body (with notation highlight)</span>
+          <MejiroNotationHighlighter
+            :model-value="customCurrentBody"
+            dialect="mejiro"
+            @update:model-value="(next: string) => customDraft.patchChapter(customSelected, { body: next })"
+          />
+        </div>
       </template>
     </aside>
   </div>
