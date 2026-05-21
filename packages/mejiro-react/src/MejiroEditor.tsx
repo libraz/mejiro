@@ -1,9 +1,5 @@
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
-import {
-  type AssetResolver,
-  EditableEpub,
-  type EditableEpubBook,
-} from '@libraz/mejiro/epub';
+import { type AssetResolver, EditableEpub, type EditableEpubBook } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';

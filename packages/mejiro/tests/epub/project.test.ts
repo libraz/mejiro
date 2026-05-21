@@ -599,4 +599,48 @@ describe('EpubProject', () => {
     expect(css).toContain('writing-mode: vertical-rl');
     expect(Array.from(cover ?? [])).toEqual([1, 2, 3]);
   });
+
+  describe('assetResolver', () => {
+    it('resolves URL-only assets through the supplied resolver at export time', async () => {
+      const project = EpubProject.fromManuscript({
+        metadata: { title: 'Remote assets', identifier: 'urn:uuid:remote-assets' },
+        chapters: [{ title: '一', body: '本文' }],
+      });
+      project.addAsset({
+        href: 'OPS/Images/remote.png',
+        mediaType: 'image/png',
+        url: 'https://cdn.example.com/remote.png',
+      });
+
+      const seen: Array<{ assetKey: string; url: string }> = [];
+      const out = await project.export({
+        assetResolver(request) {
+          seen.push({ assetKey: request.assetKey, url: request.url });
+          return new Uint8Array([0x52, 0x65, 0x6d]);
+        },
+      });
+
+      const zip = await JSZip.loadAsync(out);
+      const stored = await zip.file('OPS/Images/remote.png')?.async('uint8array');
+
+      expect(Array.from(stored ?? [])).toEqual([0x52, 0x65, 0x6d]);
+      expect(seen).toEqual([
+        { assetKey: 'OPS/Images/remote.png', url: 'https://cdn.example.com/remote.png' },
+      ]);
+    });
+
+    it('rejects when an asset has neither `data` nor `url`', async () => {
+      const project = EpubProject.fromManuscript({
+        metadata: { title: 'Empty asset', identifier: 'urn:uuid:empty-asset' },
+        chapters: [{ title: '一', body: '本文' }],
+      });
+      const asset = project.addAsset({
+        href: 'OPS/Images/orphan.png',
+        data: new Uint8Array([1]),
+      });
+      asset.data = undefined;
+
+      await expect(project.export()).rejects.toThrow(/has neither `data` nor `url`/);
+    });
+  });
 });

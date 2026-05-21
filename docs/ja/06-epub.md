@@ -251,6 +251,28 @@ for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
 
 `v0.5` では `editor.transaction(fn)` で複数操作を1ステップとしてまとめ、`editor.undo()` / `editor.redo()` / `editor.history` で履歴を扱えます。`editor.export({ onProgress, signal })` は進捗コールバックと `AbortSignal` を受け付けるため、ブラウザ上で大きな EPUB を書き出す際の UX 改善や中断にそのまま使えます。
 
+#### URL ベースの画像登録（assetResolver）
+
+`addImage()` には `{ filename, data }` の代わりに `{ filename, url }` を渡せます。バイト実体は `editor.export({ assetResolver })` の時点で初めて解決されるため、編集セッション中は外部ストレージの URL だけを保持できます。
+
+```ts
+editor.addImage(0, {
+  filename: 'figure-01.png',
+  url: 'https://cdn.example.com/works/1/figure-01.png',
+  alt: '挿絵',
+});
+
+const buffer = await editor.export({
+  assetResolver: async ({ assetKey, url, signal }) => {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`asset ${assetKey} failed: ${res.status}`);
+    return res.arrayBuffer();
+  },
+});
+```
+
+`assetResolver` を省略すると、ランタイムの `fetch(url, { signal })` が暗黙に使われます。投稿サイト全体の流し込みパターンは [09-advanced.md §7.4](09-advanced.md#74-画像アセットの配信assetresolver) を参照してください。
+
 ## 原稿テキストからEPUBを生成
 
 `EpubProject` は章ドラフトから新しい EPUB 3 パッケージを生成します。原稿内のルビは `｜漢字《かんじ》` のような青空文庫風記法で書けます。

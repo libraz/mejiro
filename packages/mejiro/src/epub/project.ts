@@ -6,12 +6,7 @@ import {
   parseManuscript,
   parseManuscriptRuby,
 } from '../manuscript.js';
-import {
-  type EpubExportOptions,
-  generateZip,
-  resolveAssetData,
-  throwIfAborted,
-} from './editor.js';
+import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
 export { parseManuscript, parseManuscriptRuby };
@@ -766,10 +761,6 @@ function relativeZipPath(fromDir: string, target: string): string {
     to.shift();
   }
   return `${'../'.repeat(from.length)}${to.join('/')}`;
-}
-
-function toUint8Array(data: Uint8Array | ArrayBuffer): Uint8Array {
-  return data instanceof Uint8Array ? data : new Uint8Array(data);
 }
 
 function escapeText(text: string): string {

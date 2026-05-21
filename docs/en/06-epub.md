@@ -251,6 +251,28 @@ for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
 
 `v0.5` groups multiple operations through `editor.transaction(fn)` and exposes history via `editor.undo()` / `editor.redo()` / `editor.history`. `editor.export({ onProgress, signal })` also accepts a progress callback and an `AbortSignal`, so large EPUB writes can report status and be cancelled from the host UI.
 
+#### URL-only image registration (assetResolver)
+
+`addImage()` accepts `{ filename, url }` as an alternative to `{ filename, data }`. The bytes are only resolved when `editor.export({ assetResolver })` runs, so the editor session can hold remote URLs without ever materializing the image bytes client-side.
+
+```ts
+editor.addImage(0, {
+  filename: 'figure-01.png',
+  url: 'https://cdn.example.com/works/1/figure-01.png',
+  alt: 'figure',
+});
+
+const buffer = await editor.export({
+  assetResolver: async ({ assetKey, url, signal }) => {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`asset ${assetKey} failed: ${res.status}`);
+    return res.arrayBuffer();
+  },
+});
+```
+
+When `assetResolver` is omitted, the runtime `fetch(url, { signal })` is used by default. See [09-advanced.md §7.4](09-advanced.md#74-delivering-image-assets-assetresolver) for the end-to-end novel-posting-site pattern.
+
 ## Building EPUBs from Manuscript Text
 
 `EpubProject` creates a new EPUB 3 package from chapter drafts. Manuscript ruby uses Aozora-style notation such as `｜漢字《かんじ》`.

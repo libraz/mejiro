@@ -1263,4 +1263,132 @@ describe('EditableEpub', () => {
     expect(name).toBe('mimetype');
     expect(contents).toBe('application/epub+zip');
   });
+
+  describe('assetResolver', () => {
+    it('lazily resolves URL-only image assets via the provided resolver', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, {
+        filename: 'remote.png',
+        mediaType: 'image/png',
+        url: 'https://cdn.example.com/cover/remote.png',
+        alt: 'remote',
+      });
+
+      const calls: Array<{ assetKey: string; url: string }> = [];
+      const out = await editor.export({
+        assetResolver(request) {
+          calls.push({ assetKey: request.assetKey, url: request.url });
+          return new Uint8Array([42, 43, 44]);
+        },
+      });
+
+      const zip = await JSZip.loadAsync(out);
+      const stored = await zip.file('OPS/Images/remote.png')?.async('uint8array');
+      expect(Array.from(stored ?? [])).toEqual([42, 43, 44]);
+      expect(calls).toEqual([
+        { assetKey: 'remote.png', url: 'https://cdn.example.com/cover/remote.png' },
+      ]);
+    });
+
+    it('passes the export AbortSignal through to the resolver', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, {
+        filename: 'remote.png',
+        url: 'https://cdn.example.com/remote.png',
+      });
+
+      const controller = new AbortController();
+      const seen: AbortSignal[] = [];
+      await editor.export({
+        signal: controller.signal,
+        assetResolver(request) {
+          if (request.signal) seen.push(request.signal);
+          return new Uint8Array([1]);
+        },
+      });
+
+      expect(seen).toEqual([controller.signal]);
+    });
+
+    it('prefers inline `data` over `url` when both are set', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, {
+        filename: 'inline.png',
+        data: new Uint8Array([7, 7, 7]),
+      });
+      // Manually attach a url to the stored asset; data must still win.
+      const asset = editor.chapters[0].imageAssets.get('inline.png');
+      if (asset) asset.url = 'https://example.com/should-be-ignored.png';
+
+      let resolverCalled = false;
+      const out = await editor.export({
+        assetResolver() {
+          resolverCalled = true;
+          return new Uint8Array([0]);
+        },
+      });
+
+      const zip = await JSZip.loadAsync(out);
+      const stored = await zip.file('OPS/Images/inline.png')?.async('uint8array');
+      expect(Array.from(stored ?? [])).toEqual([7, 7, 7]);
+      expect(resolverCalled).toBe(false);
+    });
+
+    it('throws a descriptive error when an asset has neither `data` nor `url`', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, {
+        filename: 'orphan.png',
+        data: new Uint8Array([1]),
+      });
+      const asset = editor.chapters[0].imageAssets.get('orphan.png');
+      // Force the invalid state to exercise the export-time guard.
+      if (asset) asset.data = undefined;
+
+      await expect(editor.export()).rejects.toThrow(/has neither `data` nor `url`/);
+    });
+
+    it('rejects addImage inputs that provide neither `data` nor `url`', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      // Cast required because the runtime check is the safety net under the
+      // discriminated union; TypeScript already rejects this at compile time.
+      expect(() =>
+        editor.addImage(0, { filename: 'empty.png' } as Parameters<typeof editor.addImage>[1]),
+      ).toThrow(/must include either `data` or `url`/);
+    });
+  });
 });

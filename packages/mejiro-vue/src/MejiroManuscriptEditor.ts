@@ -1,9 +1,4 @@
-import {
-  type AssetResolver,
-  type EpubBook,
-  EpubProject,
-  parseEpub,
-} from '@libraz/mejiro/epub';
+import { type AssetResolver, type EpubBook, EpubProject, parseEpub } from '@libraz/mejiro/epub';
 import { computed, defineComponent, h, type PropType, ref, watch } from 'vue';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';

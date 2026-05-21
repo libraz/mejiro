@@ -541,11 +541,39 @@ const { position, save } = useReadingPosition({
 
 複数デバイス同期は「`setItem` で書く前にサーバの最新 `updatedAt` と比較する」など、`storage` 側で完結させるのが扱いやすいです。
 
-### 7.4 画像アセットの配信
+### 7.4 画像アセットの配信（assetResolver）
 
-`EditableEpub` / `EditableImageBlock` は画像実体を `Uint8Array` として持つ前提です。投稿サイトのように画像を S3/CloudFront などの外部ストレージへ寄せたい場合は、サーバ側で「保存：`EditableImageAsset.data` を抽出して S3 へ上げ、DB には URL のみ保持」「配信：EPUB を組み立てる直前に外部 URL から fetch して `data` に詰め直す」の往復で構成するのが現実的です。
+投稿サイトのように画像を S3/CloudFront などの外部ストレージへ寄せたい場合、`EditableImageAsset.data`（バイト）の代わりに `url` を登録しておき、EPUB 書き出し時にだけ実体を fetch する運用ができます。`addImage` には `{ filename, data }` の代わりに `{ filename, url }` を渡せます。
 
-mejiro は現在「外部 URL を直接参照する `assetResolver`」フックを公開していません。多数の作品・多数の画像を扱う投稿サイトでは、（a）読み専用は `<MejiroReader>` に EPUB バイナリ を都度組み立てて渡す、（b）編集時のみフル `Uint8Array` を扱う、の2系統で運用するのが安全です。本フックは将来追加を検討中です。
+```ts
+editor.addImage(0, {
+  filename: 'figure-01.png',
+  url: 'https://cdn.example.com/works/1/figure-01.png',
+  alt: '挿絵',
+});
+
+// 書き出し時に外部 URL からバイトを取得
+const buffer = await editor.export({
+  assetResolver: async ({ assetKey, asset, url, signal }) => {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    });
+    if (!res.ok) throw new Error(`asset fetch failed: ${assetKey} (${res.status})`);
+    return res.arrayBuffer();
+  },
+});
+```
+
+`assetResolver` を省略するとランタイムの `fetch(url, { signal })` がそのまま使われます。S3 SDK で署名付き URL を都度生成したり、IndexedDB キャッシュからオフラインで返したりといった用途では明示的にラッパーを書いてください。
+
+同じ仕組みは `EpubProject`（manuscript-to-EPUB 経路、カバー画像や挿絵を `addAsset({ href, url })` で登録）にも適用されます。`<MejiroEditor>` / `<MejiroManuscriptEditor>` / `useEpubProject` / `useEditableEpub` はすべて `assetResolver` プロップ・オプションを受け取り、内部の `editor.export()` / `project.export()` 呼び出しへ透過的に渡します。
+
+注意点:
+
+- `data` と `url` の両方が登録されている場合、`data` を優先し `url` は無視されます。
+- どちらも未登録のアセットを書き出そうとすると `has neither 'data' nor 'url'` のエラーが投げられます（呼び出し側のバグ検知）。
+- `assetResolver` には export と同じ `AbortSignal` がそのまま渡るため、長時間 fetch を停止可能です。
 
 ### 7.5 サイト横断検索
 

@@ -545,11 +545,39 @@ const { position, save } = useReadingPosition({
 
 For multi-device sync, prefer to compare against the server's latest `updatedAt` inside `storage.setItem` so the conflict logic stays self-contained.
 
-### 7.4 Delivering image assets
+### 7.4 Delivering image assets (assetResolver)
 
-`EditableEpub` / `EditableImageBlock` hold image bytes as `Uint8Array`. When a posting site stores images in external object storage (S3 / CloudFront / R2), the practical pattern is: **save** — extract `EditableImageAsset.data`, upload it to storage, and persist only the URL in the DB; **deliver** — fetch from the external URL and refill `data` right before assembling the EPUB. mejiro does not currently expose a hook to reference external URLs directly from a reading session.
+When you want image bytes to live in external object storage (S3 / CloudFront / R2) rather than in the editor session, register an asset by `url` instead of `data` and resolve the bytes lazily at export time.
 
-For high-volume catalogs, run two pipelines: (a) read-only — assemble an EPUB binary per request and pass it to `<MejiroReader>`; (b) editor-only — work with full `Uint8Array` bytes in memory. A direct `assetResolver` hook is under consideration.
+```ts
+editor.addImage(0, {
+  filename: 'figure-01.png',
+  url: 'https://cdn.example.com/works/1/figure-01.png',
+  alt: 'figure',
+});
+
+// Bytes are fetched only when the EPUB is being assembled.
+const buffer = await editor.export({
+  assetResolver: async ({ assetKey, asset, url, signal }) => {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal,
+    });
+    if (!res.ok) throw new Error(`asset fetch failed: ${assetKey} (${res.status})`);
+    return res.arrayBuffer();
+  },
+});
+```
+
+Omit `assetResolver` and mejiro falls back to the runtime `fetch(url, { signal })`. Write an explicit wrapper when you need to mint S3 signed URLs per request, hit an IndexedDB cache offline, or attach custom headers.
+
+The same wiring exists on the manuscript-to-EPUB path: `EpubProject` accepts `{ href, url }` via `addAsset` / `setCover`. `<MejiroEditor>`, `<MejiroManuscriptEditor>`, `useEditableEpub`, and `useEpubProject` all surface `assetResolver` as a prop / option and forward it to the internal `editor.export()` / `project.export()` calls.
+
+Notes:
+
+- If both `data` and `url` are set on an asset, `data` wins and `url` is ignored.
+- Trying to export an asset with neither field set throws `… has neither 'data' nor 'url'` (catches missing wiring early).
+- The same export-level `AbortSignal` is forwarded to the resolver, so long-running fetches can be interrupted.
 
 ### 7.5 Cross-work search
 
