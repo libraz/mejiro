@@ -151,4 +151,37 @@ describe('useReadingPosition (Vue)', () => {
     warn.mockRestore();
     unmount();
   });
+
+  it('onChange fires synchronously on save() with the new anchor', () => {
+    const onChange = vi.fn();
+    const storage = memoryStorage();
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key: 'k', storage, onChange }),
+    );
+    result.save({ chapter: 2, paragraph: 1, charIndex: 9 });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ chapter: 2, paragraph: 1, charIndex: 9 });
+    unmount();
+  });
+
+  it('onChange fires with null on clear()', () => {
+    const onChange = vi.fn();
+    const storage = memoryStorage();
+    storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key: 'k', storage, onChange }),
+    );
+    result.clear();
+    expect(onChange).toHaveBeenCalledWith(null);
+    unmount();
+  });
+
+  it('onChange is not invoked during initial hydration', () => {
+    const onChange = vi.fn();
+    const storage = memoryStorage();
+    storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
+    const { unmount } = withSetup(() => useReadingPosition({ key: 'k', storage, onChange }));
+    expect(onChange).not.toHaveBeenCalled();
+    unmount();
+  });
 });

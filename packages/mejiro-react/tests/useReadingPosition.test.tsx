@@ -100,4 +100,34 @@ describe('useReadingPosition (React)', () => {
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
+
+  it('onChange fires synchronously on save() with the new anchor', () => {
+    const onChange = vi.fn();
+    const storage = memoryStorage();
+    const { result } = renderHook(() => useReadingPosition({ key: 'k', storage, onChange }));
+    act(() => {
+      result.current.save({ chapter: 2, paragraph: 1, charIndex: 9 });
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ chapter: 2, paragraph: 1, charIndex: 9 });
+  });
+
+  it('onChange fires with null on clear()', () => {
+    const onChange = vi.fn();
+    const storage = memoryStorage();
+    storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
+    const { result } = renderHook(() => useReadingPosition({ key: 'k', storage, onChange }));
+    act(() => {
+      result.current.clear();
+    });
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
+  it('onChange is not invoked during initial hydration', () => {
+    const onChange = vi.fn();
+    const storage = memoryStorage();
+    storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
+    renderHook(() => useReadingPosition({ key: 'k', storage, onChange }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });

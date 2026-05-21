@@ -26,6 +26,12 @@ export interface UseReadingPositionOptions {
   storage?: ReadingPositionStorage;
   /** Throttle ms between writes. @defaultValue 250 */
   throttleMs?: number;
+  /**
+   * Called immediately after `save()` (with the new anchor) or `clear()`
+   * (with `null`). Use to mirror the position to a server alongside the
+   * local `storage`. Not invoked on initial hydration or `key` changes.
+   */
+  onChange?: (next: ReadingPositionValue | null) => void;
 }
 
 /** Return value of {@link useReadingPosition}. */
@@ -161,18 +167,23 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
     [],
   );
 
+  const onChangeRef = useRef(options.onChange);
+  onChangeRef.current = options.onChange;
+
   const save = useCallback(
     (next: ReadingPositionValue) => {
       setPosition(next);
-      if (!storage) return;
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        try {
-          storage.setItem(key, serializePosition(next));
-        } catch {
-          // Quota, disabled storage, or denied access — keep the in-memory copy.
-        }
-      }, throttleMs);
+      if (storage) {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => {
+          try {
+            storage.setItem(key, serializePosition(next));
+          } catch {
+            // Quota, disabled storage, or denied access — keep the in-memory copy.
+          }
+        }, throttleMs);
+      }
+      onChangeRef.current?.(next);
     },
     [storage, key, throttleMs],
   );
@@ -187,6 +198,7 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
         // ignore
       }
     }
+    onChangeRef.current?.(null);
   }, [storage, key]);
 
   return { position, save, clear };
