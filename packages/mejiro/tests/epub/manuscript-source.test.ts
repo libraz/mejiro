@@ -1,0 +1,51 @@
+import { describe, expect, it } from 'vitest';
+import { manuscriptToEpubBook } from '../../src/epub/manuscript-source.js';
+
+describe('manuscriptToEpubBook', () => {
+  it('emits a heading paragraph for each chapter title', () => {
+    const book = manuscriptToEpubBook([{ id: 'c1', title: '第一話', body: '' }]);
+    expect(book.chapters[0].title).toBe('第一話');
+    expect(book.chapters[0].paragraphs[0]).toMatchObject({
+      text: '第一話',
+      headingLevel: 1,
+    });
+  });
+
+  it('splits the body on blank lines and parses each block', () => {
+    const book = manuscriptToEpubBook([
+      { id: 'c1', title: 'タイトル', body: '本文一。\n\n本文二。' },
+    ]);
+    const paragraphs = book.chapters[0].paragraphs;
+    expect(paragraphs).toHaveLength(3);
+    expect(paragraphs[1].text).toBe('本文一。');
+    expect(paragraphs[2].text).toBe('本文二。');
+  });
+
+  it('extracts ruby annotations from auto-ruby notation under the default dialect', () => {
+    const book = manuscriptToEpubBook([
+      { id: 'c1', title: 'タイトル', body: '漢字《かんじ》です。' },
+    ]);
+    const body = book.chapters[0].paragraphs[1];
+    expect(body.text).toBe('漢字です。');
+    expect(body.inlineAnnotations).toHaveLength(1);
+    expect(body.inlineAnnotations[0]).toMatchObject({ kind: 'ruby', rubyText: 'かんじ' });
+  });
+
+  it('drops mejiro-only annotations when the dialect is narou', () => {
+    const book = manuscriptToEpubBook([{ id: 'c1', title: 'T', body: '《《圏点》》' }], {
+      dialect: 'narou',
+    });
+    const body = book.chapters[0].paragraphs[1];
+    expect(body.text).toBe('《《圏点》》');
+    expect(body.inlineAnnotations).toHaveLength(0);
+  });
+
+  it('honors the book-level title and author options', () => {
+    const book = manuscriptToEpubBook([{ title: 'C1', body: '' }], {
+      title: '作品名',
+      author: '作者',
+    });
+    expect(book.title).toBe('作品名');
+    expect(book.author).toBe('作者');
+  });
+});

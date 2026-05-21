@@ -14,6 +14,11 @@ export {
   setEpubInlineAnnotations,
   updateEpubParagraph,
 } from './editor.js';
+export type {
+  ManuscriptSourceChapter,
+  ManuscriptToEpubBookOptions,
+} from './manuscript-source.js';
+export { manuscriptToEpubBook } from './manuscript-source.js';
 export { parseEpub } from './parser.js';
 export type {
   EpubCollection,

@@ -22,6 +22,8 @@ export {
   isLineStartProhibited,
 } from './kinsoku.js';
 export { canBreakAt, computeBreaks } from './layout.js';
+export type { ManuscriptToken, ManuscriptTokenKind } from './manuscript-tokens.js';
+export { tokenizeManuscriptSource } from './manuscript-tokens.js';
 export type { ImageOverlayRect } from './overlay.js';
 export { moveImageOverlayRect, resizeImageOverlayRect } from './overlay.js';
 export type { PageSlice, ParagraphMeasure } from './paginate.js';
