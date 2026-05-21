@@ -240,6 +240,57 @@ describe('MejiroReader (React) — source variants', () => {
     const { container } = render(<MejiroReader enableDropZone />);
     expect(container.querySelector('.mejiro-reader-drop-zone')).not.toBeNull();
   });
+
+  it('renders manuscript chapters without an EPUB round-trip (manuscript source)', () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }));
+    const { container } = render(
+      <MejiroReader
+        manuscript={[
+          { id: 'c1', title: '第一話', body: '本文一。' },
+          { id: 'c2', title: '第二話', body: '本文二。' },
+        ]}
+      />,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const options = container.querySelectorAll('.mejiro-reader-chapter-nav option');
+    expect(options.length).toBe(2);
+    expect(options[0]?.textContent).toContain('第一話');
+    expect(options[1]?.textContent).toContain('第二話');
+    fetchSpy.mockRestore();
+  });
+
+  it('honors the dialect prop when synthesizing the manuscript book', () => {
+    const ref = createRef<MejiroReaderHandle>();
+    expect(() =>
+      render(
+        <MejiroReader
+          ref={ref}
+          dialect="narou"
+          manuscript={[{ id: 'c1', title: 'タイトル', body: '｜漢字《かんじ》' }]}
+        />,
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts an annotations prop without throwing', () => {
+    expect(() =>
+      render(
+        <MejiroReader
+          epub={fakeEpub()}
+          annotations={[
+            {
+              chapter: 0,
+              start: { paragraph: 0, charIndex: 0 },
+              end: { paragraph: 0, charIndex: 1 },
+              color: 'yellow',
+            },
+          ]}
+        />,
+      ),
+    ).not.toThrow();
+  });
 });
 
 describe('MejiroReader (React) — controlled spreadIdx', () => {
@@ -280,6 +331,38 @@ describe('MejiroReader (React) — imperative handle', () => {
     });
     expect(onChapterChange).toHaveBeenCalledWith(1);
     expect(ref.current?.getReadingPosition().chapter).toBe(1);
+  });
+
+  it('goToAnchor returns a Promise', () => {
+    const ref = createRef<MejiroReaderHandle>();
+    render(<MejiroReader ref={ref} epub={fakeEpub()} />);
+    const result = ref.current?.goToAnchor({ chapter: 0, paragraph: 0, charIndex: 0 });
+    expect(result).toBeInstanceOf(Promise);
+    // Swallow the rejection-free promise to avoid noisy unhandled-rejection warnings.
+    void result?.catch(() => {});
+  });
+
+  it('goToAnchor supersedes the previous in-flight call (prior promise resolves)', async () => {
+    const ref = createRef<MejiroReaderHandle>();
+    const { unmount } = render(<MejiroReader ref={ref} epub={fakeEpub()} />);
+    // Point at an out-of-range chapter so it cannot apply on its own.
+    const firstPromise = ref.current?.goToAnchor({
+      chapter: 99,
+      paragraph: 0,
+      charIndex: 0,
+    });
+    // Second call supersedes the first.
+    void ref.current?.goToAnchor({ chapter: 99, paragraph: 1, charIndex: 0 });
+    await expect(firstPromise).resolves.toBeUndefined();
+    unmount();
+  });
+
+  it('goToAnchor resolves on unmount even if the layout never settles', async () => {
+    const ref = createRef<MejiroReaderHandle>();
+    const { unmount } = render(<MejiroReader ref={ref} epub={fakeEpub()} />);
+    const promise = ref.current?.goToAnchor({ chapter: 99, paragraph: 0, charIndex: 0 });
+    unmount();
+    await expect(promise).resolves.toBeUndefined();
   });
 });
 

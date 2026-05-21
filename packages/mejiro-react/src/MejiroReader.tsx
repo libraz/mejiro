@@ -1,8 +1,14 @@
 // biome-ignore-all lint/correctness/useHookAtTopLevel: MejiroReaderInner is a React forwardRef render function.
-import type { BookOptions, ReadingAnchor } from '@libraz/mejiro/book';
+import type {
+  BookOptions,
+  InChapterAnchor,
+  ManuscriptChapter,
+  ReadingAnchor,
+} from '@libraz/mejiro/book';
 import { DEFAULT_BOOK_OPTIONS } from '@libraz/mejiro/book';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
-import type { EpubBook } from '@libraz/mejiro/epub';
+import type { EpubBook, ManuscriptDialect } from '@libraz/mejiro/epub';
+import { manuscriptToEpubBook } from '@libraz/mejiro/epub';
 import {
   type CSSProperties,
   type ForwardedRef,
@@ -11,6 +17,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -107,8 +114,12 @@ export interface MejiroReaderHandle {
    * Navigate to a {@link ReadingAnchor}. If the chapter differs from the
    * current one, the chapter is switched first; once the new layout is ready
    * the anchor is resolved and the matching spread is opened.
+   *
+   * Returns a promise that resolves once the spread has been applied. If
+   * another `goToAnchor` is invoked before the previous one settles, the
+   * earlier promise resolves immediately (superseded). Resolves on unmount.
    */
-  goToAnchor(anchor: ReadingAnchor): void;
+  goToAnchor(anchor: ReadingAnchor): Promise<void>;
   /**
    * Returns the {@link ReadingAnchor} at the start of the current spread,
    * or `null` if the layout is not ready.
@@ -257,6 +268,19 @@ interface MejiroReaderCommonProps {
   enableKeyboard?: boolean;
   /** Show the "n / total" indicator. @defaultValue `!bare` */
   enablePageIndicator?: boolean;
+  /**
+   * Reader-side annotations to render as highlights. Each annotation whose
+   * `chapter` matches the current chapter is converted to spread-local
+   * rectangles via `ChapterLayout.selectionRects` and drawn on top of the
+   * page content. Pair with {@link useAnnotations} for persistence, or pass
+   * any shape that satisfies `{ chapter, start, end }`.
+   */
+  annotations?: ReadonlyArray<{
+    chapter: number;
+    start: InChapterAnchor;
+    end: InChapterAnchor;
+    color?: string;
+  }>;
 
   /** Called after a successful EPUB load. */
   onLoad?: (book: EpubBook) => void;
@@ -286,9 +310,10 @@ interface MejiroReaderCommonProps {
  * to render an empty reader (e.g. while the book is still loading on the host).
  */
 export interface MejiroReaderControlledProps extends MejiroReaderCommonProps {
-  /** Pre-parsed EPUB. Cannot be combined with `epubUrl`. */
+  /** Pre-parsed EPUB. Cannot be combined with `epubUrl` / `manuscript`. */
   epub: EpubBook | null;
   epubUrl?: never;
+  manuscript?: never;
 }
 
 /**
@@ -296,9 +321,10 @@ export interface MejiroReaderControlledProps extends MejiroReaderCommonProps {
  * Use this for "just open this book" scenarios.
  */
 export interface MejiroReaderUrlProps extends MejiroReaderCommonProps {
-  /** EPUB URL fetched on mount. Cannot be combined with `epub`. */
+  /** EPUB URL fetched on mount. Cannot be combined with `epub` / `manuscript`. */
   epubUrl: string;
   epub?: never;
+  manuscript?: never;
 }
 
 /**
@@ -309,16 +335,33 @@ export interface MejiroReaderUrlProps extends MejiroReaderCommonProps {
 export interface MejiroReaderFileProps extends MejiroReaderCommonProps {
   epub?: never;
   epubUrl?: never;
+  manuscript?: never;
 }
 
 /**
- * Props for {@link MejiroReader}. Discriminated union of the three source
- * modes — TypeScript prevents passing both `epub` and `epubUrl` at once.
+ * Manuscript-source variant: render manuscript chapters directly without an
+ * EPUB ZIP round-trip. Designed for live preview in custom manuscript editors;
+ * each chapter body is split into paragraphs on blank lines and run through
+ * {@link parseManuscript} before layout.
+ */
+export interface MejiroReaderManuscriptProps extends MejiroReaderCommonProps {
+  /** Manuscript chapters to render. Cannot be combined with `epub` / `epubUrl`. */
+  manuscript: readonly ManuscriptChapter[];
+  /** Manuscript notation dialect. @defaultValue `'mejiro'` */
+  dialect?: ManuscriptDialect;
+  epub?: never;
+  epubUrl?: never;
+}
+
+/**
+ * Props for {@link MejiroReader}. Discriminated union of the four source
+ * modes — TypeScript prevents passing more than one source at once.
  */
 export type MejiroReaderProps =
   | MejiroReaderControlledProps
   | MejiroReaderUrlProps
-  | MejiroReaderFileProps;
+  | MejiroReaderFileProps
+  | MejiroReaderManuscriptProps;
 
 /**
  * Full-page EPUB reader component. Composes all of `@libraz/mejiro-react`
@@ -338,6 +381,8 @@ function MejiroReaderInner(
   props: MejiroReaderProps,
   ref: ForwardedRef<MejiroReaderHandle>,
 ): ReactNode {
+  const manuscriptProp = 'manuscript' in props ? props.manuscript : undefined;
+  const dialectProp = 'dialect' in props ? props.dialect : undefined;
   const {
     options = DEFAULT_BOOK_OPTIONS,
     fonts,
@@ -367,6 +412,7 @@ function MejiroReaderInner(
     enableStats = !bare,
     enableKeyboard = true,
     enablePageIndicator = !bare,
+    annotations,
     onLoad,
     onError,
     onChapterChange,
@@ -412,9 +458,15 @@ function MejiroReaderInner(
 
   const { book, options: bookOptions, setOptions } = useMejiroBook(options);
 
+  const synthesizedEpub = useMemo<EpubBook | null>(() => {
+    if (manuscriptProp === undefined) return null;
+    return manuscriptToEpubBook(manuscriptProp, { dialect: dialectProp });
+  }, [manuscriptProp, dialectProp]);
+
   const epubCtx = useEpub({
-    // `epub` takes precedence: skip the URL fetch when a parsed book is supplied.
-    defaultUrl: epubProp !== undefined ? undefined : epubUrl,
+    // `epub` / `manuscript` take precedence: skip the URL fetch when a parsed
+    // book (or a synthesized manuscript book) is supplied.
+    defaultUrl: epubProp !== undefined || manuscriptProp !== undefined ? undefined : epubUrl,
     fetchOptions,
     fetchEpub: fetchEpubFn,
     onLoad: (b) => {
@@ -423,8 +475,9 @@ function MejiroReaderInner(
     },
   });
 
-  const controlled = epubProp !== undefined;
-  const e = controlled ? (epubProp ?? null) : epubCtx.epub;
+  const controlled = epubProp !== undefined || manuscriptProp !== undefined;
+  const isManuscriptSource = manuscriptProp !== undefined;
+  const e = isManuscriptSource ? synthesizedEpub : controlled ? (epubProp ?? null) : epubCtx.epub;
 
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
@@ -447,6 +500,20 @@ function MejiroReaderInner(
   const imageCtx = useMultiImageOverlay(layoutCtx.layout, spreadCtx.spreadIdx, {
     onUpdate: () => spreadCtx.refresh(),
   });
+
+  const annotationRects = useMemo(() => {
+    if (!(annotations && layoutCtx.layout)) return [];
+    const result = [];
+    for (const annotation of annotations) {
+      if (annotation.chapter !== chapter) continue;
+      const rects = layoutCtx.layout.selectionRects({
+        start: annotation.start,
+        end: annotation.end,
+      });
+      for (const rect of rects) result.push(rect);
+    }
+    return result;
+  }, [annotations, layoutCtx.layout, chapter]);
 
   // Controlled mode: render `epub` directly instead of copying it into the
   // loader state. Copying introduces a render where layout can see the old
@@ -494,24 +561,37 @@ function MejiroReaderInner(
     [],
   );
 
-  const pendingAnchorRef = useRef<ReadingAnchor | null>(null);
+  interface PendingAnchor {
+    anchor: ReadingAnchor;
+    resolve: () => void;
+  }
+  const pendingAnchorRef = useRef<PendingAnchor | null>(null);
   const layout = layoutCtx.layout;
   const tryApplyPendingAnchor = useCallback(() => {
-    const anchor = pendingAnchorRef.current;
-    if (!anchor) return;
-    if (anchor.chapter !== chapter) return;
+    const pending = pendingAnchorRef.current;
+    if (!pending) return;
+    if (pending.anchor.chapter !== chapter) return;
     if (!layout) return;
     const loc = layout.locateAnchor({
-      paragraph: anchor.paragraph,
-      charIndex: anchor.charIndex,
+      paragraph: pending.anchor.paragraph,
+      charIndex: pending.anchor.charIndex,
     });
     if (!loc) return;
     pendingAnchorRef.current = null;
     spreadGoToRef.current(loc.spreadIdx);
+    pending.resolve();
   }, [chapter, layout]);
   useEffect(() => {
     tryApplyPendingAnchor();
   }, [tryApplyPendingAnchor]);
+  // Resolve any in-flight anchor on unmount so awaiting callers never hang.
+  useEffect(
+    () => () => {
+      pendingAnchorRef.current?.resolve();
+      pendingAnchorRef.current = null;
+    },
+    [],
+  );
 
   // Emit spreadChanged whenever spreadIdx (or chapter) changes, after mount.
   // Also fires the analytics callbacks: onPageRead with the dwell of the spread
@@ -568,11 +648,15 @@ function MejiroReaderInner(
         totalPages: spreadCtx.totalPages,
         totalSpreads: spreadCtx.totalSpreads,
       }),
-      goToAnchor: (anchor: ReadingAnchor) => {
-        pendingAnchorRef.current = anchor;
-        if (anchor.chapter !== chapter) onChapter(anchor.chapter);
-        tryApplyPendingAnchor();
-      },
+      goToAnchor: (anchor: ReadingAnchor) =>
+        new Promise<void>((resolve) => {
+          // Supersede any previous pending anchor — resolve so the caller
+          // does not hang. The new request takes over.
+          pendingAnchorRef.current?.resolve();
+          pendingAnchorRef.current = { anchor, resolve };
+          if (anchor.chapter !== chapter) onChapter(anchor.chapter);
+          tryApplyPendingAnchor();
+        }),
       getAnchor: () => {
         if (!layout) return null;
         const inCh = layout.anchorAt(spreadCtx.spreadIdx, 'right');
@@ -792,6 +876,7 @@ function MejiroReaderInner(
                 onImagePointerDown={imageCtx.onOverlayPointerDown}
                 onImageResizePointerDown={imageCtx.onResizePointerDown}
                 onImageClose={imageCtx.removeImage}
+                selectionRects={annotationRects.length ? annotationRects : undefined}
               />
             )}
           </div>

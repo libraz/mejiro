@@ -348,6 +348,36 @@ describe('MejiroReader (Vue) — epub precedence over epubUrl', () => {
     fetchSpy.mockRestore();
   });
 
+  it('renders manuscript chapters without an EPUB round-trip (manuscript source)', () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }));
+    const { container } = render(MejiroReader, {
+      props: {
+        manuscript: [
+          { id: 'c1', title: '第一話', body: '本文一。' },
+          { id: 'c2', title: '第二話', body: '本文二。' },
+        ],
+      },
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const options = container.querySelectorAll('.mejiro-reader-chapter-nav option');
+    expect(options.length).toBe(2);
+    expect(options[0]?.textContent).toContain('第一話');
+    fetchSpy.mockRestore();
+  });
+
+  it('synthesizes via the given dialect without throwing', () => {
+    expect(() =>
+      render(MejiroReader, {
+        props: {
+          manuscript: [{ id: 'c1', title: 'タイトル', body: '｜漢字《かんじ》' }],
+          dialect: 'narou',
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it('loads epubUrl after switching from controlled epub back to URL source', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
@@ -440,6 +470,47 @@ describe('MejiroReader (Vue) — imperative handle', () => {
     expect(pos.spreadIdx).toBe(0);
     expect(typeof pos.totalPages).toBe('number');
     expect(typeof pos.totalSpreads).toBe('number');
+  });
+
+  function mountHandle(): { handle: MejiroReaderHandle; unmount: () => void } {
+    let handle: MejiroReaderHandle | null = null;
+    const Wrapper = defineComponent({
+      setup() {
+        return () =>
+          h(MejiroReader, {
+            ref: (instance: unknown) => {
+              handle = instance as MejiroReaderHandle | null;
+            },
+            epub: fakeEpub(),
+          });
+      },
+    });
+    const { unmount } = render(Wrapper);
+    expect(handle).not.toBeNull();
+    return { handle: handle as unknown as MejiroReaderHandle, unmount };
+  }
+
+  it('goToAnchor returns a Promise', () => {
+    const { handle, unmount } = mountHandle();
+    const result = handle.goToAnchor({ chapter: 0, paragraph: 0, charIndex: 0 });
+    expect(result).toBeInstanceOf(Promise);
+    void result.catch(() => {});
+    unmount();
+  });
+
+  it('goToAnchor supersedes the previous in-flight call (prior promise resolves)', async () => {
+    const { handle, unmount } = mountHandle();
+    const firstPromise = handle.goToAnchor({ chapter: 99, paragraph: 0, charIndex: 0 });
+    void handle.goToAnchor({ chapter: 99, paragraph: 1, charIndex: 0 });
+    await expect(firstPromise).resolves.toBeUndefined();
+    unmount();
+  });
+
+  it('goToAnchor resolves on unmount even if the layout never settles', async () => {
+    const { handle, unmount } = mountHandle();
+    const promise = handle.goToAnchor({ chapter: 99, paragraph: 0, charIndex: 0 });
+    unmount();
+    await expect(promise).resolves.toBeUndefined();
   });
 });
 
