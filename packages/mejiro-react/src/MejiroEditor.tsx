@@ -353,6 +353,7 @@ export function MejiroEditor({
             subtitle={messages.editorPreviewSubtitle}
             chapterNavMode="panel"
             enableImageOverlay={false}
+            enableSurfaceTap={false}
           />
         ) : (
           <MejiroDropZone onFile={(file) => void loadFile(file)} />

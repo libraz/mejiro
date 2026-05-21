@@ -28,6 +28,13 @@ export interface ManuscriptPreviewProps {
   enableStats?: boolean;
   enableKeyboard?: boolean;
   enablePageIndicator?: boolean;
+  /**
+   * Toggle the surface-tap chrome-hide behavior of the embedded reader.
+   * Defaults to `false` here (the editor's preview is part of a side-by-side
+   * authoring workflow where tap-to-hide would surprise the author). Set
+   * to `true` to demo the fullscreen-reader behavior.
+   */
+  enableSurfaceTap?: boolean;
   bare?: boolean;
 }
 
@@ -253,6 +260,7 @@ export function MejiroManuscriptEditor({
         <MejiroReader
           subtitle={messages.manuscriptPreviewSubtitle}
           chapterNavMode="panel"
+          enableSurfaceTap={false}
           {...previewProps}
           manuscript={chapters.map((chapter) => ({
             id: chapter.id,

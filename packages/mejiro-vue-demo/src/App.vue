@@ -7,6 +7,7 @@ import {
   MejiroNotationHighlighter,
   MejiroReader,
   useEditableEpub,
+  useEpub,
   useEpubProject,
   useManuscriptDraft,
 } from '@libraz/mejiro-vue';
@@ -111,6 +112,11 @@ const projectCurrentChapter = project.currentChapter;
 const projectPreviewError = project.previewError;
 const projectPreviewing = project.previewing;
 
+// Parse the sample EPUB once so switching back to the viewer tab does not
+// re-trigger fetch+parse — passing `:epub="..."` skips the work that
+// `epub-url` would re-run on every remount.
+const sample = useEpub({ defaultUrl: '/neko.epub' });
+const sampleEpub = sample.epub;
 const editable = useEditableEpub();
 const editableEditor = editable.editor;
 const editableLoading = editable.loading;
@@ -263,7 +269,7 @@ function setPreviewChapter(nextChapter: number): void {
         key="viewer"
         :options="options"
         :fonts="FONTS"
-        epub-url="/neko.epub"
+        :epub="sampleEpub"
         subtitle="Vue Viewer"
         :enable-header="enableHeader"
         :enable-drop-zone="enableDropZone"
@@ -285,6 +291,7 @@ function setPreviewChapter(nextChapter: number): void {
         :manuscript="customManuscript"
         :chapter="customSelected"
         :enable-image-overlay="false"
+        :enable-surface-tap="false"
         @chapter-change="customDraft.setSelected"
       />
       <MejiroReader
@@ -297,6 +304,7 @@ function setPreviewChapter(nextChapter: number): void {
         :subtitle="mode === 'create' ? 'Create Preview' : 'Edit Preview'"
         chapter-nav-mode="panel"
         :enable-image-overlay="false"
+        :enable-surface-tap="false"
         @chapter-change="setPreviewChapter"
       />
       <div v-else class="demo-empty">Loading preview...</div>

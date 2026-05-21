@@ -258,6 +258,7 @@ export const MejiroEditor = defineComponent({
                 subtitle: messages.value.editorPreviewSubtitle,
                 chapterNavMode: 'panel',
                 enableImageOverlay: false,
+                enableSurfaceTap: false,
               })
             : h(MejiroDropZone, {
                 onFile: (file: File) => void loadFile(file),

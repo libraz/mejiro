@@ -11,6 +11,7 @@ import {
   type MejiroSpreadMode,
   type MejiroThemeName,
   useEditableEpub,
+  useEpub,
   useEpubProject,
   useManuscriptDraft,
 } from '@libraz/mejiro-react';
@@ -111,6 +112,10 @@ export default function App() {
     metadata: { title: '新しい作品', author: '作者名' },
     chapters: [defaultChapter()],
   });
+  // Parse the sample EPUB once at the app level so switching back to the
+  // viewer tab is instant — passing `epub={...}` skips the fetch+parse
+  // cycle that `epubUrl` would re-run on every remount.
+  const sample = useEpub({ defaultUrl: '/neko.epub' });
   const editable = useEditableEpub({ defaultUrl: '/neko.epub' });
   const customDraft = useManuscriptDraft({
     initialChapters: [
@@ -249,13 +254,14 @@ export default function App() {
             chapter={customDraft.selected}
             onChapterChange={customDraft.setSelected}
             enableImageOverlay={false}
+            enableSurfaceTap={false}
           />
         ) : mode === 'viewer' ? (
           <MejiroReader
             key="viewer"
             options={OPTIONS}
             fonts={FONTS}
-            epubUrl="/neko.epub"
+            epub={sample.epub}
             subtitle="React Viewer"
             mode={readerMode}
             spreadMode={spreadMode}
@@ -282,6 +288,7 @@ export default function App() {
             subtitle={mode === 'create' ? 'Create Preview' : 'Edit Preview'}
             chapterNavMode="panel"
             enableImageOverlay={false}
+            enableSurfaceTap={false}
             onChapterChange={setPreviewChapter}
           />
         ) : (
