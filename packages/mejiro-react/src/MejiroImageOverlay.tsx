@@ -49,8 +49,15 @@ export function MejiroImageOverlay({
       <button
         type="button"
         aria-label={messages.imageRemoveButton}
+        title={messages.imageRemoveButton}
         className="mejiro-reader-image-overlay-close"
         onPointerDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onClose?.();
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return;
           e.stopPropagation();
           e.preventDefault();
           onClose?.();

@@ -230,10 +230,22 @@ export function buildColumnSlots(
  * the slot positions to account for heading lines being wider and inter-paragraph
  * spacing.
  *
+ * The exclusion engine also derives its column count from the uniform base
+ * pitch (`floor(contentWidth / basePitch)`), so a spread with a wider-than-body
+ * heading produces more columns than physically fit once the heading excess is
+ * re-added here. When `contentWidth` is supplied, trailing columns whose
+ * adjusted physical extent (`xPos + pitch`) would overflow the content box are
+ * dropped, so the caller can reflow those lines onto the following page/spread
+ * instead of letting them clip past the page's leading edge. The slot array is
+ * ordered by non-decreasing `xPos`, so the overflowing slots are always a
+ * trailing run. At least one slot is always kept so layout makes progress.
+ *
  * @param slots - Column slots from the exclusion engine.
  * @param metrics - Per-line metrics from {@link buildLineMetrics}.
  * @param startIdx - Global line index of the first slot.
  * @param basePitch - Base body line pitch (from {@link LineMetricsResult.linePitch}).
+ * @param contentWidth - Page content-box width (px). When set, overflowing
+ *   trailing slots are dropped. When omitted, no trimming is applied.
  * @returns New array of adjusted slots (input is not mutated).
  */
 export function adjustExclusionSlots(
@@ -241,6 +253,7 @@ export function adjustExclusionSlots(
   metrics: LineMetric[],
   startIdx: number,
   basePitch: number,
+  contentWidth?: number,
 ): ColumnSlot[] {
   const adjusted: ColumnSlot[] = [];
   let extraOffset = 0;
@@ -255,11 +268,18 @@ export function adjustExclusionSlots(
       extraOffset += metrics[li - 1].pitch - basePitch;
       extraOffset += metrics[li].gapBefore;
     }
-    adjusted.push({
-      xPos: slots[i].xPos + extraOffset,
-      yStart: slots[i].yStart,
-      height: slots[i].height,
-    });
+    const xPos = slots[i].xPos + extraOffset;
+    // Drop trailing columns that would overflow the content box once the
+    // heading excess has been re-applied. Keep at least one slot so the
+    // page is never empty (which would stall the line walk).
+    if (
+      contentWidth != null &&
+      adjusted.length > 0 &&
+      xPos + metrics[li].pitch > contentWidth + 0.5
+    ) {
+      break;
+    }
+    adjusted.push({ xPos, yStart: slots[i].yStart, height: slots[i].height });
   }
   return adjusted;
 }

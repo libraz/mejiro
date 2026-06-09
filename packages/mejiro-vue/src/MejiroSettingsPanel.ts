@@ -23,6 +23,17 @@ const DEFAULT_FONTS: FontChoice[] = [
 ];
 
 /**
+ * Derives a human-readable label from a CSS `font-family` value — its first
+ * family with surrounding quotes stripped (e.g. `'"Noto Serif JP", serif'` →
+ * `Noto Serif JP`). Used to label an active font that isn't in the host's
+ * `fonts` list.
+ */
+function fontLabelFromCss(css: string): string {
+  const first = css.split(',')[0]?.trim() ?? css;
+  return first.replace(/^["']|["']$/g, '') || css;
+}
+
+/**
  * Reader settings panel: font, size, kinsoku mode, hanging punctuation,
  * and line spacing. Pass `open` to control visibility and use
  * `v-model:settings` to bind the editable options.
@@ -66,106 +77,117 @@ export const MejiroSettingsPanel = defineComponent({
     return () => {
       const s = props.settings;
       const m = messages.value;
+      // Show the active font even when the host's `fonts` list doesn't include
+      // it, so the selector never renders blank (e.g. an embed that sets a
+      // custom family but passes no matching choice).
+      const current = normalizeFontFamily(s.fontFamily);
+      const fontOptions = props.fonts.some((f) => f.value === current)
+        ? props.fonts
+        : [{ value: current, label: fontLabelFromCss(current) }, ...props.fonts];
       return h(
         'div',
         { class: ['mejiro-reader-settings-panel', { 'is-open': props.open }] },
-        h('div', { class: 'mejiro-reader-settings-inner' }, [
-          h('div', { class: 'mejiro-reader-settings-group' }, [
-            h('span', { class: 'mejiro-reader-settings-group-title' }, m.settingsFont),
-            h('div', { class: 'mejiro-reader-control' }, [
-              h(
-                'select',
-                {
-                  value: normalizeFontFamily(s.fontFamily),
+        h(
+          'div',
+          { class: 'mejiro-reader-settings-inner' },
+          h('div', { class: 'mejiro-reader-settings-content' }, [
+            h('div', { class: 'mejiro-reader-settings-group' }, [
+              h('span', { class: 'mejiro-reader-settings-group-title' }, m.settingsFont),
+              h('div', { class: 'mejiro-reader-control' }, [
+                h(
+                  'select',
+                  {
+                    value: normalizeFontFamily(s.fontFamily),
+                    onChange: (e: Event) =>
+                      patch({ fontFamily: (e.target as HTMLSelectElement).value }),
+                  },
+                  fontOptions.map((f) => h('option', { key: f.value, value: f.value }, f.label)),
+                ),
+              ]),
+              h('div', { class: 'mejiro-reader-control' }, [
+                h('label', { class: 'mejiro-reader-control-label' }, m.settingsSize),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'mejiro-reader-btn mejiro-reader-btn--icon',
+                    'aria-label': m.settingsSizeDown,
+                    onClick: () => patch({ fontSize: Math.max(props.minFontSize, s.fontSize - 1) }),
+                  },
+                  'A−',
+                ),
+                h('input', {
+                  type: 'number',
+                  value: s.fontSize,
+                  min: props.minFontSize,
+                  max: props.maxFontSize,
                   onChange: (e: Event) =>
-                    patch({ fontFamily: (e.target as HTMLSelectElement).value }),
-                },
-                props.fonts.map((f) => h('option', { key: f.value, value: f.value }, f.label)),
-              ),
+                    patch({ fontSize: Number((e.target as HTMLInputElement).value) }),
+                }),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    class: 'mejiro-reader-btn mejiro-reader-btn--icon',
+                    'aria-label': m.settingsSizeUp,
+                    onClick: () => patch({ fontSize: Math.min(props.maxFontSize, s.fontSize + 1) }),
+                  },
+                  'A+',
+                ),
+              ]),
             ]),
-            h('div', { class: 'mejiro-reader-control' }, [
-              h('label', { class: 'mejiro-reader-control-label' }, m.settingsSize),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  class: 'mejiro-reader-btn mejiro-reader-btn--icon',
-                  'aria-label': m.settingsSizeDown,
-                  onClick: () => patch({ fontSize: Math.max(props.minFontSize, s.fontSize - 1) }),
-                },
-                'A−',
-              ),
-              h('input', {
-                type: 'number',
-                value: s.fontSize,
-                min: props.minFontSize,
-                max: props.maxFontSize,
-                onChange: (e: Event) =>
-                  patch({ fontSize: Number((e.target as HTMLInputElement).value) }),
-              }),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  class: 'mejiro-reader-btn mejiro-reader-btn--icon',
-                  'aria-label': m.settingsSizeUp,
-                  onClick: () => patch({ fontSize: Math.min(props.maxFontSize, s.fontSize + 1) }),
-                },
-                'A+',
-              ),
+            h('div', { class: 'mejiro-reader-settings-group' }, [
+              h('span', { class: 'mejiro-reader-settings-group-title' }, m.settingsLayout),
+              h('div', { class: 'mejiro-reader-control' }, [
+                h('label', { class: 'mejiro-reader-control-label' }, m.settingsKinsoku),
+                h(
+                  'select',
+                  {
+                    value: s.mode ?? 'strict',
+                    onChange: (e: Event) =>
+                      patch({
+                        mode: (e.target as HTMLSelectElement).value as 'strict' | 'loose',
+                      }),
+                  },
+                  [
+                    h('option', { value: 'strict' }, m.settingsStrict),
+                    h('option', { value: 'loose' }, m.settingsLoose),
+                  ],
+                ),
+              ]),
+              h('div', { class: 'mejiro-reader-control' }, [
+                h('label', { class: 'mejiro-reader-control-label' }, m.settingsHanging),
+                h(
+                  'select',
+                  {
+                    value: String(s.enableHanging ?? true),
+                    onChange: (e: Event) =>
+                      patch({
+                        enableHanging: (e.target as HTMLSelectElement).value === 'true',
+                      }),
+                  },
+                  [
+                    h('option', { value: 'true' }, m.toggleOn),
+                    h('option', { value: 'false' }, m.toggleOff),
+                  ],
+                ),
+              ]),
+              h('div', { class: 'mejiro-reader-control' }, [
+                h('label', { class: 'mejiro-reader-control-label' }, m.settingsLineSpacing),
+                h('input', {
+                  class: 'mejiro-reader-control--wide',
+                  type: 'number',
+                  value: s.lineSpacing ?? 1.8,
+                  min: 1.0,
+                  max: 3.0,
+                  step: 0.1,
+                  onChange: (e: Event) =>
+                    patch({ lineSpacing: Number((e.target as HTMLInputElement).value) }),
+                }),
+              ]),
             ]),
           ]),
-          h('div', { class: 'mejiro-reader-settings-group' }, [
-            h('span', { class: 'mejiro-reader-settings-group-title' }, m.settingsLayout),
-            h('div', { class: 'mejiro-reader-control' }, [
-              h('label', { class: 'mejiro-reader-control-label' }, m.settingsKinsoku),
-              h(
-                'select',
-                {
-                  value: s.mode ?? 'strict',
-                  onChange: (e: Event) =>
-                    patch({
-                      mode: (e.target as HTMLSelectElement).value as 'strict' | 'loose',
-                    }),
-                },
-                [
-                  h('option', { value: 'strict' }, m.settingsStrict),
-                  h('option', { value: 'loose' }, m.settingsLoose),
-                ],
-              ),
-            ]),
-            h('div', { class: 'mejiro-reader-control' }, [
-              h('label', { class: 'mejiro-reader-control-label' }, m.settingsHanging),
-              h(
-                'select',
-                {
-                  value: String(s.enableHanging ?? true),
-                  onChange: (e: Event) =>
-                    patch({
-                      enableHanging: (e.target as HTMLSelectElement).value === 'true',
-                    }),
-                },
-                [
-                  h('option', { value: 'true' }, m.toggleOn),
-                  h('option', { value: 'false' }, m.toggleOff),
-                ],
-              ),
-            ]),
-            h('div', { class: 'mejiro-reader-control' }, [
-              h('label', { class: 'mejiro-reader-control-label' }, m.settingsLineSpacing),
-              h('input', {
-                class: 'mejiro-reader-control--wide',
-                type: 'number',
-                value: s.lineSpacing ?? 1.8,
-                min: 1.0,
-                max: 3.0,
-                step: 0.1,
-                onChange: (e: Event) =>
-                  patch({ lineSpacing: Number((e.target as HTMLInputElement).value) }),
-              }),
-            ]),
-          ]),
-        ]),
+        ),
       );
     };
   },

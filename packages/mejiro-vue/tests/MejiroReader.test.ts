@@ -142,6 +142,41 @@ describe('MejiroReader (Vue) — enable* toggles', () => {
     ).toBe(true);
   });
 
+  it('settings slot replaces the controls while keeping the panel chrome', () => {
+    const { container } = render(MejiroReader, {
+      props: { epub: fakeEpub() },
+      slots: { settings: () => h('div', { class: 'custom-settings' }, 'Custom') },
+    });
+    const panel = container.querySelector('.mejiro-reader-settings-panel');
+    expect(panel).not.toBeNull();
+    expect(
+      panel?.querySelector(
+        '.mejiro-reader-settings-inner > .mejiro-reader-settings-content > .custom-settings',
+      )?.textContent,
+    ).toBe('Custom');
+    // Built-in controls are gone.
+    expect(container.querySelector('#mejiro-reader-font-size')).toBeNull();
+  });
+
+  it('settings slot receives a live slot (settings, update, open, toggle)', () => {
+    // biome-ignore lint/suspicious/noExplicitAny: capturing the runtime slot payload
+    let captured: any = null;
+    render(MejiroReader, {
+      props: { epub: fakeEpub() },
+      slots: {
+        settings: (slotProps: unknown) => {
+          captured = slotProps;
+          return h('div');
+        },
+      },
+    });
+    expect(captured).not.toBeNull();
+    expect(typeof captured.settings.fontSize).toBe('number');
+    expect(typeof captured.update).toBe('function');
+    expect(typeof captured.toggle).toBe('function');
+    expect(captured.open).toBe(false);
+  });
+
   it('reacts to options prop changes', async () => {
     const options = ref({ fontFamily: 'serif', fontSize: 16 });
     const book = fakeEpub();

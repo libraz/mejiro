@@ -361,6 +361,85 @@ describe('ChapterLayout', () => {
     expect(cacheBefore.has(1)).toBe(false);
   });
 
+  describe('image exclusion with a wide heading column', () => {
+    // fontSize 10, lineSpacing 1 → body pitch 10; headingScale 1.4 → heading
+    // font 14, pitch 14. pageWidth/contentWidth 100 → 10 body columns / page.
+    const BASE_PITCH = 10;
+    const CONTENT_WIDTH = 100;
+
+    function makeHeadedLayout(): ChapterLayout {
+      const heading = '章';
+      const body = 'あ'.repeat(400);
+      const cached: CachedParagraph[] = [
+        {
+          text: toCodepoints(heading),
+          advances: uniformAdvances([...heading].length, 14),
+          chars: chars(heading),
+          inlineAnnotations: [],
+          headingLevel: 1,
+        },
+        {
+          text: toCodepoints(body),
+          advances: uniformAdvances([...body].length, 10),
+          chars: chars(body),
+          inlineAnnotations: [],
+        },
+      ];
+      const entries: RenderEntry[] = [
+        {
+          chars: chars(heading),
+          breakPoints: new Uint32Array(0),
+          inlineAnnotations: [],
+          headingLevel: 1,
+        },
+        { chars: chars(body), breakPoints: new Uint32Array(0), inlineAnnotations: [] },
+      ];
+      return makeLayout(cached, entries);
+    }
+
+    /** Concatenates all rendered text across every spread of the layout. */
+    function renderedText(layout: ChapterLayout): string {
+      const spreadCount = Math.ceil(layout.totalPages / 2);
+      let out = '';
+      for (let s = 0; s < spreadCount; s++) {
+        const spread = layout.getSpread(s);
+        for (const page of [spread.right, spread.left]) {
+          for (const line of page.lines) {
+            for (const seg of line.segments) {
+              if (seg.type === 'text') out += seg.text;
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    it('keeps every right-page column inside the page content box', () => {
+      const layout = makeHeadedLayout();
+      // Image on the right page (content coords): overlaps body columns near x≈30.
+      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+
+      const spread = layout.getSpread(0);
+      expect(spread.right.hasImages).toBe(true);
+
+      // In vertical-rl, a slot's xPos is its distance from the right content
+      // edge; the column occupies [xPos, xPos + pitch]. No column may extend
+      // past the content box, or it is clipped off the page's left edge.
+      const overflow = spread.right.slots.filter((s) => s.xPos + BASE_PITCH > CONTENT_WIDTH + 0.5);
+      expect(overflow).toEqual([]);
+    });
+
+    it('reflows the trimmed columns instead of dropping their text', () => {
+      const layout = makeHeadedLayout();
+      const expected = renderedText(layout);
+
+      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      // Columns trimmed from the overflowing right page must reappear on a
+      // later page — the full chapter text is still rendered, never lost.
+      expect(renderedText(layout)).toBe(expected);
+    });
+  });
+
   it('clears only the target spread when syncImages receives no images', () => {
     const text = 'あ'.repeat(300);
     const codepoints = toCodepoints(text);

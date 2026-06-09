@@ -285,14 +285,17 @@ export class MejiroBook {
     const maxHeight = options?.maxHeight ?? DEFAULT_PAGE_GEOMETRY.maxHeight;
     const headerOffset = options?.headerOffset ?? DEFAULT_PAGE_GEOMETRY.headerOffset;
     const gutterOffset = options?.gutterOffset ?? DEFAULT_PAGE_GEOMETRY.gutterOffset;
+    const columns = options?.columns ?? 2;
 
     const availH = container.clientHeight - headerOffset;
     const availW = container.clientWidth - gutterOffset;
 
     let h = Math.min(availH, maxHeight);
     let w = Math.round(h / aspect);
-    if (w * 2 > availW) {
-      w = Math.floor(availW / 2);
+    // Bound the page width by the container: a two-page spread shares the width
+    // across both pages, a single-page reader gets the full width.
+    if (w * columns > availW) {
+      w = Math.floor(availW / columns);
       h = Math.round(w * aspect);
     }
     w = Math.max(w, minWidth);

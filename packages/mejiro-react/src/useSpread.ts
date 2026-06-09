@@ -29,6 +29,12 @@ export interface UseSpreadReturn {
   prev: () => void;
   /** Jump to an arbitrary spread index (clamped). */
   goTo: (index: number) => void;
+  /**
+   * Set the spread index immediately, with no page-turn animation, clamped to
+   * `[0, totalSpreads − 1]`. Use to restore a reading position after a reflow
+   * re-layout (where an animated {@link goTo} would briefly flash spread 0).
+   */
+  setSpread: (index: number) => void;
   /** Manually refresh `spread` from `layout` at the current index. */
   refresh: () => void;
 }
@@ -115,6 +121,17 @@ export function useSpread(
     [turnDuration],
   );
 
+  const setSpreadIndex = useCallback((index: number) => {
+    if (!layoutRef.current) return;
+    if (turnTimerRef.current) {
+      clearTimeout(turnTimerRef.current);
+      turnTimerRef.current = null;
+    }
+    setTurning(false);
+    const max = Math.max(1, Math.ceil(layoutRef.current.totalPages / 2)) - 1;
+    setSpreadIdx(Math.max(0, Math.min(max, index)));
+  }, []);
+
   const next = useCallback(() => goTo(spreadIdxRef.current + 1), [goTo]);
   const prev = useCallback(() => goTo(spreadIdxRef.current - 1), [goTo]);
 
@@ -136,5 +153,16 @@ export function useSpread(
     [],
   );
 
-  return { spreadIdx, spread, totalPages, totalSpreads, turning, next, prev, goTo, refresh };
+  return {
+    spreadIdx,
+    spread,
+    totalPages,
+    totalSpreads,
+    turning,
+    next,
+    prev,
+    goTo,
+    setSpread: setSpreadIndex,
+    refresh,
+  };
 }

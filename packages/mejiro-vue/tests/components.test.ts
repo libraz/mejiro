@@ -339,6 +339,37 @@ describe('MejiroSettingsPanel (Vue)', () => {
     hanging.dispatchEvent(new Event('change', { bubbles: true }));
     expect(onUpdate).toHaveBeenLastCalledWith({ ...baseSettings, enableHanging: false });
   });
+
+  it('shows the active font even when it is not in the `fonts` list (no blank select)', () => {
+    const { container } = render(MejiroSettingsPanel, {
+      props: {
+        open: true,
+        settings: { ...baseSettings, fontFamily: '"Noto Serif JP", serif' },
+        // host passes no matching choice
+        fonts: [{ value: 'sans-serif', label: 'System Sans' }],
+      },
+    });
+    const fontSelect = container.querySelector('select') as HTMLSelectElement;
+    // The select resolves to the active family instead of rendering blank.
+    expect(fontSelect.value).toBe('"Noto Serif JP", serif');
+    const option = Array.from(fontSelect.options).find((o) => o.value === '"Noto Serif JP", serif');
+    expect(option).toBeTruthy();
+    // Prettified label: first family, quotes stripped.
+    expect(option?.textContent).toBe('Noto Serif JP');
+  });
+
+  it('does not duplicate the active font when it is already in the `fonts` list', () => {
+    const { container } = render(MejiroSettingsPanel, {
+      props: {
+        open: true,
+        settings: { ...baseSettings, fontFamily: 'serif' },
+        fonts: [{ value: 'serif', label: 'System Serif' }],
+      },
+    });
+    const fontSelect = container.querySelector('select') as HTMLSelectElement;
+    expect(fontSelect.options.length).toBe(1);
+    expect(fontSelect.value).toBe('serif');
+  });
 });
 
 describe('MejiroPageIndicator (Vue)', () => {
@@ -402,6 +433,35 @@ describe('MejiroSpread (Vue)', () => {
     expect(container.querySelectorAll('.mejiro-page-slots')).toHaveLength(2);
     expect(container.querySelector('.mejiro-reader-page-content.mejiro-page')).toBeNull();
     expect(container.querySelector('br')).toBeNull();
+  });
+
+  it('prints each page number in its own running head and hides it when null', () => {
+    const spread: SpreadResult = {
+      right: pageResult('右頁'),
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+
+    // A null pageNumber is how `pageNumbers="right"` suppresses the left folio.
+    const { container } = render(MejiroSpread, {
+      props: {
+        spread,
+        pageWidth: 320,
+        pageHeight: 460,
+        contentHeight: 360,
+        rightHeader: { title: 'Book', pageNumber: 7 },
+        leftHeader: { title: 'Chapter', pageNumber: null },
+      },
+    });
+
+    const rightNum = container.querySelector(
+      '.mejiro-reader-page--right .mejiro-reader-page-header-num',
+    );
+    const leftNum = container.querySelector(
+      '.mejiro-reader-page--left .mejiro-reader-page-header-num',
+    );
+    expect(rightNum?.textContent).toBe('7');
+    expect(leftNum?.textContent).toBe('');
   });
 });
 

@@ -69,6 +69,23 @@ describe('MejiroBook', () => {
     expect(dims.pageHeight).toBe(300);
   });
 
+  it('computePageSize gives a single-page reader the full container width', () => {
+    // Portrait-ish container where a two-page spread would be width-bound and
+    // therefore halved. A single page should instead fill the width.
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 600, configurable: true });
+    Object.defineProperty(container, 'clientHeight', { value: 900, configurable: true });
+
+    const double = book.computePageSize(container); // columns defaults to 2
+    const single = book.computePageSize(container, { columns: 1 });
+
+    // Two-page spread is halved (width-bound, then clamped up to the 280 min);
+    // a single page is height-bound and ends up markedly wider.
+    expect(double.pageWidth).toBe(280);
+    expect(single.pageWidth).toBe(538);
+    expect(single.pageWidth).toBeGreaterThan(double.pageWidth);
+  });
+
   it('clearCache does not throw and produces no observable error', () => {
     expect(() => book.clearCache()).not.toThrow();
     expect(() => book.clearCache('serif 16px')).not.toThrow();

@@ -41,6 +41,7 @@ const fontSizeInput = document.getElementById('fontSize') as HTMLInputElement;
 const modeSelect = document.getElementById('mode') as HTMLSelectElement;
 const hangingSelect = document.getElementById('hanging') as HTMLSelectElement;
 const lineSpacingInput = document.getElementById('lineSpacing') as HTMLInputElement;
+const pageNumbersSelect = document.getElementById('pageNumbers') as HTMLSelectElement;
 const imageToggle = document.getElementById('imageToggle') as HTMLButtonElement;
 
 // ── State ──
@@ -283,7 +284,7 @@ function createImageOverlay(x: number, y: number): ImagePlacement {
   el.innerHTML = `
     <div class="mejiro-reader-image-overlay-label"><div class="mejiro-reader-image-overlay-icon"></div><span>Image</span></div>
     <div class="mejiro-reader-image-overlay-resize"></div>
-    <div class="mejiro-reader-image-overlay-close"></div>
+    <div class="mejiro-reader-image-overlay-close" role="button" tabindex="0" aria-label="Remove image" title="Remove image"></div>
   `;
   pageRight.appendChild(el);
 
@@ -331,6 +332,13 @@ function setupOverlayDrag(placement: ImagePlacement): void {
   let startVal = { x: 0, y: 0, w: 0, h: 0 };
 
   closeEl.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    removeImageOverlay(placement);
+  });
+
+  closeEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
     e.stopPropagation();
     e.preventDefault();
     removeImageOverlay(placement);
@@ -459,6 +467,8 @@ fontSizeInput.addEventListener('input', debouncedRender);
 modeSelect.addEventListener('change', render);
 hangingSelect.addEventListener('change', render);
 lineSpacingInput.addEventListener('input', debouncedRender);
+// Page-number visibility is pure chrome — no relayout needed.
+pageNumbersSelect.addEventListener('change', updatePageInfo);
 
 chapterSelect.addEventListener('change', () => {
   currentChapter = Number(chapterSelect.value);
@@ -665,12 +675,16 @@ function updatePageInfo(): void {
     ? `${currentBook.author}  ${currentBook.title}`
     : currentBook.title;
 
+  const pageNumbers = pageNumbersSelect.value as 'both' | 'right' | 'left' | 'none';
+  const showRightNum = pageNumbers === 'both' || pageNumbers === 'right';
+  const showLeftNum = pageNumbers === 'both' || pageNumbers === 'left';
+
   runningTitleRight.textContent = headerText;
-  runningPageRight.textContent = `${currentPage + 1}`;
+  runningPageRight.textContent = showRightNum ? `${currentPage + 1}` : '';
 
   if (currentPage + 1 < totalPages) {
     runningTitleLeft.textContent = chTitle;
-    runningPageLeft.textContent = `${currentPage + 2}`;
+    runningPageLeft.textContent = showLeftNum ? `${currentPage + 2}` : '';
   } else {
     runningTitleLeft.textContent = '';
     runningPageLeft.textContent = '';

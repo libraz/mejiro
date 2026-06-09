@@ -22,6 +22,17 @@ const DEFAULT_FONTS: FontChoice[] = [
   { value: 'sans-serif', label: 'System Sans' },
 ];
 
+/**
+ * Derives a human-readable label from a CSS `font-family` value — its first
+ * family with surrounding quotes stripped (e.g. `'"Noto Serif JP", serif'` →
+ * `Noto Serif JP`). Used to label an active font that isn't in the host's
+ * `fonts` list.
+ */
+function fontLabelFromCss(css: string): string {
+  const first = css.split(',')[0]?.trim() ?? css;
+  return first.replace(/^["']|["']$/g, '') || css;
+}
+
 /** Props for {@link MejiroSettingsPanel}. */
 export interface MejiroSettingsPanelProps {
   /** Whether the panel is expanded. */
@@ -52,95 +63,102 @@ export function MejiroSettingsPanel({
   const messages = useI18n();
   const patch = (next: Partial<EditableSettings>) => onChange({ ...settings, ...next });
 
+  // Show the active font even when the host's `fonts` list doesn't include it,
+  // so the selector never renders blank (e.g. an embed that sets a custom
+  // family but passes no matching choice).
+  const currentFont = normalizeFontFamily(settings.fontFamily);
+  const fontOptions = fonts.some((f) => f.value === currentFont)
+    ? fonts
+    : [{ value: currentFont, label: fontLabelFromCss(currentFont) }, ...fonts];
+
   return (
     <div className={`mejiro-reader-settings-panel${open ? ' is-open' : ''}`}>
       <div className="mejiro-reader-settings-inner">
-        <div className="mejiro-reader-settings-group">
-          <span className="mejiro-reader-settings-group-title">{messages.settingsFont}</span>
-          <div className="mejiro-reader-control">
-            <select
-              value={normalizeFontFamily(settings.fontFamily)}
-              onChange={(e) => patch({ fontFamily: e.target.value })}
-            >
-              {fonts.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
+        <div className="mejiro-reader-settings-content">
+          <div className="mejiro-reader-settings-group">
+            <span className="mejiro-reader-settings-group-title">{messages.settingsFont}</span>
+            <div className="mejiro-reader-control">
+              <select value={currentFont} onChange={(e) => patch({ fontFamily: e.target.value })}>
+                {fontOptions.map((f) => (
+                  <option key={f.value} value={f.value}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="mejiro-reader-control">
+              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-font-size">
+                {messages.settingsSize}
+              </label>
+              <button
+                type="button"
+                className="mejiro-reader-btn mejiro-reader-btn--icon"
+                aria-label={messages.settingsSizeDown}
+                onClick={() => patch({ fontSize: Math.max(minFontSize, settings.fontSize - 1) })}
+              >
+                A−
+              </button>
+              <input
+                id="mejiro-reader-font-size"
+                type="number"
+                value={settings.fontSize}
+                min={minFontSize}
+                max={maxFontSize}
+                onChange={(e) => patch({ fontSize: Number(e.target.value) })}
+              />
+              <button
+                type="button"
+                className="mejiro-reader-btn mejiro-reader-btn--icon"
+                aria-label={messages.settingsSizeUp}
+                onClick={() => patch({ fontSize: Math.min(maxFontSize, settings.fontSize + 1) })}
+              >
+                A+
+              </button>
+            </div>
           </div>
-          <div className="mejiro-reader-control">
-            <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-font-size">
-              {messages.settingsSize}
-            </label>
-            <button
-              type="button"
-              className="mejiro-reader-btn mejiro-reader-btn--icon"
-              aria-label={messages.settingsSizeDown}
-              onClick={() => patch({ fontSize: Math.max(minFontSize, settings.fontSize - 1) })}
-            >
-              A−
-            </button>
-            <input
-              id="mejiro-reader-font-size"
-              type="number"
-              value={settings.fontSize}
-              min={minFontSize}
-              max={maxFontSize}
-              onChange={(e) => patch({ fontSize: Number(e.target.value) })}
-            />
-            <button
-              type="button"
-              className="mejiro-reader-btn mejiro-reader-btn--icon"
-              aria-label={messages.settingsSizeUp}
-              onClick={() => patch({ fontSize: Math.min(maxFontSize, settings.fontSize + 1) })}
-            >
-              A+
-            </button>
-          </div>
-        </div>
-        <div className="mejiro-reader-settings-group">
-          <span className="mejiro-reader-settings-group-title">{messages.settingsLayout}</span>
-          <div className="mejiro-reader-control">
-            <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-kinsoku">
-              {messages.settingsKinsoku}
-            </label>
-            <select
-              id="mejiro-reader-kinsoku"
-              value={settings.mode ?? 'strict'}
-              onChange={(e) => patch({ mode: e.target.value as 'strict' | 'loose' })}
-            >
-              <option value="strict">{messages.settingsStrict}</option>
-              <option value="loose">{messages.settingsLoose}</option>
-            </select>
-          </div>
-          <div className="mejiro-reader-control">
-            <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-hanging">
-              {messages.settingsHanging}
-            </label>
-            <select
-              id="mejiro-reader-hanging"
-              value={String(settings.enableHanging ?? true)}
-              onChange={(e) => patch({ enableHanging: e.target.value === 'true' })}
-            >
-              <option value="true">{messages.toggleOn}</option>
-              <option value="false">{messages.toggleOff}</option>
-            </select>
-          </div>
-          <div className="mejiro-reader-control">
-            <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-line-spacing">
-              {messages.settingsLineSpacing}
-            </label>
-            <input
-              id="mejiro-reader-line-spacing"
-              className="mejiro-reader-control--wide"
-              type="number"
-              value={settings.lineSpacing ?? 1.8}
-              min={1.0}
-              max={3.0}
-              step={0.1}
-              onChange={(e) => patch({ lineSpacing: Number(e.target.value) })}
-            />
+          <div className="mejiro-reader-settings-group">
+            <span className="mejiro-reader-settings-group-title">{messages.settingsLayout}</span>
+            <div className="mejiro-reader-control">
+              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-kinsoku">
+                {messages.settingsKinsoku}
+              </label>
+              <select
+                id="mejiro-reader-kinsoku"
+                value={settings.mode ?? 'strict'}
+                onChange={(e) => patch({ mode: e.target.value as 'strict' | 'loose' })}
+              >
+                <option value="strict">{messages.settingsStrict}</option>
+                <option value="loose">{messages.settingsLoose}</option>
+              </select>
+            </div>
+            <div className="mejiro-reader-control">
+              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-hanging">
+                {messages.settingsHanging}
+              </label>
+              <select
+                id="mejiro-reader-hanging"
+                value={String(settings.enableHanging ?? true)}
+                onChange={(e) => patch({ enableHanging: e.target.value === 'true' })}
+              >
+                <option value="true">{messages.toggleOn}</option>
+                <option value="false">{messages.toggleOff}</option>
+              </select>
+            </div>
+            <div className="mejiro-reader-control">
+              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-line-spacing">
+                {messages.settingsLineSpacing}
+              </label>
+              <input
+                id="mejiro-reader-line-spacing"
+                className="mejiro-reader-control--wide"
+                type="number"
+                value={settings.lineSpacing ?? 1.8}
+                min={1.0}
+                max={3.0}
+                step={0.1}
+                onChange={(e) => patch({ lineSpacing: Number(e.target.value) })}
+              />
+            </div>
           </div>
         </div>
       </div>

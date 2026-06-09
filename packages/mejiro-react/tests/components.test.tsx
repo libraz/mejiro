@@ -267,6 +267,37 @@ describe('MejiroSpread (React)', () => {
     expect(container.querySelector('.mejiro-reader-page-content.mejiro-page')).toBeNull();
     expect(container.querySelector('br')).toBeNull();
   });
+
+  it('prints each page number in its own running head and hides it when null', () => {
+    const spread: SpreadResult = {
+      right: pageResult('右頁'),
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+
+    // A null pageNumber is how `pageNumbers="right"` suppresses the left folio.
+    const { container } = render(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread
+          spread={spread}
+          pageWidth={320}
+          pageHeight={460}
+          contentHeight={360}
+          rightHeader={{ title: 'Book', pageNumber: 7 }}
+          leftHeader={{ title: 'Chapter', pageNumber: null }}
+        />
+      </MejiroI18nProvider>,
+    );
+
+    const rightNum = container.querySelector(
+      '.mejiro-reader-page--right .mejiro-reader-page-header-num',
+    );
+    const leftNum = container.querySelector(
+      '.mejiro-reader-page--left .mejiro-reader-page-header-num',
+    );
+    expect(rightNum?.textContent).toBe('7');
+    expect(leftNum?.textContent).toBe('');
+  });
 });
 
 describe('MejiroSettingsPanel (React)', () => {
@@ -292,6 +323,21 @@ describe('MejiroSettingsPanel (React)', () => {
     );
     const panel = container.querySelector('.mejiro-reader-settings-panel') as HTMLElement;
     expect(panel.classList.contains('is-open')).toBe(false);
+  });
+
+  it('wraps controls in the accordion clip box + padded content layer', () => {
+    // The `0fr → 1fr` accordion requires `.settings-inner` to be a bare clip box
+    // and the padding/flex to live on a nested `.settings-content`; otherwise a
+    // closed panel reserves a permanent band (looks "always open").
+    const { container } = render(
+      <MejiroSettingsPanel open settings={baseSettings} onChange={() => {}} />,
+    );
+    const content = container.querySelector(
+      '.mejiro-reader-settings-inner > .mejiro-reader-settings-content',
+    );
+    expect(content).not.toBeNull();
+    // The controls live inside the content layer, not directly in the clip box.
+    expect(content?.querySelector('.mejiro-reader-settings-group')).not.toBeNull();
   });
 
   it('calls onChange with the merged value when font size changes', () => {
@@ -331,6 +377,37 @@ describe('MejiroSettingsPanel (React)', () => {
     const hanging = container.querySelector('#mejiro-reader-hanging') as HTMLSelectElement;
     fireEvent.change(hanging, { target: { value: 'false' } });
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, enableHanging: false });
+  });
+
+  it('shows the active font even when it is not in the `fonts` list (no blank select)', () => {
+    const { container } = render(
+      <MejiroSettingsPanel
+        open
+        settings={{ ...baseSettings, fontFamily: '"Noto Serif JP", serif' }}
+        onChange={() => {}}
+        fonts={[{ value: 'sans-serif', label: 'System Sans' }]}
+      />,
+    );
+    const fontSelect = container.querySelector('select') as HTMLSelectElement;
+    expect(fontSelect.value).toBe('"Noto Serif JP", serif');
+    const option = Array.from(fontSelect.options).find((o) => o.value === '"Noto Serif JP", serif');
+    expect(option).toBeTruthy();
+    // Prettified label: first family, quotes stripped.
+    expect(option?.textContent).toBe('Noto Serif JP');
+  });
+
+  it('does not duplicate the active font when it is already in the `fonts` list', () => {
+    const { container } = render(
+      <MejiroSettingsPanel
+        open
+        settings={{ ...baseSettings, fontFamily: 'serif' }}
+        onChange={() => {}}
+        fonts={[{ value: 'serif', label: 'System Serif' }]}
+      />,
+    );
+    const fontSelect = container.querySelector('select') as HTMLSelectElement;
+    expect(fontSelect.options.length).toBe(1);
+    expect(fontSelect.value).toBe('serif');
   });
 });
 

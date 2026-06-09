@@ -611,6 +611,87 @@ Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS class
 }
 ```
 
+### CSS cascade layers (host resets can clobber the reader chrome)
+
+The reader's chrome stylesheet (`MejiroReader` header, settings panel, controls)
+ships inside a CSS cascade layer:
+
+```css
+@layer mejiro.base, mejiro.chrome, mejiro.print;
+```
+
+Layering lets you override mejiro's chrome from your own **unlayered** styles
+without specificity wars — any unlayered rule wins. But that same precedence
+rule cuts the other way: an unlayered global **reset** in the host app also beats
+mejiro's layered rules, regardless of selector specificity. VitePress,
+normalize.css, and Tailwind's preflight all ship something like:
+
+```css
+button, input, optgroup, select, textarea { padding: 0; ... }  /* unlayered */
+```
+
+which strips the padding mejiro reserves for the settings `<select>` dropdown
+arrows (the arrow then overlaps the option text). mejiro reasserts the few
+box-model properties its controls depend on with `!important` so they survive
+this, but the general guidance for a clean embed is to **put your own resets in a
+layer** so they participate in the cascade order instead of trumping everything:
+
+```css
+@layer reset, mejiro, app;
+
+@layer reset {
+  /* normalize / preflight / your reset here */
+}
+```
+
+With the reset layered before `mejiro`, the reader's chrome styles win as
+intended, and your `app` layer can still override them on top.
+
+### Embedding in page flow (`fit="width"`)
+
+By default `MejiroReader` fills its container's height (`fit="fill"`), so the
+container needs an explicit height. To drop the reader into normal document flow
+(a blog post, a docs page) without computing a height, use `fit="width"`: the
+reader derives its own height from its measured width and the page aspect ratio,
+the spread fills edge-to-edge with no letterbox, and you only constrain the
+width.
+
+```tsx
+// React
+<div style={{ width: '100%', maxWidth: 720 }}>
+  <MejiroReader epubUrl="/book.epub" fit="width" />
+</div>
+```
+
+```vue
+<!-- Vue -->
+<div style="width: 100%; max-width: 720px;">
+  <MejiroReader epub-url="/book.epub" fit="width" />
+</div>
+```
+
+### Page numbers (`pageNumbers`)
+
+Each page of a spread prints its own page number in the running head — the right
+page odd, the left page even. Use `pageNumbers` to choose which pages show one:
+
+| Value | Effect |
+|---|---|
+| `'both'` | Number every page (default). |
+| `'right'` | Only the right page. |
+| `'left'` | Only the left page. |
+| `'none'` | Hide page numbers. The `enablePageIndicator` "n / total" badge is independent. |
+
+```tsx
+// React
+<MejiroReader epubUrl="/book.epub" pageNumbers="right" />
+```
+
+```vue
+<!-- Vue -->
+<MejiroReader epub-url="/book.epub" page-numbers="right" />
+```
+
 ---
 
 ## 5. Building a fully custom editor

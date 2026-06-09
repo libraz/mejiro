@@ -31,6 +31,17 @@ export default function App() {
 html, body, #root { height: 100%; margin: 0; }
 ```
 
+To embed in normal page flow instead (a blog post, a docs page) with no height
+math, use `fit="width"` — the reader self-sizes its height from its width:
+
+```tsx
+<MejiroReader epubUrl="/book.epub" fit="width" />
+```
+
+> Embedding inside a framework with an unlayered global CSS reset (Next.js,
+> Tailwind preflight, normalize.css)? See the [cascade-layers note](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md#css-cascade-layers-host-resets-can-clobber-the-reader-chrome)
+> so host resets don't clobber the reader chrome.
+
 ## Templates
 
 Copy-paste-ready starters live under [`examples/`](https://github.com/libraz/mejiro/tree/main/examples):

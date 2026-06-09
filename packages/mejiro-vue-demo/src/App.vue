@@ -2,7 +2,11 @@
 import { formatDialogueLineBreaks } from '@libraz/mejiro';
 import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
-import type { EpubProjectChapterDraft, MejiroChapterNavMode } from '@libraz/mejiro-vue';
+import type {
+  EpubProjectChapterDraft,
+  MejiroChapterNavMode,
+  PageNumberDisplay,
+} from '@libraz/mejiro-vue';
 import {
   MejiroNotationHighlighter,
   MejiroReader,
@@ -64,6 +68,8 @@ const enableImageOverlay = ref(true);
 const enableStats = ref(true);
 const enableKeyboard = ref(true);
 const enablePageIndicator = ref(true);
+const pageNumbers = ref<PageNumberDisplay>('both');
+const pageNumberModes: PageNumberDisplay[] = ['both', 'right', 'left', 'none'];
 const chapterNavMode = ref<MejiroChapterNavMode>('panel');
 const chapterNavModes: MejiroChapterNavMode[] = ['select', 'panel', 'both', 'none'];
 
@@ -280,6 +286,7 @@ function setPreviewChapter(nextChapter: number): void {
         :enable-stats="enableHeader && enableStats"
         :enable-keyboard="enableKeyboard"
         :enable-page-indicator="enablePageIndicator"
+        :page-numbers="pageNumbers"
       />
       <MejiroReader
         v-else-if="mode === 'custom'"
@@ -344,6 +351,20 @@ function setPreviewChapter(nextChapter: number): void {
           </label>
         </div>
         <div class="demo-option-group">
+          <span class="demo-option-label">pageNumbers</span>
+          <div class="demo-segments">
+            <button
+              v-for="value in pageNumberModes"
+              :key="value"
+              type="button"
+              :class="{ 'is-active': pageNumbers === value }"
+              @click="pageNumbers = value"
+            >
+              {{ value }}
+            </button>
+          </div>
+        </div>
+        <div class="demo-option-group">
           <span class="demo-option-label">chapterNavMode</span>
           <div class="demo-segments">
             <button
@@ -368,6 +389,7 @@ function setPreviewChapter(nextChapter: number): void {
   :enable-stats="{{ enableHeader && enableStats }}"
   :enable-keyboard="{{ enableKeyboard }}"
   :enable-page-indicator="{{ enablePageIndicator }}"
+  page-numbers="{{ pageNumbers }}"
 /&gt;</pre>
       </template>
 

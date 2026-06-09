@@ -807,22 +807,27 @@ export class ChapterLayout {
         const rHasImg = excl.rightSlots.some((s) => s.height < this.size.lineWidth - 0.5);
         const lHasImg = excl.leftSlots.some((s) => s.height < this.size.lineWidth - 0.5);
 
-        // Use excl.rightSlotCount for right page line count to keep lineWidths
-        // aligned with the exclusion engine's right/left split. Without this,
-        // packPageLines may return a different count than the engine assumed,
-        // causing left page lines to read from wrong lineWidth offsets.
+        // For an image page, the slot count comes from the exclusion engine,
+        // but `adjustExclusionSlots` re-applies heading pitch excess and drops
+        // columns that no longer fit physically (the engine counts columns at
+        // uniform body pitch, so a wide heading would otherwise overflow the
+        // page's leading edge). The dropped lines reflow onto the next page via
+        // the reduced `rCount`. For a non-image page we keep the engine's
+        // `rightSlotCount` so the right/left lineWidth split stays aligned.
         let rSlots: ColumnSlot[];
-        const rCount = rHasImg ? excl.rightSlots.length : excl.rightSlotCount;
+        let rCount: number;
         if (rHasImg) {
-          rSlots = adjustExclusionSlots(excl.rightSlots, lm, li, lp);
+          rSlots = adjustExclusionSlots(excl.rightSlots, lm, li, lp, cw);
+          rCount = rSlots.length;
         } else {
+          rCount = excl.rightSlotCount;
           rSlots = buildColumnSlots(lm, li, rCount, this.size.lineWidth);
         }
 
         let lSlots: ColumnSlot[];
         let lCount: number;
         if (lHasImg) {
-          lSlots = adjustExclusionSlots(excl.leftSlots, lm, li + rCount, lp);
+          lSlots = adjustExclusionSlots(excl.leftSlots, lm, li + rCount, lp, cw);
           lCount = lSlots.length;
         } else {
           lCount = packPageLines(lm, li + rCount, cw);

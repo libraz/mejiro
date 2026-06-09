@@ -75,6 +75,14 @@ export interface ComputePageSizeOptions {
    * @defaultValue 48
    */
   gutterOffset?: number;
+  /**
+   * Number of page columns the spread occupies horizontally. Use `1` for a
+   * single-page reader so the page width is derived from the full container
+   * width instead of being halved for a two-page spread. `2` is the
+   * two-page-spread default.
+   * @defaultValue 2
+   */
+  columns?: 1 | 2;
 }
 
 /**

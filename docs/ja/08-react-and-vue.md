@@ -611,6 +611,71 @@ const [cover, setCover] = useState<File | null>(null);
 }
 ```
 
+### CSS カスケードレイヤー（ホスト側リセットがリーダー UI を壊しうる）
+
+リーダーの UI スタイルシート（`MejiroReader` のヘッダ・設定パネル・コントロール）は CSS カスケードレイヤー内で出荷されます。
+
+```css
+@layer mejiro.base, mejiro.chrome, mejiro.print;
+```
+
+レイヤー化のおかげで、ホスト側の**レイヤー外**スタイルから詳細度の戦いなしに mejiro の UI を上書きできます（レイヤー外の宣言は常に勝つ）。ただしこの優先順位は逆にも働きます。ホストアプリのレイヤー外の**グローバルリセット**もまた、詳細度に関係なく mejiro のレイヤー内ルールに勝ってしまいます。VitePress・normalize.css・Tailwind の preflight はいずれも次のようなリセットを出荷します。
+
+```css
+button, input, optgroup, select, textarea { padding: 0; ... }  /* レイヤー外 */
+```
+
+これは設定パネルの `<select>` のドロップダウン矢印用に mejiro が確保している padding を剥がし、矢印が選択肢のテキストに重なってしまいます。mejiro はコントロールが依存する最小限のボックスモデルを `!important` で再宣言してこれに耐えていますが、きれいに埋め込むための一般的な指針は、**自前のリセットもレイヤーに入れる**ことです。そうすればリセットがすべてを踏み潰すのではなく、カスケード順序に従って参加します。
+
+```css
+@layer reset, mejiro, app;
+
+@layer reset {
+  /* normalize / preflight / 自前リセットはここに */
+}
+```
+
+リセットを `mejiro` より前のレイヤーに置けば、リーダーの UI スタイルが意図どおり勝ち、`app` レイヤーからはさらにその上で上書きできます。
+
+### ページフローへの埋め込み（`fit="width"`）
+
+デフォルトの `MejiroReader` はコンテナの高さいっぱいに広がる（`fit="fill"`）ため、コンテナに明示的な高さが必要です。ブログ記事やドキュメントページなど通常のドキュメントフローに高さ計算なしで置きたい場合は `fit="width"` を使います。リーダーは計測した幅とページのアスペクト比から自分の高さを導出し、見開きがレターボックスなしで端まで埋まります。指定するのは幅だけです。
+
+```tsx
+// React
+<div style={{ width: '100%', maxWidth: 720 }}>
+  <MejiroReader epubUrl="/book.epub" fit="width" />
+</div>
+```
+
+```vue
+<!-- Vue -->
+<div style="width: 100%; max-width: 720px;">
+  <MejiroReader epub-url="/book.epub" fit="width" />
+</div>
+```
+
+### ページ番号（`pageNumbers`）
+
+見開きの各ページは、柱（ランニングヘッド）にそのページ自身のノンブルを表示します（右ページが奇数、左ページが偶数）。どのページに番号を出すかは `pageNumbers` で切り替えます。
+
+| 値 | 効果 |
+|---|---|
+| `'both'` | 全ページに番号（デフォルト）。 |
+| `'right'` | 右ページのみ。 |
+| `'left'` | 左ページのみ。 |
+| `'none'` | 番号を非表示。`enablePageIndicator` の「n / total」表示は独立しています。 |
+
+```tsx
+// React
+<MejiroReader epubUrl="/book.epub" pageNumbers="right" />
+```
+
+```vue
+<!-- Vue -->
+<MejiroReader epub-url="/book.epub" page-numbers="right" />
+```
+
 ---
 
 ## 5. フルカスタムエディタを組む

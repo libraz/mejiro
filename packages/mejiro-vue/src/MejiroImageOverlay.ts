@@ -51,7 +51,14 @@ export const MejiroImageOverlay = defineComponent({
             type: 'button',
             class: 'mejiro-reader-image-overlay-close',
             'aria-label': messages.value.imageRemoveButton,
+            title: messages.value.imageRemoveButton,
             onPointerdown: (e: PointerEvent) => {
+              e.stopPropagation();
+              e.preventDefault();
+              emit('close');
+            },
+            onKeydown: (e: KeyboardEvent) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
               e.stopPropagation();
               e.preventDefault();
               emit('close');

@@ -44,13 +44,16 @@ export type {
   MejiroReaderControlledProps,
   MejiroReaderEventMap,
   MejiroReaderFileProps,
+  MejiroReaderFit,
   MejiroReaderHandle,
   MejiroReaderMode,
   MejiroReaderProps,
+  MejiroReaderSettingsSlot,
   MejiroReaderUrlProps,
   MejiroSpreadMode,
   MejiroTheme,
   MejiroThemeName,
+  PageNumberDisplay,
   ReadingPosition,
 } from './MejiroReader.js';
 export { MejiroReader } from './MejiroReader.js';

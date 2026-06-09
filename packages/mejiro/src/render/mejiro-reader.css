@@ -19,6 +19,14 @@
     /* Default palette = "light" theme. Override per theme below. */
     --mejiro-bg-deep: #1c1915;
     --mejiro-bg-paper: #f5f0e4;
+    /* Surround (the "desk" behind the pages) and header chrome. Exposed as
+       variables so a host can flatten or recolor them via `theme.override`
+       without fighting the hard-coded gradient. */
+    --mejiro-surface-bg:
+      radial-gradient(ellipse at 40% 30%, rgba(40, 35, 28, 0.95) 0%, var(--mejiro-bg-deep) 70%),
+      var(--mejiro-bg-deep);
+    --mejiro-header-bg: var(--mejiro-bg-deep);
+    --mejiro-header-fg: #d6cfc5;
     --mejiro-ink: #2a2521;
     --mejiro-ink-light: #6b6156;
     --mejiro-ink-faint: #a89e91;
@@ -120,8 +128,8 @@
 
   /* ── Header ── */
   .mejiro-reader-header {
-    background: var(--mejiro-bg-deep);
-    color: #d6cfc5;
+    background: var(--mejiro-header-bg);
+    color: var(--mejiro-header-fg);
     padding: 0 28px;
     height: 48px;
     display: flex;
@@ -227,7 +235,9 @@
   }
 
   .mejiro-reader-chapter-nav select {
-    padding: 4px 26px 4px 10px;
+    /* `!important`: survives unlayered host form resets so the arrow keeps its
+       gutter — see `.mejiro-reader-control select`. */
+    padding: 4px 26px 4px 10px !important;
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: transparent;
     color: #c8c0b4;
@@ -406,30 +416,51 @@
   }
 
   /* ── Settings panel ── */
+  /* Accordion via `grid-template-rows: 0fr → 1fr`: the panel animates to its
+     content's natural height with no hard-coded `max-height`, so wrapped /
+     custom controls are never clipped (a fixed `max-height` cut off the second
+     row of controls in narrow embeds). */
   .mejiro-reader-settings-panel {
     background: #f0ebe0;
     border-bottom: 1px solid var(--mejiro-border);
     overflow: hidden;
-    max-height: 0;
-    transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.35s cubic-bezier(0.4, 0, 0.2, 1);
     flex-shrink: 0;
     z-index: 90;
   }
 
   .mejiro-reader-settings-panel.is-open {
-    max-height: 200px;
+    grid-template-rows: 1fr;
   }
 
+  /* Grid item that the `0fr → 1fr` track collapses. It must be a bare clip box:
+     `min-height: 0` + `overflow: hidden` zero out its content contribution, but
+     any padding here would survive the collapse (the track's auto-minimum keeps
+     the padding box), leaving a permanently reserved band even when closed — so
+     the visual padding lives on `.mejiro-reader-settings-content` below. */
   .mejiro-reader-settings-inner {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Actual padded content. Wraps (not overflows) when the reader is narrow.
+     Fades/slides in once the panel opens. */
+  .mejiro-reader-settings-content {
     padding: 16px 28px 20px;
     display: flex;
-    gap: 32px;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 32px;
     opacity: 0;
     transform: translateY(-6px);
-    transition: all 0.25s ease 0.08s;
+    transition:
+      opacity 0.25s ease 0.08s,
+      transform 0.25s ease 0.08s;
   }
 
-  .mejiro-reader-settings-panel.is-open .mejiro-reader-settings-inner {
+  .mejiro-reader-settings-panel.is-open .mejiro-reader-settings-content {
     opacity: 1;
     transform: translateY(0);
   }
@@ -462,7 +493,13 @@
 
   .mejiro-reader-control input,
   .mejiro-reader-control select {
-    padding: 4px 8px;
+    /* `padding` is reasserted with `!important` because this whole sheet lives
+       in `@layer mejiro.chrome`, and an *unlayered* host reset (VitePress /
+       normalize / Tailwind preflight all ship `button, input, select,
+       textarea { padding: 0 }`) beats any layered rule regardless of
+       specificity. Without this the dropdown-arrow background below has no
+       padding-right to sit in and renders on top of the option text. */
+    padding: 4px 8px !important;
     border: 1px solid var(--mejiro-control-border);
     background: var(--mejiro-control-bg);
     font-size: 0.72rem;
@@ -478,7 +515,8 @@
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%236b6156'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 6px center;
-    padding-right: 22px;
+    /* See the box-model note above — keep the arrow's gutter against host resets. */
+    padding-right: 22px !important;
   }
 
   .mejiro-reader-control input:focus,
@@ -503,11 +541,33 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background:
-      radial-gradient(ellipse at 40% 30%, rgba(40, 35, 28, 0.95) 0%, var(--mejiro-bg-deep) 70%),
-      var(--mejiro-bg-deep);
+    background: var(--mejiro-surface-bg);
     overflow: hidden;
     position: relative;
+  }
+
+  /* Self-sizing mode (`fit="width"`): the reader derives its own height from
+     its width and the page aspect, so an embedding host only constrains the
+     width — no explicit height, no letterbox, no aspect magic numbers. */
+  .mejiro-reader--fit-width {
+    height: auto;
+  }
+
+  .mejiro-reader--fit-width .mejiro-reader-body {
+    flex: 0 0 auto;
+  }
+
+  .mejiro-reader--fit-width .mejiro-reader-surface {
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 0;
+    aspect-ratio: var(--mejiro-surface-aspect, 2 / 1.45);
+  }
+
+  /* The page indicator normally hangs just below the spread; in a self-sized
+     surface that would be clipped, so tuck it inside the bottom edge. */
+  .mejiro-reader--fit-width .mejiro-reader-page-indicator {
+    bottom: 6px;
   }
 
   .mejiro-reader-surface::before {
@@ -614,7 +674,7 @@
     .mejiro-reader-chapter-card,
     .mejiro-reader-image-overlay,
     .mejiro-reader-settings-panel,
-    .mejiro-reader-settings-inner {
+    .mejiro-reader-settings-content {
       transition: none;
       animation: none;
     }
@@ -1063,34 +1123,66 @@
 
   .mejiro-reader-image-overlay-close {
     position: absolute;
-    top: -6px;
-    right: -6px;
-    width: 14px;
-    height: 14px;
+    top: -11px;
+    right: -11px;
+    width: 22px;
+    height: 22px;
     border-radius: 50%;
     background: var(--mejiro-bg-paper);
-    border: 0.5px solid rgba(139, 58, 58, 0.3);
+    border: 0.5px solid var(--mejiro-accent);
+    box-shadow:
+      0 1px 4px rgba(0, 0, 0, 0.16),
+      0 0 0 0.5px rgba(139, 58, 58, 0.1);
     cursor: pointer;
     z-index: 23;
     display: flex;
     align-items: center;
     justify-content: center;
-    opacity: 0;
-    transition: opacity 0.15s ease;
     padding: 0;
+    /* Visible at rest so the affordance survives on touch (no hover). */
+    opacity: 0.9;
+    transform: scale(0.92);
+    transition:
+      opacity 0.18s ease,
+      transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1),
+      background-color 0.18s ease,
+      border-color 0.18s ease,
+      box-shadow 0.18s ease;
   }
 
   .mejiro-reader-image-overlay:hover .mejiro-reader-image-overlay-close {
     opacity: 1;
+    transform: scale(1);
+  }
+
+  /* Hover/focus turns the chip into an unmistakable filled delete target. */
+  .mejiro-reader-image-overlay-close:hover,
+  .mejiro-reader-image-overlay-close:focus-visible {
+    background: var(--mejiro-accent);
+    border-color: var(--mejiro-accent);
+    transform: scale(1.12);
+    box-shadow:
+      0 3px 9px rgba(139, 58, 58, 0.36),
+      0 0 0 0.5px rgba(139, 58, 58, 0.18);
+    outline: none;
   }
 
   .mejiro-reader-image-overlay-close::before,
   .mejiro-reader-image-overlay-close::after {
     content: "";
     position: absolute;
-    width: 6px;
-    height: 0.5px;
+    width: 9px;
+    height: 1.25px;
+    border-radius: 1px;
     background: var(--mejiro-accent);
+    transition: background-color 0.18s ease;
+  }
+
+  .mejiro-reader-image-overlay-close:hover::before,
+  .mejiro-reader-image-overlay-close:hover::after,
+  .mejiro-reader-image-overlay-close:focus-visible::before,
+  .mejiro-reader-image-overlay-close:focus-visible::after {
+    background: var(--mejiro-bg-paper);
   }
 
   .mejiro-reader-image-overlay-close::before {
@@ -1344,7 +1436,7 @@
       display: none;
     }
 
-    .mejiro-reader-settings-inner {
+    .mejiro-reader-settings-content {
       padding: 12px 16px 16px;
       gap: 16px;
       flex-wrap: wrap;

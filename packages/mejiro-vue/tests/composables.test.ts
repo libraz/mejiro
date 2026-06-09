@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import type { EditableEpub } from '@libraz/mejiro/epub';
+import type { ChapterLayout, InChapterAnchor, MejiroBook, SpreadResult } from '@libraz/mejiro/book';
+import type { EditableEpub, EpubBook } from '@libraz/mejiro/epub';
 import { describe, expect, it, vi } from 'vitest';
 import { type App, createApp, defineComponent, nextTick, ref } from 'vue';
 
@@ -57,6 +57,7 @@ vi.mock('@libraz/mejiro/epub', () => {
   };
 });
 
+import { useChapterLayout } from '../src/useChapterLayout.js';
 import { useEditableEpub } from '../src/useEditableEpub.js';
 import { useEpub } from '../src/useEpub.js';
 import { useImageOverlay } from '../src/useImageOverlay.js';
@@ -599,6 +600,136 @@ describe('useSpread (Vue)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('setSpread jumps immediately (no turn animation) and clamps to range', async () => {
+    const layoutRef = ref<ChapterLayout | null>(mockLayout(6));
+    const { result, unmount } = withSetup(() => useSpread(layoutRef, { turnDuration: 180 }));
+    await nextTick();
+
+    result.setSpread(2);
+    await nextTick();
+    expect(result.spreadIdx.value).toBe(2);
+    expect(result.turning.value).toBe(false);
+
+    result.setSpread(99);
+    await nextTick();
+    expect(result.spreadIdx.value).toBe(2); // clamped to totalSpreads − 1
+
+    result.setSpread(-5);
+    await nextTick();
+    expect(result.spreadIdx.value).toBe(0);
+    unmount();
+  });
+
+  it('setSpread cancels an in-flight page-turn animation', async () => {
+    vi.useFakeTimers();
+    try {
+      const layoutRef = ref<ChapterLayout | null>(mockLayout(6));
+      const { result, unmount } = withSetup(() => useSpread(layoutRef, { turnDuration: 180 }));
+      await nextTick();
+      result.goTo(2);
+      expect(result.turning.value).toBe(true);
+
+      // An immediate setSpread should win and clear the pending animation.
+      result.setSpread(1);
+      await nextTick();
+      expect(result.turning.value).toBe(false);
+      expect(result.spreadIdx.value).toBe(1);
+
+      // The superseded goTo timer must not fire afterwards.
+      vi.advanceTimersByTime(180);
+      await nextTick();
+      expect(result.spreadIdx.value).toBe(1);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('useChapterLayout (Vue)', () => {
+  function makeEpub(): EpubBook {
+    return { chapters: [{ text: 'x', paragraphs: [] }] } as unknown as EpubBook;
+  }
+  function makeBook(layouts: ChapterLayout[]): MejiroBook {
+    let i = 0;
+    return {
+      computePageSize: vi.fn(() => ({ pageWidth: 120, pageHeight: 174, contentHeight: 150 })),
+      layoutChapter: vi.fn(async () => layouts[Math.min(i++, layouts.length - 1)]),
+    } as unknown as MejiroBook;
+  }
+  // Flush the immediate (sync) layout watch plus the async `layoutChapter`.
+  async function flush(): Promise<void> {
+    await nextTick();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  it('captures the reading position before a reflow and restores it into the new layout', async () => {
+    const l0 = mockLayout(6);
+    const l1 = mockLayout(8);
+    const book = makeBook([l0, l1]);
+    const surface = ref<HTMLElement | null>(document.createElement('div'));
+    const anchor: InChapterAnchor = { paragraph: 0, charIndex: 5 };
+    const capturePosition = vi.fn(() => anchor);
+    const restorePosition = vi.fn();
+
+    const { result, unmount } = withSetup(() =>
+      useChapterLayout(book, ref<EpubBook | null>(makeEpub()), ref(0), surface, {
+        enableResize: false,
+        capturePosition,
+        restorePosition,
+      }),
+    );
+    await flush();
+    // Initial (blank) layout: position hooks are not invoked.
+    expect(result.layout.value).toBe(l0);
+    expect(capturePosition).not.toHaveBeenCalled();
+    expect(restorePosition).not.toHaveBeenCalled();
+
+    // A reflow captures from the outgoing layout and restores into the new one.
+    await result.recompute({ blank: false });
+    expect(capturePosition).toHaveBeenCalledTimes(1);
+    expect(capturePosition).toHaveBeenCalledWith(l0);
+    expect(restorePosition).toHaveBeenCalledTimes(1);
+    expect(restorePosition).toHaveBeenCalledWith(l1, anchor);
+    expect(result.layout.value).toBe(l1);
+    unmount();
+  });
+
+  it('does not capture/restore on a blank (content-change) re-layout', async () => {
+    const book = makeBook([mockLayout(6), mockLayout(6)]);
+    const surface = ref<HTMLElement | null>(document.createElement('div'));
+    const capturePosition = vi.fn(() => ({ paragraph: 0, charIndex: 0 }) as InChapterAnchor);
+    const restorePosition = vi.fn();
+    const { result, unmount } = withSetup(() =>
+      useChapterLayout(book, ref<EpubBook | null>(makeEpub()), ref(0), surface, {
+        enableResize: false,
+        capturePosition,
+        restorePosition,
+      }),
+    );
+    await flush();
+    await result.recompute({ blank: true });
+    expect(capturePosition).not.toHaveBeenCalled();
+    expect(restorePosition).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('forwards page-geometry overrides to computePageSize', async () => {
+    const book = makeBook([mockLayout(6)]);
+    const surface = ref<HTMLElement | null>(document.createElement('div'));
+    const geometry = { gutterOffset: 0, headerOffset: 0 };
+    const { unmount } = withSetup(() =>
+      useChapterLayout(book, ref<EpubBook | null>(makeEpub()), ref(0), surface, {
+        enableResize: false,
+        pageGeometry: () => geometry,
+      }),
+    );
+    await flush();
+    expect(book.computePageSize).toHaveBeenCalledWith(surface.value, geometry);
+    unmount();
   });
 });
 

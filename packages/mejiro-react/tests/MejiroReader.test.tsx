@@ -6,7 +6,11 @@ import { act, render, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { jaMessages, MejiroI18nProvider } from '../src/i18n.js';
-import { MejiroReader, type MejiroReaderHandle } from '../src/MejiroReader.js';
+import {
+  MejiroReader,
+  type MejiroReaderHandle,
+  type MejiroReaderSettingsSlot,
+} from '../src/MejiroReader.js';
 
 function fakeEpub(): EpubBook {
   return {
@@ -136,6 +140,66 @@ describe('MejiroReader (React) — enable* toggles', () => {
   it('enableStats=true (default) renders the stats element', () => {
     const { container } = render(<MejiroReader />);
     expect(container.querySelector('.mejiro-reader-stats')).not.toBeNull();
+  });
+});
+
+describe('MejiroReader (React) — renderSettings injection', () => {
+  it('replaces the built-in controls while keeping the panel chrome', () => {
+    const { container } = render(
+      <MejiroReader
+        epub={fakeEpub()}
+        renderSettings={() => <div className="custom-settings">Custom</div>}
+      />,
+    );
+    const panel = container.querySelector('.mejiro-reader-settings-panel');
+    expect(panel).not.toBeNull();
+    // Custom content lives inside the standard chrome (clip box + content layer).
+    expect(
+      panel?.querySelector(
+        '.mejiro-reader-settings-inner > .mejiro-reader-settings-content > .custom-settings',
+      )?.textContent,
+    ).toBe('Custom');
+    // The built-in font-size control is gone.
+    expect(container.querySelector('#mejiro-reader-font-size')).toBeNull();
+  });
+
+  it('passes a live slot (settings, update, open, toggle) to the render prop', () => {
+    let captured: MejiroReaderSettingsSlot | null = null;
+    render(
+      <MejiroReader
+        epub={fakeEpub()}
+        renderSettings={(slot) => {
+          captured = slot;
+          return <div />;
+        }}
+      />,
+    );
+    expect(captured).not.toBeNull();
+    const slot = captured as unknown as MejiroReaderSettingsSlot;
+    expect(typeof slot.settings.fontSize).toBe('number');
+    expect(typeof slot.update).toBe('function');
+    expect(typeof slot.toggle).toBe('function');
+    expect(slot.open).toBe(false);
+  });
+
+  it('header Settings button toggles the injected panel open', () => {
+    const { container } = render(
+      <MejiroReader epub={fakeEpub()} renderSettings={() => <div className="custom-settings" />} />,
+    );
+    const panel = container.querySelector('.mejiro-reader-settings-panel') as HTMLElement;
+    expect(panel.classList.contains('is-open')).toBe(false);
+    const settingsBtn = Array.from(container.querySelectorAll('.mejiro-reader-btn')).find((b) =>
+      b.textContent?.includes('Settings'),
+    ) as HTMLButtonElement;
+    act(() => {
+      settingsBtn.click();
+    });
+    expect(panel.classList.contains('is-open')).toBe(true);
+  });
+
+  it('renders the built-in panel when renderSettings is omitted', () => {
+    const { container } = render(<MejiroReader epub={fakeEpub()} />);
+    expect(container.querySelector('#mejiro-reader-font-size')).not.toBeNull();
   });
 });
 

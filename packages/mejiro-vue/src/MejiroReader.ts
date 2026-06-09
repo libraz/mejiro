@@ -1,10 +1,12 @@
 import type {
   BookOptions,
+  ChapterLayout,
+  ComputePageSizeOptions,
   InChapterAnchor,
   ManuscriptChapter,
   ReadingAnchor,
 } from '@libraz/mejiro/book';
-import { DEFAULT_BOOK_OPTIONS } from '@libraz/mejiro/book';
+import { DEFAULT_BOOK_OPTIONS, DEFAULT_PAGE_GEOMETRY } from '@libraz/mejiro/book';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
 import type { EpubBook, ManuscriptDialect } from '@libraz/mejiro/epub';
 import { manuscriptToEpubBook } from '@libraz/mejiro/epub';
@@ -57,6 +59,24 @@ export type MejiroReaderMode = 'paginated' | 'scroll';
  * - `auto` — switch based on the surface aspect ratio (single when portrait).
  */
 export type MejiroSpreadMode = 'double' | 'single' | 'auto';
+
+/**
+ * Which page of a spread prints its page number: `'both'` (right = odd,
+ * left = even), only `'right'`, only `'left'`, or `'none'`.
+ */
+export type PageNumberDisplay = 'both' | 'right' | 'left' | 'none';
+
+/**
+ * How the reader sizes itself inside its container.
+ * - `fill` — fill the container's given height; the spread is fitted inside it,
+ *   letterboxing if the box aspect doesn't match the spread (the default; the
+ *   host must give the reader a height).
+ * - `width` — self-size from width: the reader derives its own height from its
+ *   measured width and the page aspect ratio, so the spread fills exactly with
+ *   no letterbox and the host needs no height/aspect magic numbers. The host
+ *   only constrains the width.
+ */
+export type MejiroReaderFit = 'fill' | 'width';
 
 /** Built-in reader theme presets. */
 export type MejiroThemeName = 'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto';
@@ -178,17 +198,36 @@ export const MejiroReader = defineComponent({
   name: 'MejiroReader',
   props: {
     /**
-     * Initial book options. Optional — defaults to {@link DEFAULT_BOOK_OPTIONS}
-     * (`serif` 16px, line spacing 1.8, strict kinsoku, hanging punctuation on).
-     * Spread the defaults to tweak only a few:
+     * Book options. Accepts a **partial** set — any omitted field falls back to
+     * {@link DEFAULT_BOOK_OPTIONS} (`serif` 16px, line spacing 1.8, strict
+     * kinsoku, hanging punctuation on), so you only pass what you want to change:
      *
      * ```ts
-     * { ...DEFAULT_BOOK_OPTIONS, fontFamily: '"Noto Serif JP"', fontSize: 18 }
+     * { fontFamily: '"Noto Serif JP"', fontSize: 18 }
      * ```
+     *
+     * The merge is shallow (top-level keys), so a supplied `headingStyles`
+     * replaces the default map rather than merging into it.
      */
     options: {
-      type: Object as PropType<BookOptions>,
-      default: () => DEFAULT_BOOK_OPTIONS,
+      type: Object as PropType<Partial<BookOptions>>,
+      default: () => ({}),
+    },
+    /**
+     * Page-geometry overrides forwarded to `MejiroBook.computePageSize`. Use to
+     * tune how the spread is sized inside the surface — most usefully to shrink
+     * the reserved margins so the pages fill their frame:
+     *
+     * ```vue
+     * <MejiroReader :page-geometry="{ gutterOffset: 0, headerOffset: 0 }" />
+     * ```
+     *
+     * Also accepts `aspect`, `minWidth`, `minHeight`, `maxHeight`, and inner
+     * `padding`. Omitted fields fall back to the built-in defaults.
+     */
+    pageGeometry: {
+      type: Object as PropType<ComputePageSizeOptions>,
+      default: undefined,
     },
     /** Font choices displayed in the settings panel. */
     fonts: { type: Array as PropType<FontChoice[]>, default: undefined },
@@ -256,6 +295,19 @@ export const MejiroReader = defineComponent({
     spreadMode: {
       type: String as PropType<MejiroSpreadMode>,
       default: 'double',
+    },
+    /**
+     * How the reader sizes itself in its container. `fill` (default) fills the
+     * container height and letterboxes the spread; `width` makes the reader
+     * self-size — it derives its height from its width and the page aspect, so
+     * an embedding host only has to constrain the width (no height/aspect magic
+     * numbers, no letterbox). In `width` mode the reserved `gutterOffset` /
+     * `headerOffset` default to 0 so the spread fills edge-to-edge; override via
+     * `pageGeometry` if you still want them.
+     */
+    fit: {
+      type: String as PropType<MejiroReaderFit>,
+      default: 'fill',
     },
     /**
      * Enable surface-tap chrome toggling. Tapping the spread center (away
@@ -335,6 +387,13 @@ export const MejiroReader = defineComponent({
     /** Show the "n / total" indicator below the book. @defaultValue `!bare` */
     enablePageIndicator: { type: Boolean as PropType<boolean | undefined>, default: undefined },
     /**
+     * Which page of a spread shows its page number in the running head.
+     * `'both'` numbers each page (right = odd, left = even), `'right'` /
+     * `'left'` number only that side, `'none'` hides them (the "n / total"
+     * indicator is independent). @defaultValue 'both'
+     */
+    pageNumbers: { type: String as PropType<PageNumberDisplay>, default: 'both' },
+    /**
      * Reader-side annotations to render as highlights. Each annotation whose
      * `chapter` matches the current chapter is converted to spread-local
      * rectangles via `ChapterLayout.selectionRects` and drawn on top of the
@@ -367,6 +426,10 @@ export const MejiroReader = defineComponent({
     const chapter = ref(0);
     const chromeHidden = ref(false);
     const autoSingle = ref(false);
+
+    function toggleSettings(): void {
+      settingsOpen.value = !settingsOpen.value;
+    }
 
     let resizeObserver: ResizeObserver | null = null;
     function updateAutoSingle(): void {
@@ -409,6 +472,41 @@ export const MejiroReader = defineComponent({
     const effectiveSingle = computed(
       () => props.spreadMode === 'single' || (props.spreadMode === 'auto' && autoSingle.value),
     );
+
+    // Page geometry forwarded to `computePageSize`. In `fit="width"` mode the
+    // surface self-sizes its height from its width via `aspect-ratio`, and the
+    // book must exactly fill it. The fill-mode safety rails fight that invariant:
+    // the reserved gutter / header offsets, the `maxHeight` cap, and the
+    // `minWidth` / `minHeight` floors would size the book to something other than
+    // the surface, leaving a reserved empty band around the spread. So default
+    // them all off here (offsets 0, no clamp) — the spread tracks the surface
+    // edge-to-edge. The host can still override any field via `pageGeometry`.
+    const resolvedGeometry = computed<ComputePageSizeOptions | undefined>(() => {
+      // A single-page reader derives its page width from the full container
+      // width instead of halving it for a two-page spread (the host can still
+      // override `columns` via `pageGeometry`).
+      const columns: 1 | 2 = effectiveSingle.value ? 1 : 2;
+      if (props.fit !== 'width') return { columns, ...props.pageGeometry };
+      return {
+        columns,
+        gutterOffset: 0,
+        headerOffset: 0,
+        maxHeight: Number.POSITIVE_INFINITY,
+        minWidth: 0,
+        minHeight: 0,
+        ...props.pageGeometry,
+      };
+    });
+
+    // The spread aspect (width / height) used to self-size the surface in
+    // `fit="width"` mode: one or two page columns wide, `aspect` tall. Exposed
+    // as a CSS `aspect-ratio` value so the browser derives the surface height
+    // from its width with no JS measurement feedback loop.
+    const surfaceAspect = computed(() => {
+      const columns = effectiveSingle.value ? 1 : 2;
+      const aspect = resolvedGeometry.value?.aspect ?? DEFAULT_PAGE_GEOMETRY.aspect;
+      return `${columns} / ${aspect}`;
+    });
     const inheritedMessages = useI18n();
     const resolvedMessages = computed(() => {
       if (props.locale == null && props.messages == null) return inheritedMessages.value;
@@ -424,8 +522,15 @@ export const MejiroReader = defineComponent({
     const effEnableStats = computed(() => props.enableStats ?? !props.bare);
     const effEnablePageIndicator = computed(() => props.enablePageIndicator ?? !props.bare);
 
-    const optionsSource = computed(() => props.options);
-    const { book, options, setOptions } = useMejiroBook(props.options, optionsSource);
+    // Fill any omitted option from the defaults so a host can pass just the
+    // fields it cares about (`:options="{ fontSize: 15 }"`) without dropping the
+    // rest. Shallow by design — a supplied nested map (e.g. `headingStyles`)
+    // replaces, not merges.
+    const resolvedOptions = computed<BookOptions>(() => ({
+      ...DEFAULT_BOOK_OPTIONS,
+      ...props.options,
+    }));
+    const { book, options, setOptions } = useMejiroBook(resolvedOptions.value, resolvedOptions);
 
     const synthesizedEpub = computed<EpubBook | null>(() => {
       if (props.manuscript === undefined) return null;
@@ -461,7 +566,60 @@ export const MejiroReader = defineComponent({
 
     const activeChapter = computed(() => props.chapter ?? chapter.value);
 
-    const layoutCtx = useChapterLayout(book, epub.epub, activeChapter, surfaceEl);
+    // Bridge between the layout and spread composables: a reflow re-layout
+    // produces a new layout object (which resets the spread index to 0), so
+    // capture the reading anchor beforehand and restore it afterwards — but only
+    // in uncontrolled mode. When `spreadIdx` is controlled the host owns the
+    // position, so the controlled-restore watch below handles it instead.
+    const positionBridge = {
+      capture(layout: ChapterLayout): InChapterAnchor | null {
+        if (props.spreadIdx != null) return null;
+        return layout.anchorAt(spreadCtx.spreadIdx.value, 'right');
+      },
+      restore(layout: ChapterLayout, anchor: InChapterAnchor): void {
+        const loc = layout.locateAnchor(anchor);
+        spreadCtx.setSpread(loc?.spreadIdx ?? 0);
+      },
+    };
+
+    const layoutCtx = useChapterLayout(book, epub.epub, activeChapter, surfaceEl, {
+      pageGeometry: () => resolvedGeometry.value,
+      capturePosition: (layout) => positionBridge.capture(layout),
+      restorePosition: (layout, anchor) => positionBridge.restore(layout, anchor),
+    });
+
+    // Re-flow when the resolved page geometry changes at runtime (covers both
+    // host `pageGeometry` edits and `fit`-driven offset changes).
+    watch(resolvedGeometry, () => void layoutCtx.recompute({ blank: false }), { deep: true });
+
+    // Re-flow when metric-affecting options change at runtime. `useMejiroBook`
+    // keeps the book + reactive snapshot in sync, but an options change does not
+    // otherwise re-run layout, so the settings-panel font / line-spacing /
+    // kinsoku controls would only restyle the wrapper while the typeset content
+    // stayed frozen. Debounced so dragging a continuous control (font-size /
+    // line-spacing slider) coalesces into a single re-flow instead of laying out
+    // the chapter on every step; `book.setOptions` is awaited first so the
+    // re-layout sees the current metrics.
+    let optionsReflowTimer: ReturnType<typeof setTimeout> | null = null;
+    watch(
+      () => {
+        const o = options.value;
+        return [o.fontFamily, o.fontSize, o.lineSpacing, o.mode, o.enableHanging].join('|');
+      },
+      () => {
+        if (optionsReflowTimer) clearTimeout(optionsReflowTimer);
+        optionsReflowTimer = setTimeout(() => {
+          optionsReflowTimer = null;
+          void (async () => {
+            await book.setOptions({ ...options.value });
+            await layoutCtx.recompute({ blank: false });
+          })();
+        }, 60);
+      },
+    );
+    onBeforeUnmount(() => {
+      if (optionsReflowTimer) clearTimeout(optionsReflowTimer);
+    });
 
     const spreadCtx = useSpread(layoutCtx.layout, {
       enableKeyboard: props.enableKeyboard,
@@ -541,16 +699,28 @@ export const MejiroReader = defineComponent({
       { immediate: true },
     );
 
-    // Controlled spreadIdx: drive useSpread.goTo from the prop and re-apply
-    // it after layout changes, because useSpread resets to 0 for each layout.
+    // Controlled spreadIdx → host-driven navigation: animate to the prop value.
     watch(
-      [() => props.spreadIdx, () => layoutCtx.layout.value],
-      ([next]) => {
+      () => props.spreadIdx,
+      (next) => {
         if (next == null) return;
         if (next === spreadCtx.spreadIdx.value) return;
         spreadCtx.goTo(next);
       },
       { immediate: true },
+    );
+
+    // Controlled spreadIdx → reflow restore: a re-layout resets useSpread to
+    // spread 0, so snap back to the controlled index immediately (no turn
+    // animation, which would otherwise flash spread 0 on every resize).
+    watch(
+      () => layoutCtx.layout.value,
+      () => {
+        const next = props.spreadIdx;
+        if (next == null) return;
+        if (next === spreadCtx.spreadIdx.value) return;
+        spreadCtx.setSpread(next);
+      },
     );
 
     function setChapter(i: number): void {
@@ -715,6 +885,43 @@ export const MejiroReader = defineComponent({
       enableHanging: options.value.enableHanging ?? true,
     }));
 
+    /**
+     * Settings region. A host can fully replace the built-in controls with the
+     * `settings` slot (external injection) while keeping the panel chrome and
+     * its open/close accordion — the slot receives the live `settings`, an
+     * `update(partial)` patcher that re-flows the book, and the `open` /
+     * `toggle` panel state. With no slot, the built-in {@link MejiroSettingsPanel}
+     * is rendered. Either way the header "Settings" button toggles it.
+     */
+    function renderSettings(): VNode {
+      if (slots.settings) {
+        return h(
+          'div',
+          { class: ['mejiro-reader-settings-panel', { 'is-open': settingsOpen.value }] },
+          h(
+            'div',
+            { class: 'mejiro-reader-settings-inner' },
+            h(
+              'div',
+              { class: 'mejiro-reader-settings-content' },
+              slots.settings({
+                settings: editable.value,
+                update: patchSettings,
+                open: settingsOpen.value,
+                toggle: toggleSettings,
+              }),
+            ),
+          ),
+        );
+      }
+      return h(MejiroSettingsPanel, {
+        open: settingsOpen.value,
+        settings: editable.value,
+        fonts: props.fonts ?? undefined,
+        'onUpdate:settings': patchSettings,
+      });
+    }
+
     const fontLabel = computed(() => {
       const css = normalizeFontFamily(options.value.fontFamily);
       const f = props.fonts?.find((x) => x.value === css);
@@ -791,9 +998,7 @@ export const MejiroReader = defineComponent({
               {
                 type: 'button',
                 class: ['mejiro-reader-btn', { 'is-active': settingsOpen.value }],
-                onClick: () => {
-                  settingsOpen.value = !settingsOpen.value;
-                },
+                onClick: toggleSettings,
               },
               [
                 resolvedMessages.value.settingsButton,
@@ -876,6 +1081,8 @@ export const MejiroReader = defineComponent({
         const rightPage = currentSpread * 2 + 1;
         const leftPage = currentSpread * 2 + 2;
         const showLeft = leftPage <= spread.totalPages;
+        const showRightNum = props.pageNumbers === 'both' || props.pageNumbers === 'right';
+        const showLeftNum = props.pageNumbers === 'both' || props.pageNumbers === 'left';
         children.push(
           h(
             MejiroSpread,
@@ -890,10 +1097,13 @@ export const MejiroReader = defineComponent({
               lineSpacing: options.value.lineSpacing,
               turning: spreadCtx.turning.value,
               singlePage: effectiveSingle.value,
-              rightHeader: { title: runningTitleRight.value, pageNumber: rightPage },
+              rightHeader: {
+                title: runningTitleRight.value,
+                pageNumber: showRightNum ? rightPage : null,
+              },
               leftHeader: {
                 title: runningTitleLeft.value,
-                pageNumber: showLeft ? leftPage : null,
+                pageNumber: showLeft && showLeftNum ? leftPage : null,
               },
               images: imageCtx.currentImages.value,
               onPrev: () => spreadCtx.prev(),
@@ -933,9 +1143,22 @@ export const MejiroReader = defineComponent({
     const themeName = computed<MejiroThemeName>(() =>
       typeof props.theme === 'string' ? props.theme : props.theme.name,
     );
-    const themeStyle = computed<Record<string, string> | undefined>(() =>
-      typeof props.theme === 'string' ? undefined : props.theme.override,
-    );
+    const themeStyle = computed<Record<string, string> | undefined>(() => {
+      const override = typeof props.theme === 'string' ? undefined : props.theme.override;
+      // Keep the page's *visual* padding (CSS vars) in sync with the *layout*
+      // padding (`pageGeometry.padding`). Without this the text is laid out for
+      // one inset but clipped at another, so a custom padding overflows the page.
+      const pad = props.pageGeometry?.padding;
+      const padVars: Record<string, string> = {};
+      if (pad?.x != null) padVars['--mejiro-page-pad-x'] = `${pad.x}px`;
+      if (pad?.y != null) padVars['--mejiro-page-pad-y'] = `${pad.y}px`;
+      if (pad?.bottom != null) padVars['--mejiro-page-pad-bottom'] = `${pad.bottom}px`;
+      // In `fit="width"` the surface self-sizes from this aspect ratio.
+      if (props.fit === 'width') padVars['--mejiro-surface-aspect'] = surfaceAspect.value;
+      const hasPad = Object.keys(padVars).length > 0;
+      if (!(override || hasPad)) return undefined;
+      return { ...override, ...padVars };
+    });
 
     return () => {
       return h(
@@ -946,20 +1169,19 @@ export const MejiroReader = defineComponent({
             h(
               'div',
               {
-                class: ['mejiro-reader', { 'mejiro-reader--chrome-hidden': chromeHidden.value }],
+                class: [
+                  'mejiro-reader',
+                  {
+                    'mejiro-reader--chrome-hidden': chromeHidden.value,
+                    'mejiro-reader--fit-width': props.fit === 'width',
+                  },
+                ],
                 'data-mejiro-theme': themeName.value,
                 style: themeStyle.value,
               },
               [
                 renderHeader(),
-                effEnableSettings.value
-                  ? h(MejiroSettingsPanel, {
-                      open: settingsOpen.value,
-                      settings: editable.value,
-                      fonts: props.fonts ?? undefined,
-                      'onUpdate:settings': patchSettings,
-                    })
-                  : null,
+                effEnableSettings.value ? renderSettings() : null,
                 h(
                   'div',
                   {

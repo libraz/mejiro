@@ -10,6 +10,7 @@ import {
   type MejiroReaderMode,
   type MejiroSpreadMode,
   type MejiroThemeName,
+  type PageNumberDisplay,
   useEditableEpub,
   useEpub,
   useEpubProject,
@@ -64,6 +65,7 @@ const HEADER_DEPENDENT_OPTIONS: (keyof ReaderChromeOptions)[] = [
 const CHAPTER_NAV_MODES: MejiroChapterNavMode[] = ['select', 'panel', 'both', 'none'];
 const READER_MODES: MejiroReaderMode[] = ['paginated', 'scroll'];
 const SPREAD_MODES: MejiroSpreadMode[] = ['double', 'single', 'auto'];
+const PAGE_NUMBER_MODES: PageNumberDisplay[] = ['both', 'right', 'left', 'none'];
 const THEMES: MejiroThemeName[] = ['light', 'dark', 'sepia', 'high-contrast', 'auto'];
 const LOCALES: MejiroLocale[] = ['en', 'ja'];
 
@@ -100,6 +102,7 @@ export default function App() {
   const [chapterNavMode, setChapterNavMode] = useState<MejiroChapterNavMode>('panel');
   const [readerMode, setReaderMode] = useState<MejiroReaderMode>('paginated');
   const [spreadMode, setSpreadMode] = useState<MejiroSpreadMode>('double');
+  const [pageNumbers, setPageNumbers] = useState<PageNumberDisplay>('both');
   const [theme, setTheme] = useState<MejiroThemeName>('light');
   const [locale, setLocale] = useState<MejiroLocale>('en');
   const [editText, setEditText] = useState('');
@@ -277,6 +280,7 @@ export default function App() {
             enableStats={effectiveOption('enableStats')}
             enableKeyboard={chrome.enableKeyboard}
             enablePageIndicator={chrome.enablePageIndicator}
+            pageNumbers={pageNumbers}
           />
         ) : previewBook ? (
           <MejiroReader
@@ -365,6 +369,21 @@ export default function App() {
               </div>
             </div>
             <div className="demo-option-group">
+              <span className="demo-option-label">pageNumbers</span>
+              <div className="demo-segments">
+                {PAGE_NUMBER_MODES.map((value) => (
+                  <button
+                    type="button"
+                    key={value}
+                    className={pageNumbers === value ? 'is-active' : ''}
+                    onClick={() => setPageNumbers(value)}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="demo-option-group">
               <span className="demo-option-label">theme</span>
               <div className="demo-segments demo-segments-wrap">
                 {THEMES.map((themeValue) => (
@@ -413,6 +432,7 @@ export default function App() {
             <pre>{`<MejiroReader
   mode="${readerMode}"
   spreadMode="${spreadMode}"
+  pageNumbers="${pageNumbers}"
   theme="${theme}"
   locale="${locale}"
   enableHeader={${chrome.enableHeader}}

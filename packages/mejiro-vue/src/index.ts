@@ -46,12 +46,14 @@ export {
   type MejiroChapterNavMode,
   MejiroReader,
   type MejiroReaderEventMap,
+  type MejiroReaderFit,
   type MejiroReaderHandle,
   type MejiroReaderMode,
   type MejiroReaderProps,
   type MejiroSpreadMode,
   type MejiroTheme,
   type MejiroThemeName,
+  type PageNumberDisplay,
   type ReadingPosition,
 } from './MejiroReader.js';
 export { MejiroScrollView, type MejiroScrollViewProps } from './MejiroScrollView.js';
