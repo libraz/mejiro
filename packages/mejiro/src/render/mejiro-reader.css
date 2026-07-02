@@ -237,6 +237,7 @@
   .mejiro-reader-chapter-nav select {
     /* `!important`: survives unlayered host form resets so the arrow keeps its
        gutter — see `.mejiro-reader-control select`. */
+    /* biome-ignore lint/complexity/noImportantStyles: unlayered host resets beat any layered rule */
     padding: 4px 26px 4px 10px !important;
     border: 1px solid rgba(255, 255, 255, 0.1);
     background: transparent;
@@ -499,6 +500,7 @@
        textarea { padding: 0 }`) beats any layered rule regardless of
        specificity. Without this the dropdown-arrow background below has no
        padding-right to sit in and renders on top of the option text. */
+    /* biome-ignore lint/complexity/noImportantStyles: unlayered host resets beat any layered rule */
     padding: 4px 8px !important;
     border: 1px solid var(--mejiro-control-border);
     background: var(--mejiro-control-bg);
@@ -516,6 +518,7 @@
     background-repeat: no-repeat;
     background-position: right 6px center;
     /* See the box-model note above — keep the arrow's gutter against host resets. */
+    /* biome-ignore lint/complexity/noImportantStyles: unlayered host resets beat any layered rule */
     padding-right: 22px !important;
   }
 
@@ -969,6 +972,7 @@
   }
 
   /* ── Page indicator ── */
+  /* biome-ignore lint/style/noDescendingSpecificity: the fit-width override above is section-ordered; the higher-specificity selector wins regardless of source order */
   .mejiro-reader-page-indicator {
     position: absolute;
     bottom: -24px;

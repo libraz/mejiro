@@ -726,8 +726,8 @@ function MejiroReaderInner(
   // Controlled spreadIdx → reflow restore: a re-layout resets useSpread to
   // spread 0, so snap back to the controlled index immediately (no turn
   // animation, which would otherwise flash spread 0 on every resize). Runs after
-  // useSpread's reset effect (registered earlier).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the layout object; refs hold the latest values.
+  // useSpread's reset effect (registered earlier). Keyed on the layout object;
+  // refs hold the latest values.
   useLayoutEffect(() => {
     const next = spreadIdxPropRef.current;
     if (next == null || !layoutCtx.layout) return;

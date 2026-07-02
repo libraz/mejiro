@@ -361,7 +361,7 @@ export class EditableEpub {
   ): void {
     const chapter = requireChapter(this.book, chapterIndex);
     const block = chapter.blocks.find((b) => b.id === blockId);
-    if (!block || block.kind !== 'image') throw new Error(`Missing image block: ${blockId}`);
+    if (block?.kind !== 'image') throw new Error(`Missing image block: ${blockId}`);
     this.recordChapterChange(chapterIndex);
     if (patch.alt !== undefined) block.alt = patch.alt;
     if (patch.caption !== undefined) block.caption = patch.caption;
