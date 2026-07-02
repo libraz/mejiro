@@ -52,6 +52,7 @@
       "types": "./dist/image/index.d.ts",
       "import": "./dist/image/index.js"
     },
+    "./package.json": "./package.json",
     "./render/mejiro.css": "./dist/render/mejiro.css",
     "./render/mejiro-reader.css": "./dist/render/mejiro-reader.css",
     "./render/mejiro-editor.css": "./dist/render/mejiro-editor.css",
