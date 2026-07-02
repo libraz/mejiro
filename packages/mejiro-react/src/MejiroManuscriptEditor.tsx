@@ -1,8 +1,10 @@
+import type { BookOptions } from '@libraz/mejiro/book';
 import { type AssetResolver, EpubProject } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
-import { MejiroReader } from './MejiroReader.js';
+import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
+import { MejiroReader, type MejiroReaderSettingsSlot, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
 import { useManuscriptDraft } from './useManuscriptDraft.js';
 
@@ -10,6 +12,14 @@ export interface ManuscriptEditorChapter {
   id: string;
   title: string;
   body: string;
+}
+
+/** Autosave payload emitted by {@link MejiroManuscriptEditor}. */
+export interface ManuscriptAutosaveDraft {
+  title: string;
+  author: string;
+  cover: File | null;
+  chapters: ManuscriptEditorChapter[];
 }
 
 /**
@@ -28,6 +38,12 @@ export interface ManuscriptPreviewProps {
   enableStats?: boolean;
   enableKeyboard?: boolean;
   enablePageIndicator?: boolean;
+  /** Book options forwarded to the embedded reader preview. */
+  options?: Partial<BookOptions>;
+  /** Theme forwarded to the embedded reader preview. */
+  theme?: MejiroTheme;
+  /** Custom settings controls forwarded to the embedded reader preview. */
+  renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode;
   /**
    * Toggle the surface-tap chrome-hide behavior of the embedded reader.
    * Defaults to `false` here (the editor's preview is part of a side-by-side
@@ -70,7 +86,7 @@ export interface MejiroManuscriptEditorProps {
    * {@link MejiroManuscriptEditorProps.autosaveDelay}). Use to persist drafts
    * to localStorage, IndexedDB, or upload to a server.
    */
-  onAutosave?: (chapters: ManuscriptEditorChapter[]) => void | Promise<void>;
+  onAutosave?: (draft: ManuscriptAutosaveDraft) => void | Promise<void>;
   /** Autosave debounce in milliseconds. @defaultValue 800 */
   autosaveDelay?: number;
   /**
@@ -196,7 +212,13 @@ export function MejiroManuscriptEditor({
   const draft = useManuscriptDraft({
     initialChapters: initialChapters?.length ? initialChapters : [defaultChapter(messages)],
     onAutosave,
+    autosavePayload: (savedChapters) => ({ title, author, cover, chapters: savedChapters }),
+    autosaveKey: `${title}\u0000${author}\u0000${cover?.name ?? ''}\u0000${cover?.size ?? 0}\u0000${
+      cover?.lastModified ?? 0
+    }`,
     autosaveDelay,
+    defaultChapterTitle: (index) =>
+      format(messages.manuscriptDefaultChapterTitle, { n: index + 1 }),
   });
   const {
     chapters,
@@ -279,6 +301,9 @@ export function MejiroManuscriptEditor({
           <strong>{title}</strong>
           <small>{messages.manuscriptRubyHint}</small>
         </div>
+        {draft.autosaveError && (
+          <div className="mejiro-editor-error">{draft.autosaveError.message}</div>
+        )}
         <div className="mejiro-editor-section">
           <span className="mejiro-editor-label">{messages.manuscriptMetadata}</span>
           <input value={title} onChange={(event) => setTitle(event.target.value)} />
@@ -370,11 +395,11 @@ export function MejiroManuscriptEditor({
                 {messages.manuscriptStrong}
               </button>
             </div>
-            <textarea
+            <MejiroNotationHighlighter
               ref={bodyTextareaRef}
               className="mejiro-editor-manuscript"
               value={current.body}
-              onChange={(event) => patchChapter(selected, { body: event.target.value })}
+              onChange={(body) => patchChapter(selected, { body })}
             />
           </div>
         )}

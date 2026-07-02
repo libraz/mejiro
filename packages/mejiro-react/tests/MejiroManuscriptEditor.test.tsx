@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const epubMocks = vi.hoisted(() => ({
@@ -158,6 +158,94 @@ describe('MejiroManuscriptEditor (React)', () => {
     Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
     fireEvent.change(fileInput);
     expect(onCoverChange).toHaveBeenCalledWith(file);
+  });
+
+  it('autosaves chapters together with metadata and cover', () => {
+    vi.useFakeTimers();
+    try {
+      const onAutosave = vi.fn();
+      const { container } = render(
+        <MejiroManuscriptEditor
+          title="Draft"
+          author="Author"
+          onAutosave={onAutosave}
+          autosaveDelay={100}
+        />,
+      );
+      const input = container.querySelector(
+        '.mejiro-editor-panel input[type="file"]',
+      ) as HTMLInputElement;
+      const file = new File(['cover'], 'cover.png', { type: 'image/png' });
+      Object.defineProperty(input, 'files', { value: [file], configurable: true });
+      fireEvent.change(input);
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(onAutosave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Draft',
+          author: 'Author',
+          cover: file,
+          chapters: expect.any(Array),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('surfaces autosave errors in the editor panel', async () => {
+    vi.useFakeTimers();
+    try {
+      const onAutosave = vi.fn(async () => {
+        throw new Error('autosave failed');
+      });
+      const { container } = render(
+        <MejiroManuscriptEditor onAutosave={onAutosave} autosaveDelay={100} />,
+      );
+      const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: 'changed' } });
+
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('autosave failed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forwards preview options, theme, and settings renderer to the embedded reader', () => {
+    const { container } = render(
+      <MejiroManuscriptEditor
+        previewProps={{
+          options: { fontFamily: 'serif', fontSize: 22 },
+          theme: 'dark',
+          renderSettings: () => <div className="custom-preview-settings">Custom</div>,
+        }}
+      />,
+    );
+
+    expect(container.querySelector('.mejiro-reader')?.getAttribute('data-mejiro-theme')).toBe(
+      'dark',
+    );
+    expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 22px');
+    expect(container.querySelector('.custom-preview-settings')?.textContent).toBe('Custom');
+  });
+
+  it('uses the notation highlighter for manuscript body editing', () => {
+    const { container } = render(<MejiroManuscriptEditor />);
+    const wrapper = container.querySelector('.mejiro-notation-highlighter');
+    const textarea = container.querySelector('.mejiro-notation-textarea') as HTMLTextAreaElement;
+
+    expect(wrapper).not.toBeNull();
+    fireEvent.change(textarea, { target: { value: '漢字《かんじ》' } });
+    expect(textarea.value).toBe('漢字《かんじ》');
   });
 
   it('falls back to a valid cover asset filename when the upload name has no safe characters', async () => {

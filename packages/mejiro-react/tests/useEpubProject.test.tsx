@@ -76,6 +76,22 @@ describe('useEpubProject (React)', () => {
     expect(second.body).toBe('');
   });
 
+  it('uses custom default chapter copy for generated chapters', () => {
+    const { result } = renderHook(() =>
+      useEpubProject({
+        debounceMs: 10_000,
+        defaultChapterTitle: (index) => `Episode ${index + 1}`,
+        defaultChapterBody: (index) => `Body ${index + 1}`,
+      }),
+    );
+
+    expect(result.current.chapters[0]).toMatchObject({ title: 'Episode 1', body: 'Body 1' });
+    act(() => result.current.addChapter());
+    expect(result.current.chapters[1]).toMatchObject({ title: 'Episode 2', body: 'Body 2' });
+    act(() => result.current.setChapters([]));
+    expect(result.current.chapters[0]).toMatchObject({ title: 'Episode 1', body: 'Body 1' });
+  });
+
   it('falls back to "Untitled" when exporting a chapter with no title', () => {
     const fromManuscript = vi.mocked(EpubProject.fromManuscript);
     fromManuscript.mockClear();

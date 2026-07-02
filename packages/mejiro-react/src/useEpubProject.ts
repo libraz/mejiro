@@ -26,6 +26,10 @@ export interface UseEpubProjectOptions {
   assetResolver?: AssetResolver;
   onPreview?: (book: EpubBook) => void;
   onExport?: (buffer: ArrayBuffer) => void;
+  /** Creates the default title for a generated chapter. */
+  defaultChapterTitle?: (index: number) => string;
+  /** Creates the default body for a generated chapter. */
+  defaultChapterBody?: (index: number) => string;
 }
 
 export interface UseEpubProjectReturn {
@@ -49,13 +53,15 @@ export interface UseEpubProjectReturn {
 
 /** Headless manuscript-to-EPUB project state for custom authoring UIs. */
 export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProjectReturn {
+  const defaultTitle = options.defaultChapterTitle;
+  const defaultBody = options.defaultChapterBody;
   const [metadata, setMetadataState] = useState<EpubProjectMetadata>({
     title: '新しい作品',
     language: 'ja',
     ...options.metadata,
   });
   const [chapters, setChaptersState] = useState<EpubProjectChapterDraft[]>(
-    options.chapters?.length ? options.chapters : [defaultChapter(0)],
+    options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
   );
   const [selectedChapter, setSelectedChapterState] = useState(0);
   const [previewBook, setPreviewBook] = useState<EpubBook | null>(null);
@@ -125,7 +131,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
 
   const setChapters = useCallback(
     (next: EpubProjectChapterDraft[]) => {
-      const normalized = next.length ? next : [defaultChapter(0)];
+      const normalized = next.length ? next : [defaultChapter(0, defaultTitle, defaultBody)];
       setChaptersState(normalized);
       setSelectedChapterState((current) => {
         const selectedId = chapters[current]?.id;
@@ -135,7 +141,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
         return nextIndex >= 0 ? nextIndex : Math.max(0, Math.min(current, normalized.length - 1));
       });
     },
-    [chapters],
+    [chapters, defaultBody, defaultTitle],
   );
 
   const setSelectedChapter = useCallback(
@@ -153,21 +159,24 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     );
   }, []);
 
-  const addChapter = useCallback((chapter: Partial<EpubProjectChapterDraft> = {}) => {
-    setChaptersState((current) => {
-      const generated = defaultChapter(current.length);
-      const next = [
-        ...current,
-        {
-          id: chapter.id ?? generated.id,
-          title: chapter.title ?? generated.title,
-          body: chapter.body ?? generated.body,
-        },
-      ];
-      setSelectedChapterState(next.length - 1);
-      return next;
-    });
-  }, []);
+  const addChapter = useCallback(
+    (chapter: Partial<EpubProjectChapterDraft> = {}) => {
+      setChaptersState((current) => {
+        const generated = defaultChapter(current.length, defaultTitle, defaultBody);
+        const next = [
+          ...current,
+          {
+            id: chapter.id ?? generated.id,
+            title: chapter.title ?? generated.title,
+            body: chapter.body ?? generated.body,
+          },
+        ];
+        setSelectedChapterState(next.length - 1);
+        return next;
+      });
+    },
+    [defaultBody, defaultTitle],
+  );
 
   const removeChapter = useCallback(
     (index = selectedChapter) => {
@@ -249,10 +258,15 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   );
 }
 
-function defaultChapter(index: number): EpubProjectChapterDraft {
+function defaultChapter(
+  index: number,
+  titleFor: (index: number) => string = (i) => (i === 0 ? '第一話' : `第${i + 1}話`),
+  bodyFor: (index: number) => string = (i) =>
+    i === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
+): EpubProjectChapterDraft {
   return {
     id: `chapter-${Date.now()}-${index}`,
-    title: index === 0 ? '第一話' : `第${index + 1}話`,
-    body: index === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
+    title: titleFor(index),
+    body: bodyFor(index),
   };
 }
