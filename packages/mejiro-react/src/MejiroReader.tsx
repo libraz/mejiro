@@ -195,7 +195,7 @@ interface MejiroReaderCommonProps {
    * { ...DEFAULT_BOOK_OPTIONS, fontFamily: '"Noto Serif JP"', fontSize: 18 }
    * ```
    */
-  options?: BookOptions;
+  options?: Partial<BookOptions>;
   /**
    * Page-geometry overrides forwarded to `MejiroBook.computePageSize`. Use to
    * tune how the spread is sized inside the surface — most usefully to shrink
@@ -458,7 +458,7 @@ function MejiroReaderInner(
   const manuscriptProp = 'manuscript' in props ? props.manuscript : undefined;
   const dialectProp = 'dialect' in props ? props.dialect : undefined;
   const {
-    options = DEFAULT_BOOK_OPTIONS,
+    options: optionsProp,
     pageGeometry: pageGeometryProp,
     fonts,
     epub: epubProp,
@@ -504,6 +504,7 @@ function MejiroReaderInner(
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [chapterState, setChapterState] = useState(chapterProp ?? 0);
+  const chapterIsUncontrolled = chapterProp == null;
   const chapter = chapterProp ?? chapterState;
   const [chromeHidden, setChromeHidden] = useState(false);
   const [autoSingle, setAutoSingle] = useState(false);
@@ -569,7 +570,19 @@ function MejiroReaderInner(
     return `${columns} / ${aspect}`;
   }, [effectiveSingle, resolvedGeometry]);
 
-  const { book, options: bookOptions, setOptions } = useMejiroBook(options);
+  const resolvedOptions = useMemo<BookOptions>(
+    () => ({ ...DEFAULT_BOOK_OPTIONS, ...(optionsProp ?? {}) }),
+    [optionsProp],
+  );
+  const { book, options: bookOptions, setOptions } = useMejiroBook(resolvedOptions);
+  const didSyncOptionsPropRef = useRef(false);
+  useEffect(() => {
+    if (!didSyncOptionsPropRef.current) {
+      didSyncOptionsPropRef.current = true;
+      return;
+    }
+    void setOptions(resolvedOptions);
+  }, [resolvedOptions, setOptions]);
 
   const synthesizedEpub = useMemo<EpubBook | null>(() => {
     if (manuscriptProp === undefined) return null;
@@ -700,20 +713,20 @@ function MejiroReaderInner(
     return result;
   }, [annotations, layoutCtx.layout, chapter]);
 
-  // Controlled mode: render `epub` directly instead of copying it into the
-  // loader state. Copying introduces a render where layout can see the old
-  // book with the new chapter index.
+  // Controlled mode: render `epub` / `manuscript` directly instead of copying
+  // it into the loader state. Copying introduces a render where layout can see
+  // the old book with the new chapter index.
   const clearImagesRef = useRef(imageCtx.clearImages);
   clearImagesRef.current = imageCtx.clearImages;
   const onLoadRef = useRef(onLoad);
   onLoadRef.current = onLoad;
   useEffect(() => {
     if (!controlled) return;
-    if (chapterProp == null) setChapterState(0);
+    if (chapterIsUncontrolled) setChapterState(0);
     clearImagesRef.current();
     book.clearCache();
-    if (epubProp) onLoadRef.current?.(epubProp);
-  }, [controlled, epubProp, book, chapterProp]);
+    if (e) onLoadRef.current?.(e);
+  }, [controlled, e, book, chapterIsUncontrolled]);
 
   // Controlled spreadIdx → host-driven navigation: animate to the prop value.
   const spreadGoToRef = useRef(spreadCtx.goTo);
@@ -1062,9 +1075,10 @@ function MejiroReaderInner(
                 fontSize={bookOptions.fontSize}
                 lineSpacing={bookOptions.lineSpacing}
                 scrollToPage={spreadCtx.spreadIdx * 2}
-                onVisiblePageChange={(pageIdx) => {
+                onVisiblePageChange={(pageIdx, source) => {
+                  if (source === 'programmatic') return;
                   const target = Math.floor(pageIdx / 2);
-                  if (target !== spreadCtx.spreadIdx) spreadGoToRef.current(target);
+                  if (target !== spreadCtx.spreadIdx) spreadCtx.setSpread(target);
                 }}
               />
             )}

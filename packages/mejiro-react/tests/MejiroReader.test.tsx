@@ -141,6 +141,23 @@ describe('MejiroReader (React) — enable* toggles', () => {
     const { container } = render(<MejiroReader />);
     expect(container.querySelector('.mejiro-reader-stats')).not.toBeNull();
   });
+
+  it('reacts to options prop changes', async () => {
+    const epub = fakeEpub();
+    const { container, rerender } = render(
+      <MejiroReader epub={epub} options={{ fontFamily: 'serif', fontSize: 16 }} enableStats />,
+    );
+
+    expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 16px');
+
+    rerender(
+      <MejiroReader epub={epub} options={{ fontFamily: 'serif', fontSize: 22 }} enableStats />,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 22px'),
+    );
+  });
 });
 
 describe('MejiroReader (React) — renderSettings injection', () => {
@@ -239,6 +256,17 @@ describe('MejiroReader (React) — events', () => {
     const { rerender } = render(<MejiroReader epub={null} onLoad={onLoad} />);
     expect(onLoad).not.toHaveBeenCalled();
     rerender(<MejiroReader epub={fakeEpub()} onLoad={onLoad} />);
+    expect(onLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call onLoad again when only the controlled chapter changes', () => {
+    const onLoad = vi.fn();
+    const epub = fakeEpub();
+    const { rerender } = render(<MejiroReader epub={epub} chapter={0} onLoad={onLoad} />);
+
+    expect(onLoad).toHaveBeenCalledTimes(1);
+    rerender(<MejiroReader epub={epub} chapter={1} onLoad={onLoad} />);
+
     expect(onLoad).toHaveBeenCalledTimes(1);
   });
 
@@ -365,6 +393,15 @@ describe('MejiroReader (React) — controlled spreadIdx', () => {
         <MejiroReader epub={fakeEpub()} spreadIdx={0} onSpreadIdxChange={onSpreadIdxChange} />,
       ),
     ).not.toThrow();
+  });
+
+  it('does not emit a synthetic onSpreadIdxChange on initial mount', async () => {
+    const onSpreadIdxChange = vi.fn();
+    render(<MejiroReader epub={fakeEpub()} onSpreadIdxChange={onSpreadIdxChange} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onSpreadIdxChange).not.toHaveBeenCalled();
   });
 });
 

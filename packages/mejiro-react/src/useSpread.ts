@@ -62,6 +62,7 @@ export function useSpread(
   spreadIdxRef.current = spreadIdx;
   const turnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutGenerationRef = useRef(0);
+  const lastEmittedRef = useRef<{ layout: ChapterLayout; spreadIdx: number } | null>(null);
 
   const totalPages = layout?.totalPages ?? 0;
   const totalSpreads = Math.max(1, Math.ceil(totalPages / 2));
@@ -95,7 +96,15 @@ export function useSpread(
   useEffect(() => {
     if (!layout) return;
     setSpread(layout.getSpread(spreadIdx));
-    onChangeRef.current?.(spreadIdx);
+    const last = lastEmittedRef.current;
+    if (!last) {
+      lastEmittedRef.current = { layout, spreadIdx };
+      return;
+    }
+    if (last.spreadIdx !== spreadIdx) {
+      onChangeRef.current?.(spreadIdx);
+    }
+    lastEmittedRef.current = { layout, spreadIdx };
   }, [layout, spreadIdx]);
 
   const goTo = useCallback(

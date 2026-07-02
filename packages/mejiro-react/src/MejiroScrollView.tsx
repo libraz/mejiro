@@ -32,7 +32,7 @@ export interface MejiroScrollViewProps {
    * Visible page index reported to the parent as the user scrolls. The page
    * with the largest intersection with the viewport is treated as visible.
    */
-  onVisiblePageChange?: (pageIdx: number) => void;
+  onVisiblePageChange?: (pageIdx: number, source: 'user' | 'programmatic') => void;
   /**
    * Target page to scroll into view. When set, the view scrolls so that the
    * matching page sits at the top of the scroll container.
@@ -64,11 +64,13 @@ export function MejiroScrollView({
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const onVisiblePageChangeRef = useRef(onVisiblePageChange);
   onVisiblePageChangeRef.current = onVisiblePageChange;
+  const programmaticScrollRef = useRef(false);
 
   const pages = useMemo(() => {
     const total = layout.totalPages;
     return Array.from({ length: total }, (_, i) => layout.getPage(i));
   }, [layout]);
+  const pageCount = pages.length;
 
   const useSlot = true;
 
@@ -80,6 +82,7 @@ export function MejiroScrollView({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    if (pageCount === 0) return;
     if (typeof IntersectionObserver === 'undefined') return;
     let mostVisibleIdx = -1;
     let mostVisibleRatio = 0;
@@ -98,7 +101,12 @@ export function MejiroScrollView({
             }
           }
         }
-        if (mostVisibleIdx >= 0) onVisiblePageChangeRef.current?.(mostVisibleIdx);
+        if (mostVisibleIdx >= 0) {
+          onVisiblePageChangeRef.current?.(
+            mostVisibleIdx,
+            programmaticScrollRef.current ? 'programmatic' : 'user',
+          );
+        }
       },
       { root: container, threshold: [0.25, 0.5, 0.75] },
     );
@@ -106,17 +114,23 @@ export function MejiroScrollView({
       if (el) observer.observe(el);
     }
     return () => observer.disconnect();
-  }, []);
+  }, [pageCount]);
 
   useLayoutEffect(() => {
     if (scrollToPage == null) return;
+    if (pageCount === 0) return;
     const el = pageRefs.current[scrollToPage];
     if (!(el && containerRef.current)) return;
+    programmaticScrollRef.current = true;
     containerRef.current.scrollTo({
       top: el.offsetTop,
       behavior: 'auto',
     });
-  }, [scrollToPage]);
+    const timer = setTimeout(() => {
+      programmaticScrollRef.current = false;
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [scrollToPage, pageCount]);
 
   return (
     <div ref={containerRef} className="mejiro-reader-scroll">
