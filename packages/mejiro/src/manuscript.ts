@@ -1,4 +1,5 @@
 import type { InlineAnnotation, InlineRubyAnnotation } from './browser/types.js';
+import { sanitizeUrl } from './url.js';
 
 /**
  * Manuscript notation dialect. Selects which inline markers are recognized.
@@ -17,8 +18,15 @@ export interface ParseManuscriptOptions {
   dialect?: ManuscriptDialect;
 }
 
-const AUTO_RUBY = /^([\p{Script=Han}々〆ヶ]+)《([^》]+)》/u;
+const AUTO_RUBY = /([\p{Script=Han}々〆ヶ]+)《([^《》]+)》/uy;
 const TCY_BODY = /^[A-Za-z0-9!?]+$/;
+
+function indexOfBeforeLineEnd(text: string, search: string, from: number): number {
+  const idx = text.indexOf(search, from);
+  if (idx < 0) return -1;
+  const lineEnd = text.indexOf('\n', from);
+  return lineEnd >= 0 && lineEnd < idx ? -1 : idx;
+}
 
 /**
  * Parses a manuscript paragraph into base text and inline annotations.
@@ -32,6 +40,7 @@ export function parseManuscript(
   text: string,
   options: ParseManuscriptOptions = {},
 ): { text: string; inlineAnnotations: InlineAnnotation[] } {
+  text = text.normalize('NFC');
   const dialect = options.dialect ?? 'mejiro';
   const inlineAnnotations: InlineAnnotation[] = [];
   let out = '';
@@ -40,19 +49,20 @@ export function parseManuscript(
   const charCount = (str: string): number => [...str].length;
 
   while (i < text.length) {
-    if (text[i] === '｜') {
-      const closeBase = text.indexOf('《', i + 1);
-      const closeRuby = closeBase >= 0 ? text.indexOf('》', closeBase + 1) : -1;
-      if (closeBase > i && closeRuby > closeBase) {
-        addRuby(text.slice(i + 1, closeBase), text.slice(closeBase + 1, closeRuby));
+    if (text[i] === '｜' || text[i] === '|') {
+      const closeBase = indexOfBeforeLineEnd(text, '《', i + 1);
+      const closeRuby = closeBase >= 0 ? indexOfBeforeLineEnd(text, '》', closeBase + 1) : -1;
+      const rubyText = closeRuby > closeBase ? text.slice(closeBase + 1, closeRuby) : '';
+      if (closeBase > i && rubyText && !rubyText.includes('《')) {
+        addRuby(text.slice(i + 1, closeBase), rubyText);
         i = closeRuby + 1;
         continue;
       }
     }
 
     if (dialect === 'mejiro' && text.startsWith('《《', i)) {
-      const close = text.indexOf('》》', i + 2);
-      if (close > i) {
+      const close = indexOfBeforeLineEnd(text, '》》', i + 2);
+      if (close > i + 2) {
         const body = text.slice(i + 2, close);
         const startIndex = charCount(out);
         out += body;
@@ -67,7 +77,8 @@ export function parseManuscript(
       }
     }
 
-    const auto = text.slice(i).match(AUTO_RUBY);
+    AUTO_RUBY.lastIndex = i;
+    const auto = AUTO_RUBY.exec(text);
     if (auto) {
       addRuby(auto[1], auto[2]);
       i += auto[0].length;
@@ -76,7 +87,7 @@ export function parseManuscript(
 
     if (dialect === 'mejiro') {
       if (text[i] === '〔') {
-        const close = text.indexOf('〕', i + 1);
+        const close = indexOfBeforeLineEnd(text, '〕', i + 1);
         if (close > i && close - i <= 6) {
           const body = text.slice(i + 1, close);
           if (TCY_BODY.test(body)) {
@@ -94,8 +105,8 @@ export function parseManuscript(
       }
 
       if (text.startsWith('[[#', i)) {
-        const close = text.indexOf(']]', i + 3);
-        if (close > i) {
+        const close = indexOfBeforeLineEnd(text, ']]', i + 3);
+        if (close > i + 3) {
           const id = text.slice(i + 3, close);
           const startIndex = charCount(out);
           out += `*${id}`;
@@ -111,10 +122,10 @@ export function parseManuscript(
       }
 
       if (text[i] === '[') {
-        const closeLabel = text.indexOf(']', i + 1);
+        const closeLabel = indexOfBeforeLineEnd(text, ']', i + 1);
         const openTarget = closeLabel >= 0 ? closeLabel + 1 : -1;
         if (closeLabel > i && text[openTarget] === '(') {
-          const closeTarget = text.indexOf(')', openTarget + 1);
+          const closeTarget = indexOfBeforeLineEnd(text, ')', openTarget + 1);
           if (closeTarget > openTarget + 1) {
             const target = parseLinkTarget(text.slice(openTarget + 1, closeTarget));
             if (target) {
@@ -136,7 +147,7 @@ export function parseManuscript(
       }
 
       if (text.startsWith('**', i)) {
-        const close = text.indexOf('**', i + 2);
+        const close = indexOfBeforeLineEnd(text, '**', i + 2);
         if (close > i && close - i > 2) {
           const body = text.slice(i + 2, close);
           const startIndex = charCount(out);
@@ -152,7 +163,7 @@ export function parseManuscript(
       }
 
       if (text[i] === '*') {
-        const close = text.indexOf('*', i + 1);
+        const close = indexOfBeforeLineEnd(text, '*', i + 1);
         if (close > i && close - i > 1) {
           const body = text.slice(i + 1, close);
           if (!body.includes('*')) {
@@ -190,12 +201,14 @@ export function parseManuscript(
   }
 }
 
-function parseLinkTarget(raw: string): { href: string; title?: string } | null {
+export function parseLinkTarget(raw: string): { href: string; title?: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const match = trimmed.match(/^(\S+)(?:\s+"([^"]+)")?$/u);
   if (!match) return null;
-  return match[2] ? { href: match[1], title: match[2] } : { href: match[1] };
+  const href = sanitizeUrl(match[1]);
+  if (!href) return null;
+  return match[2] ? { href, title: match[2] } : { href };
 }
 
 /**

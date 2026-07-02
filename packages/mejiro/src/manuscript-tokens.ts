@@ -1,4 +1,4 @@
-import type { ManuscriptDialect } from './manuscript.js';
+import { type ManuscriptDialect, parseLinkTarget } from './manuscript.js';
 
 /** Kinds of notation tokens recognized in manuscript source. */
 export type ManuscriptTokenKind =
@@ -19,8 +19,15 @@ export interface ManuscriptToken {
   end: number;
 }
 
-const AUTO_RUBY = /([\p{Script=Han}々〆ヶ]+)《([^》]+)》/u;
+const AUTO_RUBY = /([\p{Script=Han}々〆ヶ]+)《([^《》]+)》/uy;
 const TCY_BODY = /^[A-Za-z0-9!?]+$/;
+
+function indexOfBeforeLineEnd(text: string, search: string, from: number): number {
+  const idx = text.indexOf(search, from);
+  if (idx < 0) return -1;
+  const lineEnd = text.indexOf('\n', from);
+  return lineEnd >= 0 && lineEnd < idx ? -1 : idx;
+}
 
 /**
  * Locates manuscript-notation tokens in source text. Designed for syntax
@@ -39,10 +46,11 @@ export function tokenizeManuscriptSource(
   let i = 0;
 
   while (i < text.length) {
-    if (text[i] === '｜') {
-      const closeBase = text.indexOf('《', i + 1);
-      const closeRuby = closeBase >= 0 ? text.indexOf('》', closeBase + 1) : -1;
-      if (closeBase > i && closeRuby > closeBase) {
+    if (text[i] === '｜' || text[i] === '|') {
+      const closeBase = indexOfBeforeLineEnd(text, '《', i + 1);
+      const closeRuby = closeBase >= 0 ? indexOfBeforeLineEnd(text, '》', closeBase + 1) : -1;
+      const rubyText = closeRuby > closeBase ? text.slice(closeBase + 1, closeRuby) : '';
+      if (closeBase > i && rubyText && !rubyText.includes('《')) {
         tokens.push({ kind: 'ruby', start: i, end: closeRuby + 1 });
         i = closeRuby + 1;
         continue;
@@ -50,16 +58,17 @@ export function tokenizeManuscriptSource(
     }
 
     if (dialect === 'mejiro' && text.startsWith('《《', i)) {
-      const close = text.indexOf('》》', i + 2);
-      if (close > i) {
+      const close = indexOfBeforeLineEnd(text, '》》', i + 2);
+      if (close > i + 2) {
         tokens.push({ kind: 'emphasis', start: i, end: close + 2 });
         i = close + 2;
         continue;
       }
     }
 
-    const auto = text.slice(i).match(AUTO_RUBY);
-    if (auto && auto.index === 0) {
+    AUTO_RUBY.lastIndex = i;
+    const auto = AUTO_RUBY.exec(text);
+    if (auto) {
       tokens.push({ kind: 'ruby', start: i, end: i + auto[0].length });
       i += auto[0].length;
       continue;
@@ -67,7 +76,7 @@ export function tokenizeManuscriptSource(
 
     if (dialect === 'mejiro') {
       if (text[i] === '〔') {
-        const close = text.indexOf('〕', i + 1);
+        const close = indexOfBeforeLineEnd(text, '〕', i + 1);
         if (close > i && close - i <= 6) {
           const body = text.slice(i + 1, close);
           if (TCY_BODY.test(body)) {
@@ -79,8 +88,8 @@ export function tokenizeManuscriptSource(
       }
 
       if (text.startsWith('[[#', i)) {
-        const close = text.indexOf(']]', i + 3);
-        if (close > i) {
+        const close = indexOfBeforeLineEnd(text, ']]', i + 3);
+        if (close > i + 3) {
           tokens.push({ kind: 'footnote', start: i, end: close + 2 });
           i = close + 2;
           continue;
@@ -88,11 +97,14 @@ export function tokenizeManuscriptSource(
       }
 
       if (text[i] === '[') {
-        const closeLabel = text.indexOf(']', i + 1);
+        const closeLabel = indexOfBeforeLineEnd(text, ']', i + 1);
         const openTarget = closeLabel >= 0 ? closeLabel + 1 : -1;
         if (closeLabel > i && text[openTarget] === '(') {
-          const closeTarget = text.indexOf(')', openTarget + 1);
-          if (closeTarget > openTarget + 1) {
+          const closeTarget = indexOfBeforeLineEnd(text, ')', openTarget + 1);
+          if (
+            closeTarget > openTarget + 1 &&
+            parseLinkTarget(text.slice(openTarget + 1, closeTarget))
+          ) {
             tokens.push({ kind: 'link', start: i, end: closeTarget + 1 });
             i = closeTarget + 1;
             continue;
@@ -101,7 +113,7 @@ export function tokenizeManuscriptSource(
       }
 
       if (text.startsWith('**', i)) {
-        const close = text.indexOf('**', i + 2);
+        const close = indexOfBeforeLineEnd(text, '**', i + 2);
         if (close > i && close - i > 2) {
           tokens.push({ kind: 'strong', start: i, end: close + 2 });
           i = close + 2;
@@ -110,7 +122,7 @@ export function tokenizeManuscriptSource(
       }
 
       if (text[i] === '*') {
-        const close = text.indexOf('*', i + 1);
+        const close = indexOfBeforeLineEnd(text, '*', i + 1);
         if (close > i && close - i > 1) {
           const body = text.slice(i + 1, close);
           if (!body.includes('*')) {
