@@ -101,13 +101,9 @@ export interface ExclusionPageGeometry {
   linePitch: number;
   /** Total content width in the block direction (px). */
   contentWidth: number;
+  /** Minimum vertical gap height usable for text. Defaults to `linePitch`. */
+  minGapHeight?: number;
 }
-
-/**
- * Minimum gap height (in pixels) to be considered usable for text.
- * Gaps smaller than this are discarded to avoid tiny text fragments.
- */
-const MIN_GAP_HEIGHT = 8;
 
 /**
  * Manages image exclusion zones for text layout on a page.
@@ -198,10 +194,18 @@ export class ExclusionEngine {
    */
   compute(): { slots: ColumnSlot[]; lineWidths: Float32Array } {
     const { lineWidth, lineCount, linePitch, contentWidth } = this.geometry;
+    const minGapHeight = this.geometry.minGapHeight ?? linePitch;
     const slots: ColumnSlot[] = [];
 
     for (let col = 0; col < lineCount; col++) {
-      const gaps = computeColumnGaps(col, linePitch, contentWidth, lineWidth, this.images);
+      const gaps = computeColumnGaps(
+        col,
+        linePitch,
+        contentWidth,
+        lineWidth,
+        this.images,
+        minGapHeight,
+      );
       for (const gap of gaps) {
         slots.push(gap);
       }
@@ -251,6 +255,7 @@ function computeColumnGaps(
   contentW: number,
   lineWidth: number,
   images: readonly ImageRect[],
+  minGapHeight: number,
 ): ColumnSlot[] {
   const xPos = colIndex * linePitch;
   // Column horizontal range (in content coords, measured from left)
@@ -292,13 +297,13 @@ function computeColumnGaps(
   let prevEnd = 0;
   for (const [top, bottom] of merged) {
     const gapH = top - prevEnd;
-    if (gapH >= MIN_GAP_HEIGHT) {
+    if (gapH >= minGapHeight) {
       gaps.push({ xPos, yStart: prevEnd, height: gapH });
     }
     prevEnd = bottom;
   }
   const tailGap = lineWidth - prevEnd;
-  if (tailGap >= MIN_GAP_HEIGHT) {
+  if (tailGap >= minGapHeight) {
     gaps.push({ xPos, yStart: prevEnd, height: tailGap });
   }
 
@@ -464,6 +469,7 @@ export class SpreadExclusionEngine {
       // Convert from right-page-relative to content-area coordinates
       const cx = img.x - pagePaddingX;
       const cy = img.y - pagePaddingY;
+      const bm = img.blockMargin ?? 0;
       const baseProps = {
         y: cy,
         w: img.w,
@@ -473,13 +479,13 @@ export class SpreadExclusionEngine {
       };
 
       // Right page: image overlaps if its right edge > 0 and left edge < contentW
-      if (cx + img.w > 0 && cx < contentW) {
+      if (cx + img.w + bm > 0 && cx - bm < contentW) {
         rightEngine.addImage({ ...baseProps, x: cx });
       }
 
       // Left page: image extends past the right page's left edge (x < pagePaddingX)
       // Coordinate conversion accounts for the gutter (both pages' inner padding)
-      if (img.x < 0) {
+      if (img.x - bm < 0) {
         leftEngine.addImage({ ...baseProps, x: cx + pageWidth });
       }
     }

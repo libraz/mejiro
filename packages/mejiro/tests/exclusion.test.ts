@@ -283,6 +283,21 @@ describe('computeExclusionSlots', () => {
     expect(slots[2].height).toBe(400);
   });
 
+  it('uses linePitch as the default minimum usable gap height', () => {
+    const { slots } = computeExclusionSlots({
+      ...base,
+      images: [{ x: 0, y: 10, w: 150, h: 380 }],
+    });
+    expect(slots).toHaveLength(0);
+
+    const custom = computeExclusionSlots({
+      ...base,
+      minGapHeight: 8,
+      images: [{ x: 0, y: 10, w: 150, h: 380 }],
+    });
+    expect(custom.slots).toHaveLength(10);
+  });
+
   it('lineWidths matches slot heights', () => {
     const { slots, lineWidths } = computeExclusionSlots({
       ...base,
@@ -447,6 +462,15 @@ describe('SpreadExclusionEngine', () => {
     // Both pages have some affected slots
     expect(rightSlots.length).toBeGreaterThanOrEqual(5);
     expect(leftSlots.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('classifies spread images using blockMargin-expanded bounds', () => {
+    const engine = new SpreadExclusionEngine(spread);
+    engine.addImage({ x: 5, y: 50, w: 10, h: 100, blockMargin: 30 });
+    const { rightSlots, leftSlots } = engine.compute();
+
+    expect(rightSlots.length).toBeGreaterThan(5);
+    expect(leftSlots.length).toBeGreaterThan(5);
   });
 
   it('rightSlotCount splits lineWidths correctly', () => {
