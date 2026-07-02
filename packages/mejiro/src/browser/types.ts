@@ -141,7 +141,7 @@ export interface ChapterLayoutOptions {
 export interface ParagraphLayoutResult {
   /** Break result from the line breaking algorithm. */
   breakResult: import('../types.js').BreakResult;
-  /** Character array (grapheme clusters) of the paragraph text. */
+  /** Character array of the paragraph text, indexed by NFC Unicode codepoint. */
   chars: string[];
 }
 

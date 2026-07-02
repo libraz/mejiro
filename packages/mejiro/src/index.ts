@@ -31,7 +31,7 @@ export type { PageSlice, ParagraphMeasure } from './paginate.js';
 export { getLineRanges, paginate } from './paginate.js';
 export type { RubyAnnotation, RubyPreprocessResult, RubyType } from './ruby.js';
 export { isKana, preprocessRuby } from './ruby.js';
-export { formatDialogueLineBreaks, toCodepoints } from './text.js';
+export { formatDialogueLineBreaks, normalizeText, toCodepoints } from './text.js';
 export { tokenLengthsToBoundaries } from './tokenize.js';
 export type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
 export { sanitizeUrl } from './url.js';

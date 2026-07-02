@@ -1,6 +1,6 @@
 import { computeBreaks } from '../layout.js';
 import type { RubyAnnotation } from '../ruby.js';
-import { toCodepoints } from '../text.js';
+import { normalizeText, toCodepoints } from '../text.js';
 import type { BreakResult } from '../types.js';
 import { FontLoader } from './font-loader.js';
 import { CharMeasurer, deriveRubyFont } from './measure.js';
@@ -86,7 +86,8 @@ export async function layoutText(options: {
   await loader.ensureLoaded(fontSpec);
 
   const measurer = new CharMeasurer();
-  const codepoints = toCodepoints(options.text);
+  const text = normalizeText(options.text);
+  const codepoints = toCodepoints(text);
   const advances = measurer.measureAll(fontSpec, codepoints);
 
   let rubyAnnotations: RubyAnnotation[] | undefined;
@@ -111,13 +112,18 @@ export async function layoutText(options: {
  * Manages font loading, width caching, and layout computation.
  */
 export class MejiroBrowser {
-  private fontLoader = new FontLoader();
+  private fontLoader: FontLoader;
   private measurer: CharMeasurer;
   private options: MejiroBrowserOptions;
 
   constructor(options?: MejiroBrowserOptions) {
     this.options = options ?? {};
     this.measurer = new CharMeasurer();
+    this.fontLoader = new FontLoader({
+      onFontsLoaded: () => {
+        this.measurer.getCache().clear();
+      },
+    });
   }
 
   /**
@@ -134,11 +140,12 @@ export class MejiroBrowser {
     const fontSpec = toFontSpec(fontFamily, fontSize);
     await this.fontLoader.ensureLoaded(fontSpec);
 
-    if (this.options.strictFontCheck && !document.fonts.check(fontSpec)) {
+    if (this.options.strictFontCheck && !this.fontLoader.isAvailable(fontSpec)) {
       throw new Error(`Font not available (possible fallback): ${fontSpec}`);
     }
 
-    const codepoints = toCodepoints(options.text);
+    const text = normalizeText(options.text);
+    const codepoints = toCodepoints(text);
     const advances = this.measurer.measureAll(fontSpec, codepoints);
 
     let rubyAnnotations: RubyAnnotation[] | undefined;
@@ -194,8 +201,9 @@ export class MejiroBrowser {
 
     const results: ChapterLayoutResult['paragraphs'] = [];
     for (const para of inputs) {
+      const text = normalizeText(para.text);
       const breakResult = await this.layout({
-        text: para.text,
+        text,
         fontFamily: para.fontFamily ?? fontFamily,
         fontSize: para.fontSize ?? fontSize,
         lineWidth,
@@ -204,7 +212,7 @@ export class MejiroBrowser {
         inlineAnnotations: para.inlineAnnotations?.length ? para.inlineAnnotations : undefined,
         tokenBoundaries: para.tokenBoundaries,
       });
-      results.push({ breakResult, chars: [...para.text] });
+      results.push({ breakResult, chars: [...text] });
     }
 
     return { paragraphs: results };

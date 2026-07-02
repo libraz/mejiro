@@ -70,4 +70,55 @@ describe('MejiroBrowser argument validation', () => {
     expect(browser.verticalLineWidth(400)).toBeGreaterThan(0);
     await expect(browser.preloadFont()).resolves.toBeUndefined();
   });
+
+  it('returns NFC-normalized chars from layoutChapter', async () => {
+    vi.spyOn(document.fonts, 'check').mockReturnValue(true);
+    const browser = new MejiroBrowser({ fixedFontFamily: 'serif', fixedFontSize: 16 });
+
+    const result = await browser.layoutChapter({
+      paragraphs: [{ text: 'か\u3099く' }],
+      lineWidth: 100,
+    });
+
+    expect(result.paragraphs[0].chars).toEqual(['が', 'く']);
+    expect(result.paragraphs[0].breakResult.breakPoints).toHaveLength(0);
+  });
+
+  it('clears measured width cache when document fonts finish loading', async () => {
+    vi.spyOn(document.fonts, 'check').mockReturnValue(true);
+    let loadingDone: (() => void) | undefined;
+    const originalAddEventListener = (
+      document.fonts as FontFaceSet & Partial<Pick<EventTarget, 'addEventListener'>>
+    ).addEventListener;
+    Object.defineProperty(document.fonts, 'addEventListener', {
+      configurable: true,
+      value: (type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'loadingdone') {
+          loadingDone =
+            typeof listener === 'function'
+              ? () => listener(new Event('loadingdone'))
+              : () => listener.handleEvent(new Event('loadingdone'));
+        }
+      },
+    });
+    try {
+      const browser = new MejiroBrowser({ fixedFontFamily: 'serif', fixedFontSize: 16 });
+
+      await browser.layout({ text: 'abc', lineWidth: 100 });
+      expect(browser.cacheStats().codepoints).toBeGreaterThan(0);
+
+      loadingDone?.();
+      expect(browser.cacheStats()).toEqual({ fonts: 0, codepoints: 0 });
+    } finally {
+      if (originalAddEventListener) {
+        Object.defineProperty(document.fonts, 'addEventListener', {
+          configurable: true,
+          value: originalAddEventListener,
+        });
+      } else {
+        delete (document.fonts as FontFaceSet & Partial<Pick<EventTarget, 'addEventListener'>>)
+          .addEventListener;
+      }
+    }
+  });
 });
