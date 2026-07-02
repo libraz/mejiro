@@ -14,8 +14,13 @@ export interface HeadingStyle {
 export interface MeasureOptions {
   /** Base font size in pixels. */
   fontSize: number;
-  /** Line height multiplier. */
-  lineHeight: number;
+  /** Line spacing multiplier. */
+  lineSpacing?: number;
+  /**
+   * Line spacing multiplier.
+   * @deprecated Use `lineSpacing`; retained as a v0.x compatibility alias.
+   */
+  lineHeight?: number;
   /**
    * Scale factor for heading font size (applies to all heading levels
    * unless overridden by `headingStyles`).
@@ -37,19 +42,19 @@ export interface MeasureOptions {
   headingStyles?: Record<number, HeadingStyle>;
 }
 
-/** Returns the effective heading level for an entry (undefined for body text). */
-function entryHeadingLevel(entry: RenderEntry): number | undefined {
-  return entry.headingLevel ?? (entry.isHeading ? 1 : undefined);
+/** Returns whether an entry should use heading metrics. */
+function isHeadingEntry(entry: RenderEntry): boolean {
+  return entry.headingLevel != null || entry.isHeading === true;
 }
 
 /**
  * Builds paragraph measures from render entries for use with `paginate()`.
  *
- * Computes line pitch (font size x line height) and inter-paragraph gaps
+ * Computes line pitch (font size x line spacing) and inter-paragraph gaps
  * based on whether each paragraph is a heading or body text.
  *
  * @param entries - Render entries for each paragraph.
- * @param options - Font size, line height, and spacing configuration.
+ * @param options - Font size, line spacing, and paragraph gap configuration.
  * @returns Array of paragraph measures suitable for `paginate()`.
  */
 export function buildParagraphMeasures(
@@ -58,36 +63,40 @@ export function buildParagraphMeasures(
 ): ParagraphMeasure[] {
   const {
     fontSize,
-    lineHeight,
     headingScale = 1.4,
     paragraphGapEm = 0.4,
     headingGapEm = 1.2,
     headingStyles,
   } = options;
+  const lineSpacing = resolveLineSpacing(options);
 
-  const basePitch = fontSize * lineHeight;
+  const basePitch = fontSize * lineSpacing;
   const paragraphGap = fontSize * paragraphGapEm;
 
-  /** Resolve scale for a heading level. */
-  function resolveScale(level: number): number {
-    return headingStyles?.[level]?.scale ?? headingScale;
+  /** Resolve scale for a heading entry. Legacy `isHeading` uses generic heading settings. */
+  function resolveScale(entry: RenderEntry): number {
+    return entry.headingLevel != null
+      ? (headingStyles?.[entry.headingLevel]?.scale ?? headingScale)
+      : headingScale;
   }
 
-  /** Resolve gapAfterEm for a heading level. */
-  function resolveGapAfter(level: number): number {
-    return headingStyles?.[level]?.gapAfterEm ?? headingGapEm;
+  /** Resolve gapAfterEm for a heading entry. Legacy `isHeading` uses generic heading settings. */
+  function resolveGapAfter(entry: RenderEntry): number {
+    return entry.headingLevel != null
+      ? (headingStyles?.[entry.headingLevel]?.gapAfterEm ?? headingGapEm)
+      : headingGapEm;
   }
 
   return entries.map((entry, i) => {
     const lineCount = entry.breakPoints.length + 1;
-    const level = entryHeadingLevel(entry);
+    const isHeading = isHeadingEntry(entry);
 
     // Line pitch for this paragraph
     let linePitch: number;
-    if (level != null) {
-      const scale = resolveScale(level);
+    if (isHeading) {
+      const scale = resolveScale(entry);
       const headingFontSize = Math.round(fontSize * scale);
-      linePitch = headingFontSize * lineHeight;
+      linePitch = headingFontSize * lineSpacing;
     } else {
       linePitch = basePitch;
     }
@@ -95,8 +104,8 @@ export function buildParagraphMeasures(
     // Gap before this paragraph
     let gapBefore: number;
     if (i > 0) {
-      const prevLevel = entryHeadingLevel(entries[i - 1]);
-      gapBefore = prevLevel != null ? fontSize * resolveGapAfter(prevLevel) : paragraphGap;
+      const prev = entries[i - 1];
+      gapBefore = isHeadingEntry(prev) ? fontSize * resolveGapAfter(prev) : paragraphGap;
     } else {
       gapBefore = paragraphGap;
     }
@@ -115,7 +124,7 @@ export function buildParagraphMeasures(
  * adjusting image coordinates before passing them to the exclusion engine.
  *
  * @param entries - Render entries for each paragraph.
- * @param options - Font size, line height, and spacing configuration.
+ * @param options - Font size, line spacing, and paragraph gap configuration.
  * @returns Per-line metrics array, cumulative offsets, and base line pitch.
  */
 export function buildLineMetrics(
@@ -124,21 +133,25 @@ export function buildLineMetrics(
 ): LineMetricsResult {
   const {
     fontSize,
-    lineHeight,
     headingScale = 1.4,
     paragraphGapEm = 0.4,
     headingGapEm = 1.2,
     headingStyles,
   } = options;
+  const lineSpacing = resolveLineSpacing(options);
 
-  const basePitch = fontSize * lineHeight;
+  const basePitch = fontSize * lineSpacing;
   const paragraphGap = fontSize * paragraphGapEm;
 
-  function resolveScale(level: number): number {
-    return headingStyles?.[level]?.scale ?? headingScale;
+  function resolveScale(entry: RenderEntry): number {
+    return entry.headingLevel != null
+      ? (headingStyles?.[entry.headingLevel]?.scale ?? headingScale)
+      : headingScale;
   }
-  function resolveGapAfter(level: number): number {
-    return headingStyles?.[level]?.gapAfterEm ?? headingGapEm;
+  function resolveGapAfter(entry: RenderEntry): number {
+    return entry.headingLevel != null
+      ? (headingStyles?.[entry.headingLevel]?.gapAfterEm ?? headingGapEm)
+      : headingGapEm;
   }
 
   const metrics: LineMetric[] = [];
@@ -148,15 +161,14 @@ export function buildLineMetrics(
   for (let pi = 0; pi < entries.length; pi++) {
     const entry = entries[pi];
     const lineCount = entry.breakPoints.length + 1;
-    const level = entryHeadingLevel(entry);
-    const pitch =
-      level != null ? Math.round(fontSize * resolveScale(level)) * lineHeight : basePitch;
+    const isHeading = isHeadingEntry(entry);
+    const pitch = isHeading ? Math.round(fontSize * resolveScale(entry)) * lineSpacing : basePitch;
 
     for (let li = 0; li < lineCount; li++) {
       let gapBefore = 0;
       if (li === 0 && pi > 0) {
-        const prevLevel = entryHeadingLevel(entries[pi - 1]);
-        gapBefore = prevLevel != null ? fontSize * resolveGapAfter(prevLevel) : paragraphGap;
+        const prev = entries[pi - 1];
+        gapBefore = isHeadingEntry(prev) ? fontSize * resolveGapAfter(prev) : paragraphGap;
       }
 
       if (metrics.length === 0) {
@@ -165,12 +177,16 @@ export function buildLineMetrics(
         offsetList.push(offsetList[offsetList.length - 1] + (prevPitch - basePitch) + gapBefore);
       }
 
-      metrics.push({ pitch, gapBefore, headingLevel: level });
+      metrics.push({ pitch, gapBefore, headingLevel: entry.headingLevel });
       prevPitch = pitch;
     }
   }
 
   return { metrics, offsets: new Float32Array(offsetList), linePitch: basePitch };
+}
+
+function resolveLineSpacing(options: MeasureOptions): number {
+  return options.lineSpacing ?? options.lineHeight ?? 1;
 }
 
 /**
@@ -299,10 +315,7 @@ export function getImageXOffset(
   spreadStartLine: number,
   col: number,
 ): number {
-  const startOffset = spreadStartLine < offsets.length ? offsets[spreadStartLine] : 0;
-  const globalLine = spreadStartLine + col;
-  const colOffset = globalLine < offsets.length ? offsets[globalLine] : startOffset;
-  return colOffset - startOffset;
+  return relativeOffsetAt(offsets, spreadStartLine, col);
 }
 
 /**
@@ -326,14 +339,26 @@ export function findPhysicalColumn(
   fromRight: number,
   basePitch: number,
 ): number {
-  const startOffset = spreadStartLine < offsets.length ? offsets[spreadStartLine] : 0;
   let col = Math.max(0, Math.floor(fromRight / basePitch));
+  const maxCol = Math.max(0, offsets.length - spreadStartLine - 1);
   while (col > 0) {
-    const globalLine = spreadStartLine + col;
-    const colOffset = globalLine < offsets.length ? offsets[globalLine] : startOffset;
-    const physicalPos = col * basePitch + (colOffset - startOffset);
+    const physicalPos = col * basePitch + relativeOffsetAt(offsets, spreadStartLine, col);
     if (physicalPos <= fromRight) break;
     col--;
   }
+  while (col < maxCol) {
+    const next = col + 1;
+    const physicalPos = next * basePitch + relativeOffsetAt(offsets, spreadStartLine, next);
+    if (physicalPos > fromRight) break;
+    col = next;
+  }
   return col;
+}
+
+function relativeOffsetAt(offsets: Float32Array, spreadStartLine: number, col: number): number {
+  if (offsets.length === 0 || spreadStartLine >= offsets.length) return 0;
+  const startOffset = offsets[spreadStartLine];
+  const globalLine = spreadStartLine + col;
+  const offsetIndex = Math.min(globalLine, offsets.length - 1);
+  return offsets[offsetIndex] - startOffset;
 }

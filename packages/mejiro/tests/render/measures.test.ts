@@ -4,6 +4,7 @@ import {
   buildColumnSlots,
   buildLineMetrics,
   buildParagraphMeasures,
+  findPhysicalColumn,
   getImageXOffset,
   packPageLines,
 } from '../../src/render/measures.js';
@@ -143,11 +144,13 @@ describe('buildParagraphMeasures', () => {
     const measures = buildParagraphMeasures([entry, makeEntry(20, 2)], {
       fontSize: 16,
       lineHeight: 1.8,
+      headingScale: 1.25,
+      headingGapEm: 1.1,
+      headingStyles: { 1: { scale: 1.8, gapAfterEm: 1.6 } },
     });
-    // isHeading=true without headingLevel should be treated as level 1
-    const headingFontSize = Math.round(16 * 1.4);
+    const headingFontSize = Math.round(16 * 1.25);
     expect(measures[0].linePitch).toBe(headingFontSize * 1.8);
-    expect(measures[1].gapBefore).toBe(16 * 1.2);
+    expect(measures[1].gapBefore).toBe(16 * 1.1);
   });
 
   it('differentiates h1 and h3 with headingStyles', () => {
@@ -362,9 +365,17 @@ describe('getImageXOffset', () => {
 
   it('handles out-of-bounds gracefully', () => {
     const offsets = new Float32Array([0, 10, 20]);
-    // Col beyond array: colOffset falls back to startOffset → 0
-    expect(getImageXOffset(offsets, 0, 100)).toBe(0);
+    // Col beyond array: keep the last known offset instead of jumping back.
+    expect(getImageXOffset(offsets, 0, 100)).toBe(20);
     // Spread start beyond array: both fall back to 0
     expect(getImageXOffset(offsets, 100, 0)).toBe(0);
+  });
+});
+
+describe('findPhysicalColumn', () => {
+  it('moves forward when narrower heading offsets make the next column fit', () => {
+    const offsets = new Float32Array([0, -10, -20]);
+
+    expect(findPhysicalColumn(offsets, 0, 85, 50)).toBe(2);
   });
 });
