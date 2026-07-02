@@ -484,8 +484,7 @@ export default async function ReaderPage({ params }: { params: { slug: string } 
   const buf = await fetchEpubBuffer(params.slug);
   const book = await parseEpub(buf);
   // renderEpubStatic() の出力は parseEpub の結果から組み立てたもので、
-  // 本文も注釈もすべて escapeHtml/escapeAttr 済み。Server Component から
-  // ストリングを直接子コンポーネントへ渡すこと自体には XSS リスクはない。
+  // 本文や属性をエスケープし、リンク href も安全な URL スキームに制限する。
   const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
   return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
 }
@@ -507,7 +506,7 @@ export function ReaderClient({ slug, initialHtml }: Props) {
 }
 ```
 
-`renderEpubStatic()` は計測やページ分割を行わず、ブラウザの縦書きフローに任せた素朴な HTML を返します。出力は内部で `escapeHtml` / `escapeAttr` 済みなので、`parseEpub()` 経由で取得した EPUB であれば XSS は起きません。検索エンジン向けインデックス用や、低速回線でのプレースホルダとして十分使えます。
+`renderEpubStatic()` は計測やページ分割を行わず、ブラウザの縦書きフローに任せた素朴な HTML を返します。出力は内部で `escapeHtml` / `escapeAttr` され、`parseEpub()` 経由のリンクから `javascript:` などの実行可能スキームも落とされます。検索エンジン向けインデックス用や、低速回線でのプレースホルダとして十分使えます。
 
 ### 7.3 読書位置の永続化（サーバ同期）
 

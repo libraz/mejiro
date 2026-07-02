@@ -483,9 +483,8 @@ import { renderEpubStatic } from '@libraz/mejiro/render';
 export default async function ReaderPage({ params }: { params: { slug: string } }) {
   const buf = await fetchEpubBuffer(params.slug);
   const book = await parseEpub(buf);
-  // renderEpubStatic() output is built from parseEpub() results with every
-  // text and attribute already passed through escapeHtml / escapeAttr, so
-  // forwarding the string from a server component carries no XSS risk.
+  // renderEpubStatic() output is built from parseEpub() results with text and
+  // attributes escaped, and link hrefs restricted to safe URL schemes.
   const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
   return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
 }
@@ -511,7 +510,7 @@ export function ReaderClient({ slug, initialHtml }: Props) {
 }
 ```
 
-`renderEpubStatic()` skips measurement and pagination and lets the browser's native vertical-rl flow do the layout. Because it escapes content internally, EPUBs round-tripped through `parseEpub()` are XSS-safe. The output is also crawlable, so it doubles as a search-engine target and a slow-network placeholder.
+`renderEpubStatic()` skips measurement and pagination and lets the browser's native vertical-rl flow do the layout. It escapes content internally and drops executable link schemes such as `javascript:` from EPUBs round-tripped through `parseEpub()`. The output is also crawlable, so it doubles as a search-engine target and a slow-network placeholder.
 
 ### 7.3 Persisting the reading position to a server
 
