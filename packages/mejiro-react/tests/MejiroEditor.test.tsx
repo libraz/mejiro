@@ -165,6 +165,24 @@ describe('MejiroEditor (React) — section toggles', () => {
     fetchSpy.mockRestore();
   });
 
+  it('disables ruby application while proofread text is dirty', async () => {
+    const { container, fetchSpy } = await renderLoaded();
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+    const rubyInput = Array.from(container.querySelectorAll('input')).find(
+      (input) => input.placeholder === 'furigana',
+    ) as HTMLInputElement;
+    const applyRuby = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Apply ruby',
+    ) as HTMLButtonElement;
+
+    fireEvent.change(rubyInput, { target: { value: 'reading' } });
+    expect(applyRuby.disabled).toBe(false);
+
+    fireEvent.change(textarea, { target: { value: 'changed text' } });
+    expect(applyRuby.disabled).toBe(true);
+    fetchSpy.mockRestore();
+  });
+
   it('calls onError when URL loading fails', async () => {
     const onError = vi.fn();
     const fetchSpy = vi

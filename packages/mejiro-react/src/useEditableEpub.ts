@@ -7,7 +7,7 @@ import {
   type EditableEpubImage,
   type EpubExportOptions,
 } from '@libraz/mejiro/epub';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface EditableEpubSelection {
   chapter: number;
@@ -151,7 +151,10 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   const book = editor?.book ?? null;
   const selectedParagraph =
     book?.chapters[selection.chapter]?.paragraphs[selection.paragraph] ?? null;
-  const previewBook = book ? cloneBook(book) : null;
+  const previewBook = useMemo(() => {
+    void revision;
+    return book ? cloneBook(book) : null;
+  }, [book, revision]);
   const history = editor?.history ?? null;
 
   const setSelection = useCallback(

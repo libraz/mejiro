@@ -1,6 +1,6 @@
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import { type AssetResolver, EditableEpub, type EditableEpubBook } from '@libraz/mejiro/epub';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
 import { MejiroReader } from './MejiroReader.js';
@@ -179,8 +179,11 @@ export function MejiroEditor({
   const book = editor?.book ?? null;
   const chapter = book?.chapters[selection.chapter] ?? null;
   const paragraph = chapter?.paragraphs[selection.paragraph] ?? null;
-  const previewBook = book ? cloneBook(book) : null;
-  void revision;
+  const textDirty = paragraph ? text !== paragraph.text : false;
+  const previewBook = useMemo(() => {
+    void revision;
+    return book ? cloneBook(book) : null;
+  }, [book, revision]);
 
   useEffect(() => {
     onLoadRef.current = onLoad;
@@ -289,7 +292,7 @@ export function MejiroEditor({
   }
 
   function applyRuby(): void {
-    if (!(editor && paragraph && rubyText.trim())) return;
+    if (!(editor && paragraph && rubyText.trim()) || textDirty) return;
     const len = [...text].length;
     const start = Math.max(0, Math.min(rubyStart, len));
     const end = Math.max(start + 1, Math.min(rubyEnd, len));
@@ -421,7 +424,12 @@ export function MejiroEditor({
                   placeholder={messages.editorRubyPlaceholder}
                   onChange={(event) => setRubyText(event.target.value)}
                 />
-                <button type="button" className="mejiro-editor-primary" onClick={applyRuby}>
+                <button
+                  type="button"
+                  className="mejiro-editor-primary"
+                  disabled={textDirty || !rubyText.trim()}
+                  onClick={applyRuby}
+                >
                   {messages.editorApplyRuby}
                 </button>
               </div>
