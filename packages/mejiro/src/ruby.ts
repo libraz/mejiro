@@ -47,6 +47,9 @@ export function isKana(cp: number): boolean {
  * Ruby width distribution follows JLReq: when ruby text is wider than base text,
  * excess width is first absorbed by overhang into adjacent kana (up to 50% of
  * the kana's advance), then distributed proportionally across base characters.
+ * Overhang is not applied into an adjacent ruby annotation. Final line-edge
+ * clipping is handled by the line breaker because actual line edges are not
+ * known during preprocessing.
  *
  * Clustering prevents line breaks within ruby groups:
  * - `group`: all base characters share one cluster ID (no internal breaks).
@@ -65,6 +68,7 @@ export function preprocessRuby(
   annotations: RubyAnnotation[],
   existingClusterIds?: Uint32Array,
 ): RubyPreprocessResult {
+  validateRubyInput(text, advances, annotations, existingClusterIds);
   const len = text.length;
   const effectiveAdvances = new Float32Array(advances);
 
@@ -89,42 +93,53 @@ export function preprocessRuby(
   }
 
   // Sort annotations by startIndex for consistent processing
-  const sorted = [...annotations].sort((a, b) => a.startIndex - b.startIndex);
+  const sorted = normalizeRubyAnnotations(annotations);
 
-  for (const ann of sorted) {
+  for (let annIndex = 0; annIndex < sorted.length; annIndex++) {
+    const ann = sorted[annIndex];
     const { startIndex, endIndex, rubyAdvances } = ann;
     const type = ann.type ?? 'mono';
 
-    // Calculate base and ruby widths
-    let baseWidth = 0;
-    for (let i = startIndex; i < endIndex; i++) {
-      baseWidth += advances[i];
-    }
-
-    let rubyWidth = 0;
-    for (let i = 0; i < rubyAdvances.length; i++) {
-      rubyWidth += rubyAdvances[i];
-    }
-
-    // Ruby overhang into adjacent kana (JLReq)
-    const excess = rubyWidth - baseWidth;
-    if (excess > 0) {
-      let leftOverhang = 0;
-      let rightOverhang = 0;
-
-      if (startIndex > 0 && isKana(text[startIndex - 1])) {
-        leftOverhang = Math.min(advances[startIndex - 1] * 0.5, excess * 0.5);
-      }
-      if (endIndex < len && isKana(text[endIndex])) {
-        rightOverhang = Math.min(advances[endIndex] * 0.5, excess * 0.5);
+    if (type !== 'jukugo') {
+      // Calculate base and ruby widths
+      let baseWidth = 0;
+      for (let i = startIndex; i < endIndex; i++) {
+        baseWidth += advances[i];
       }
 
-      const netExcess = Math.max(0, excess - leftOverhang - rightOverhang);
+      let rubyWidth = 0;
+      for (let i = 0; i < rubyAdvances.length; i++) {
+        rubyWidth += rubyAdvances[i];
+      }
 
-      // Distribute net excess proportionally across base chars
-      if (netExcess > 0 && baseWidth > 0) {
-        for (let i = startIndex; i < endIndex; i++) {
-          effectiveAdvances[i] += netExcess * (advances[i] / baseWidth);
+      // Ruby overhang into adjacent kana (JLReq)
+      const excess = rubyWidth - baseWidth;
+      if (excess > 0) {
+        let leftOverhang = 0;
+        let rightOverhang = 0;
+
+        if (
+          startIndex > 0 &&
+          isKana(text[startIndex - 1]) &&
+          sorted[annIndex - 1]?.endIndex !== startIndex
+        ) {
+          leftOverhang = Math.min(advances[startIndex - 1] * 0.5, excess * 0.5);
+        }
+        if (
+          endIndex < len &&
+          isKana(text[endIndex]) &&
+          sorted[annIndex + 1]?.startIndex !== endIndex
+        ) {
+          rightOverhang = Math.min(advances[endIndex] * 0.5, excess * 0.5);
+        }
+
+        const netExcess = Math.max(0, excess - leftOverhang - rightOverhang);
+
+        // Distribute net excess proportionally across base chars
+        if (netExcess > 0 && baseWidth > 0) {
+          for (let i = startIndex; i < endIndex; i++) {
+            effectiveAdvances[i] += netExcess * (advances[i] / baseWidth);
+          }
         }
       }
     }
@@ -153,4 +168,80 @@ export function preprocessRuby(
   }
 
   return { effectiveAdvances, clusterIds };
+}
+
+function validateRubyInput(
+  text: Uint32Array,
+  advances: Float32Array,
+  annotations: readonly RubyAnnotation[],
+  existingClusterIds?: Uint32Array,
+): void {
+  const len = text.length;
+  if (advances.length !== len) {
+    throw new RangeError(
+      `preprocessRuby: advances length (${advances.length}) must match text length (${len})`,
+    );
+  }
+  if (existingClusterIds && existingClusterIds.length !== len) {
+    throw new RangeError(
+      `preprocessRuby: existingClusterIds length (${existingClusterIds.length}) must match text length (${len})`,
+    );
+  }
+  for (let i = 0; i < advances.length; i++) {
+    if (!Number.isFinite(advances[i]) || advances[i] < 0) {
+      throw new RangeError(`preprocessRuby: advances[${i}] must be a finite non-negative number`);
+    }
+  }
+
+  const sorted = [...annotations].sort((a, b) => a.startIndex - b.startIndex);
+  let previousEnd = -1;
+  for (const ann of sorted) {
+    if (!(Number.isInteger(ann.startIndex) && Number.isInteger(ann.endIndex))) {
+      throw new RangeError('preprocessRuby: annotation indices must be integers');
+    }
+    if (ann.startIndex < 0 || ann.endIndex > len || ann.endIndex <= ann.startIndex) {
+      throw new RangeError(
+        `preprocessRuby: annotation range [${ann.startIndex}, ${ann.endIndex}) is outside text length ${len}`,
+      );
+    }
+    if (ann.startIndex < previousEnd) {
+      throw new RangeError('preprocessRuby: overlapping ruby annotations are not supported');
+    }
+    previousEnd = ann.endIndex;
+
+    if (ann.rubyAdvances.length !== ann.rubyText.length) {
+      throw new RangeError(
+        `preprocessRuby: rubyAdvances length (${ann.rubyAdvances.length}) must match rubyText length (${ann.rubyText.length})`,
+      );
+    }
+    for (let i = 0; i < ann.rubyAdvances.length; i++) {
+      if (!Number.isFinite(ann.rubyAdvances[i]) || ann.rubyAdvances[i] < 0) {
+        throw new RangeError(
+          `preprocessRuby: rubyAdvances[${i}] must be a finite non-negative number`,
+        );
+      }
+    }
+    if ((ann.type ?? 'mono') === 'mono' && ann.endIndex - ann.startIndex !== 1) {
+      throw new RangeError(
+        'preprocessRuby: mono ruby annotations must cover exactly one base char',
+      );
+    }
+  }
+}
+
+function normalizeRubyAnnotations(annotations: readonly RubyAnnotation[]): RubyAnnotation[] {
+  return [...annotations]
+    .sort((a, b) => a.startIndex - b.startIndex)
+    .map((ann) => {
+      if ((ann.type ?? 'mono') !== 'jukugo') return ann;
+      const span = ann.endIndex - ann.startIndex;
+      const splitPoints = Array.from(
+        new Set(
+          (ann.jukugoSplitPoints ?? [])
+            .map((point) => Math.trunc(point))
+            .map((point) => Math.max(1, Math.min(span - 1, point))),
+        ),
+      ).sort((a, b) => a - b);
+      return { ...ann, jukugoSplitPoints: splitPoints };
+    });
 }

@@ -92,6 +92,17 @@ describe('preprocessRuby', () => {
     expect(result.effectiveAdvances[2]).toBeCloseTo(16);
   });
 
+  it('does not overhang into adjacent ruby annotations', () => {
+    const text = toCodepoints('あ漢');
+    const advances = uniformAdvances(text.length, 16);
+    const left = makeAnnotation(0, 1, 'ああ', 10, 'mono');
+    const right = makeAnnotation(1, 2, 'かんかん', 10, 'mono');
+
+    const result = preprocessRuby(text, advances, [left, right]);
+
+    expect(result.effectiveAdvances[1]).toBeCloseTo(40);
+  });
+
   it('creates shared cluster ID for group ruby', () => {
     const text = toCodepoints('あ明日か');
     const advances = uniformAdvances(text.length, 16);
@@ -134,6 +145,16 @@ describe('preprocessRuby', () => {
     expect(result.clusterIds[2]).not.toBe(result.clusterIds[0]);
   });
 
+  it('does not expand advances for jukugo aggregate annotations', () => {
+    const text = toCodepoints('東京都');
+    const advances = uniformAdvances(text.length, 16);
+    const ann = makeAnnotation(0, 3, 'とうきょうと', 20, 'jukugo', [1, 2]);
+
+    const result = preprocessRuby(text, advances, [ann]);
+
+    expect(Array.from(result.effectiveAdvances)).toEqual(Array.from(advances));
+  });
+
   it('preserves existing cluster IDs', () => {
     const text = toCodepoints('あいうえお');
     const advances = uniformAdvances(text.length, 16);
@@ -161,5 +182,62 @@ describe('preprocessRuby', () => {
     // Proportional: 漢 gets 10 * (20/30) ≈ 6.67, 字 gets 10 * (10/30) ≈ 3.33
     expect(result.effectiveAdvances[0]).toBeCloseTo(26.667, 2);
     expect(result.effectiveAdvances[1]).toBeCloseTo(13.333, 2);
+  });
+
+  it('throws when base advances or cluster IDs do not match text length', () => {
+    const text = toCodepoints('漢字');
+    const ann = makeAnnotation(0, 1, 'かん', 10, 'mono');
+
+    expect(() => preprocessRuby(text, uniformAdvances(1, 16), [ann])).toThrow(/advances length/);
+    expect(() => preprocessRuby(text, uniformAdvances(2, 16), [ann], new Uint32Array([0]))).toThrow(
+      /existingClusterIds length/,
+    );
+  });
+
+  it('throws for out-of-range and overlapping ruby annotations', () => {
+    const text = toCodepoints('漢字');
+    const advances = uniformAdvances(text.length, 16);
+
+    expect(() => preprocessRuby(text, advances, [makeAnnotation(-1, 1, 'かん', 10)])).toThrow(
+      /outside text length/,
+    );
+    expect(() =>
+      preprocessRuby(text, advances, [
+        makeAnnotation(0, 1, 'かん', 10),
+        makeAnnotation(0, 2, 'かんじ', 10, 'group'),
+      ]),
+    ).toThrow(/overlapping/);
+  });
+
+  it('throws for mismatched ruby advances and multi-character mono ruby', () => {
+    const text = toCodepoints('漢字');
+    const advances = uniformAdvances(text.length, 16);
+
+    expect(() =>
+      preprocessRuby(text, advances, [
+        {
+          startIndex: 0,
+          endIndex: 1,
+          rubyText: toCodepoints('かん'),
+          rubyAdvances: uniformAdvances(1, 10),
+          type: 'mono',
+        },
+      ]),
+    ).toThrow(/rubyAdvances length/);
+
+    expect(() => preprocessRuby(text, advances, [makeAnnotation(0, 2, 'かんじ', 10)])).toThrow(
+      /mono ruby/,
+    );
+  });
+
+  it('sorts, deduplicates, and clamps jukugo split points', () => {
+    const text = toCodepoints('東京都');
+    const advances = uniformAdvances(text.length, 16);
+    const ann = makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [2, 1, 2, 99, -5]);
+
+    const result = preprocessRuby(text, advances, [ann]);
+
+    expect(result.clusterIds[0]).not.toBe(result.clusterIds[1]);
+    expect(result.clusterIds[1]).not.toBe(result.clusterIds[2]);
   });
 });
