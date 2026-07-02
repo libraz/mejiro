@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
-import type { PageResult, SpreadResult } from '@libraz/mejiro/book';
+import type { ChapterLayout, PageResult, SpreadResult } from '@libraz/mejiro/book';
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
 import type { RenderPage } from '@libraz/mejiro/render';
 import { fireEvent, render } from '@testing-library/react';
@@ -12,6 +12,7 @@ import { MejiroDropZone } from '../src/MejiroDropZone.js';
 import { MejiroImageOverlay } from '../src/MejiroImageOverlay.js';
 import { MejiroPage } from '../src/MejiroPage.js';
 import { MejiroPageIndicator } from '../src/MejiroPageIndicator.js';
+import { MejiroScrollView } from '../src/MejiroScrollView.js';
 import { MejiroSettingsPanel } from '../src/MejiroSettingsPanel.js';
 import { MejiroShelf } from '../src/MejiroShelf.js';
 import { MejiroSpread } from '../src/MejiroSpread.js';
@@ -133,6 +134,18 @@ describe('MejiroChapterNav (React)', () => {
     expect(onChange).toHaveBeenCalledWith(2);
   });
 
+  it('keeps duplicate chapter titles selectable', () => {
+    const epub = fakeEpub();
+    epub.chapters = [
+      { title: '同名', paragraphs: [] },
+      { title: '同名', paragraphs: [] },
+    ];
+
+    const { container } = render(<MejiroChapterNav epub={epub} chapter={0} onChange={() => {}} />);
+
+    expect(container.querySelectorAll('select option')).toHaveLength(2);
+  });
+
   it("renders a list of chapter cards with the active card marked ('panel' variant)", () => {
     const { container } = render(
       <MejiroChapterNav epub={fakeEpub()} chapter={1} onChange={() => {}} variant="panel" />,
@@ -231,6 +244,54 @@ describe('MejiroPage (React)', () => {
     ).toBe(false);
     consoleError.mockRestore();
   });
+
+  it('renders unsafe links as text', () => {
+    const page: RenderPage = {
+      paragraphs: [
+        {
+          lines: [
+            {
+              segments: [{ type: 'link', text: 'unsafe', href: 'javascript:alert(1)' }],
+            },
+          ],
+          isHeading: false,
+        },
+      ],
+    };
+
+    const { container } = render(<MejiroPage page={page} />);
+
+    expect(container.textContent).toContain('unsafe');
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('renders nested ruby inside links', () => {
+    const page: RenderPage = {
+      paragraphs: [
+        {
+          lines: [
+            {
+              segments: [
+                {
+                  type: 'link',
+                  text: '漢字',
+                  href: 'https://example.test',
+                  children: [{ type: 'ruby', base: '漢字', rubyText: 'かんじ' }],
+                },
+              ],
+            },
+          ],
+          isHeading: false,
+        },
+      ],
+    };
+
+    const { container } = render(<MejiroPage page={page} />);
+
+    const anchor = container.querySelector('a');
+    expect(anchor?.getAttribute('href')).toBe('https://example.test');
+    expect(anchor?.querySelector('ruby')?.textContent).toBe('漢字かんじ');
+  });
 });
 
 function pageResult(text: string): PageResult {
@@ -300,6 +361,44 @@ describe('MejiroSpread (React)', () => {
   });
 });
 
+describe('MejiroScrollView (React)', () => {
+  it('re-observes page elements when the page list changes', () => {
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    const OriginalIntersectionObserver = globalThis.IntersectionObserver;
+    class MockIntersectionObserver {
+      observe = observe;
+      disconnect = disconnect;
+    }
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    const layoutA = fakeScrollLayout(2);
+    const layoutB = fakeScrollLayout(3);
+
+    try {
+      const { rerender } = render(
+        <MejiroScrollView layout={layoutA} pageWidth={320} pageHeight={460} contentHeight={360} />,
+      );
+      expect(observe).toHaveBeenCalledTimes(2);
+
+      rerender(
+        <MejiroScrollView layout={layoutB} pageWidth={320} pageHeight={460} contentHeight={360} />,
+      );
+
+      expect(disconnect).toHaveBeenCalledTimes(1);
+      expect(observe).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.stubGlobal('IntersectionObserver', OriginalIntersectionObserver);
+    }
+  });
+});
+
+function fakeScrollLayout(totalPages: number): ChapterLayout {
+  return {
+    totalPages,
+    getPage: (index: number) => pageResult(`頁${index + 1}`),
+  } as unknown as ChapterLayout;
+}
+
 describe('MejiroSettingsPanel (React)', () => {
   const baseSettings = {
     fontFamily: 'serif',
@@ -348,6 +447,25 @@ describe('MejiroSettingsPanel (React)', () => {
     const sizeInput = container.querySelector('#mejiro-reader-font-size') as HTMLInputElement;
     fireEvent.change(sizeInput, { target: { value: '20' } });
     expect(onChange).toHaveBeenCalledWith({ ...baseSettings, fontSize: 20 });
+  });
+
+  it('clamps invalid numeric settings instead of emitting zero or NaN', () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <MejiroSettingsPanel open settings={baseSettings} onChange={onChange} />,
+    );
+
+    const sizeInput = container.querySelector('#mejiro-reader-font-size') as HTMLInputElement;
+    fireEvent.change(sizeInput, { target: { value: '' } });
+    expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, fontSize: baseSettings.fontSize });
+    fireEvent.change(sizeInput, { target: { value: '999' } });
+    expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, fontSize: 48 });
+
+    const spacingInput = container.querySelector('#mejiro-reader-line-spacing') as HTMLInputElement;
+    fireEvent.change(spacingInput, { target: { value: '0' } });
+    expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, lineSpacing: 1 });
+    fireEvent.change(spacingInput, { target: { value: '4' } });
+    expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, lineSpacing: 3 });
   });
 
   it('reflects min/max font size on the size input', () => {

@@ -1,21 +1,9 @@
-import type { BookOptions } from '@libraz/mejiro/book';
+import type { EditableSettings, FontChoice } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
 import type { ReactNode } from 'react';
 import { useI18n } from './i18n.js';
 
-/** A font choice shown in the settings panel. */
-export interface FontChoice {
-  /** CSS `font-family` value applied to the book. */
-  value: string;
-  /** Human-readable label. */
-  label: string;
-}
-
-/** Subset of {@link BookOptions} editable from the panel. */
-export type EditableSettings = Pick<
-  BookOptions,
-  'fontFamily' | 'fontSize' | 'lineSpacing' | 'mode' | 'enableHanging'
->;
+export type { EditableSettings, FontChoice };
 
 const DEFAULT_FONTS: FontChoice[] = [
   { value: 'serif', label: 'System Serif' },
@@ -31,6 +19,16 @@ const DEFAULT_FONTS: FontChoice[] = [
 function fontLabelFromCss(css: string): string {
   const first = css.split(',')[0]?.trim() ?? css;
   return first.replace(/^["']|["']$/g, '') || css;
+}
+
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function parseClampedInput(value: string, min: number, max: number, fallback: number): number {
+  if (value.trim() === '') return fallback;
+  return clampNumber(Number(value), min, max, fallback);
 }
 
 /** Props for {@link MejiroSettingsPanel}. */
@@ -104,7 +102,16 @@ export function MejiroSettingsPanel({
                 value={settings.fontSize}
                 min={minFontSize}
                 max={maxFontSize}
-                onChange={(e) => patch({ fontSize: Number(e.target.value) })}
+                onChange={(e) =>
+                  patch({
+                    fontSize: parseClampedInput(
+                      e.target.value,
+                      minFontSize,
+                      maxFontSize,
+                      settings.fontSize,
+                    ),
+                  })
+                }
               />
               <button
                 type="button"
@@ -156,7 +163,16 @@ export function MejiroSettingsPanel({
                 min={1.0}
                 max={3.0}
                 step={0.1}
-                onChange={(e) => patch({ lineSpacing: Number(e.target.value) })}
+                onChange={(e) =>
+                  patch({
+                    lineSpacing: parseClampedInput(
+                      e.target.value,
+                      1,
+                      3,
+                      settings.lineSpacing ?? 1.8,
+                    ),
+                  })
+                }
               />
             </div>
           </div>

@@ -1,3 +1,4 @@
+import type { PageHeaderData } from '@libraz/mejiro';
 import type { AnchorRange, AnchorRect, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import {
@@ -12,13 +13,7 @@ import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
 import type { MultiImageItem } from './useMultiImageOverlay.js';
 
-/** Per-page header data. */
-export interface PageHeaderData {
-  /** Running title (left-aligned). */
-  title?: string;
-  /** Page number (right-aligned). `null` hides it. */
-  pageNumber?: number | null;
-}
+export type { PageHeaderData };
 
 /** Props for {@link MejiroSpread}. */
 export interface MejiroSpreadProps {
