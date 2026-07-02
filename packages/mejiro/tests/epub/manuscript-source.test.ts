@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { manuscriptToEpubBook } from '../../src/epub/manuscript-source.js';
+import {
+  manuscriptParagraphs,
+  manuscriptToEpubBook,
+  parseInlineImageMarker,
+} from '../../src/epub/manuscript-source.js';
 
 describe('manuscriptToEpubBook', () => {
   it('emits a heading paragraph for each chapter title', () => {
@@ -38,6 +42,25 @@ describe('manuscriptToEpubBook', () => {
     const body = book.chapters[0].paragraphs[1];
     expect(body.text).toBe('《《圏点》》');
     expect(body.inlineAnnotations).toHaveLength(0);
+  });
+
+  it('shares paragraph splitting and inline image marker parsing with project export', () => {
+    const marker = '[[mejiro-image:..%2FImages%2Ffig.png|%E6%8C%BF%E7%B5%B5]]';
+    expect(manuscriptParagraphs(`段落\n\n${marker}`)).toEqual(['段落', marker]);
+    expect(parseInlineImageMarker(marker)).toEqual({ src: '../Images/fig.png', alt: '挿絵' });
+  });
+
+  it('skips inline image markers instead of exposing them as preview text', () => {
+    const marker = '[[mejiro-image:..%2FImages%2Ffig.png|%E6%8C%BF%E7%B5%B5]]';
+    const book = manuscriptToEpubBook([
+      { id: 'c1', title: 'T', body: `段落1\n\n${marker}\n\n段落2` },
+    ]);
+
+    expect(book.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual([
+      'T',
+      '段落1',
+      '段落2',
+    ]);
   });
 
   it('honors the book-level title and author options', () => {

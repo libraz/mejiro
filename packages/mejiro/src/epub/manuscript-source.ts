@@ -3,7 +3,7 @@ import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
 
 /** Input shape for {@link manuscriptToEpubBook}. */
 export interface ManuscriptSourceChapter {
-  /** Optional chapter id (carried through but not required by the renderer). */
+  /** Optional source id for callers; the synthesized `EpubBook` shape does not expose it. */
   id?: string;
   /** Chapter title. Emitted as an `h1` paragraph at the top of the chapter. */
   title: string;
@@ -29,18 +29,8 @@ function manuscriptChapterToAnnotatedParagraphs(
   if (chapter.title) {
     paragraphs.push({ text: chapter.title, inlineAnnotations: [], headingLevel: 1 });
   }
-  const blocks = chapter.body
-    .replace(/\r\n?/gu, '\n')
-    .split(/\n[ \t　]*\n+/u)
-    .map((block) =>
-      block
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join('\n'),
-    )
-    .filter(Boolean);
-  for (const block of blocks) {
+  for (const block of manuscriptParagraphs(chapter.body)) {
+    if (parseInlineImageMarker(block)) continue;
     const parsed = parseManuscript(block, { dialect });
     paragraphs.push({ text: parsed.text, inlineAnnotations: parsed.inlineAnnotations });
   }
@@ -56,7 +46,9 @@ function manuscriptChapterToAnnotatedParagraphs(
  * Each chapter body is split into paragraphs on blank lines and run through
  * {@link parseManuscript}, so ruby / emphasis / TCY / em / strong / link /
  * footnote annotations are resolved exactly as `EpubProject.export()` would
- * resolve them.
+ * resolve them. Internal `[[mejiro-image:...]]` blocks are recognized and
+ * skipped, matching the current read-only `EpubBook` parser surface where
+ * figures do not appear as text paragraphs.
  *
  * @example
  * ```ts
@@ -78,4 +70,44 @@ export function manuscriptToEpubBook(
     ...(options.author ? { author: options.author } : {}),
     chapters: synthesized,
   };
+}
+
+/** Splits manuscript body text into normalized paragraph blocks. */
+export function manuscriptParagraphs(body: string): string[] {
+  return body
+    .replace(/\r\n?/gu, '\n')
+    .split(/\n[ \t　]*\n+/u)
+    .map((block) =>
+      block
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join('\n'),
+    )
+    .filter(Boolean);
+}
+
+const INLINE_IMAGE_MARKER = /^\[\[mejiro-image:([^:|\]]+)(?:\|([^\]]*))?\]\]$/u;
+
+/** Parsed internal inline-image marker embedded by `EpubProject.addInlineImage()`. */
+export interface ManuscriptImageMarker {
+  src: string;
+  alt: string;
+}
+
+/** Parses an internal inline-image marker, returning null for ordinary paragraphs. */
+export function parseInlineImageMarker(paragraph: string): ManuscriptImageMarker | null {
+  const match = INLINE_IMAGE_MARKER.exec(paragraph.trim());
+  if (!match) return null;
+  const value = decodeMarkerPart(match[1]);
+  const src = value.includes('/') ? value : `../Images/${value}`;
+  return { src, alt: match[2] ? decodeMarkerPart(match[2]) : '' };
+}
+
+function decodeMarkerPart(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }

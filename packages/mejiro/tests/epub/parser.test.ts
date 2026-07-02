@@ -77,6 +77,87 @@ describe('parseEpub', () => {
     ]);
   });
 
+  it('uses nav titles when chapter XHTML has no heading and exposes page progression', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Nav Titles</dc:title>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine page-progression-direction="rtl">
+    <itemref idref="c1" />
+  </spine>
+</package>`,
+      'OPS/nav.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body><nav epub:type="toc"><ol><li><a href="Text/ch1.xhtml">第一話</a></li></ol></nav></body>
+</html>`,
+      'OPS/Text/ch1.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+    });
+
+    const book = await parseEpub(data);
+
+    expect(book.pageProgressionDirection).toBe('rtl');
+    expect(book.chapters[0].title).toBe('第一話');
+  });
+
+  it('falls back to nav titles when auxiliary chapter title parsing fails', async () => {
+    const OriginalDOMParser = globalThis.DOMParser;
+    class FailingTitleDOMParser extends OriginalDOMParser {
+      override parseFromString(
+        string: string,
+        type: Parameters<DOMParser['parseFromString']>[1],
+      ): Document {
+        if (type === 'application/xml' && string.includes('chapter-title-probe')) {
+          return super.parseFromString('<parsererror>forced</parsererror>', 'application/xml');
+        }
+        return super.parseFromString(string, type);
+      }
+    }
+
+    globalThis.DOMParser = FailingTitleDOMParser;
+    try {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Nav Fallback</dc:title>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine>
+    <itemref idref="c1" />
+  </spine>
+</package>`,
+        'OPS/nav.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><nav><ol><li><a href="Text/ch1.xhtml">Nav Chapter</a></li></ol></nav></body>
+</html>`,
+        'OPS/Text/ch1.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>chapter-title-probe</h1><p>本文</p></body></html>`,
+      });
+
+      const book = await parseEpub(data);
+
+      expect(book.chapters[0].title).toBe('Nav Chapter');
+      expect(book.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual([
+        'chapter-title-probe',
+        '本文',
+      ]);
+    } finally {
+      globalThis.DOMParser = OriginalDOMParser;
+    }
+  });
+
   it('parses chapters with stylesheet links that use explicit closing tags', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
@@ -133,7 +214,7 @@ describe('parseEpub', () => {
     await expect(parseEpub(data)).rejects.toThrow('Missing file in EPUB: OPS/package.opf');
   });
 
-  it('throws when a spine chapter file is missing', async () => {
+  it('skips missing spine chapter files and keeps readable chapters', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
       'OPS/package.opf': `<?xml version="1.0"?>
@@ -142,14 +223,55 @@ describe('parseEpub', () => {
     <dc:title>x</dc:title>
   </metadata>
   <manifest>
-    <item id="c1" href="missing.xhtml" />
+    <item id="missing" href="missing.xhtml" media-type="application/xhtml+xml" />
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" />
   </manifest>
   <spine>
+    <itemref idref="missing" />
     <itemref idref="c1" />
   </spine>
 </package>`,
+      'OPS/ch1.xhtml': '<?xml version="1.0"?><html><body><p>本文</p></body></html>',
     });
-    await expect(parseEpub(data)).rejects.toThrow('Missing file in EPUB: OPS/missing.xhtml');
+
+    const book = await parseEpub(data);
+
+    expect(book.chapters).toHaveLength(1);
+    expect(book.chapters[0].paragraphs[0].text).toBe('本文');
+  });
+
+  it('skips nav, cover, non-xhtml, and linear=no spine items', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>x</dc:title>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml" properties="cover-image" />
+    <item id="css" href="style.css" media-type="text/css" />
+    <item id="skip" href="skip.xhtml" media-type="application/xhtml+xml" />
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine>
+    <itemref idref="nav" />
+    <itemref idref="cover" />
+    <itemref idref="css" />
+    <itemref idref="skip" linear="no" />
+    <itemref idref="c1" />
+  </spine>
+</package>`,
+      'OPS/nav.xhtml': '<?xml version="1.0"?><html><body><p>nav</p></body></html>',
+      'OPS/cover.xhtml': '<?xml version="1.0"?><html><body><p>cover</p></body></html>',
+      'OPS/skip.xhtml': '<?xml version="1.0"?><html><body><p>skip</p></body></html>',
+      'OPS/ch1.xhtml': '<?xml version="1.0"?><html><body><p>本文</p></body></html>',
+    });
+
+    const book = await parseEpub(data);
+
+    expect(book.chapters.map((chapter) => chapter.paragraphs[0].text)).toEqual(['本文']);
   });
 
   it('throws a clear error for malformed manifest href encoding', async () => {

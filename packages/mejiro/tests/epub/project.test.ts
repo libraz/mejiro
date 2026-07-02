@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   EpubProject,
+  manuscriptToEpubBook,
   parseEpub,
   parseManuscript,
   parseManuscriptRuby,
@@ -97,6 +98,60 @@ describe('EpubProject', () => {
     });
   });
 
+  it('falls back to a generated identifier when metadata identifier is undefined or blank', () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'No identifier', identifier: undefined },
+      chapters: [{ title: '一', body: '本文' }],
+    });
+    const blank = EpubProject.fromManuscript({
+      metadata: { title: 'Blank identifier', identifier: '  ' },
+      chapters: [{ title: '一', body: '本文' }],
+    });
+
+    expect(project.metadata.identifier).toMatch(/^urn:uuid:/u);
+    expect(blank.metadata.identifier).toMatch(/^urn:uuid:/u);
+    expect(project.metadata.identifier).not.toBe(blank.metadata.identifier);
+  });
+
+  it('rejects exporting a project without manuscript chapters', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'Empty', identifier: 'urn:uuid:empty' },
+      chapters: [],
+    });
+
+    await expect(project.export()).rejects.toThrow(/without at least one chapter/);
+  });
+
+  it('threads manuscript dialect through project export', async () => {
+    const chapters = [
+      {
+        title: '第一話',
+        body: '《《これは強調じゃない》》漢字《かんじ》*not-em*',
+      },
+    ];
+    const project = EpubProject.fromManuscript({
+      metadata: {
+        title: '方言',
+        identifier: 'urn:uuid:dialect-book',
+        modified: new Date('2026-05-20T00:00:00Z'),
+      },
+      chapters,
+      dialect: 'narou',
+      includeTitlePage: false,
+    });
+
+    const parsed = await parseEpub(await project.export());
+    const preview = manuscriptToEpubBook(chapters, { dialect: 'narou', title: '方言' });
+
+    expect(parsed.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual(
+      preview.chapters[0].paragraphs.map((paragraph) => paragraph.text),
+    );
+    expect(parsed.chapters[0].paragraphs[1].text).toBe('《《これは強調じゃない》》漢字*not-em*');
+    expect(parsed.chapters[0].paragraphs[1].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 13, endIndex: 15, rubyText: 'かんじ', type: 'group' },
+    ]);
+  });
+
   it('uses metadata language in chapter XHTML as well as package metadata', async () => {
     const project = EpubProject.fromManuscript({
       metadata: {
@@ -115,6 +170,25 @@ describe('EpubProject', () => {
 
     expect(opf).toContain('<dc:language>en</dc:language>');
     expect(xhtml).toContain('xml:lang="en" lang="en"');
+  });
+
+  it('emits rtl page progression by default and allows overrides', async () => {
+    const rtlProject = new EpubProject({
+      metadata: { title: 'rtl', identifier: 'urn:uuid:rtl-book' },
+      chapters: [{ title: '一', body: '本文' }],
+    });
+    const rtlZip = await JSZip.loadAsync(await rtlProject.export());
+    const rtlOpf = await rtlZip.file('OPS/package.opf')?.async('string');
+    expect(rtlOpf).toContain('<spine page-progression-direction="rtl">');
+
+    const ltrProject = new EpubProject({
+      metadata: { title: 'ltr', identifier: 'urn:uuid:ltr-book' },
+      chapters: [{ title: 'One', body: 'Body' }],
+      pageProgressionDirection: 'ltr',
+    });
+    const ltrZip = await JSZip.loadAsync(await ltrProject.export());
+    const ltrOpf = await ltrZip.file('OPS/package.opf')?.async('string');
+    expect(ltrOpf).toContain('<spine page-progression-direction="ltr">');
   });
 
   it('treats a blank line as a paragraph boundary and a single newline as a line break', async () => {

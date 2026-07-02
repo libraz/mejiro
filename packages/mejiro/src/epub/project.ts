@@ -1,12 +1,13 @@
 import JSZip from 'jszip';
-import type { InlineAnnotation } from '../browser/types.js';
 import {
   type ManuscriptDialect,
   type ParseManuscriptOptions,
   parseManuscript,
   parseManuscriptRuby,
 } from '../manuscript.js';
+import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
 import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
+import { manuscriptParagraphs, parseInlineImageMarker } from './manuscript-source.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
 export { parseManuscript, parseManuscriptRuby };
@@ -106,8 +107,12 @@ export interface EpubProjectAsset {
 export interface EpubProjectOptions {
   metadata: EpubProjectMetadata;
   chapters?: ManuscriptChapterInput[];
+  /** Manuscript notation dialect used when serializing chapters. @defaultValue `'mejiro'` */
+  dialect?: ManuscriptDialect;
   cover?: EpubProjectAsset;
   stylesheet?: string;
+  /** Spine page progression direction. @defaultValue 'rtl' for vertical Japanese books. */
+  pageProgressionDirection?: 'rtl' | 'ltr' | 'default';
   /** Include a title page before the first manuscript chapter. @defaultValue true */
   includeTitlePage?: boolean;
   /** Place the book title at the beginning of the first chapter. @defaultValue false */
@@ -150,6 +155,8 @@ export class EpubProject {
   readonly assets: EpubProjectAsset[] = [];
   readonly includeTitlePage: boolean;
   readonly includeTitleInFirstChapter: boolean;
+  readonly pageProgressionDirection: 'rtl' | 'ltr' | 'default';
+  readonly dialect: ManuscriptDialect;
   stylesheet: string;
 
   constructor(options: EpubProjectOptions) {
@@ -159,8 +166,13 @@ export class EpubProject {
       modified: new Date(),
       ...options.metadata,
     };
+    if (!this.metadata.identifier?.trim()) {
+      this.metadata.identifier = `urn:uuid:${crypto.randomUUID()}`;
+    }
     this.includeTitlePage = options.includeTitlePage ?? true;
     this.includeTitleInFirstChapter = options.includeTitleInFirstChapter ?? false;
+    this.pageProgressionDirection = options.pageProgressionDirection ?? 'rtl';
+    this.dialect = options.dialect ?? 'mejiro';
     this.stylesheet = options.stylesheet ?? DEFAULT_STYLESHEET;
     for (const chapter of options.chapters ?? []) this.addChapter(chapter);
     if (options.cover) this.setCover(options.cover);
@@ -270,6 +282,9 @@ export class EpubProject {
   async export(options: EpubExportOptions = {}): Promise<ArrayBuffer> {
     const { onProgress, signal, assetResolver } = options;
     throwIfAborted(signal);
+    if (this.chapters.length === 0) {
+      throw new Error('Cannot export an EPUB project without at least one chapter');
+    }
 
     const zip = new JSZip();
     zip.file('mimetype', 'application/epub+zip', {
@@ -361,7 +376,7 @@ function chapterXhtml(project: EpubProject, chapter: ProjectChapter, index: numb
     .map((paragraph) => {
       const image = parseInlineImageMarker(paragraph);
       if (image) return inlineImageFigure(image);
-      return `<p>${serializeManuscriptParagraph(paragraph)}</p>`;
+      return `<p>${serializeManuscriptParagraph(paragraph, project.dialect)}</p>`;
     })
     .join('\n');
   const frontmatter =
@@ -391,86 +406,51 @@ function firstChapterFrontmatter(project: EpubProject, chapterTitle: string): st
     <span id="chapter-title" hidden="">${escapeText(chapterTitle)}</span>`;
 }
 
-function serializeManuscriptParagraph(text: string): string {
-  const parsed = parseManuscript(text);
-  const chars = [...parsed.text];
-  // Sort by start, then by widest span first so the outer markup wraps the
-  // inner one cleanly. Overlapping ranges of the same start point can occur
-  // when ruby + emphasis cover the same characters.
-  const annotations = [...parsed.inlineAnnotations].sort(
-    (a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex,
-  );
-  let pos = 0;
-  let out = '';
-  for (const ann of annotations) {
-    if (ann.startIndex < pos) continue;
-    out += escapeTextWithBreaks(chars.slice(pos, ann.startIndex).join(''));
-    out += renderInlineAnnotation(ann, chars.slice(ann.startIndex, ann.endIndex).join(''));
-    pos = ann.endIndex;
-  }
-  out += escapeTextWithBreaks(chars.slice(pos).join(''));
-  return out;
+function serializeManuscriptParagraph(text: string, dialect: ManuscriptDialect): string {
+  const parsed = parseManuscript(text, { dialect });
+  return buildInlineNodes([...parsed.text], parsed.inlineAnnotations)
+    .map(renderInlineNode)
+    .join('');
 }
 
-function renderInlineAnnotation(ann: InlineAnnotation, body: string): string {
-  const escaped = escapeText(body);
-  switch (ann.kind) {
+function renderInlineNode(node: InlineNode): string {
+  switch (node.type) {
+    case 'text':
+      return escapeTextWithBreaks(node.text);
     case 'ruby':
-      return `<ruby>${escaped}<rt>${escapeText(ann.rubyText)}</rt></ruby>`;
+      return `<ruby>${renderInlineChildren(node)}<rt>${escapeText(node.rubyText)}</rt></ruby>`;
     case 'emphasis':
-      return `<em class="mejiro-emphasis" data-style="${escapeAttribute(ann.style ?? 'sesame')}">${escaped}</em>`;
+      return `<em class="mejiro-emphasis" data-style="${escapeAttribute(
+        node.style,
+      )}">${renderInlineChildren(node)}</em>`;
     case 'tcy':
-      return `<span class="mejiro-tcy">${escaped}</span>`;
+      return `<span class="mejiro-tcy">${renderInlineChildren(node)}</span>`;
     case 'em':
-      return `<em>${escaped}</em>`;
+      return `<em>${renderInlineChildren(node)}</em>`;
     case 'strong':
-      return `<strong>${escaped}</strong>`;
+      return `<strong>${renderInlineChildren(node)}</strong>`;
     case 'link':
-      return `<a href="${escapeAttribute(ann.href)}"${ann.title ? ` title="${escapeAttribute(ann.title)}"` : ''}>${escaped}</a>`;
-    case 'footnote':
-      return `<a class="mejiro-footnote-ref" href="#${escapeAttribute(ann.noteId)}">${escaped}</a>`;
-    default:
-      return escaped;
+      return `<a href="${escapeAttribute(node.href)}"${
+        node.title ? ` title="${escapeAttribute(node.title)}"` : ''
+      }>${renderInlineChildren(node)}</a>`;
+    case 'footnote-ref':
+      return `<a class="mejiro-footnote-ref" href="#${escapeAttribute(
+        node.noteId,
+      )}">${renderInlineChildren(node)}</a>`;
   }
 }
 
-function manuscriptParagraphs(body: string): string[] {
-  return body
-    .replace(/\r\n?/gu, '\n')
-    .split(/\n[ \t　]*\n+/u)
-    .map((block) =>
-      block
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join('\n'),
-    )
-    .filter(Boolean);
+function renderInlineChildren(node: Exclude<InlineNode, { type: 'text' }>): string {
+  return node.children.length > 0
+    ? node.children.map(renderInlineNode).join('')
+    : escapeTextWithBreaks(node.type === 'ruby' ? node.base : node.text);
 }
-
-const INLINE_IMAGE_MARKER = /^\[\[mejiro-image:([^:|\]]+)(?:\|([^\]]*))?\]\]$/u;
 
 /** Builds the manuscript marker for an inline image inserted via `addInlineImage`. */
 function manuscriptImageBlock(asset: EpubProjectAsset & { alt?: string }): string {
   const src = relativeZipPath('OPS/Text/', asset.href);
   const altPart = asset.alt ? `|${encodeURIComponent(asset.alt)}` : '';
   return `[[mejiro-image:${encodeURIComponent(src)}${altPart}]]`;
-}
-
-function parseInlineImageMarker(paragraph: string): { src: string; alt: string } | null {
-  const match = INLINE_IMAGE_MARKER.exec(paragraph.trim());
-  if (!match) return null;
-  const value = decodeMarkerPart(match[1]);
-  const src = value.includes('/') ? value : `../Images/${value}`;
-  return { src, alt: match[2] ? decodeMarkerPart(match[2]) : '' };
-}
-
-function decodeMarkerPart(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
 }
 
 function inlineImageFigure(image: { src: string; alt: string }): string {
@@ -529,7 +509,7 @@ ${metadataLines}
     ${chapterItems}
     ${assetItems}
   </manifest>
-  <spine>
+  <spine page-progression-direction="${escapeAttribute(project.pageProgressionDirection)}">
     ${spineItems}
   </spine>
 </package>`;

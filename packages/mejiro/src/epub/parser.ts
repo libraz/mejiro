@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import { extractRubyContent } from './ruby-extractor.js';
 import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
+import { stripStylesheetLinks } from './xml-utils.js';
 
 /**
  * Parses an EPUB file from an ArrayBuffer.
@@ -33,12 +34,14 @@ export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
   const opfDir = rootfilePath.includes('/')
     ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
     : '';
-  const { title, author, spineHrefs } = parseOpf(opfXml, opfDir);
+  const { title, author, spineItems, navHref, pageProgressionDirection } = parseOpf(opfXml, opfDir);
+  const navTitles = navHref ? await readNavTitles(zip, navHref) : new Map<string, string>();
 
   // 3. Extract chapters from spine items
   const chapters: EpubChapter[] = [];
-  for (const href of spineHrefs) {
-    const xhtml = await readZipText(zip, href);
+  for (const { href } of spineItems) {
+    const xhtml = await readZipTextOrNull(zip, href);
+    if (xhtml == null) continue;
     let paragraphs: AnnotatedParagraph[];
     try {
       paragraphs = extractRubyContent(xhtml);
@@ -49,7 +52,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
         `Failed to parse chapter XHTML: ${href} (${err instanceof Error ? err.message : String(err)})`,
       );
     }
-    const chapterTitle = extractChapterTitle(xhtml);
+    const chapterTitle = extractChapterTitleOrUndefined(xhtml) ?? navTitles.get(href);
 
     if (paragraphs.length > 0) {
       chapters.push({ title: chapterTitle, paragraphs });
@@ -60,7 +63,12 @@ export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
     throw new Error('EPUB has no readable chapters');
   }
 
-  return { title, author, chapters };
+  return {
+    title,
+    author,
+    chapters,
+    ...(pageProgressionDirection ? { pageProgressionDirection } : {}),
+  };
 }
 
 /** Reads a text file from the ZIP archive. */
@@ -68,6 +76,11 @@ async function readZipText(zip: JSZip, path: string): Promise<string> {
   const file = zip.file(path);
   if (!file) throw new Error(`Missing file in EPUB: ${path}`);
   return file.async('string');
+}
+
+async function readZipTextOrNull(zip: JSZip, path: string): Promise<string | null> {
+  const file = zip.file(path);
+  return file ? file.async('string') : null;
 }
 
 /** Parses XML string into a Document. */
@@ -105,11 +118,28 @@ function extractChapterTitle(xhtml: string): string | undefined {
   return undefined;
 }
 
-function stripStylesheetLinks(xhtml: string): string {
-  return xhtml.replace(
-    /<link\b(?=[^>]*\brel=["']?stylesheet["']?)[^>]*(?:\/>|>(?:\s*<\/link\s*>)?)/giu,
-    '',
-  );
+function extractChapterTitleOrUndefined(xhtml: string): string | undefined {
+  try {
+    return extractChapterTitle(xhtml);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readNavTitles(zip: JSZip, navHref: string): Promise<Map<string, string>> {
+  const navXhtml = await readZipTextOrNull(zip, navHref);
+  if (navXhtml == null) return new Map();
+  const navDir = navHref.includes('/') ? navHref.substring(0, navHref.lastIndexOf('/') + 1) : '';
+  const doc = parseXml(stripStylesheetLinks(navXhtml));
+  const titles = new Map<string, string>();
+  for (const anchor of Array.from(doc.getElementsByTagName('*'))) {
+    if (anchor.localName !== 'a' && anchor.tagName !== 'a') continue;
+    const href = anchor.getAttribute('href');
+    const text = anchor.textContent?.trim();
+    if (!(href && text)) continue;
+    titles.set(resolveZipPath(navDir, href), text);
+  }
+  return titles;
 }
 
 /** Parses OPF to extract metadata and spine item hrefs. */
@@ -119,7 +149,9 @@ function parseOpf(
 ): {
   title: string;
   author?: string;
-  spineHrefs: string[];
+  spineItems: Array<{ href: string }>;
+  navHref?: string;
+  pageProgressionDirection?: 'rtl' | 'ltr' | 'default';
 } {
   const doc = parseXml(opfXml);
 
@@ -132,29 +164,62 @@ function parseOpf(
   const creatorEl = findElementByName(doc, 'creator');
   const author = creatorEl?.textContent?.trim() || undefined;
 
-  // Build manifest id → href map
-  const manifest = new Map<string, string>();
+  // Build manifest id → spine-readable item map
+  const manifest = new Map<string, { href: string; mediaType: string; properties: Set<string> }>();
+  let navHref: string | undefined;
   const manifestEl = firstElementByName(doc, 'manifest');
   for (const item of childElementsByName(manifestEl, 'item')) {
     const id = item.getAttribute('id');
     const href = item.getAttribute('href');
+    const mediaType = item.getAttribute('media-type') ?? '';
     if (id && href) {
-      manifest.set(id, resolveZipPath(opfDir, href));
+      const entry = {
+        href: resolveZipPath(opfDir, href),
+        mediaType,
+        properties: new Set((item.getAttribute('properties') ?? '').split(/\s+/u).filter(Boolean)),
+      };
+      manifest.set(id, entry);
+      if (entry.properties.has('nav')) navHref = entry.href;
     }
   }
 
   // Extract spine itemrefs in order
-  const spineHrefs: string[] = [];
+  const spineItems: Array<{ href: string }> = [];
   const spineEl = firstElementByName(doc, 'spine');
+  const pageProgressionDirection = parsePageProgressionDirection(
+    spineEl?.getAttribute('page-progression-direction'),
+  );
   for (const itemref of childElementsByName(spineEl, 'itemref')) {
+    if (itemref.getAttribute('linear') === 'no') continue;
     const idref = itemref.getAttribute('idref');
     if (idref) {
-      const href = manifest.get(idref);
-      if (href) spineHrefs.push(href);
+      const item = manifest.get(idref);
+      if (item && isReadableSpineItem(item)) spineItems.push({ href: item.href });
     }
   }
 
-  return { title, author, spineHrefs };
+  return { title, author, spineItems, navHref, pageProgressionDirection };
+}
+
+function parsePageProgressionDirection(
+  value: string | null | undefined,
+): 'rtl' | 'ltr' | 'default' | undefined {
+  return value === 'rtl' || value === 'ltr' || value === 'default' ? value : undefined;
+}
+
+function isReadableSpineItem(item: {
+  href: string;
+  mediaType: string;
+  properties: ReadonlySet<string>;
+}): boolean {
+  if (
+    item.mediaType !== 'application/xhtml+xml' &&
+    (item.mediaType !== '' || !/\.x?html$/iu.test(item.href))
+  ) {
+    return false;
+  }
+  if (item.properties.has('nav') || item.properties.has('cover-image')) return false;
+  return true;
 }
 
 function firstElementByName(parent: Document | Element, localName: string): Element | undefined {

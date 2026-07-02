@@ -8,6 +8,8 @@ export interface EpubBook {
   readonly author?: string;
   /** Ordered chapters from the spine. */
   readonly chapters: readonly EpubChapter[];
+  /** Spine page progression direction from OPF, if declared. */
+  readonly pageProgressionDirection?: 'rtl' | 'ltr' | 'default';
 }
 
 /** A single chapter extracted from an EPUB spine item. */
@@ -103,6 +105,8 @@ export interface EditableEpubChapter extends EpubChapter {
   href: string;
   /** Original XHTML source. Kept for inspection. */
   originalXhtml: string;
+  /** @internal Whether this chapter must be serialized instead of preserving `originalXhtml`. */
+  isDirty?: boolean;
   /**
    * Block-level chapter content. Paragraphs and images are siblings, ordered
    * by reading order. This is the canonical representation in v0.5+.

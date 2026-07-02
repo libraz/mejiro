@@ -163,13 +163,70 @@ describe('EditableEpub', () => {
     const zip = await JSZip.loadAsync(out);
     const chapter = await zip.file('OPS/Text/chapter.xhtml')?.async('string');
 
-    // The new serializer rebuilds chapter XHTML from `blocks` — structural
-    // tags (h1, p, ruby) survive but unrelated source markup is dropped per
-    // the v0.5 design.
+    // The serializer rebuilds the edited body from `blocks` while preserving
+    // document-level metadata such as the head.
     expect(chapter).toContain('<h1>第一章</h1>');
     expect(chapter).toContain('<p><ruby>校正<rt>こうせい</rt></ruby>本文</p>');
-    expect(chapter).not.toContain('aside');
+    expect(chapter).toContain('<meta name="x" content="keep"');
     expect(chapter).not.toContain('data-keep');
+  });
+
+  it('preserves unedited chapter XHTML during export', async () => {
+    const originalChapter = `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../Styles/style.css"></link></head><body><ul><li><ruby>漢<rt>かん</rt></ruby>字</li></ul></body></html>`;
+    const data = await makeEpub({
+      mimetype: 'application/epub+zip',
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': originalChapter,
+      'OPS/Styles/style.css': 'html { writing-mode: vertical-rl; }',
+    });
+
+    const editor = await EditableEpub.load(data);
+    const out = await editor.export();
+    const zip = await JSZip.loadAsync(out);
+
+    await expect(zip.file('OPS/Text/chapter.xhtml')?.async('string')).resolves.toBe(
+      originalChapter,
+    );
+  });
+
+  it('preserves untouched chapters and stylesheet links when one chapter is edited', async () => {
+    const first = `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../Styles/style.css"></link></head><body><p>第一章</p></body></html>`;
+    const second = `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../Styles/style.css"></link></head><body><ul><li>未編集</li></ul></body></html>`;
+    const data = await makeEpub({
+      mimetype: 'application/epub+zip',
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>二章</dc:title>
+  </metadata>
+  <manifest>
+    <item id="c1" href="Text/chapter-1.xhtml" media-type="application/xhtml+xml" />
+    <item id="c2" href="Text/chapter-2.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine>
+    <itemref idref="c1" />
+    <itemref idref="c2" />
+  </spine>
+</package>`,
+      'OPS/Text/chapter-1.xhtml': first,
+      'OPS/Text/chapter-2.xhtml': second,
+      'OPS/Styles/style.css': 'html { writing-mode: vertical-rl; }',
+    });
+
+    const editor = await EditableEpub.load(data);
+    editor.updateParagraph(0, 0, { text: '編集済み' });
+    const out = await editor.export();
+    const zip = await JSZip.loadAsync(out);
+    const edited = await zip.file('OPS/Text/chapter-1.xhtml')?.async('string');
+
+    expect(edited).toContain('<link rel="stylesheet" href="../Styles/style.css"');
+    expect(edited).toContain('<p>編集済み</p>');
+    await expect(zip.file('OPS/Text/chapter-2.xhtml')?.async('string')).resolves.toBe(second);
   });
 
   it('extracts list and description-list items as editable paragraphs', async () => {
@@ -248,6 +305,45 @@ describe('EditableEpub', () => {
     expect(chapter).toContain('<a href="https://example.test" title="例">E</a>');
     expect(chapter).toContain('<a class="mejiro-footnote-ref" href="#fn1">F</a>');
     expect(chapter).toContain('G</p>');
+  });
+
+  it('serializes contained inline annotations such as ruby inside links', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>漢字</p></body></html>`,
+    });
+
+    const editor = await EditableEpub.load(data);
+    editor.setInlineAnnotations(0, 0, [
+      { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+    ]);
+
+    const out = await editor.export();
+    const zip = await JSZip.loadAsync(out);
+    const chapter = await zip.file('OPS/Text/chapter.xhtml')?.async('string');
+
+    expect(chapter).toContain(
+      '<a href="https://example.test"><ruby>漢字<rt>かんじ</rt></ruby></a>',
+    );
+  });
+
+  it('rejects exporting edited chapters with unsupported list structure', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>前</p><ul><li>項目</li></ul></body></html>`,
+    });
+
+    const editor = await EditableEpub.load(data);
+    editor.updateParagraph(0, 0, { text: '編集' });
+
+    await expect(editor.export()).rejects.toThrow(
+      /Cannot export edited chapter with <ul> structure/u,
+    );
   });
 
   it('preserves non-ruby inline annotations loaded from existing XHTML', async () => {
@@ -471,7 +567,7 @@ describe('EditableEpub', () => {
     expect(opf?.match(/media-type="image\/png"/gu)).toHaveLength(1);
     expect(opf).toContain('<item id="fig1" href="Images/my%20pic.png" media-type="image/png"/>');
     expect(opf).not.toContain('href="Images/my pic.png"');
-    expect(chapter).toContain('<img src="../Images/my pic.png" alt="encoded"');
+    expect(chapter).toContain('<img src="../Images/my%20pic.png" alt="encoded"');
   });
 
   it('loads and exports chapters whose OPF hrefs are percent-encoded', async () => {
@@ -637,6 +733,36 @@ describe('EditableEpub', () => {
     expect(opf).toContain('id="img-dup-2-png" href="Images/dup-2.png" media-type="image/png"');
     expect(chapter).toContain('<img src="../Images/dup.png" alt="一枚目"');
     expect(chapter).toContain('<img src="../Images/dup-2.png" alt="二枚目"');
+  });
+
+  it('uniques added image filenames against existing package files', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': `${opfXml.replace(
+        '</manifest>',
+        '<item id="cover" href="Images/cover.png" media-type="image/png" /></manifest>',
+      )}`,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      'OPS/Images/cover.png': new Uint8Array([9]),
+    });
+
+    const editor = await EditableEpub.load(data);
+    const key = editor.addImage(0, {
+      filename: 'cover.png',
+      data: new Uint8Array([1]),
+      alt: '追加画像',
+    });
+
+    expect(key).toBe('cover-2.png');
+    const out = await editor.export();
+    const zip = await JSZip.loadAsync(out);
+    expect(Array.from((await zip.file('OPS/Images/cover.png')?.async('uint8array')) ?? [])).toEqual(
+      [9],
+    );
+    expect(
+      Array.from((await zip.file('OPS/Images/cover-2.png')?.async('uint8array')) ?? []),
+    ).toEqual([1]);
   });
 
   it('uniques added image filenames across chapters so files do not overwrite', async () => {
@@ -1384,11 +1510,19 @@ describe('EditableEpub', () => {
       });
 
       const editor = await EditableEpub.load(data);
+      editor.updateParagraph(0, 0, { text: '編集済み' });
+      expect(editor.undo()).toBe(true);
+      expect(editor.history).toMatchObject({ depth: 0, redoDepth: 1, canRedo: true });
+
       // Cast required because the runtime check is the safety net under the
       // discriminated union; TypeScript already rejects this at compile time.
       expect(() =>
         editor.addImage(0, { filename: 'empty.png' } as Parameters<typeof editor.addImage>[1]),
       ).toThrow(/must include either `data` or `url`/);
+
+      expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
+      expect(editor.chapters[0].imageAssets.has('empty.png')).toBe(false);
+      expect(editor.history).toMatchObject({ depth: 0, redoDepth: 1, canRedo: true });
     });
   });
 });

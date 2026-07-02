@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import type { InlineAnnotation } from '../browser/types.js';
+import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
 import { extractRubyContent } from './ruby-extractor.js';
 import type {
   AnnotatedParagraph,
@@ -11,6 +12,7 @@ import type {
   EditableImageBlock,
   EditableParagraphBlock,
 } from './types.js';
+import { extractStylesheetLinks, stripStylesheetLinks } from './xml-utils.js';
 
 const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 
@@ -99,11 +101,13 @@ export class EditableEpub {
       if (!this.pendingEntry.has(chapterIndex)) {
         this.pendingEntry.set(chapterIndex, snapshotChapter(chapter));
       }
+      markChapterDirty(chapter);
       return;
     }
     const entry: HistoryEntry = new Map();
     entry.set(chapterIndex, snapshotChapter(chapter));
     this.commitHistoryEntry(entry);
+    markChapterDirty(chapter);
   }
 
   private commitHistoryEntry(entry: HistoryEntry): void {
@@ -129,6 +133,7 @@ export class EditableEpub {
       if (!chapter) continue;
       chapter.blocks = snapshot.blocks.map(cloneBlock);
       chapter.imageAssets = new Map(snapshot.imageAssets);
+      chapter.isDirty = snapshot.isDirty;
       syncParagraphsView(chapter);
     }
   }
@@ -322,6 +327,7 @@ export class EditableEpub {
    */
   addImage(chapterIndex: number, image: AddImageInput | EditableEpubImage): string {
     assertImageInputFilename(image);
+    assertAddImagePayload(image);
     const chapter = requireChapter(this.book, chapterIndex);
     assertAddImageTarget(chapter, image);
     this.recordChapterChange(chapterIndex);
@@ -550,6 +556,7 @@ export function updateEpubParagraph(
 ): void {
   const chapter = requireChapter(book, chapterIndex);
   const block = findParagraphBlock(chapter, paragraphIndex);
+  markChapterDirty(chapter);
   applyParagraphUpdate(chapter, block, next);
 }
 
@@ -581,6 +588,7 @@ export function setEpubInlineAnnotations(
 ): void {
   const chapter = requireChapter(book, chapterIndex);
   const block = findParagraphBlock(chapter, paragraphIndex);
+  markChapterDirty(chapter);
   applyInlineAnnotations(chapter, block, inlineAnnotations);
 }
 
@@ -607,6 +615,7 @@ export function addEpubChapterImage(
 ): string {
   const chapter = requireChapter(book, chapterIndex);
   const isV5 = isAddImageInput(image);
+  markChapterDirty(chapter);
 
   const requestedFilename = assertImageInputFilename(image);
   const insertAt = resolveAddImageInsertIndex(chapter, image);
@@ -664,6 +673,15 @@ function assertAddImageTarget(
   resolveAddImageInsertIndex(chapter, image);
 }
 
+function assertAddImagePayload(image: AddImageInput | EditableEpubImage): void {
+  if (
+    image.data === undefined &&
+    (!isAddImageInput(image) || (image as AddImageInputUrl).url === undefined)
+  ) {
+    throw new Error('Image input must include either `data` or `url`');
+  }
+}
+
 function isAddImageInput(image: AddImageInput | EditableEpubImage): image is AddImageInput {
   return 'filename' in image && image.filename !== undefined;
 }
@@ -703,12 +721,19 @@ async function exportEditableEpubBook(
     throwIfAborted(signal);
     const chapter = book.chapters[i];
     for (const href of chapter.originalImageHrefs ?? []) originalImageHrefs.add(href);
-    files.set(chapter.href, encodeText(serializeChapterXhtml(chapter, book.packageData.opfDir)));
+    for (const assetKey of chapter.imageAssets.keys()) {
+      retainedImageHrefs.add(imageAssetHref(book, chapter, assetKey));
+    }
+
+    if (chapter.isDirty || !chapter.originalXhtml) {
+      files.set(chapter.href, encodeText(serializeChapterXhtml(chapter, book.packageData.opfDir)));
+    } else {
+      files.set(chapter.href, encodeText(chapter.originalXhtml));
+    }
 
     for (const [assetKey, asset] of chapter.imageAssets) {
       throwIfAborted(signal);
       const assetHref = imageAssetHref(book, chapter, assetKey);
-      retainedImageHrefs.add(assetHref);
       const bytes = await resolveAssetBytes(assetKey, asset, assetResolver, signal);
       files.set(assetHref, bytes);
       opfXml = ensureManifestItem(
@@ -850,18 +875,14 @@ async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<Arr
  * the original document are dropped.
  */
 function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): string {
-  // Build XHTML from a clean DOMParser document. Using `createDocument`
-  // (especially under happy-dom) auto-creates head/body which then duplicate
-  // when we add our own — parsing an empty skeleton sidesteps that.
-  const skeleton = `<?xml version="1.0" encoding="utf-8"?><html xmlns="${XHTML_NS}"><head/><body/></html>`;
-  const doc = new DOMParser().parseFromString(skeleton, 'application/xhtml+xml');
+  assertEditableChapterStructure(chapter);
+  const stylesheetLinks = extractStylesheetLinks(chapter.originalXhtml);
+  const doc = createSerializationDocument(chapter);
   const html = doc.documentElement;
-  const head = doc.getElementsByTagName('head')[0];
-  const body = doc.getElementsByTagName('body')[0];
+  const head = ensureChildElement(doc, html, 'head', html.firstChild);
+  const body = ensureChildElement(doc, html, 'body');
 
-  // Clear any auto-populated children, then add a title node when known.
-  while (head.firstChild) head.removeChild(head.firstChild);
-  if (chapter.title) {
+  if (chapter.title && !findFirstDescendant(doc, 'title')) {
     const titleEl = doc.createElementNS(XHTML_NS, 'title');
     titleEl.appendChild(doc.createTextNode(chapter.title));
     head.appendChild(titleEl);
@@ -879,7 +900,60 @@ function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): st
   }
 
   const xmlDecl = '<?xml version="1.0" encoding="utf-8"?>\n';
-  return xmlDecl + new XMLSerializer().serializeToString(doc);
+  return (
+    xmlDecl + restoreStylesheetLinks(new XMLSerializer().serializeToString(doc), stylesheetLinks)
+  );
+}
+
+function createSerializationDocument(chapter: EditableEpubChapter): Document {
+  if (chapter.originalXhtml) {
+    try {
+      return parseXml(stripStylesheetLinks(chapter.originalXhtml));
+    } catch {
+      // Fall through to the clean skeleton. Some real EPUBs contain HTML-ish
+      // void tags that are accepted on import after stylesheet stripping but
+      // are not well-formed XML for full-document reuse.
+    }
+  }
+  const skeleton = `<?xml version="1.0" encoding="utf-8"?><html xmlns="${XHTML_NS}"><head/><body/></html>`;
+  return new DOMParser().parseFromString(skeleton, 'application/xhtml+xml');
+}
+
+function restoreStylesheetLinks(xhtml: string, links: readonly string[]): string {
+  if (links.length === 0) return xhtml;
+  if (links.every((link) => xhtml.includes(link))) return xhtml;
+  return xhtml.replace(/<\/head>/iu, `${links.join('')}</head>`);
+}
+
+function findFirstElement(root: ParentNode, localName: string): Element | null {
+  return (
+    Array.from(root.childNodes).find(
+      (node): node is Element =>
+        node.nodeType === Node.ELEMENT_NODE &&
+        (node as Element).localName.toLowerCase() === localName,
+    ) ?? null
+  );
+}
+
+function findFirstDescendant(root: ParentNode, localName: string): Element | null {
+  return (
+    Array.from((root as Element | Document).getElementsByTagName('*')).find(
+      (el) => el.localName.toLowerCase() === localName,
+    ) ?? null
+  );
+}
+
+function ensureChildElement(
+  doc: Document,
+  parent: Element,
+  localName: 'head' | 'body',
+  before?: ChildNode | null,
+): Element {
+  const existing = findFirstElement(parent, localName);
+  if (existing) return existing;
+  const el = doc.createElementNS(XHTML_NS, localName);
+  parent.insertBefore(el, before ?? null);
+  return el;
 }
 
 function renderBlock(
@@ -916,78 +990,79 @@ function paragraphTagName(block: EditableParagraphBlock): string {
 
 /** Appends a paragraph's text + inline annotations as DOM nodes. */
 function appendInlineContent(doc: Document, parent: Element, block: EditableParagraphBlock): void {
-  const chars = [...block.text];
-  // Jukugo entries are layout-only; the segment-level ruby annotations carry
-  // the serializable <ruby> markup.
-  const annotations = block.inlineAnnotations
-    .filter((ann) => ann.kind !== 'ruby' || ann.type !== 'jukugo')
-    .slice()
-    .sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-
-  let pos = 0;
-  for (const ann of annotations) {
-    if (ann.startIndex < pos || ann.endIndex <= ann.startIndex) continue;
-    if (ann.startIndex > pos) {
-      parent.appendChild(doc.createTextNode(chars.slice(pos, ann.startIndex).join('')));
-    }
-    parent.appendChild(
-      renderInlineAnnotation(doc, ann, chars.slice(ann.startIndex, ann.endIndex).join('')),
-    );
-    pos = ann.endIndex;
-  }
-  if (pos < chars.length) {
-    parent.appendChild(doc.createTextNode(chars.slice(pos).join('')));
+  for (const node of buildInlineNodes([...block.text], block.inlineAnnotations)) {
+    parent.appendChild(renderInlineNode(doc, node));
   }
 }
 
-function renderInlineAnnotation(doc: Document, ann: InlineAnnotation, body: string): Node {
-  switch (ann.kind) {
+function renderInlineNode(doc: Document, inline: InlineNode): Node {
+  if (inline.type === 'text') return doc.createTextNode(inline.text);
+  const element = renderInlineElement(doc, inline);
+  if (inline.children.length > 0) {
+    for (const child of inline.children) {
+      element.appendChild(renderInlineNode(doc, child));
+    }
+  } else {
+    element.appendChild(doc.createTextNode(inline.type === 'ruby' ? inline.base : inline.text));
+  }
+  if (inline.type === 'ruby') {
+    const rt = doc.createElementNS(XHTML_NS, 'rt');
+    rt.appendChild(doc.createTextNode(inline.rubyText));
+    element.appendChild(rt);
+  }
+  return element;
+}
+
+function renderInlineElement(
+  doc: Document,
+  inline: Exclude<InlineNode, { type: 'text' }>,
+): Element {
+  switch (inline.type) {
     case 'ruby': {
-      const ruby = doc.createElementNS(XHTML_NS, 'ruby');
-      ruby.appendChild(doc.createTextNode(body));
-      const rt = doc.createElementNS(XHTML_NS, 'rt');
-      rt.appendChild(doc.createTextNode(ann.rubyText));
-      ruby.appendChild(rt);
-      return ruby;
+      return doc.createElementNS(XHTML_NS, 'ruby');
     }
     case 'emphasis': {
       const em = doc.createElementNS(XHTML_NS, 'em');
       em.setAttribute('class', 'mejiro-emphasis');
-      em.setAttribute('data-style', ann.style ?? 'sesame');
-      em.appendChild(doc.createTextNode(body));
+      em.setAttribute('data-style', inline.style);
       return em;
     }
     case 'tcy': {
       const span = doc.createElementNS(XHTML_NS, 'span');
       span.setAttribute('class', 'mejiro-tcy');
-      span.appendChild(doc.createTextNode(body));
       return span;
     }
     case 'em': {
-      const em = doc.createElementNS(XHTML_NS, 'em');
-      em.appendChild(doc.createTextNode(body));
-      return em;
+      return doc.createElementNS(XHTML_NS, 'em');
     }
     case 'strong': {
-      const strong = doc.createElementNS(XHTML_NS, 'strong');
-      strong.appendChild(doc.createTextNode(body));
-      return strong;
+      return doc.createElementNS(XHTML_NS, 'strong');
     }
     case 'link': {
       const anchor = doc.createElementNS(XHTML_NS, 'a');
-      anchor.setAttribute('href', ann.href);
-      if (ann.title) anchor.setAttribute('title', ann.title);
-      anchor.appendChild(doc.createTextNode(body));
+      anchor.setAttribute('href', inline.href);
+      if (inline.title) anchor.setAttribute('title', inline.title);
       return anchor;
     }
-    case 'footnote': {
+    case 'footnote-ref': {
       const anchor = doc.createElementNS(XHTML_NS, 'a');
       anchor.setAttribute('class', 'mejiro-footnote-ref');
-      anchor.setAttribute('href', `#${ann.noteId}`);
-      anchor.appendChild(doc.createTextNode(body));
+      anchor.setAttribute('href', `#${inline.noteId}`);
       return anchor;
     }
   }
+}
+
+function assertEditableChapterStructure(chapter: EditableEpubChapter): void {
+  if (!chapter.originalXhtml) return;
+  const doc = parseXml(stripStylesheetLinks(chapter.originalXhtml));
+  const unsupported = Array.from(doc.getElementsByTagName('*')).find((el) =>
+    UNSUPPORTED_EDITABLE_CONTAINERS.has(el.localName.toLowerCase()),
+  );
+  if (!unsupported) return;
+  throw new Error(
+    `Cannot export edited chapter with <${unsupported.localName}> structure: ${chapter.href}`,
+  );
 }
 
 function renderImageBlock(
@@ -1053,6 +1128,8 @@ const EDITABLE_BLOCK_ELEMENTS = new Set([
   'hr',
   'figure',
 ]);
+
+const UNSUPPORTED_EDITABLE_CONTAINERS = new Set(['ul', 'ol', 'dl', 'table', 'thead', 'tbody']);
 
 function extractEditableBlocks(
   xhtml: string,
@@ -1162,13 +1239,6 @@ function extractEditableBlocks(
   return { blocks, imageAssets, originalImageHrefs: [...originalImageHrefs] };
 }
 
-function stripStylesheetLinks(xhtml: string): string {
-  return xhtml.replace(
-    /<link\b(?=[^>]*\brel=["']?stylesheet["']?)[^>]*(?:\/>|>(?:\s*<\/link\s*>)?)/giu,
-    '',
-  );
-}
-
 function wrapXhtml(body: string): string {
   return `<?xml version="1.0" encoding="utf-8"?><html xmlns="${XHTML_NS}"><body>${body}</body></html>`;
 }
@@ -1179,6 +1249,10 @@ function nextGeneratedBlockId(blocks: readonly EditableBlock[]): string {
 
 function collectImageAssetKeys(book: EditableEpubBook): Set<string> {
   const keys = new Set<string>();
+  for (const path of book.packageData.files.keys()) {
+    const name = basename(path);
+    if (name) keys.add(name);
+  }
   for (const chapter of book.chapters) {
     for (const key of chapter.imageAssets.keys()) keys.add(key);
   }
@@ -1476,6 +1550,7 @@ function clamp(value: number, min: number, max: number): number {
 interface ChapterSnapshot {
   blocks: EditableBlock[];
   imageAssets: Map<string, EditableImageAsset>;
+  isDirty?: boolean;
 }
 
 type HistoryEntry = Map<number, ChapterSnapshot>;
@@ -1484,7 +1559,12 @@ function snapshotChapter(chapter: EditableEpubChapter): ChapterSnapshot {
   return {
     blocks: chapter.blocks.map(cloneBlock),
     imageAssets: new Map(chapter.imageAssets),
+    isDirty: chapter.isDirty,
   };
+}
+
+function markChapterDirty(chapter: EditableEpubChapter): void {
+  chapter.isDirty = true;
 }
 
 function cloneBlock(block: EditableBlock): EditableBlock {

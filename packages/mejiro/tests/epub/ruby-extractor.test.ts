@@ -103,6 +103,52 @@ describe('extractRubyContent', () => {
     expect(result[0].inlineAnnotations[0].rubyText).toBe('かん');
   });
 
+  it('keeps base text after rt in source order', () => {
+    const xhtml = wrapXhtml('<p><ruby>漢字<rt>かんじ</rt>です</ruby></p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('漢字です');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+    ]);
+  });
+
+  it('pairs rb and rt elements by index', () => {
+    const xhtml = wrapXhtml(
+      '<p><ruby><rb>東</rb><rb>京</rb><rt>とう</rt><rt>きょう</rt></ruby></p>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('東京');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', type: 'mono' },
+      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'きょう', type: 'mono' },
+      {
+        kind: 'ruby',
+        startIndex: 0,
+        endIndex: 2,
+        rubyText: 'とうきょう',
+        type: 'jukugo',
+        jukugoSplitPoints: [1],
+      },
+    ]);
+  });
+
+  it('skips rtc and nested ruby readings without leaking them into base text', () => {
+    const xhtml = wrapXhtml(
+      '<p><ruby>漢<rt>かん</rt><rtc><rt>Kan</rt></rtc></ruby><ruby><ruby>字<rt>じ</rt></ruby><rt>zi</rt></ruby></p>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('漢字');
+    expect(result[0].text).not.toContain('Kan');
+    expect(result[0].inlineAnnotations[0]).toMatchObject({
+      startIndex: 0,
+      endIndex: 1,
+      rubyText: 'かん',
+    });
+  });
+
   it('extracts multiple paragraphs', () => {
     const xhtml = wrapXhtml('<p>第一段落</p><p><ruby>第<rt>だい</rt></ruby>二段落</p>');
     const result = extractRubyContent(xhtml);
@@ -144,6 +190,34 @@ describe('extractRubyContent', () => {
     expect(result[0].inlineAnnotations[1].endIndex).toBe(2);
   });
 
+  it('keeps cumulative annotation indices in code point units', () => {
+    const xhtml = wrapXhtml(
+      '<p>🙂<ruby>漢<rt>かん</rt></ruby><a href="https://example.test">字</a></p>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('🙂漢字');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', type: 'mono' },
+      { kind: 'link', startIndex: 2, endIndex: 3, href: 'https://example.test' },
+    ]);
+  });
+
+  it('preserves inline annotations inside ruby base markup', () => {
+    const xhtml = wrapXhtml(
+      '<p><ruby><em>漢</em><rt>かん</rt></ruby><ruby><a href="https://example.test">字</a><rt>じ</rt></ruby></p>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('漢字');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'em', startIndex: 0, endIndex: 1 },
+      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', type: 'mono' },
+      { kind: 'link', startIndex: 1, endIndex: 2, href: 'https://example.test' },
+      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'じ', type: 'mono' },
+    ]);
+  });
+
   it('extracts non-ruby inline annotations from XHTML markup', () => {
     const xhtml = wrapXhtml(
       '<p><em class="mejiro-emphasis" data-style="dot">A</em><span class="mejiro-tcy">12</span><em>B</em><strong>C</strong><a href="https://example.test" title="例">D</a><a class="mejiro-footnote-ref" href="#fn1">E</a>F</p>',
@@ -164,6 +238,23 @@ describe('extractRubyContent', () => {
         title: '例',
       },
       { kind: 'footnote', startIndex: 6, endIndex: 7, noteId: 'fn1' },
+    ]);
+  });
+
+  it('drops unsafe link schemes while preserving link text', () => {
+    const xhtml = wrapXhtml(
+      '<p><a href="javascript:alert(1)">危険</a><a href="mailto:test@example.com">安全</a></p>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('危険安全');
+    expect(result[0].inlineAnnotations).toEqual([
+      {
+        kind: 'link',
+        startIndex: 2,
+        endIndex: 4,
+        href: 'mailto:test@example.com',
+      },
     ]);
   });
 
@@ -194,5 +285,31 @@ describe('extractRubyContent', () => {
       endIndex: 1,
       rubyText: 'かん',
     });
+  });
+
+  it('clamps inline annotations that cross trimmed paragraph boundaries', () => {
+    const xhtml = wrapXhtml('<p><a href="https://example.test"> 本文 </a></p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('本文');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+    ]);
+  });
+
+  it('normalizes pretty-print whitespace while preserving explicit br and ideographic indent', () => {
+    const xhtml = wrapXhtml('<p>\n  吾輩は\n  猫である<br />　次行</p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('吾輩は猫である\n　次行');
+  });
+
+  it('keeps direct inline runs inside section elements with nested blocks', () => {
+    const xhtml = wrapXhtml(
+      '<section>序文<p>本文</p></section><table><tr><td>セル</td></tr></table>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result.map((p) => p.text)).toEqual(['序文', '本文', 'セル']);
   });
 });
