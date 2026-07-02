@@ -50,6 +50,7 @@ export {
   type MejiroReaderHandle,
   type MejiroReaderMode,
   type MejiroReaderProps,
+  type MejiroReaderSettingsSlot,
   type MejiroSpreadMode,
   type MejiroTheme,
   type MejiroThemeName,

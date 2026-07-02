@@ -198,6 +198,36 @@ describe('MejiroReader (Vue) — enable* toggles', () => {
     expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 22px');
   });
 
+  it('attaches and detaches the auto spread ResizeObserver when spreadMode changes', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    class MockResizeObserver {
+      observe = observe;
+      disconnect = disconnect;
+    }
+    vi.stubGlobal('ResizeObserver', MockResizeObserver);
+
+    try {
+      const epub = fakeEpub();
+      const { rerender, unmount } = render(MejiroReader, {
+        props: { epub, spreadMode: 'double' },
+      });
+      observe.mockClear();
+      disconnect.mockClear();
+
+      await rerender({ epub, spreadMode: 'auto' });
+      expect(observe).toHaveBeenCalled();
+      disconnect.mockClear();
+
+      await rerender({ epub, spreadMode: 'single' });
+      expect(disconnect).toHaveBeenCalled();
+      unmount();
+    } finally {
+      vi.stubGlobal('ResizeObserver', originalResizeObserver);
+    }
+  });
+
   it('enableImageOverlay=true with an EPUB exposes the Image button', () => {
     const { container } = render(MejiroReader, {
       props: { enableImageOverlay: true, epub: fakeEpub() },

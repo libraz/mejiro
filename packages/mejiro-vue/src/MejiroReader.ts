@@ -117,6 +117,24 @@ export interface MejiroReaderEventMap {
   chapterFinished: (payload: { chapter: number }) => void;
 }
 
+/**
+ * Slot payload passed to the `settings` slot.
+ *
+ * Lets a host replace the built-in settings controls with its own UI while
+ * keeping the panel chrome and its open/close accordion. All fields are wired
+ * to the live reader.
+ */
+export interface MejiroReaderSettingsSlot {
+  /** Current effective settings (font, size, line spacing, kinsoku, hanging). */
+  settings: EditableSettings;
+  /** Applies a partial settings change and re-flows the chapter. */
+  update: (partial: Partial<BookOptions>) => void;
+  /** Whether the settings panel is currently open. */
+  open: boolean;
+  /** Toggles the settings panel open/closed. */
+  toggle: () => void;
+}
+
 /** Imperative handle exposed via `ref` on {@link MejiroReader}. */
 export interface MejiroReaderHandle {
   /** Jump to a specific spread (0-based, clamped to [0, totalSpreads − 1]). */
@@ -450,7 +468,12 @@ export const MejiroReader = defineComponent({
       window.removeEventListener('keydown', onKey);
     });
 
-    onMounted(() => {
+    function stopAutoSingleObserver(): void {
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+    }
+    function startAutoSingleObserver(): void {
+      stopAutoSingleObserver();
       if (props.spreadMode !== 'auto') return;
       updateAutoSingle();
       if (typeof ResizeObserver === 'undefined') return;
@@ -458,15 +481,16 @@ export const MejiroReader = defineComponent({
       if (!surface) return;
       resizeObserver = new ResizeObserver(updateAutoSingle);
       resizeObserver.observe(surface);
-    });
+    }
+    onMounted(() => startAutoSingleObserver());
     onBeforeUnmount(() => {
-      resizeObserver?.disconnect();
-      resizeObserver = null;
+      stopAutoSingleObserver();
     });
     watch(
       () => props.spreadMode,
       (next) => {
-        if (next === 'auto') updateAutoSingle();
+        if (next === 'auto') startAutoSingleObserver();
+        else stopAutoSingleObserver();
       },
     );
     const effectiveSingle = computed(
