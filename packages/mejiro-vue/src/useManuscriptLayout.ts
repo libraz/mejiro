@@ -1,4 +1,5 @@
 import type { ChapterLayout, ManuscriptChapter, MejiroBook } from '@libraz/mejiro/book';
+import { verticalLineWidth } from '@libraz/mejiro/browser';
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
 import { onMounted, onUnmounted, type Ref, shallowRef, watch } from 'vue';
 
@@ -116,7 +117,7 @@ export function useManuscriptLayout(
       contentHeight.value = dims.contentHeight;
       layout.value.resize({
         pageWidth: dims.pageWidth,
-        lineWidth: dims.contentHeight - book.getOptions().fontSize * 0.5,
+        lineWidth: verticalLineWidth(dims.contentHeight, book.getOptions().fontSize),
       });
     }, resizeDebounce);
   }

@@ -1,3 +1,4 @@
+import type { PageHeaderData } from '@libraz/mejiro';
 import type { AnchorRange, AnchorRect, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import { defineComponent, h, type PropType, ref, type VNode } from 'vue';
@@ -7,15 +8,7 @@ import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
 import type { MultiImageItem } from './useMultiImageOverlay.js';
 
-/**
- * Per-page header data used to render the running title and page number.
- */
-export interface PageHeaderData {
-  /** Running title (left-aligned). */
-  title?: string;
-  /** Page number (right-aligned). Hidden when `null`. */
-  pageNumber?: number | null;
-}
+export type { PageHeaderData };
 
 /**
  * Renders a two-page spread with the book frame, page chrome, navigation

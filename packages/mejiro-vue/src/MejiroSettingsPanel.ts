@@ -1,21 +1,9 @@
-import type { BookOptions } from '@libraz/mejiro/book';
+import type { EditableSettings, FontChoice } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
 import { defineComponent, h, type PropType } from 'vue';
 import { useI18n } from './i18n.js';
 
-/** A font choice shown in the settings panel. */
-export interface FontChoice {
-  /** CSS `font-family` value applied to the book. */
-  value: string;
-  /** Human-readable label shown in the picker. */
-  label: string;
-}
-
-/** Subset of {@link BookOptions} the settings panel can edit. */
-export type EditableSettings = Pick<
-  BookOptions,
-  'fontFamily' | 'fontSize' | 'lineSpacing' | 'mode' | 'enableHanging'
->;
+export type { EditableSettings, FontChoice };
 
 const DEFAULT_FONTS: FontChoice[] = [
   { value: 'serif', label: 'System Serif' },

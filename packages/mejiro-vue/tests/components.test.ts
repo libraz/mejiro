@@ -17,6 +17,7 @@ import type {
   MejiroPageProps,
   MejiroPageViewProps,
   MejiroReaderProps,
+  MejiroReaderSettingsSlot,
   MejiroScrollViewProps,
   MejiroSelectionLayerProps,
   MejiroSettingsPanelProps,
@@ -28,6 +29,7 @@ import type {
 import { MejiroChapterNav } from '../src/MejiroChapterNav.js';
 import { MejiroDropZone } from '../src/MejiroDropZone.js';
 import { MejiroImageOverlay } from '../src/MejiroImageOverlay.js';
+import { MejiroNotationHighlighter } from '../src/MejiroNotationHighlighter.js';
 import { MejiroPage } from '../src/MejiroPage.js';
 import { MejiroPageIndicator } from '../src/MejiroPageIndicator.js';
 import { MejiroSettingsPanel } from '../src/MejiroSettingsPanel.js';
@@ -47,6 +49,7 @@ describe('Vue public component prop types', () => {
     expectTypeOf<MejiroPageIndicatorProps>().toHaveProperty('current');
     expectTypeOf<MejiroPageViewProps>().toHaveProperty('result');
     expectTypeOf<MejiroReaderProps>().toHaveProperty('epubUrl');
+    expectTypeOf<MejiroReaderSettingsSlot>().toHaveProperty('settings');
     expectTypeOf<MejiroScrollViewProps>().toHaveProperty('layout');
     expectTypeOf<MejiroSelectionLayerProps>().toHaveProperty('rects');
     expectTypeOf<MejiroSettingsPanelProps>().toHaveProperty('settings');
@@ -54,6 +57,36 @@ describe('Vue public component prop types', () => {
     expectTypeOf<MejiroSpreadProps>().toHaveProperty('spread');
     expectTypeOf<MejiroStatsProps>().toHaveProperty('chapter');
     expectTypeOf<MejiroTocProps>().toHaveProperty('epub');
+  });
+});
+
+describe('MejiroNotationHighlighter (Vue)', () => {
+  it('passes attrs and listeners through to the textarea', () => {
+    const onFocus = vi.fn();
+    const onInput = vi.fn();
+    const { container } = render(MejiroNotationHighlighter, {
+      props: { modelValue: '本文', textareaClass: 'inner' },
+      attrs: {
+        class: 'from-attrs',
+        rows: 7,
+        maxlength: 12,
+        'aria-label': 'draft body',
+        onFocus,
+        onInput,
+      },
+    });
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+
+    expect(textarea.classList.contains('inner')).toBe(true);
+    expect(textarea.classList.contains('from-attrs')).toBe(true);
+    expect(textarea.getAttribute('rows')).toBe('7');
+    expect(textarea.maxLength).toBe(12);
+    expect(textarea.getAttribute('aria-label')).toBe('draft body');
+
+    textarea.dispatchEvent(new Event('focus', { bubbles: true }));
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(onFocus).toHaveBeenCalledTimes(1);
+    expect(onInput).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -399,6 +432,54 @@ describe('MejiroPage (Vue)', () => {
       '漢かん',
       '字じ',
     ]);
+  });
+
+  it('renders unsafe links as text', () => {
+    const page: RenderPage = {
+      paragraphs: [
+        {
+          lines: [
+            {
+              segments: [{ type: 'link', text: 'unsafe', href: 'javascript:alert(1)' }],
+            },
+          ],
+          isHeading: false,
+        },
+      ],
+    };
+
+    const { container } = render(MejiroPage, { props: { page } });
+
+    expect(container.textContent).toContain('unsafe');
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('renders nested ruby inside links', () => {
+    const page: RenderPage = {
+      paragraphs: [
+        {
+          lines: [
+            {
+              segments: [
+                {
+                  type: 'link',
+                  text: '漢字',
+                  href: 'https://example.test',
+                  children: [{ type: 'ruby', base: '漢字', rubyText: 'かんじ' }],
+                },
+              ],
+            },
+          ],
+          isHeading: false,
+        },
+      ],
+    };
+
+    const { container } = render(MejiroPage, { props: { page } });
+
+    const anchor = container.querySelector('a');
+    expect(anchor?.getAttribute('href')).toBe('https://example.test');
+    expect(anchor?.querySelector('ruby')?.textContent).toBe('漢字かんじ');
   });
 });
 
