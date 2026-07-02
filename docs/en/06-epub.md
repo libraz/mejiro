@@ -251,6 +251,8 @@ for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
 
 `v0.5` groups multiple operations through `editor.transaction(fn)` and exposes history via `editor.undo()` / `editor.redo()` / `editor.history`. `editor.export({ onProgress, signal })` also accepts a progress callback and an `AbortSignal`, so large EPUB writes can report status and be cancelled from the host UI.
 
+Unedited chapters are written back from their original XHTML so stylesheet links, list wrappers, tables, and other source structure stay intact. Edited chapters preserve the document shell (`html`, `head`, `body`, and stylesheet links), but list and table containers (`ul`, `ol`, `dl`, `table`) are not rewritten safely yet; exporting an edited chapter that contains those structures throws instead of silently flattening the XHTML.
+
 #### URL-only image registration (assetResolver)
 
 `addImage()` accepts `{ filename, url }` as an alternative to `{ filename, data }`. The bytes are only resolved when `editor.export({ assetResolver })` runs, so the editor session can hold remote URLs without ever materializing the image bytes client-side.
@@ -286,6 +288,7 @@ const project = new EpubProject({
     creators: [{ name: '作者名', role: 'aut' }],
     language: 'ja',
   },
+  dialect: 'mejiro',
   chapters: [
     {
       title: '第一話',

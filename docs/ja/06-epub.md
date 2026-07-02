@@ -251,6 +251,8 @@ for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
 
 `v0.5` では `editor.transaction(fn)` で複数操作を1ステップとしてまとめ、`editor.undo()` / `editor.redo()` / `editor.history` で履歴を扱えます。`editor.export({ onProgress, signal })` は進捗コールバックと `AbortSignal` を受け付けるため、ブラウザ上で大きな EPUB を書き出す際の UX 改善や中断にそのまま使えます。
 
+未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link を保持したうえで本文を再生成しますが、`ul` / `ol` / `dl` / `table` を含む章はまだ安全に往復できないため、黙って平坦化せず export 時にエラーとして拒否します。
+
 #### URL ベースの画像登録（assetResolver）
 
 `addImage()` には `{ filename, data }` の代わりに `{ filename, url }` を渡せます。バイト実体は `editor.export({ assetResolver })` の時点で初めて解決されるため、編集セッション中は外部ストレージの URL だけを保持できます。
@@ -286,6 +288,7 @@ const project = new EpubProject({
     creators: [{ name: '作者名', role: 'aut' }],
     language: 'ja',
   },
+  dialect: 'mejiro',
   chapters: [
     {
       title: '第一話',
