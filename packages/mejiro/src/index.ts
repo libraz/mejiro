@@ -15,6 +15,14 @@ export {
   SpreadExclusionEngine,
 } from './exclusion.js';
 export { computeHangingAdjustment, isHangingTarget } from './hanging.js';
+export type { MejiroLocale, MejiroMessages } from './i18n.js';
+export {
+  enMessages,
+  formatMessage,
+  jaMessages,
+  messageCatalogs,
+  resolveMessages,
+} from './i18n.js';
 export {
   buildKinsokuRules,
   getDefaultKinsokuRules,
