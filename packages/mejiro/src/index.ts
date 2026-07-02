@@ -51,4 +51,5 @@ export { isKana, preprocessRuby } from './ruby.js';
 export { formatDialogueLineBreaks, normalizeText, toCodepoints } from './text.js';
 export { tokenLengthsToBoundaries } from './tokenize.js';
 export type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
+export type { EditableSettings, FontChoice, PageHeaderData } from './ui-types.js';
 export { sanitizeUrl } from './url.js';
