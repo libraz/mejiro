@@ -1,4 +1,9 @@
-import type { ReadingAnchor } from '@libraz/mejiro/book';
+import {
+  type MejiroStorage,
+  parseReadingPosition,
+  type ReadingPositionValue,
+  serializeReadingPosition,
+} from '@libraz/mejiro';
 import { onScopeDispose, type Ref, ref, watch } from 'vue';
 
 /**
@@ -6,14 +11,10 @@ import { onScopeDispose, type Ref, ref, watch } from 'vue';
  * {@link MejiroReaderHandle.goToAnchor} to restore the user's exact location
  * even after a reflow that invalidates spread indices.
  */
-export type ReadingPositionValue = ReadingAnchor;
+export type { ReadingPositionValue };
 
 /** Minimal storage interface required by {@link useReadingPosition}. */
-export interface ReadingPositionStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
+export type ReadingPositionStorage = MejiroStorage;
 
 /** Options for {@link useReadingPosition}. */
 export interface UseReadingPositionOptions {
@@ -44,64 +45,10 @@ export interface UseReadingPositionReturn {
   clear(): void;
 }
 
-const STORAGE_VERSION = 2;
-
-interface PersistedV2 {
-  version: 2;
-  chapter: number;
-  paragraph: number;
-  charIndex: number;
-}
-
-interface LegacyV1 {
-  chapter: number;
-  spreadIdx: number;
-}
-
 function resolveDefaultStorage(): ReadingPositionStorage | null {
   if (typeof globalThis === 'undefined') return null;
   const w = (globalThis as { localStorage?: ReadingPositionStorage }).localStorage;
   return w ?? null;
-}
-
-function parsePosition(raw: string | null): ReadingPositionValue | null {
-  if (!raw) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const p = parsed as Partial<PersistedV2 & LegacyV1>;
-  if (typeof p.chapter !== 'number') return null;
-  if (p.version === STORAGE_VERSION) {
-    if (typeof p.paragraph !== 'number' || typeof p.charIndex !== 'number') return null;
-    return { chapter: p.chapter, paragraph: p.paragraph, charIndex: p.charIndex };
-  }
-  if (typeof p.spreadIdx === 'number') {
-    // biome-ignore lint/suspicious/noConsole: intentional one-time migration notice
-    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
-      // biome-ignore lint/suspicious/noConsole: intentional one-time migration notice
-      console.warn(
-        '[mejiro] useReadingPosition: migrating legacy {chapter, spreadIdx} format. ' +
-          'spreadIdx has been dropped because it does not survive reflow; the position ' +
-          'now resumes at the start of the chapter. Persist new positions via save() to upgrade.',
-      );
-    }
-    return { chapter: p.chapter, paragraph: 0, charIndex: 0 };
-  }
-  return null;
-}
-
-function serializePosition(value: ReadingPositionValue): string {
-  const payload: PersistedV2 = {
-    version: STORAGE_VERSION,
-    chapter: value.chapter,
-    paragraph: value.paragraph,
-    charIndex: value.charIndex,
-  };
-  return JSON.stringify(payload);
 }
 
 /**
@@ -126,7 +73,7 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
       return;
     }
     try {
-      position.value = parsePosition(storage.getItem(currentKey));
+      position.value = parseReadingPosition(storage.getItem(currentKey));
     } catch {
       position.value = null;
     }
@@ -149,7 +96,7 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
       const keyAtSave = keyRef.value;
       timer = setTimeout(() => {
         try {
-          storage.setItem(keyAtSave, serializePosition(next));
+          storage.setItem(keyAtSave, serializeReadingPosition(next));
         } catch {
           // Quota, disabled storage, or denied access — keep the in-memory copy.
         }

@@ -1,4 +1,11 @@
-import type { InChapterAnchor } from '@libraz/mejiro/book';
+import {
+  type Annotation,
+  createAnnotationId,
+  type MejiroStorage,
+  parseAnnotations,
+  serializeAnnotations,
+  sortAnnotations,
+} from '@libraz/mejiro';
 import { onUnmounted, type Ref, ref, watch } from 'vue';
 
 /**
@@ -7,22 +14,10 @@ import { onUnmounted, type Ref, ref, watch } from 'vue';
  * prop on {@link MejiroReader} to render highlights, or with `goToAnchor` to
  * implement bookmarks.
  */
-export interface Annotation {
-  id: string;
-  chapter: number;
-  start: InChapterAnchor;
-  end: InChapterAnchor;
-  color?: string;
-  note?: string;
-  createdAt?: number;
-}
+export type { Annotation };
 
 /** Minimal storage interface required by {@link useAnnotations}. */
-export interface AnnotationsStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
+export type AnnotationsStorage = MejiroStorage;
 
 /** Options for {@link useAnnotations}. */
 export interface UseAnnotationsOptions {
@@ -57,48 +52,10 @@ export interface UseAnnotationsReturn {
   clear(): void;
 }
 
-const STORAGE_VERSION = 1;
-
-interface Persisted {
-  version: number;
-  annotations: Annotation[];
-}
-
 function resolveDefaultStorage(): AnnotationsStorage | null {
   if (typeof globalThis === 'undefined') return null;
   const w = (globalThis as { localStorage?: AnnotationsStorage }).localStorage;
   return w ?? null;
-}
-
-function parse(raw: string | null): Annotation[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as Partial<Persisted>;
-    if (parsed && Array.isArray(parsed.annotations)) return parsed.annotations;
-  } catch {
-    // ignore
-  }
-  return [];
-}
-
-function serialize(annotations: readonly Annotation[]): string {
-  const payload: Persisted = { version: STORAGE_VERSION, annotations: [...annotations] };
-  return JSON.stringify(payload);
-}
-
-function sort(annotations: readonly Annotation[]): Annotation[] {
-  return [...annotations].sort((a, b) => {
-    if (a.chapter !== b.chapter) return a.chapter - b.chapter;
-    if (a.start.paragraph !== b.start.paragraph) return a.start.paragraph - b.start.paragraph;
-    return a.start.charIndex - b.start.charIndex;
-  });
-}
-
-function makeId(): string {
-  if (typeof crypto !== 'undefined' && typeof (crypto as Crypto).randomUUID === 'function') {
-    return (crypto as Crypto).randomUUID();
-  }
-  return `ann-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function unwrapKey(key: Ref<string> | string): string {
@@ -114,12 +71,12 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const storage = options.storage ?? resolveDefaultStorage();
 
   const annotations = ref<readonly Annotation[]>(
-    storage ? sort(parse(storage.getItem(unwrapKey(options.key)))) : [],
+    storage ? sortAnnotations(parseAnnotations(storage.getItem(unwrapKey(options.key)))) : [],
   );
 
   if (typeof options.key === 'object' && options.key && 'value' in options.key) {
     watch(options.key, (next) => {
-      annotations.value = storage ? sort(parse(storage.getItem(next))) : [];
+      annotations.value = storage ? sortAnnotations(parseAnnotations(storage.getItem(next))) : [];
     });
   }
 
@@ -133,7 +90,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         try {
-          storage.setItem(unwrapKey(options.key), serialize(next));
+          storage.setItem(unwrapKey(options.key), serializeAnnotations(next));
         } catch {
           // ignore
         }
@@ -147,10 +104,10 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   ): Annotation {
     const annotation: Annotation = {
       ...input,
-      id: input.id ?? makeId(),
+      id: input.id ?? createAnnotationId(),
       createdAt: input.createdAt ?? Date.now(),
     };
-    const next = sort([...annotations.value, annotation]);
+    const next = sortAnnotations([...annotations.value, annotation]);
     annotations.value = next;
     commit(next);
     return annotation;
@@ -172,7 +129,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       return { ...annotation, ...patch, id };
     });
     if (changed) {
-      const sorted = sort(next);
+      const sorted = sortAnnotations(next);
       annotations.value = sorted;
       commit(sorted);
     }
