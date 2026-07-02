@@ -350,7 +350,7 @@ function jump(): void {
 
 Source props mirror the React package: `epub-url`, `epub`, or neither (the reader renders its own drop zone). `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
 
-Persisting the reading position uses the `useReadingPosition` composable together with the controlled props (`:spread-idx` + `@update:spread-idx`).
+Persisting the reading position uses the `useReadingPosition` composable together with the controlled props (`:spread-idx` + `@spread-idx-change`).
 
 ### MejiroPageView (Recommended)
 

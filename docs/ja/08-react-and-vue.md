@@ -350,7 +350,7 @@ function jump(): void {
 
 ソース指定は React 版と同じ3通り（`epub-url` / `epub` / 未指定で drop-zone）です。`MejiroReaderHandle` は React 版と同じシグネチャを公開しているため、メソッド一覧は [React 側の表](#mejiroreader-の-imperative-handle) を参照してください。Vue 版では `ref` の `.value` 経由で呼び出します。
 
-読書位置の永続化は `useReadingPosition` composable と controlled モード（`:spread-idx` + `@update:spread-idx`）の組み合わせで実装できます。
+読書位置の永続化は `useReadingPosition` composable と controlled モード（`:spread-idx` + `@spread-idx-change`）の組み合わせで実装できます。
 
 ### MejiroPageView（推奨）
 
