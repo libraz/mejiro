@@ -87,6 +87,26 @@ describe('prepareImage', () => {
     expect(result.mediaType).toBe('image/webp');
   });
 
+  it('prefers image magic bytes over a mismatched Blob.type', async () => {
+    const pngHeader = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const file = new Blob([pngHeader], { type: 'image/jpeg' });
+
+    const result = await prepareImage(file);
+
+    expect(result.mediaType).toBe('image/png');
+    expect(result.warnings.some((w) => /does not match image bytes/.test(w))).toBe(true);
+  });
+
+  it('warns when GIF input is flattened to a static image', async () => {
+    const gifHeader = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
+    const file = new Blob([gifHeader], { type: 'image/gif' });
+
+    const result = await prepareImage(file);
+
+    expect(result.mediaType).toBe('image/png');
+    expect(result.warnings.some((w) => /GIF animation is flattened/.test(w))).toBe(true);
+  });
+
   it('throws when createImageBitmap is unavailable', async () => {
     vi.stubGlobal('createImageBitmap', undefined);
     const file = new Blob([new Uint8Array(16)], { type: 'image/png' });
