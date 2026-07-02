@@ -93,7 +93,8 @@ export function MejiroChapterNav({
     <div className="mejiro-reader-chapter-nav">
       <select value={chapter} onChange={(e) => onChange(Number(e.target.value))}>
         {epub.chapters.map((ch, i) => (
-          <option key={ch.title ?? `chapter-${i}`} value={i}>
+          // biome-ignore lint/suspicious/noArrayIndexKey: chapter titles are not guaranteed unique
+          <option key={i} value={i}>
             {ch.title ?? format(messages.chapterN, { n: i + 1 })}
           </option>
         ))}
