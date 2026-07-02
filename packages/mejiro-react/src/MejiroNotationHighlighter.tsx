@@ -10,6 +10,7 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 
 /** Props for {@link MejiroNotationHighlighter}. */
@@ -51,6 +52,8 @@ export const MejiroNotationHighlighter = forwardRef<
     className,
     style,
     onScroll,
+    onCompositionStart,
+    onCompositionEnd,
     ...rest
   },
   ref: Ref<HTMLTextAreaElement>,
@@ -59,7 +62,14 @@ export const MejiroNotationHighlighter = forwardRef<
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useImperativeHandle(ref, () => textareaRef.current as HTMLTextAreaElement, []);
 
-  const segments = useMemo(() => buildSegments(value, dialect), [value, dialect]);
+  const [isComposing, setIsComposing] = useState(false);
+  const lastSegmentsRef = useRef<Segment[] | null>(null);
+  const segments = useMemo(() => {
+    if (isComposing && lastSegmentsRef.current) return lastSegmentsRef.current;
+    const next = buildSegments(value, dialect);
+    lastSegmentsRef.current = next;
+    return next;
+  }, [value, dialect, isComposing]);
 
   return (
     <div
@@ -93,6 +103,14 @@ export const MejiroNotationHighlighter = forwardRef<
         style={style}
         value={value}
         onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.target.value)}
+        onCompositionStart={(event) => {
+          setIsComposing(true);
+          onCompositionStart?.(event);
+        }}
+        onCompositionEnd={(event) => {
+          setIsComposing(false);
+          onCompositionEnd?.(event);
+        }}
         onScroll={(event) => {
           if (overlayRef.current) {
             overlayRef.current.scrollTop = event.currentTarget.scrollTop;

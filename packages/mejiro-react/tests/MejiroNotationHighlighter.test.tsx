@@ -31,4 +31,16 @@ describe('MejiroNotationHighlighter (React)', () => {
     fireEvent.change(ta, { target: { value: '《《圏点》》' } });
     expect(container.querySelector('[data-token="emphasis"]')?.textContent).toBe('《《圏点》》');
   });
+
+  it('keeps the previous highlight overlay during IME composition', () => {
+    const { container } = render(<Harness />);
+    const ta = container.querySelector('.mejiro-notation-textarea') as HTMLTextAreaElement;
+
+    fireEvent.compositionStart(ta);
+    fireEvent.change(ta, { target: { value: '《《圏点》》' } });
+    expect(container.querySelector('[data-token="emphasis"]')).toBeNull();
+
+    fireEvent.compositionEnd(ta);
+    expect(container.querySelector('[data-token="emphasis"]')?.textContent).toBe('《《圏点》》');
+  });
 });
