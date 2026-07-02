@@ -69,8 +69,12 @@ export interface KinsokuRules {
   lineStartProhibited: number[];
   /** Codepoints prohibited at the end of a line. */
   lineEndProhibited: number[];
+  /** Adjacent codepoint pairs that must not be split across lines. */
+  unbreakablePairs: Array<readonly [number, number]>;
   /** Pre-computed lookup set for lineStartProhibited. */
   lineStartProhibitedSet: Set<number>;
   /** Pre-computed lookup set for lineEndProhibited. */
   lineEndProhibitedSet: Set<number>;
+  /** Pre-computed lookup set for unbreakablePairs. */
+  unbreakablePairSet: Set<string>;
 }

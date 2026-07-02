@@ -8,6 +8,7 @@
   "expected": {
     "breakPoints": [10],
     "hangingAdjustments": [16],
+    "lines": ["あいうえおかきくけこ、", "さしすせそ"],
     "comment": "、 at index 10 hangs beyond line width"
   }
 }

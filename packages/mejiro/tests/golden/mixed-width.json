@@ -6,6 +6,7 @@
     "lineWidth": 80
   },
   "expected": {
-    "breakPoints": [7, 14]
+    "breakPoints": [7, 14],
+    "lines": ["Hello世界T", "est日本語A", "BC"]
   }
 }

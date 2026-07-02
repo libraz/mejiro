@@ -14,7 +14,7 @@ import { toCodepoints, uniformAdvances } from './helpers.js';
 function runGolden(fixture: {
   description: string;
   input: { text: string; advanceWidth?: number; advances?: number[]; lineWidth: number };
-  expected: { breakPoints: number[]; hangingAdjustments?: number[] };
+  expected: { breakPoints: number[]; hangingAdjustments?: number[]; lines?: string[] };
 }) {
   const text = toCodepoints(fixture.input.text);
   const advances = fixture.input.advances
@@ -28,6 +28,11 @@ function runGolden(fixture: {
   });
 
   expect([...result.breakPoints]).toEqual(fixture.expected.breakPoints);
+  if (fixture.expected.lines) {
+    expect(linesFromBreakPoints(fixture.input.text, result.breakPoints)).toEqual(
+      fixture.expected.lines,
+    );
+  }
 
   if (fixture.expected.hangingAdjustments) {
     expect(result.hangingAdjustments).toBeDefined();
@@ -35,6 +40,18 @@ function runGolden(fixture: {
       fixture.expected.hangingAdjustments,
     );
   }
+}
+
+function linesFromBreakPoints(text: string, breakPoints: Uint32Array): string[] {
+  const chars = [...text];
+  const lines: string[] = [];
+  let start = 0;
+  for (const breakPoint of breakPoints) {
+    lines.push(chars.slice(start, breakPoint + 1).join(''));
+    start = breakPoint + 1;
+  }
+  if (start < chars.length) lines.push(chars.slice(start).join(''));
+  return lines;
 }
 
 describe('golden tests', () => {
@@ -106,6 +123,45 @@ describe('edge cases', () => {
     });
     expect(result.hangingAdjustments).toBeUndefined();
   });
+
+  it('throws when advances length does not match text length', () => {
+    expect(() =>
+      computeBreaks({
+        text: toCodepoints('あいう'),
+        advances: uniformAdvances(2, 16),
+        lineWidth: 100,
+      }),
+    ).toThrow(/advances length/);
+  });
+
+  it('throws when clusterIds length does not match text length', () => {
+    expect(() =>
+      computeBreaks({
+        text: toCodepoints('あいう'),
+        advances: uniformAdvances(3, 16),
+        clusterIds: new Uint32Array([0, 1]),
+        lineWidth: 100,
+      }),
+    ).toThrow(/clusterIds length/);
+  });
+
+  it('throws for invalid line widths and advances', () => {
+    expect(() =>
+      computeBreaks({
+        text: toCodepoints('あ'),
+        advances: uniformAdvances(1, 16),
+        lineWidth: 0,
+      }),
+    ).toThrow(/lineWidth/);
+
+    expect(() =>
+      computeBreaks({
+        text: toCodepoints('あ'),
+        advances: new Float32Array([Number.NaN]),
+        lineWidth: 100,
+      }),
+    ).toThrow(/advances\[0\]/);
+  });
 });
 
 describe('trailing hanging punctuation', () => {
@@ -171,6 +227,18 @@ describe('tokenBoundaries support', () => {
     expect(result.breakPoints.length).toBeGreaterThan(0);
   });
 
+  it('does not treat a token boundary at line start as a preferred break', () => {
+    const text = toCodepoints('あいうえおか');
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 16),
+      lineWidth: 48,
+      tokenBoundaries: tokenLengthsToBoundaries([1, 5]),
+    });
+
+    expect([...result.breakPoints]).toEqual([2]);
+  });
+
   it('respects kinsoku even at token boundaries', () => {
     // "あいう「えお" tokens: "あいう"(3) + "「えお"(3)
     // lineWidth=48 fits 3 chars. Token boundary is at index 2, but index 3 is 「
@@ -201,6 +269,32 @@ describe('tokenBoundaries support', () => {
       lineWidth: 80,
     });
     expect(result.breakPoints.length).toBeGreaterThan(0);
+  });
+
+  it('prefers Latin whitespace over splitting the current word', () => {
+    const value = 'hello world';
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 80,
+    });
+
+    expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['hello ', 'world']);
+  });
+});
+
+describe('cluster-safe forced breaks', () => {
+  it('prefers a cluster-safe forced break over splitting the overflowing cluster', () => {
+    const text = toCodepoints('「「「「い');
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 16),
+      clusterIds: new Uint32Array([0, 1, 1, 2, 2]),
+      lineWidth: 64,
+    });
+
+    expect([...result.breakPoints]).toEqual([2]);
   });
 });
 
@@ -263,6 +357,32 @@ describe('canBreakAt', () => {
     });
     expect(canBreakAt(text, 0, undefined, 'strict', rules)).toBe(false); // next is B
     expect(canBreakAt(text, 1, undefined, 'strict', rules)).toBe(true); // next is C
+  });
+
+  it('disallows breaks inside custom unbreakable pairs', () => {
+    const text = toCodepoints('ABC');
+    const rules = buildKinsokuRules({
+      lineStartProhibited: [],
+      lineEndProhibited: [],
+      unbreakablePairs: [[0x41, 0x42]],
+    });
+    expect(canBreakAt(text, 0, undefined, 'strict', rules)).toBe(false);
+    expect(canBreakAt(text, 1, undefined, 'strict', rules)).toBe(true);
+  });
+});
+
+describe('hanging punctuation with kinsoku', () => {
+  it('does not hang a period when it would leave a closing bracket at line start', () => {
+    const text = toCodepoints('あいうえおかきく。」さ');
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 16),
+      lineWidth: 130,
+    });
+
+    expect([...result.breakPoints]).not.toContain(8);
+    expect([...result.breakPoints]).toEqual([6]);
+    expect(result.hangingAdjustments ? [...result.hangingAdjustments] : undefined).toEqual([0]);
   });
 });
 

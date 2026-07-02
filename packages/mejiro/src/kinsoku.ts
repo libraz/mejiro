@@ -12,11 +12,22 @@ const STRICT_LINE_START_PROHIBITED = new Set([
   0xff1b, // ；
   0xff1f, // ？
   0xff01, // ！
+  0x2025, // ‥
+  0x2026, // …
+  0x301c, // 〜
+  0x2014, // —
+  0x2015, // ―
+  0x2019, // ’
+  0x201d, // ”
   0x30fc, // ー
   0xff09, // ）
+  0x3017, // 〗
+  0x3019, // 〙
+  0x301b, // 〛
   0x3015, // 〕
   0xff3d, // ］
   0xff5d, // ｝
+  0x301f, // 〟
   0x3009, // 〉
   0x300b, // 》
   0x300d, // 」
@@ -33,6 +44,8 @@ const STRICT_LINE_START_PROHIBITED = new Set([
   0x3085, // ゅ
   0x3087, // ょ
   0x308e, // ゎ
+  0x3095, // ゕ
+  0x3096, // ゖ
   0x30a1, // ァ
   0x30a3, // ィ
   0x30a5, // ゥ
@@ -43,6 +56,8 @@ const STRICT_LINE_START_PROHIBITED = new Set([
   0x30e5, // ュ
   0x30e7, // ョ
   0x30ee, // ヮ
+  0x30f5, // ヵ
+  0x30f6, // ヶ
   // Iteration marks
   0x3005, // 々
   0x303b, // 〻
@@ -75,6 +90,8 @@ const LOOSE_LINE_START_EXCLUSIONS = new Set([
   0x30e5,
   0x30e7,
   0x30ee, // ッャュョヮ
+  0x30f5,
+  0x30f6, // ヵヶ
   // Long vowel mark
   0x30fc, // ー
 ]);
@@ -82,15 +99,31 @@ const LOOSE_LINE_START_EXCLUSIONS = new Set([
 /** Characters prohibited at the end of a line (same for strict and loose). */
 const LINE_END_PROHIBITED = new Set([
   0xff08, // （
+  0x3016, // 〖
+  0x3018, // 〘
+  0x301a, // 〚
   0x3014, // 〔
   0xff3b, // ［
   0xff5b, // ｛
+  0x301d, // 〝
+  0x2018, // ‘
+  0x201c, // “
   0x3008, // 〈
   0x300a, // 《
   0x300c, // 「
   0x300e, // 『
   0x3010, // 【
 ]);
+
+/** Adjacent pairs that should be kept together. */
+const UNBREAKABLE_PAIRS: Array<readonly [number, number]> = [
+  [0x2025, 0x2025], // ‥‥
+  [0x2026, 0x2026], // ……
+  [0x2014, 0x2014], // ——
+  [0x2015, 0x2015], // ――
+];
+
+const pairKey = (left: number, right: number): string => `${left}:${right}`;
 
 /**
  * Returns whether the given codepoint is prohibited at the start of a line.
@@ -120,12 +153,29 @@ export function isLineEndProhibited(codepoint: number, rules?: KinsokuRules): bo
 }
 
 /**
+ * Returns whether a break between adjacent codepoints is prohibited by pair rules.
+ * @param left - Codepoint before the proposed line break.
+ * @param right - Codepoint after the proposed line break.
+ * @param rules - Optional custom kinsoku rules. When provided, uses rules instead of defaults.
+ */
+export function isUnbreakablePair(left: number, right: number, rules?: KinsokuRules): boolean {
+  const key = pairKey(left, right);
+  if (rules) return rules.unbreakablePairSet.has(key);
+  return DEFAULT_UNBREAKABLE_PAIR_SET.has(key);
+}
+
+const DEFAULT_UNBREAKABLE_PAIR_SET = new Set(
+  UNBREAKABLE_PAIRS.map(([left, right]) => pairKey(left, right)),
+);
+
+/**
  * Returns a copy of the default strict kinsoku rules.
  */
 export function getDefaultKinsokuRules(): KinsokuRules {
   return buildKinsokuRules({
     lineStartProhibited: [...STRICT_LINE_START_PROHIBITED],
     lineEndProhibited: [...LINE_END_PROHIBITED],
+    unbreakablePairs: [...UNBREAKABLE_PAIRS],
   });
 }
 
@@ -137,10 +187,14 @@ export function getDefaultKinsokuRules(): KinsokuRules {
 export function buildKinsokuRules(raw: {
   lineStartProhibited: number[];
   lineEndProhibited: number[];
+  unbreakablePairs?: Array<readonly [number, number]>;
 }): KinsokuRules {
+  const unbreakablePairs = raw.unbreakablePairs ?? [];
   return {
     ...raw,
+    unbreakablePairs,
     lineStartProhibitedSet: new Set(raw.lineStartProhibited),
     lineEndProhibitedSet: new Set(raw.lineEndProhibited),
+    unbreakablePairSet: new Set(unbreakablePairs.map(([left, right]) => pairKey(left, right))),
   };
 }

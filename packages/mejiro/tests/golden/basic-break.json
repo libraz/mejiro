@@ -6,6 +6,7 @@
     "lineWidth": 160
   },
   "expected": {
-    "breakPoints": [9]
+    "breakPoints": [9],
+    "lines": ["あいうえおかきくけこ", "さしすせそたちつてと"]
   }
 }

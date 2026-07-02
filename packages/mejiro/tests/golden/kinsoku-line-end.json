@@ -7,6 +7,7 @@
   },
   "expected": {
     "breakPoints": [8],
+    "lines": ["あいうえおかきくけ", "「さしすせそ"],
     "comment": "Break at index 8 (before 「) because 「 is line-end prohibited"
   }
 }

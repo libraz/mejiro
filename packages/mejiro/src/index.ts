@@ -20,6 +20,7 @@ export {
   getDefaultKinsokuRules,
   isLineEndProhibited,
   isLineStartProhibited,
+  isUnbreakablePair,
 } from './kinsoku.js';
 export { canBreakAt, computeBreaks } from './layout.js';
 export type { ManuscriptToken, ManuscriptTokenKind } from './manuscript-tokens.js';

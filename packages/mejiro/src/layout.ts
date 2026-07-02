@@ -1,6 +1,6 @@
 import { isClusterBreakAllowed } from './cluster.js';
 import { isHangingTarget } from './hanging.js';
-import { isLineEndProhibited, isLineStartProhibited } from './kinsoku.js';
+import { isLineEndProhibited, isLineStartProhibited, isUnbreakablePair } from './kinsoku.js';
 import { preprocessRuby } from './ruby.js';
 import type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
 
@@ -16,6 +16,7 @@ const LINE_FEED = 10;
  * @returns Break points and optional hanging adjustments.
  */
 export function computeBreaks(input: LayoutInput): BreakResult {
+  validateLayoutInput(input);
   const {
     text,
     lineWidth: defaultLineWidth,
@@ -82,7 +83,12 @@ export function computeBreaks(input: LayoutInput): BreakResult {
 
     if (accWidth > lineWidth && i > lineStart) {
       // Allow hanging punctuation to protrude beyond line width
-      if (enableHanging && isHangingTarget(text[i]) && accWidth - adv[i] <= lineWidth) {
+      if (
+        enableHanging &&
+        isHangingTarget(text[i]) &&
+        accWidth - adv[i] <= lineWidth &&
+        canBreakAt(text, i, clusterIds, mode, kinsokuRules)
+      ) {
         // Skip break at the very last character — no content follows it
         if (i < len - 1) {
           breaks.push(i);
@@ -99,27 +105,45 @@ export function computeBreaks(input: LayoutInput): BreakResult {
       // When token boundaries are provided, prefer breaking at token edges.
       let breakPos = i - 1;
       let fallbackPos = -1;
+      let whitespacePos = -1;
+      let clusterSafePos = -1;
+      let foundTokenBoundary = false;
       if (tokenBoundarySet) {
         while (breakPos > lineStart) {
+          if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, breakPos, text.length)) {
+            clusterSafePos = breakPos;
+          }
           if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
-            if (tokenBoundarySet.has(breakPos)) break;
+            if (tokenBoundarySet.has(breakPos)) {
+              foundTokenBoundary = true;
+              break;
+            }
+            if (whitespacePos < 0 && isWhitespace(text[breakPos])) whitespacePos = breakPos;
             if (fallbackPos < 0) fallbackPos = breakPos;
           }
           breakPos--;
         }
         // No token boundary found — use first kinsoku-valid position
-        if (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
-          breakPos = fallbackPos;
-        } else if (breakPos === lineStart && !tokenBoundarySet.has(breakPos) && fallbackPos >= 0) {
-          breakPos = fallbackPos;
+        if (!foundTokenBoundary) {
+          if (whitespacePos >= 0) breakPos = whitespacePos;
+          else if (fallbackPos >= 0) breakPos = fallbackPos;
         }
       } else {
         while (breakPos > lineStart) {
+          if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, breakPos, text.length)) {
+            clusterSafePos = breakPos;
+          }
           if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
-            break;
+            if (isWhitespace(text[breakPos])) {
+              whitespacePos = breakPos;
+              break;
+            }
+            if (fallbackPos < 0) fallbackPos = breakPos;
           }
           breakPos--;
         }
+        if (whitespacePos >= 0) breakPos = whitespacePos;
+        else if (fallbackPos >= 0) breakPos = fallbackPos;
       }
 
       // Force break if no valid candidate was found
@@ -127,7 +151,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         breakPos < 0 ||
         (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules))
       ) {
-        breakPos = i - 1;
+        breakPos = clusterSafePos >= lineStart ? clusterSafePos : i - 1;
       }
 
       breaks.push(breakPos);
@@ -157,6 +181,39 @@ export function computeBreaks(input: LayoutInput): BreakResult {
   };
 }
 
+function isWhitespace(codepoint: number): boolean {
+  return codepoint === 0x20 || codepoint === 0x09;
+}
+
+function validateLayoutInput(input: LayoutInput): void {
+  const len = input.text.length;
+  if (input.advances.length !== len) {
+    throw new RangeError(
+      `computeBreaks: advances length (${input.advances.length}) must match text length (${len})`,
+    );
+  }
+  if (input.clusterIds && input.clusterIds.length !== len) {
+    throw new RangeError(
+      `computeBreaks: clusterIds length (${input.clusterIds.length}) must match text length (${len})`,
+    );
+  }
+  if (!Number.isFinite(input.lineWidth) || input.lineWidth <= 0) {
+    throw new RangeError('computeBreaks: lineWidth must be a positive finite number');
+  }
+  if (input.lineWidths) {
+    for (let i = 0; i < input.lineWidths.length; i++) {
+      if (!Number.isFinite(input.lineWidths[i]) || input.lineWidths[i] <= 0) {
+        throw new RangeError(`computeBreaks: lineWidths[${i}] must be a positive finite number`);
+      }
+    }
+  }
+  for (let i = 0; i < input.advances.length; i++) {
+    if (!Number.isFinite(input.advances[i]) || input.advances[i] < 0) {
+      throw new RangeError(`computeBreaks: advances[${i}] must be a finite non-negative number`);
+    }
+  }
+}
+
 /**
  * Determines whether a line break is allowed after position `pos`.
  *
@@ -184,6 +241,10 @@ export function canBreakAt(
   }
   // Line-start prohibition: cannot break if next char is prohibited at line start
   if (pos + 1 < text.length && isLineStartProhibited(text[pos + 1], mode, rules)) {
+    return false;
+  }
+  // Pair prohibition: cannot split inseparable adjacent punctuation pairs
+  if (pos + 1 < text.length && isUnbreakablePair(text[pos], text[pos + 1], rules)) {
     return false;
   }
   return true;
