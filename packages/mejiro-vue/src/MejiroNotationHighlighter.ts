@@ -8,6 +8,7 @@ import { computed, defineComponent, h, type PropType, ref } from 'vue';
  */
 export const MejiroNotationHighlighter = defineComponent({
   name: 'MejiroNotationHighlighter',
+  inheritAttrs: false,
   props: {
     /** Source manuscript text. */
     modelValue: { type: String, required: true },
@@ -21,7 +22,7 @@ export const MejiroNotationHighlighter = defineComponent({
     placeholder: { type: String, default: undefined },
   },
   emits: ['update:modelValue'],
-  setup(props, { emit }) {
+  setup(props, { attrs, emit }) {
     const overlayRef = ref<HTMLDivElement | null>(null);
     const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
@@ -46,6 +47,16 @@ export const MejiroNotationHighlighter = defineComponent({
       if (out.length === 0) out.push({ key: 'empty', text: props.modelValue });
       return out;
     });
+
+    function callAttrHandler(handler: unknown, event: Event): void {
+      if (Array.isArray(handler)) {
+        for (const fn of handler) callAttrHandler(fn, event);
+        return;
+      }
+      if (typeof handler === 'function') {
+        (handler as (event: Event) => void)(event);
+      }
+    }
 
     return () =>
       h(
@@ -79,13 +90,17 @@ export const MejiroNotationHighlighter = defineComponent({
             ],
           ),
           h('textarea', {
+            ...attrs,
             ref: textareaRef,
-            class: ['mejiro-notation-textarea', props.textareaClass].filter(Boolean).join(' '),
+            class: ['mejiro-notation-textarea', props.textareaClass, attrs.class]
+              .filter(Boolean)
+              .join(' '),
             value: props.modelValue,
             placeholder: props.placeholder,
             spellcheck: false,
             onInput: (event: Event) => {
               emit('update:modelValue', (event.target as HTMLTextAreaElement).value);
+              callAttrHandler(attrs.onInput, event);
             },
             onScroll: (event: Event) => {
               if (overlayRef.value) {
@@ -93,6 +108,7 @@ export const MejiroNotationHighlighter = defineComponent({
                 overlayRef.value.scrollTop = t.scrollTop;
                 overlayRef.value.scrollLeft = t.scrollLeft;
               }
+              callAttrHandler(attrs.onScroll, event);
             },
           }),
         ],
