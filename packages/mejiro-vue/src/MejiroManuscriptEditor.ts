@@ -142,6 +142,8 @@ export const MejiroManuscriptEditor = defineComponent({
         : [defaultChapter(messages.value)],
       onAutosave: props.onAutosave,
       autosaveDelay: props.autosaveDelay,
+      defaultChapterTitle: (index) =>
+        format(messages.value.manuscriptDefaultChapterTitle, { n: index + 1 }),
     });
     const chapters = draft.chapters;
     const selected = draft.selected;

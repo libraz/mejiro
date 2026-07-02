@@ -24,6 +24,10 @@ export interface UseEpubProjectOptions {
   assetResolver?: AssetResolver;
   onPreview?: (book: EpubBook) => void;
   onExport?: (buffer: ArrayBuffer) => void;
+  /** Creates the default title for a generated chapter. */
+  defaultChapterTitle?: (index: number) => string;
+  /** Creates the default body for a generated chapter. */
+  defaultChapterBody?: (index: number) => string;
 }
 
 export interface UseEpubProjectReturn {
@@ -47,13 +51,15 @@ export interface UseEpubProjectReturn {
 
 /** Vue composable for custom manuscript-to-EPUB authoring UIs. */
 export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProjectReturn {
+  const defaultTitle = options.defaultChapterTitle;
+  const defaultBody = options.defaultChapterBody;
   const metadata = ref<EpubProjectMetadata>({
     title: '新しい作品',
     language: 'ja',
     ...options.metadata,
   });
   const chapters = ref<EpubProjectChapterDraft[]>(
-    options.chapters?.length ? options.chapters : [defaultChapter(0)],
+    options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
   );
   const selectedChapter = ref(0);
   const previewBook = shallowRef<EpubBook | null>(null);
@@ -116,7 +122,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
 
   function setChapters(next: EpubProjectChapterDraft[]): void {
     const selectedId = chapters.value[selectedChapter.value]?.id;
-    chapters.value = next.length ? next : [defaultChapter(0)];
+    chapters.value = next.length ? next : [defaultChapter(0, defaultTitle, defaultBody)];
     const nextIndex = selectedId
       ? chapters.value.findIndex((chapter) => chapter.id === selectedId)
       : -1;
@@ -137,7 +143,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   }
 
   function addChapter(chapter: Partial<EpubProjectChapterDraft> = {}): void {
-    const generated = defaultChapter(chapters.value.length);
+    const generated = defaultChapter(chapters.value.length, defaultTitle, defaultBody);
     chapters.value = [
       ...chapters.value,
       {
@@ -207,10 +213,15 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   };
 }
 
-function defaultChapter(index: number): EpubProjectChapterDraft {
+function defaultChapter(
+  index: number,
+  titleFor: (index: number) => string = (i) => (i === 0 ? '第一話' : `第${i + 1}話`),
+  bodyFor: (index: number) => string = (i) =>
+    i === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
+): EpubProjectChapterDraft {
   return {
     id: `chapter-${Date.now()}-${index}`,
-    title: index === 0 ? '第一話' : `第${index + 1}話`,
-    body: index === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
+    title: titleFor(index),
+    body: bodyFor(index),
   };
 }

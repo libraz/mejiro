@@ -12,6 +12,10 @@ export interface UseManuscriptDraftOptions {
   onAutosave?: (chapters: ManuscriptEditorChapter[]) => void | Promise<void>;
   /** Debounce delay in milliseconds. @defaultValue 800 */
   autosaveDelay?: number;
+  /** Creates the default title for a generated chapter. */
+  defaultChapterTitle?: (index: number) => string;
+  /** Creates the default body for a generated chapter. */
+  defaultChapterBody?: (index: number) => string;
 }
 
 /** Return value of {@link useManuscriptDraft}. */
@@ -28,8 +32,12 @@ export interface UseManuscriptDraftReturn {
 
 const DEFAULT_DELAY = 800;
 
-function defaultChapter(index: number): ManuscriptEditorChapter {
-  return { id: `chapter-${Date.now()}-${index}`, title: `第${index + 1}話`, body: '' };
+function defaultChapter(
+  index: number,
+  titleFor: (index: number) => string = (i) => `第${i + 1}話`,
+  bodyFor: (index: number) => string = () => '',
+): ManuscriptEditorChapter {
+  return { id: `chapter-${Date.now()}-${index}`, title: titleFor(index), body: bodyFor(index) };
 }
 
 /**
@@ -40,8 +48,12 @@ export function useManuscriptDraft(
   options: UseManuscriptDraftOptions = {},
 ): UseManuscriptDraftReturn {
   const autosaveDelay = options.autosaveDelay ?? DEFAULT_DELAY;
+  const titleFor = options.defaultChapterTitle;
+  const bodyFor = options.defaultChapterBody;
   const chapters = ref<ManuscriptEditorChapter[]>(
-    options.initialChapters?.length ? [...options.initialChapters] : [defaultChapter(0)],
+    options.initialChapters?.length
+      ? [...options.initialChapters]
+      : [defaultChapter(0, titleFor, bodyFor)],
   );
   const selected = ref(0);
 
@@ -65,7 +77,7 @@ export function useManuscriptDraft(
 
   function setChapters(next: ManuscriptEditorChapter[]): void {
     const selectedId = chapters.value[selected.value]?.id;
-    chapters.value = next.length ? next : [defaultChapter(0)];
+    chapters.value = next.length ? next : [defaultChapter(0, titleFor, bodyFor)];
     const nextIndex = selectedId
       ? chapters.value.findIndex((chapter) => chapter.id === selectedId)
       : -1;
@@ -81,7 +93,7 @@ export function useManuscriptDraft(
     );
   }
   function addChapter(chapter: Partial<ManuscriptEditorChapter> = {}): void {
-    const generated = defaultChapter(chapters.value.length);
+    const generated = defaultChapter(chapters.value.length, titleFor, bodyFor);
     chapters.value = [
       ...chapters.value,
       {

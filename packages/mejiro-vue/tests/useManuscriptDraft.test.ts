@@ -78,6 +78,30 @@ describe('useManuscriptDraft (Vue)', () => {
     expect(second.body).toBe('');
   });
 
+  it('uses custom default chapter copy for generated chapters', () => {
+    const { result } = harness(() =>
+      useManuscriptDraft({
+        defaultChapterTitle: (index) => `Episode ${index + 1}`,
+        defaultChapterBody: (index) => `Body ${index + 1}`,
+      }),
+    );
+
+    expect(result.current.chapters.value[0]).toMatchObject({
+      title: 'Episode 1',
+      body: 'Body 1',
+    });
+    result.current.addChapter();
+    expect(result.current.chapters.value[1]).toMatchObject({
+      title: 'Episode 2',
+      body: 'Body 2',
+    });
+    result.current.setChapters([]);
+    expect(result.current.chapters.value[0]).toMatchObject({
+      title: 'Episode 1',
+      body: 'Body 1',
+    });
+  });
+
   it('debounces and fires onAutosave', async () => {
     vi.useFakeTimers();
     const save = vi.fn();
