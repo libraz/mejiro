@@ -37,6 +37,15 @@ export type { ImageOverlayRect } from './overlay.js';
 export { moveImageOverlayRect, resizeImageOverlayRect } from './overlay.js';
 export type { PageSlice, ParagraphMeasure } from './paginate.js';
 export { getLineRanges, paginate } from './paginate.js';
+export type { Annotation, MejiroStorage, ReadingPositionValue } from './persistence.js';
+export {
+  createAnnotationId,
+  parseAnnotations,
+  parseReadingPosition,
+  serializeAnnotations,
+  serializeReadingPosition,
+  sortAnnotations,
+} from './persistence.js';
 export type { RubyAnnotation, RubyPreprocessResult, RubyType } from './ruby.js';
 export { isKana, preprocessRuby } from './ruby.js';
 export { formatDialogueLineBreaks, normalizeText, toCodepoints } from './text.js';
