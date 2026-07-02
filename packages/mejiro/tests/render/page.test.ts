@@ -50,7 +50,7 @@ describe('buildRenderPage', () => {
     const page = buildRenderPage(slices, entries);
 
     expect(page.paragraphs[0].isHeading).toBe(true);
-    expect(page.paragraphs[0].headingLevel).toBe(1);
+    expect(page.paragraphs[0].headingLevel).toBeUndefined();
   });
 
   it('handles ruby annotations', () => {
@@ -131,8 +131,64 @@ describe('buildRenderPage', () => {
     expect(page.paragraphs[0].lines[0].segments).toEqual([{ type: 'text', text: '漢字です' }]);
   });
 
+  it('renders unsafe links as plain text', () => {
+    const entries = [
+      makeEntry('unsafe', [], false, [
+        { kind: 'link', startIndex: 0, endIndex: 6, href: 'javascript:alert(1)' },
+      ]),
+    ];
+    const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
+
+    const page = buildRenderPage(slices, entries);
+
+    expect(page.paragraphs[0].lines[0].segments).toEqual([{ type: 'text', text: 'unsafe' }]);
+  });
+
+  it('preserves contained annotations such as ruby inside links', () => {
+    const entries = [
+      makeEntry('漢字', [], false, [
+        { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+      ]),
+    ];
+    const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
+
+    const page = buildRenderPage(slices, entries);
+
+    expect(page.paragraphs[0].lines[0].segments).toEqual([
+      {
+        type: 'link',
+        text: '漢字',
+        href: 'https://example.test',
+        children: [{ type: 'ruby', base: '漢字', rubyText: 'かんじ' }],
+      },
+    ]);
+  });
+
+  it('does not hang on zero-length annotations', () => {
+    const entries = [
+      makeEntry('本文', [], false, [
+        { kind: 'emphasis', startIndex: 1, endIndex: 1, style: 'sesame' },
+      ]),
+    ];
+    const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
+
+    const page = buildRenderPage(slices, entries);
+
+    expect(page.paragraphs[0].lines[0].segments).toEqual([{ type: 'text', text: '本文' }]);
+  });
+
   it('returns empty paragraphs for empty slices', () => {
     const page = buildRenderPage([], []);
     expect(page.paragraphs).toEqual([]);
+  });
+
+  it('renders an empty paragraph slice without throwing', () => {
+    const entries = [makeEntry('', [])];
+    const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
+
+    const page = buildRenderPage(slices, entries);
+
+    expect(page.paragraphs[0].lines).toEqual([{ segments: [] }]);
   });
 });

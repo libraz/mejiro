@@ -1,6 +1,8 @@
 import type { InlineAnnotation } from '../browser/types.js';
 import type { PageSlice } from '../paginate.js';
 import { getLineRanges } from '../paginate.js';
+import { sanitizeUrl } from '../url.js';
+import { buildInlineNodes, type InlineNode } from './inline-tree.js';
 import type { RenderEntry, RenderLine, RenderPage, RenderSegment } from './types.js';
 
 /**
@@ -22,74 +24,42 @@ function buildLineSegments(
   lineStart: number,
   lineEnd: number,
 ): RenderSegment[] {
-  const annMap = new Map<number, InlineAnnotation>();
-  const annSkip = new Set<number>();
-
-  for (const ann of annotations) {
-    // Jukugo ruby is a span hint for the line breaker — the renderer emits
-    // the per-segment ruby variants that pair with it instead.
-    if (ann.kind === 'ruby' && ann.type === 'jukugo') continue;
-    if (ann.startIndex >= lineStart && ann.startIndex < lineEnd) {
-      annMap.set(ann.startIndex, ann);
-      for (let i = ann.startIndex + 1; i < ann.endIndex && i < lineEnd; i++) {
-        annSkip.add(i);
-      }
-    }
-  }
-
-  const segments: RenderSegment[] = [];
-  let textBuffer = '';
-  let pos = lineStart;
-
-  function flushText(): void {
-    if (textBuffer) {
-      segments.push({ type: 'text', text: textBuffer });
-      textBuffer = '';
-    }
-  }
-
-  while (pos < lineEnd) {
-    if (annSkip.has(pos)) {
-      pos++;
-      continue;
-    }
-
-    const ann = annMap.get(pos);
-    if (ann) {
-      flushText();
-      const baseEnd = Math.min(ann.endIndex, lineEnd);
-      const base = chars.slice(pos, baseEnd).join('');
-      segments.push(toSegment(ann, base));
-      pos = baseEnd;
-    } else {
-      if (chars[pos] !== '\n') textBuffer += chars[pos];
-      pos++;
-    }
-  }
-
-  flushText();
-  return segments;
+  return buildInlineNodes(chars, annotations, lineStart, lineEnd).map(nodeToSegment);
 }
 
-function toSegment(ann: InlineAnnotation, text: string): RenderSegment {
-  switch (ann.kind) {
+function nodeToSegment(node: InlineNode): RenderSegment {
+  switch (node.type) {
+    case 'text':
+      return { type: 'text', text: node.text.replaceAll('\n', '') };
     case 'ruby':
-      return { type: 'ruby', base: text, rubyText: ann.rubyText };
+      return { type: 'ruby', base: node.base, rubyText: node.rubyText, children: children(node) };
     case 'emphasis':
-      return { type: 'emphasis', text, style: ann.style ?? 'sesame' };
+      return { type: 'emphasis', text: node.text, style: node.style, children: children(node) };
     case 'tcy':
-      return { type: 'tcy', text };
+      return { type: 'tcy', text: node.text, children: children(node) };
     case 'em':
-      return { type: 'em', text };
+      return { type: 'em', text: node.text, children: children(node) };
     case 'strong':
-      return { type: 'strong', text };
-    case 'link':
-      return ann.title != null
-        ? { type: 'link', text, href: ann.href, title: ann.title }
-        : { type: 'link', text, href: ann.href };
-    case 'footnote':
-      return { type: 'footnote-ref', text, noteId: ann.noteId };
+      return { type: 'strong', text: node.text, children: children(node) };
+    case 'link': {
+      const href = sanitizeUrl(node.href);
+      if (!href) return { type: 'text', text: node.text };
+      return node.title != null
+        ? { type: 'link', text: node.text, href, title: node.title, children: children(node) }
+        : { type: 'link', text: node.text, href, children: children(node) };
+    }
+    case 'footnote-ref':
+      return {
+        type: 'footnote-ref',
+        text: node.text,
+        noteId: node.noteId,
+        children: children(node),
+      };
   }
+}
+
+function children(node: Exclude<InlineNode, { type: 'text' }>): RenderSegment[] | undefined {
+  return node.children.length > 0 ? node.children.map(nodeToSegment) : undefined;
 }
 
 /**
@@ -107,18 +77,19 @@ export function buildRenderPage(slices: PageSlice[], entries: RenderEntry[]): Re
   const paragraphs = slices.map((slice) => {
     const entry = entries[slice.paragraphIndex];
     const lineRanges = getLineRanges(entry.breakPoints, entry.chars.length);
+    const safeLineRanges = lineRanges.length > 0 ? lineRanges : ([[0, 0]] as [number, number][]);
 
     const lines: RenderLine[] = [];
     for (let li = slice.lineStart; li < slice.lineEnd; li++) {
-      const [charStart, rawCharEnd] = lineRanges[li];
+      const [charStart, rawCharEnd] = safeLineRanges[li] ?? [0, 0];
       const charEnd = entry.chars[rawCharEnd - 1] === '\n' ? rawCharEnd - 1 : rawCharEnd;
       lines.push({
         segments: buildLineSegments(entry.chars, entry.inlineAnnotations, charStart, charEnd),
       });
     }
 
-    const headingLevel = entry.headingLevel ?? (entry.isHeading ? 1 : undefined);
-    return { lines, isHeading: headingLevel != null, headingLevel };
+    const headingLevel = entry.headingLevel;
+    return { lines, isHeading: headingLevel != null || entry.isHeading === true, headingLevel };
   });
 
   return { paragraphs };

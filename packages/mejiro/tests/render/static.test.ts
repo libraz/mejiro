@@ -25,11 +25,36 @@ describe('renderEpubStatic', () => {
     expect(html).not.toContain('<evil>');
   });
 
+  it('renders explicit newlines as line breaks instead of spaces', () => {
+    const html = renderEpubStatic({
+      paragraphs: [paragraph('一行目\n二行目')],
+    });
+
+    expect(html).toContain('一行目<br />二行目');
+  });
+
   it('renders heading paragraphs with per-level classes', () => {
     const html = renderEpubStatic({
       paragraphs: [paragraph('Title', { headingLevel: 1, kind: 'heading' })],
     });
     expect(html).toContain('mejiro-paragraph--h1');
+  });
+
+  it('renders structural paragraph kind classes using CSS-friendly names', () => {
+    const html = renderEpubStatic({
+      paragraphs: [
+        paragraph('quote', { kind: 'blockquote' }),
+        paragraph('* * *', { kind: 'sceneBreak' }),
+        paragraph('code', { kind: 'pre' }),
+        paragraph('caption', { kind: 'figure' }),
+      ],
+    });
+
+    expect(html).toContain('mejiro-paragraph--blockquote');
+    expect(html).toContain('mejiro-paragraph--scene-break');
+    expect(html).toContain('mejiro-paragraph--pre');
+    expect(html).toContain('mejiro-paragraph--figure');
+    expect(html).not.toContain('mejiro-paragraph--sceneBreak');
   });
 
   it('renders inline annotations (ruby / emphasis / tcy / em / strong / link / footnote)', () => {
@@ -55,6 +80,35 @@ describe('renderEpubStatic', () => {
     expect(html).toContain('<strong>d</strong>');
     expect(html).toContain('<a href="/x">e</a>');
     expect(html).toContain('class="mejiro-footnote-ref"');
+  });
+
+  it('does not render unsafe link schemes', () => {
+    const html = renderEpubStatic({
+      paragraphs: [
+        paragraph('unsafe', {
+          inlineAnnotations: [{ kind: 'link', startIndex: 0, endIndex: 6, href: 'javascript:x' }],
+        }),
+      ],
+    });
+
+    expect(html).toContain('>unsafe</div>');
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('javascript:');
+  });
+
+  it('renders contained annotations such as ruby inside links', () => {
+    const html = renderEpubStatic({
+      paragraphs: [
+        paragraph('漢字', {
+          inlineAnnotations: [
+            { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+            { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+          ],
+        }),
+      ],
+    });
+
+    expect(html).toContain('<a href="https://example.test"><ruby>漢字<rt>かんじ</rt></ruby></a>');
   });
 
   it('honors tag and ariaLabel options', () => {

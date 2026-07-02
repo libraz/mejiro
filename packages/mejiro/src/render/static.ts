@@ -1,5 +1,7 @@
 import type { BookParagraph, ParagraphKind } from '../book/types.js';
 import type { InlineAnnotation } from '../browser/types.js';
+import { sanitizeUrl } from '../url.js';
+import { buildInlineNodes, type InlineNode } from './inline-tree.js';
 
 /** Options for {@link renderEpubStatic}. */
 export interface RenderEpubStaticOptions {
@@ -56,56 +58,57 @@ function paragraphClass(kind: ParagraphKind | undefined, headingLevel?: number):
   } else if (kind === 'heading') {
     parts.push('mejiro-paragraph--heading');
   } else if (kind && kind !== 'body') {
-    parts.push(`mejiro-paragraph--${kind}`);
+    parts.push(`mejiro-paragraph--${paragraphKindClass(kind)}`);
   }
   return parts.join(' ');
 }
 
-function renderInline(text: string, annotations: readonly InlineAnnotation[]): string {
-  if (annotations.length === 0) return escapeHtml(text);
-  // Sort by startIndex so we can walk the codepoint stream in order.
-  const sorted = [...annotations].sort((a, b) => a.startIndex - b.startIndex);
-  const chars = [...text];
-  let cursor = 0;
-  const out: string[] = [];
-  for (const ann of sorted) {
-    if (ann.startIndex < cursor) continue; // overlap — skip to keep behaviour deterministic
-    if (ann.startIndex > cursor) {
-      out.push(escapeHtml(chars.slice(cursor, ann.startIndex).join('')));
-    }
-    const baseText = chars.slice(ann.startIndex, ann.endIndex).join('');
-    out.push(renderAnnotation(ann, baseText));
-    cursor = ann.endIndex;
-  }
-  if (cursor < chars.length) {
-    out.push(escapeHtml(chars.slice(cursor).join('')));
-  }
-  return out.join('');
+function paragraphKindClass(kind: Exclude<ParagraphKind, 'body' | 'heading'>): string {
+  return kind.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
 }
 
-function renderAnnotation(ann: InlineAnnotation, baseText: string): string {
-  switch (ann.kind) {
+function renderInline(text: string, annotations: readonly InlineAnnotation[]): string {
+  const chars = [...text];
+  return buildInlineNodes(chars, annotations).map(renderInlineNode).join('');
+}
+
+function renderInlineNode(node: InlineNode): string {
+  switch (node.type) {
+    case 'text':
+      return escapeText(node.text);
     case 'ruby':
-      return `<ruby>${escapeHtml(baseText)}<rt>${escapeHtml(ann.rubyText)}</rt></ruby>`;
+      return `<ruby>${renderChildren(node)}<rt>${escapeHtml(node.rubyText)}</rt></ruby>`;
     case 'emphasis': {
-      const style = ann.style ?? 'sesame';
-      return `<span class="mejiro-emphasis mejiro-emphasis--${escapeAttr(style)}">${escapeHtml(
-        baseText,
-      )}</span>`;
+      return `<span class="mejiro-emphasis mejiro-emphasis--${escapeAttr(
+        node.style,
+      )}">${renderChildren(node)}</span>`;
     }
     case 'tcy':
-      return `<span class="mejiro-tcy">${escapeHtml(baseText)}</span>`;
+      return `<span class="mejiro-tcy">${renderChildren(node)}</span>`;
     case 'em':
-      return `<em>${escapeHtml(baseText)}</em>`;
+      return `<em>${renderChildren(node)}</em>`;
     case 'strong':
-      return `<strong>${escapeHtml(baseText)}</strong>`;
+      return `<strong>${renderChildren(node)}</strong>`;
     case 'link': {
-      const title = ann.title ? ` title="${escapeAttr(ann.title)}"` : '';
-      return `<a href="${escapeAttr(ann.href)}"${title}>${escapeHtml(baseText)}</a>`;
+      const href = sanitizeUrl(node.href);
+      if (!href) return escapeHtml(node.text);
+      const title = node.title ? ` title="${escapeAttr(node.title)}"` : '';
+      return `<a href="${escapeAttr(href)}"${title}>${renderChildren(node)}</a>`;
     }
-    case 'footnote':
-      return `<a class="mejiro-footnote-ref" href="#${escapeAttr(ann.noteId)}">${escapeHtml(baseText)}</a>`;
+    case 'footnote-ref':
+      return `<a class="mejiro-footnote-ref" href="#${escapeAttr(node.noteId)}">${renderChildren(
+        node,
+      )}</a>`;
   }
+}
+
+function renderChildren(node: Exclude<InlineNode, { type: 'text' }>): string {
+  if (node.children.length > 0) return node.children.map(renderInlineNode).join('');
+  return escapeText(node.type === 'ruby' ? node.base : node.text);
+}
+
+function escapeText(s: string): string {
+  return escapeHtml(s).replaceAll('\n', '<br />');
 }
 
 function escapeHtml(s: string): string {

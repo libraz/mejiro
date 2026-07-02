@@ -15,12 +15,12 @@
   .mejiro-paragraph {
     writing-mode: vertical-rl;
     display: inline-block;
-    margin-left: 0.4em;
+    margin-right: 0.4em;
     white-space: nowrap;
   }
 
   .mejiro-paragraph:first-child {
-    margin-left: 0;
+    margin-right: 0;
   }
 
   /* Heading defaults — applies to all heading levels unless overridden */
@@ -31,7 +31,7 @@
   }
 
   .mejiro-paragraph--heading + .mejiro-paragraph {
-    margin-left: 1.2em;
+    margin-right: 1.2em;
   }
 
   /* Per-level heading styles */
@@ -42,7 +42,7 @@
   }
 
   .mejiro-paragraph--h1 + .mejiro-paragraph {
-    margin-left: 1.4em;
+    margin-right: 1.4em;
   }
 
   .mejiro-paragraph--h2 {
@@ -52,7 +52,7 @@
   }
 
   .mejiro-paragraph--h2 + .mejiro-paragraph {
-    margin-left: 1.2em;
+    margin-right: 1.2em;
   }
 
   .mejiro-paragraph--h3 {
@@ -62,7 +62,7 @@
   }
 
   .mejiro-paragraph--h3 + .mejiro-paragraph {
-    margin-left: 1em;
+    margin-right: 1em;
   }
 
   .mejiro-paragraph--h4 {
@@ -72,7 +72,7 @@
   }
 
   .mejiro-paragraph--h4 + .mejiro-paragraph {
-    margin-left: 0.8em;
+    margin-right: 0.8em;
   }
 
   .mejiro-paragraph--h5 {
@@ -82,7 +82,7 @@
   }
 
   .mejiro-paragraph--h5 + .mejiro-paragraph {
-    margin-left: 0.6em;
+    margin-right: 0.6em;
   }
 
   .mejiro-paragraph--h6 {
@@ -92,7 +92,58 @@
   }
 
   .mejiro-paragraph--h6 + .mejiro-paragraph {
-    margin-left: 0.6em;
+    margin-right: 0.6em;
+  }
+
+  .mejiro-paragraph--blockquote {
+    font-style: italic;
+    opacity: 0.92;
+    margin-right: 0.8em;
+  }
+
+  .mejiro-paragraph--blockquote + .mejiro-paragraph {
+    margin-right: 1em;
+  }
+
+  .mejiro-paragraph--scene-break {
+    letter-spacing: 0.2em;
+    text-align: center;
+    margin-right: 1.2em;
+  }
+
+  .mejiro-paragraph--pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre;
+  }
+
+  .mejiro-paragraph--figure {
+    text-align: center;
+    margin-right: 1em;
+  }
+
+  .mejiro-emphasis {
+    -webkit-text-emphasis-position: over right;
+    text-emphasis-position: over right;
+  }
+
+  .mejiro-emphasis--sesame {
+    -webkit-text-emphasis: sesame;
+    text-emphasis: sesame;
+  }
+
+  .mejiro-emphasis--dot {
+    -webkit-text-emphasis: dot;
+    text-emphasis: dot;
+  }
+
+  .mejiro-emphasis--circle {
+    -webkit-text-emphasis: circle;
+    text-emphasis: circle;
+  }
+
+  .mejiro-tcy {
+    -webkit-text-combine: horizontal;
+    text-combine-upright: all;
   }
 
   .mejiro-page ruby {

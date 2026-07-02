@@ -846,12 +846,12 @@
   .mejiro-reader-page-content .mejiro-paragraph {
     writing-mode: vertical-rl;
     display: inline-block;
-    margin-left: 0.4em;
+    margin-right: 0.4em;
     white-space: nowrap;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph:first-child {
-    margin-left: 0;
+    margin-right: 0;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--heading {
@@ -861,7 +861,7 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--heading + .mejiro-paragraph {
-    margin-left: 1.2em;
+    margin-right: 1.2em;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h1 {
@@ -871,7 +871,7 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h1 + .mejiro-paragraph {
-    margin-left: 1.4em;
+    margin-right: 1.4em;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h2 {
@@ -881,7 +881,7 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h2 + .mejiro-paragraph {
-    margin-left: 1.2em;
+    margin-right: 1.2em;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h3 {
@@ -891,7 +891,7 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h3 + .mejiro-paragraph {
-    margin-left: 1em;
+    margin-right: 1em;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h4 {
@@ -901,7 +901,83 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h4 + .mejiro-paragraph {
-    margin-left: 0.8em;
+    margin-right: 0.8em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h5 {
+    font-weight: 700;
+    font-size: 1em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h5 + .mejiro-paragraph {
+    margin-right: 0.6em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h6 {
+    font-weight: 700;
+    font-size: 1em;
+    height: 100%;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--h6 + .mejiro-paragraph {
+    margin-right: 0.6em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--blockquote {
+    font-style: italic;
+    opacity: 0.92;
+    margin-right: 0.8em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--blockquote + .mejiro-paragraph {
+    margin-right: 1em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--scene-break {
+    letter-spacing: 0.2em;
+    text-align: center;
+    margin-right: 1.2em;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--pre {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre;
+  }
+
+  .mejiro-reader-page-content .mejiro-paragraph--figure {
+    text-align: center;
+    margin-right: 1em;
+  }
+
+  .mejiro-reader-page-content .mejiro-emphasis,
+  .mejiro-page-slots .mejiro-emphasis {
+    -webkit-text-emphasis-position: over right;
+    text-emphasis-position: over right;
+  }
+
+  .mejiro-reader-page-content .mejiro-emphasis--sesame,
+  .mejiro-page-slots .mejiro-emphasis--sesame {
+    -webkit-text-emphasis: sesame;
+    text-emphasis: sesame;
+  }
+
+  .mejiro-reader-page-content .mejiro-emphasis--dot,
+  .mejiro-page-slots .mejiro-emphasis--dot {
+    -webkit-text-emphasis: dot;
+    text-emphasis: dot;
+  }
+
+  .mejiro-reader-page-content .mejiro-emphasis--circle,
+  .mejiro-page-slots .mejiro-emphasis--circle {
+    -webkit-text-emphasis: circle;
+    text-emphasis: circle;
+  }
+
+  .mejiro-reader-page-content .mejiro-tcy,
+  .mejiro-page-slots .mejiro-tcy {
+    -webkit-text-combine: horizontal;
+    text-combine-upright: all;
   }
 
   .mejiro-reader-page-content ruby,

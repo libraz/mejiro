@@ -3,13 +3,24 @@ import type { InlineAnnotation } from '../browser/types.js';
 /** A text segment within a rendered line. */
 export type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string }
-  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
-  | { type: 'tcy'; text: string }
-  | { type: 'em'; text: string }
-  | { type: 'strong'; text: string }
-  | { type: 'link'; text: string; href: string; title?: string }
-  | { type: 'footnote-ref'; text: string; noteId: string };
+  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | {
+      type: 'emphasis';
+      text: string;
+      style: 'sesame' | 'dot' | 'circle';
+      children?: readonly RenderSegment[];
+    }
+  | { type: 'tcy'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'em'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'strong'; text: string; children?: readonly RenderSegment[] }
+  | {
+      type: 'link';
+      text: string;
+      href: string;
+      title?: string;
+      children?: readonly RenderSegment[];
+    }
+  | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 
 /** A single rendered line containing text and ruby segments. */
 export interface RenderLine {
@@ -49,13 +60,13 @@ export interface LineMetricsResult {
   metrics: LineMetric[];
   /** Cumulative x-offset at each line index, accounting for heading pitch excess and paragraph gaps. */
   offsets: Float32Array;
-  /** Base body line pitch (fontSize × lineHeight). */
+  /** Base body line pitch (fontSize × lineSpacing). */
   linePitch: number;
 }
 
 /** Input entry for render functions, combining layout results with annotations. */
 export interface RenderEntry {
-  /** Character array (grapheme clusters) of the paragraph text. */
+  /** Character array of the paragraph text, indexed by Unicode code point. */
   chars: string[];
   /** Break points from the line breaking algorithm. */
   breakPoints: Uint32Array;
