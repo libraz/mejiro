@@ -82,6 +82,18 @@ function resolveScale(
   return opts.headingStyles?.[level]?.scale ?? opts.headingScale;
 }
 
+function paragraphIsHeading(p: Pick<BookParagraph, 'headingLevel' | 'kind'>): boolean {
+  return p.headingLevel != null || p.kind === 'heading';
+}
+
+function paragraphHeadingScale(
+  p: Pick<CachedParagraph, 'headingLevel' | 'isHeading'>,
+  opts: InternalOptions,
+): number {
+  if (p.headingLevel != null) return resolveScale(p.headingLevel, opts);
+  return p.isHeading === true ? opts.headingScale : 1;
+}
+
 function buildLayoutRubyAnnotations(
   annotations: readonly InlineAnnotation[] | undefined,
   rubyFontSpec: string,
@@ -180,6 +192,10 @@ export class MejiroBook {
       options.fontFamily !== undefined && options.fontFamily !== this.opts.fontFamily;
     const fontSizeChanged =
       options.fontSize !== undefined && options.fontSize !== this.opts.fontSize;
+    const headingStylesChanged =
+      options.headingStyles !== undefined && options.headingStyles !== this.opts.headingStyles;
+    const headingScaleChanged =
+      options.headingScale !== undefined && options.headingScale !== this.opts.headingScale;
 
     if (options.fontFamily != null) this.opts.fontFamily = options.fontFamily;
     if (options.fontSize != null) this.opts.fontSize = options.fontSize;
@@ -189,7 +205,7 @@ export class MejiroBook {
     if (options.headingStyles !== undefined) this.opts.headingStyles = options.headingStyles;
     if (options.headingScale != null) this.opts.headingScale = options.headingScale;
 
-    if (fontFamilyChanged || fontSizeChanged) {
+    if (fontFamilyChanged || fontSizeChanged || headingStylesChanged || headingScaleChanged) {
       return this.remeasureLayouts();
     }
     this.applyConfigToLayouts();
@@ -219,8 +235,11 @@ export class MejiroBook {
     for (const layout of this.liveLayouts()) {
       const cached = layout.getCachedParagraphs();
       for (const para of cached) {
-        const scale = resolveScale(para.headingLevel, this.opts);
-        const pFontSize = para.headingLevel ? Math.round(fontSize * scale) : fontSize;
+        const scale = paragraphHeadingScale(para, this.opts);
+        const pFontSize =
+          para.isHeading === true || para.headingLevel != null
+            ? Math.round(fontSize * scale)
+            : fontSize;
         const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
         para.advances = this.measurer.measureAll(spec, para.text);
         para.layoutRubyAnnotations = buildLayoutRubyAnnotations(
@@ -229,7 +248,7 @@ export class MejiroBook {
           this.measurer,
         );
       }
-      layout.applyConfig(this.layoutConfigSnapshot());
+      layout.applyConfig(this.layoutConfigSnapshot(), { rebreak: false });
       layout.recomputeAfterMeasurement();
     }
   }
@@ -332,13 +351,19 @@ export class MejiroBook {
 
     // Initial layout via MejiroBrowser (handles font loading + ruby)
     const result = await this.browser.layoutChapter({
-      paragraphs: chapter.paragraphs.map((p) => ({
-        text: p.text,
-        inlineAnnotations: p.inlineAnnotations?.length ? p.inlineAnnotations : undefined,
-        fontSize: p.headingLevel
-          ? Math.round(fontSize * resolveScale(p.headingLevel, this.opts))
-          : undefined,
-      })),
+      paragraphs: chapter.paragraphs.map((p) => {
+        const isHeading = paragraphIsHeading(p);
+        return {
+          text: p.text,
+          inlineAnnotations: p.inlineAnnotations?.length ? p.inlineAnnotations : undefined,
+          fontSize: isHeading
+            ? Math.round(
+                fontSize *
+                  paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, this.opts),
+              )
+            : undefined,
+        };
+      }),
       fontFamily,
       fontSize,
       lineWidth,
@@ -351,14 +376,16 @@ export class MejiroBook {
       chars: result.paragraphs[i].chars,
       breakPoints: result.paragraphs[i].breakResult.breakPoints,
       inlineAnnotations: p.inlineAnnotations ?? [],
+      isHeading: paragraphIsHeading(p),
       headingLevel: p.headingLevel,
     }));
 
     // Cache paragraph data for re-layout on resize/exclusion
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
     const cached: CachedParagraph[] = chapter.paragraphs.map((p, i) => {
-      const scale = resolveScale(p.headingLevel, this.opts);
-      const pFontSize = p.headingLevel ? Math.round(fontSize * scale) : fontSize;
+      const isHeading = paragraphIsHeading(p);
+      const scale = paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, this.opts);
+      const pFontSize = isHeading ? Math.round(fontSize * scale) : fontSize;
       const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
       const rubySpec = deriveRubyFont(fontFamily, pFontSize);
       const codepoints = toCodepoints(p.text);
@@ -373,6 +400,7 @@ export class MejiroBook {
           rubySpec,
           this.measurer,
         ),
+        isHeading,
         headingLevel: p.headingLevel,
       };
     });
@@ -456,6 +484,7 @@ export class MejiroBook {
         chars,
         inlineAnnotations: p.inlineAnnotations,
         ...(layoutRubyAnnotations ? { layoutRubyAnnotations } : {}),
+        ...(p.isHeading === true ? { isHeading: true } : {}),
         ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
       };
     });
@@ -463,6 +492,7 @@ export class MejiroBook {
       chars: cached[i].chars,
       breakPoints: new Uint32Array(p.breakPoints),
       inlineAnnotations: p.inlineAnnotations,
+      ...(p.isHeading === true ? { isHeading: true } : {}),
       ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
     }));
     const config: LayoutConfig = {
@@ -474,6 +504,9 @@ export class MejiroBook {
       ...(snapshot.config.headingStyles ? { headingStyles: snapshot.config.headingStyles } : {}),
     };
     const layout = new ChapterLayout(cached, entries, config, { ...snapshot.size });
+    for (const spread of snapshot.images ?? []) {
+      layout.setImages(spread.spreadIndex, spread.images);
+    }
     this.layouts.add(new WeakRef(layout));
     return layout;
   }

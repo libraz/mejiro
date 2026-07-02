@@ -45,7 +45,7 @@ export function estimateReadingTime(
   return Math.round((chars / cpm) * 60_000);
 }
 
-/** Format a millisecond duration as `H:MM` or `M分S秒`. */
+/** Format a millisecond duration as compact Japanese or English text. */
 export function formatReadingTime(ms: number, locale: 'ja' | 'en' = 'ja'): string {
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);

@@ -1,14 +1,14 @@
 /**
  * A position within a single chapter, expressed as a paragraph index and a
- * grapheme-cluster offset into that paragraph's `text`.
+ * Unicode code point offset into that paragraph's `text`.
  *
- * Cluster offsets are stable under reflow (font / size / line-width changes),
+ * Code point offsets are stable under reflow (font / size / line-width changes),
  * which is what makes them suitable for cross-device reading-position resume.
  */
 export interface InChapterAnchor {
   /** Zero-based paragraph index within the chapter. */
   paragraph: number;
-  /** Grapheme-cluster offset into the paragraph's `text`. */
+  /** Unicode code point offset into the paragraph's `text`. */
   charIndex: number;
 }
 

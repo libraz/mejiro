@@ -34,7 +34,7 @@ export const DEFAULT_PAGE_GEOMETRY = {
 } as const;
 
 /**
- * Default heading style overrides for levels 1–4.
+ * Default heading style overrides for levels 1–6.
  *
  * @example
  * ```ts
@@ -50,6 +50,8 @@ export const DEFAULT_HEADING_STYLES: Readonly<Record<number, HeadingStyle>> = {
   2: { scale: 1.4, gapAfterEm: 1.2 },
   3: { scale: 1.2, gapAfterEm: 1.0 },
   4: { scale: 1.1, gapAfterEm: 0.8 },
+  5: { scale: 1.0, gapAfterEm: 0.6 },
+  6: { scale: 1.0, gapAfterEm: 0.6 },
 };
 
 /**

@@ -1,7 +1,8 @@
 /**
  * @vitest-environment happy-dom
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_HEADING_STYLES } from '../../src/book/constants.js';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookOptions } from '../../src/book/types.js';
 
@@ -30,6 +31,12 @@ describe('MejiroBook', () => {
     expect(opts.mode).toBe('strict');
     expect(opts.enableHanging).toBe(true);
     expect(opts.headingScale).toBe(1.4);
+  });
+
+  it('provides default heading styles for h1 through h6', () => {
+    expect(DEFAULT_HEADING_STYLES[1]).toEqual({ scale: 1.6, gapAfterEm: 1.4 });
+    expect(DEFAULT_HEADING_STYLES[5]).toEqual({ scale: 1.0, gapAfterEm: 0.6 });
+    expect(DEFAULT_HEADING_STYLES[6]).toEqual({ scale: 1.0, gapAfterEm: 0.6 });
   });
 
   it('setOptions patches only provided fields', () => {
@@ -126,6 +133,30 @@ describe('MejiroBook', () => {
     expect(layout.getSpread(0)).toBeDefined();
   });
 
+  it('setOptions re-breaks live layouts only once after fontSize remeasurement', async () => {
+    book.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
+    // biome-ignore lint/suspicious/noExplicitAny: private method spy verifies an internal regression.
+    const recompute = vi.spyOn(layout as any, 'recomputeBreaks');
+
+    await book.setOptions({ fontSize: 32 });
+
+    expect(recompute).toHaveBeenCalledTimes(1);
+  });
+
+  it('setOptions re-measures live heading paragraphs when headingScale changes', async () => {
+    const headed = new MejiroBook({ ...baseOptions, headingScale: 1 });
+    headed.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    const layout = await headed.layoutChapter({
+      paragraphs: [{ text: '見出し', headingLevel: 1 }],
+    });
+    const recompute = vi.spyOn(layout, 'recomputeAfterMeasurement');
+
+    await headed.setOptions({ headingScale: 2 });
+
+    expect(recompute).toHaveBeenCalledTimes(1);
+  });
+
   it('snapshot ↔ layoutFromSnapshot round-trips a layout without re-measuring', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layout = await book.layoutChapter({
@@ -150,6 +181,29 @@ describe('MejiroBook', () => {
     // The restored layout serves data identical to the original.
     expect(restored.totalPages).toBe(layout.totalPages);
     expect(restored.getSpread(0)).toBeDefined();
+  });
+
+  it('snapshot ↔ layoutFromSnapshot preserves image exclusions', async () => {
+    book.setPageSize({ pageWidth: 180, lineWidth: 120 });
+    const layout = await book.layoutChapter({
+      paragraphs: [{ text: 'あ'.repeat(240) }],
+    });
+    layout.setImages(0, [{ x: 20, y: 10, w: 40, h: 60, margin: 0 }]);
+    const originalSpread = layout.getSpread(0);
+    const snapshot = layout.snapshot();
+
+    expect(snapshot.images).toEqual([
+      { spreadIndex: 0, images: [{ x: 20, y: 10, w: 40, h: 60, margin: 0 }] },
+    ]);
+
+    const fresh = new MejiroBook(baseOptions);
+    const restored = fresh.layoutFromSnapshot(snapshot);
+    const restoredSpread = restored.getSpread(0);
+
+    expect(restored.hasImages).toBe(true);
+    expect(restored.totalPages).toBe(layout.totalPages);
+    expect(restoredSpread.right.hasImages).toBe(originalSpread.right.hasImages);
+    expect(restoredSpread.right.slots).toEqual(originalSpread.right.slots);
   });
 
   it('layoutFromSnapshot rejects an unsupported version', () => {

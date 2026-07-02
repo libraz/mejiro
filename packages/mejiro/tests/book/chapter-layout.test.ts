@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type CachedParagraph, ChapterLayout } from '../../src/book/chapter-layout.js';
+import { computeBreaks } from '../../src/layout.js';
 import type { RenderEntry } from '../../src/render/types.js';
 import type { RubyAnnotation } from '../../src/ruby.js';
 import { toCodepoints, uniformAdvances } from '../helpers.js';
@@ -21,6 +22,14 @@ function makeLayout(cached: CachedParagraph[], entries: RenderEntry[]): ChapterL
     },
     { pageWidth: 100, lineWidth: 100, pagePaddingX: 0, pagePaddingY: 0 },
   );
+}
+
+function computedBreakPoints(charCount: number): Uint32Array {
+  return computeBreaks({
+    text: toCodepoints('あ'.repeat(charCount)),
+    advances: uniformAdvances(charCount, 10),
+    lineWidth: 100,
+  }).breakPoints;
 }
 
 describe('ChapterLayout', () => {
@@ -74,7 +83,7 @@ describe('ChapterLayout', () => {
         inlineAnnotations: [],
       },
     ];
-    const breakPoints = new Uint32Array([10, 20, 30, 40, 50, 60, 70, 80, 90]);
+    const breakPoints = computedBreakPoints(100);
     const entries: RenderEntry[] = [{ chars: chars(text), breakPoints, inlineAnnotations: [] }];
     const layout = makeLayout(cached, entries);
 
@@ -90,6 +99,11 @@ describe('ChapterLayout', () => {
     const at25 = layout.locateAnchor({ paragraph: 0, charIndex: 25 });
     expect(at25?.lineIdx).toBe(2);
     expect(at25?.side).toBe('right');
+
+    // Line-end anchors stay on the line they end; the next character moves to
+    // the following line.
+    expect(layout.locateAnchor({ paragraph: 0, charIndex: 9 })?.lineIdx).toBe(0);
+    expect(layout.locateAnchor({ paragraph: 0, charIndex: 10 })?.lineIdx).toBe(1);
 
     // Char index out of range → null.
     expect(layout.locateAnchor({ paragraph: 0, charIndex: -1 })).toBeNull();
@@ -107,7 +121,7 @@ describe('ChapterLayout', () => {
         inlineAnnotations: [],
       },
     ];
-    const breakPoints = new Uint32Array([10, 20, 30, 40, 50]);
+    const breakPoints = computedBreakPoints(60);
     const entries: RenderEntry[] = [{ chars: chars(text), breakPoints, inlineAnnotations: [] }];
     const layout = makeLayout(cached, entries);
 
@@ -118,6 +132,27 @@ describe('ChapterLayout', () => {
     const located = layout.locateAnchor(anchor);
     expect(located?.spreadIdx).toBe(0);
     expect(located?.side).toBe('right');
+  });
+
+  it('does not count an empty trailing left page in exclusion mode', () => {
+    const text = 'あ'.repeat(50);
+    const codepoints = toCodepoints(text);
+    const cached: CachedParagraph[] = [
+      {
+        text: codepoints,
+        advances: uniformAdvances(codepoints.length, 10),
+        chars: chars(text),
+        inlineAnnotations: [],
+      },
+    ];
+    const breakPoints = computedBreakPoints(50);
+    const entries: RenderEntry[] = [{ chars: chars(text), breakPoints, inlineAnnotations: [] }];
+    const layout = makeLayout(cached, entries);
+
+    layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 20, margin: 0 }]);
+
+    expect(layout.totalPages).toBe(1);
+    expect(layout.getSpread(0).totalPages).toBe(1);
   });
 
   describe('coord ↔ anchor', () => {
@@ -137,10 +172,7 @@ describe('ChapterLayout', () => {
 
     it('returns rect at the start of the first column on the right page', () => {
       // 100 chars at 10px each, lineWidth=100 → 10 chars per line, 10 lines per page.
-      const layout = makeStaticLayout(
-        'あ'.repeat(100),
-        new Uint32Array([10, 20, 30, 40, 50, 60, 70, 80, 90]),
-      );
+      const layout = makeStaticLayout('あ'.repeat(100), computedBreakPoints(100));
       const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 0 });
       expect(rect).not.toBeNull();
       if (!rect) throw new Error('rect is null');
@@ -155,10 +187,7 @@ describe('ChapterLayout', () => {
     });
 
     it('returns rect on the left page in negative x range', () => {
-      const layout = makeStaticLayout(
-        'あ'.repeat(150),
-        new Uint32Array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140]),
-      );
+      const layout = makeStaticLayout('あ'.repeat(150), computedBreakPoints(150));
       // Char 100 is at the start of line 10. Lines 0..9 fit on page 0; line 10 starts page 1 (left page of spread 0).
       const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 100 });
       expect(rect).not.toBeNull();
@@ -170,10 +199,7 @@ describe('ChapterLayout', () => {
     });
 
     it('round-trips coordOfAnchor → anchorAtCoord at a column center', () => {
-      const layout = makeStaticLayout(
-        'あ'.repeat(100),
-        new Uint32Array([10, 20, 30, 40, 50, 60, 70, 80, 90]),
-      );
+      const layout = makeStaticLayout('あ'.repeat(100), computedBreakPoints(100));
       const original = { paragraph: 0, charIndex: 25 };
       const rect = layout.coordOfAnchor(original);
       expect(rect).not.toBeNull();
@@ -185,7 +211,7 @@ describe('ChapterLayout', () => {
     });
 
     it('returns null when the coordinate is outside every column', () => {
-      const layout = makeStaticLayout('あ'.repeat(30), new Uint32Array([10, 20]));
+      const layout = makeStaticLayout('あ'.repeat(30), computedBreakPoints(30));
       expect(layout.anchorAtCoord(0, 1000, 1000)).toBeNull();
     });
   });
@@ -206,7 +232,7 @@ describe('ChapterLayout', () => {
     }
 
     it('returns one rect when the range stays within a single line', () => {
-      const layout = makeStaticLayout('あ'.repeat(30), new Uint32Array([10, 20]));
+      const layout = makeStaticLayout('あ'.repeat(30), computedBreakPoints(30));
       const rects = layout.selectionRects({
         start: { paragraph: 0, charIndex: 2 },
         end: { paragraph: 0, charIndex: 7 },
@@ -218,7 +244,7 @@ describe('ChapterLayout', () => {
     });
 
     it('returns multiple rects across line boundaries', () => {
-      const layout = makeStaticLayout('あ'.repeat(30), new Uint32Array([10, 20]));
+      const layout = makeStaticLayout('あ'.repeat(30), computedBreakPoints(30));
       const rects = layout.selectionRects({
         start: { paragraph: 0, charIndex: 5 },
         end: { paragraph: 0, charIndex: 25 },
@@ -230,7 +256,7 @@ describe('ChapterLayout', () => {
     });
 
     it('normalizes reversed ranges', () => {
-      const layout = makeStaticLayout('あ'.repeat(20), new Uint32Array([10]));
+      const layout = makeStaticLayout('あ'.repeat(20), computedBreakPoints(20));
       const forward = layout.selectionRects({
         start: { paragraph: 0, charIndex: 2 },
         end: { paragraph: 0, charIndex: 8 },
@@ -308,6 +334,13 @@ describe('ChapterLayout', () => {
       const layout = setup(['第1章: あ\n第10章: い']);
       const matches = layout.findText('第\\d+章', { regex: true });
       expect(matches.map((m) => m.match)).toEqual(['第1章', '第10章']);
+    });
+
+    it('uses Unicode regex semantics for regex queries', () => {
+      const layout = setup(['ABC 漢字 123']);
+      const matches = layout.findText('\\p{Script=Han}+', { regex: true });
+
+      expect(matches.map((m) => [m.match, m.charStart, m.charEnd])).toEqual([['漢字', 4, 6]]);
     });
 
     it('escapes regex metacharacters in literal mode', () => {
@@ -438,6 +471,64 @@ describe('ChapterLayout', () => {
       // later page — the full chapter text is still rendered, never lost.
       expect(renderedText(layout)).toBe(expected);
     });
+
+    it('uses heading pitch for exclusion anchor rectangles and taps', () => {
+      const layout = makeHeadedLayout();
+      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+
+      const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 0 });
+      expect(rect?.width).toBe(14);
+      if (!rect) throw new Error('missing heading rect');
+
+      const anchor = layout.anchorAtCoord(rect.spreadIdx, rect.x + rect.width / 2, rect.y + 1);
+      expect(anchor).toEqual({ paragraph: 0, charIndex: 0 });
+    });
+
+    it('applies heading offset compensation to left-page images', () => {
+      const layout = makeHeadedLayout();
+      layout.setImages(0, [{ x: -70, y: 10, w: 20, h: 30, margin: 0 }]);
+
+      const spread = layout.getSpread(0);
+
+      expect(spread.left.hasImages).toBe(true);
+      expect(spread.left.slots.some((slot) => slot.height < 100)).toBe(true);
+    });
+  });
+
+  it('aligns exclusion line widths with gap-aware spread assignment on later spreads', () => {
+    const paragraphs = Array.from({ length: 12 }, () => 'あ'.repeat(20));
+    const cached: CachedParagraph[] = paragraphs.map((text) => ({
+      text: toCodepoints(text),
+      advances: uniformAdvances([...text].length, 10),
+      chars: chars(text),
+      inlineAnnotations: [],
+    }));
+    const entries: RenderEntry[] = paragraphs.map((text) => ({
+      chars: chars(text),
+      breakPoints: new Uint32Array(0),
+      inlineAnnotations: [],
+    }));
+    const layout = makeLayout(cached, entries);
+
+    layout.setImages(1, [{ x: 20, y: 20, w: 40, h: 60, margin: 0 }]);
+
+    const page = layout.getSpread(1).right;
+    expect(page.hasImages).toBe(true);
+    expect(page.lines).toHaveLength(page.slots.length);
+
+    const constrained = page.lines
+      .map((line, i) => ({ line, slot: page.slots[i] }))
+      .filter(({ slot }) => slot.height < 100);
+    expect(constrained.length).toBeGreaterThan(0);
+
+    for (const { line, slot } of constrained) {
+      const charCount = line.segments.reduce((sum, segment) => {
+        if (segment.type === 'text') return sum + [...segment.text].length;
+        if (segment.type === 'ruby') return sum + [...segment.base].length;
+        return sum + [...segment.text].length;
+      }, 0);
+      expect(charCount * 10).toBeLessThanOrEqual(slot.height + 0.5);
+    }
   });
 
   it('clears only the target spread when syncImages receives no images', () => {

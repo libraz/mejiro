@@ -1,6 +1,6 @@
 import type { InlineAnnotation } from '../browser/types.js';
 import type { HeadingStyle } from '../render/measures.js';
-import type { PageSize } from './types.js';
+import type { BookImage, PageSize } from './types.js';
 
 /**
  * Serializable snapshot of a {@link ChapterLayout}.
@@ -25,6 +25,8 @@ export interface ChapterLayoutSnapshot {
   size: Required<PageSize>;
   /** Per-paragraph data. */
   paragraphs: ParagraphSnapshot[];
+  /** Image exclusions keyed by spread index. Omitted for snapshots without images. */
+  images?: SpreadImagesSnapshot[];
 }
 
 /** Serializable subset of `LayoutConfig`. */
@@ -47,6 +49,8 @@ export interface ParagraphSnapshot {
   breakPoints: number[];
   /** Inline annotations (kept as the original kind-tagged objects). */
   inlineAnnotations: readonly InlineAnnotation[];
+  /** Legacy/generic heading marker when no heading level is available. */
+  isHeading?: boolean;
   /** Heading level (1–6), if any. */
   headingLevel?: number;
   /** Pre-resolved ruby layout (after width measurement). */
@@ -63,4 +67,10 @@ export interface LayoutRubySnapshot {
   rubyAdvances: number[];
   type?: 'mono' | 'group' | 'jukugo';
   jukugoSplitPoints?: number[];
+}
+
+/** Serializable image exclusions for one spread. */
+export interface SpreadImagesSnapshot {
+  spreadIndex: number;
+  images: BookImage[];
 }
