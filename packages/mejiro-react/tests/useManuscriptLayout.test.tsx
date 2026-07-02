@@ -100,4 +100,43 @@ describe('useManuscriptLayout (React)', () => {
     });
     expect(book.layoutManuscript).toHaveBeenCalledTimes(2);
   });
+
+  it('recomputes through ResizeObserver when the surface size changes', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver;
+    let resizeCallback: ResizeObserverCallback | null = null;
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    class MockResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        resizeCallback = callback;
+      }
+      observe = observe;
+      disconnect = disconnect;
+    }
+    vi.stubGlobal('ResizeObserver', MockResizeObserver);
+
+    try {
+      const book = mockBook();
+      const surfaceEl = document.createElement('div');
+      const chapter: ManuscriptChapter = { id: 'c1', title: 'T', body: 'B' };
+      const { unmount } = renderHook(() => {
+        const surface = useRef<HTMLElement | null>(surfaceEl);
+        return useManuscriptLayout(book, chapter, surface, { resizeDebounce: 0 });
+      });
+
+      await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(1));
+      expect(observe).toHaveBeenCalledWith(surfaceEl);
+
+      act(() => resizeCallback?.([], {} as ResizeObserver));
+      await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(2));
+
+      act(() => resizeCallback?.([], {} as ResizeObserver));
+      await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(3));
+      expect(book.computePageSize).toHaveBeenCalledTimes(3);
+      unmount();
+      expect(disconnect).toHaveBeenCalled();
+    } finally {
+      vi.stubGlobal('ResizeObserver', originalResizeObserver);
+    }
+  });
 });

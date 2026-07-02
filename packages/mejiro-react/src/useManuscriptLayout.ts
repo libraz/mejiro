@@ -6,9 +6,9 @@ import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useSta
 export interface UseManuscriptLayoutOptions {
   /** Manuscript notation dialect. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
-  /** Listen for `window.resize` and re-flow on resize. @defaultValue true */
+  /** Observe the surface element for size changes and re-flow. @defaultValue true */
   enableResize?: boolean;
-  /** Debounce window (ms) for resize re-flows. @defaultValue 120 */
+  /** Debounce window (ms) applied to size-triggered re-flows. @defaultValue 120 */
   resizeDebounce?: number;
 }
 
@@ -43,9 +43,9 @@ export interface UseManuscriptLayoutReturn {
  * {@link useManuscriptDraft} for the chapter array and feed the resulting
  * {@link ChapterLayout} into {@link MejiroSpread} or {@link MejiroScrollView}.
  *
- * Re-layouts whenever `chapter`, `dialect`, or `book` change. On `window.resize`,
- * page dimensions are recomputed and {@link ChapterLayout.resize} is called
- * instead of a full re-layout.
+ * Re-layouts whenever `chapter`, `dialect`, or `book` change. The surface is
+ * observed with {@link ResizeObserver}; size changes trigger a full re-layout
+ * so pagination stays correct after non-trivial container changes.
  */
 export function useManuscriptLayout(
   book: MejiroBook,
@@ -63,9 +63,7 @@ export function useManuscriptLayout(
   const [contentHeight, setContentHeight] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
 
-  const layoutRef = useRef<ChapterLayout | null>(null);
   const requestIdRef = useRef(0);
-  layoutRef.current = layout;
 
   const recompute = useCallback(async () => {
     const requestId = ++requestIdRef.current;
@@ -109,28 +107,49 @@ export function useManuscriptLayout(
 
   useEffect(() => {
     if (!enableResize) return;
+    const el = surface.current;
+    if (!el) return;
+
     let timer: ReturnType<typeof setTimeout> | null = null;
-    const onResize = (): void => {
-      if (!(surface.current && layoutRef.current)) return;
-      if (timer) clearTimeout(timer);
+    let observed = false;
+    const clear = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+    const scheduleReflow = (immediate: boolean): void => {
+      clear();
+      if (immediate) {
+        void recompute();
+        return;
+      }
       timer = setTimeout(() => {
-        if (!(surface.current && layoutRef.current)) return;
-        const dims = book.computePageSize(surface.current);
-        setPageWidth(dims.pageWidth);
-        setPageHeight(dims.pageHeight);
-        setContentHeight(dims.contentHeight);
-        layoutRef.current.resize({
-          pageWidth: dims.pageWidth,
-          lineWidth: dims.contentHeight - book.getOptions().fontSize * 0.5,
-        });
+        timer = null;
+        void recompute();
       }, resizeDebounce);
     };
-    window.addEventListener('resize', onResize);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => {
+        const immediate = !observed;
+        observed = true;
+        scheduleReflow(immediate);
+      });
+      observer.observe(el);
+      return () => {
+        observer.disconnect();
+        clear();
+      };
+    }
+
+    const onWindowResize = () => scheduleReflow(false);
+    window.addEventListener('resize', onWindowResize);
     return () => {
-      window.removeEventListener('resize', onResize);
-      if (timer) clearTimeout(timer);
+      window.removeEventListener('resize', onWindowResize);
+      clear();
     };
-  }, [book, surface, enableResize, resizeDebounce]);
+  }, [surface, enableResize, resizeDebounce, recompute]);
 
   return { layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute };
 }
