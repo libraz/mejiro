@@ -8,6 +8,12 @@ import { useReadingPosition } from '../src/useReadingPosition.js';
 
 function memoryStorage(): ReadingPositionStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
+  return storageFromMap(data);
+}
+
+function storageFromMap(
+  data: Map<string, string>,
+): ReadingPositionStorage & { data: Map<string, string> } {
   return {
     data,
     getItem: (k) => data.get(k) ?? null,
@@ -54,6 +60,30 @@ describe('useReadingPosition (React)', () => {
       vi.advanceTimersByTime(100);
     });
     expect(JSON.parse(storage.data.get('k') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 1,
+      paragraph: 3,
+      charIndex: 5,
+    });
+  });
+
+  it('does not roll back an inline storage save before the throttled write', () => {
+    const data = new Map<string, string>();
+    const { result } = renderHook(() =>
+      useReadingPosition({ key: 'k', storage: storageFromMap(data), throttleMs: 100 }),
+    );
+
+    act(() => {
+      result.current.save({ chapter: 1, paragraph: 3, charIndex: 5 });
+    });
+
+    expect(result.current.position).toEqual({ chapter: 1, paragraph: 3, charIndex: 5 });
+    expect(data.get('k')).toBeUndefined();
+
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(JSON.parse(data.get('k') ?? '{}')).toEqual({
       version: 2,
       chapter: 1,
       paragraph: 3,

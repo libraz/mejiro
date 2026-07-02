@@ -1,4 +1,11 @@
-import type { InChapterAnchor } from '@libraz/mejiro/book';
+import {
+  type Annotation,
+  createAnnotationId,
+  type MejiroStorage,
+  parseAnnotations,
+  serializeAnnotations,
+  sortAnnotations,
+} from '@libraz/mejiro';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
@@ -7,29 +14,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * prop on {@link MejiroReader} to render highlights, or with `goToAnchor` to
  * implement bookmarks.
  */
-export interface Annotation {
-  /** Stable identifier. Auto-generated when omitted from {@link useAnnotations.add}. */
-  id: string;
-  /** Chapter the annotation lives in. */
-  chapter: number;
-  /** Range start (inclusive). */
-  start: InChapterAnchor;
-  /** Range end (exclusive). Equal to `start` for caret-style bookmarks. */
-  end: InChapterAnchor;
-  /** Free-form color identifier (e.g. `'yellow'`, `'#ffd166'`). */
-  color?: string;
-  /** Optional note text attached to the annotation. */
-  note?: string;
-  /** Unix epoch ms. Auto-set on {@link useAnnotations.add} when omitted. */
-  createdAt?: number;
-}
+export type { Annotation };
 
 /** Minimal storage interface required by {@link useAnnotations}. */
-export interface AnnotationsStorage {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-  removeItem(key: string): void;
-}
+export type AnnotationsStorage = MejiroStorage;
 
 /** Options for {@link useAnnotations}. */
 export interface UseAnnotationsOptions {
@@ -67,48 +55,10 @@ export interface UseAnnotationsReturn {
   clear(): void;
 }
 
-const STORAGE_VERSION = 1;
-
-interface Persisted {
-  version: number;
-  annotations: Annotation[];
-}
-
 function resolveDefaultStorage(): AnnotationsStorage | null {
   if (typeof globalThis === 'undefined') return null;
   const w = (globalThis as { localStorage?: AnnotationsStorage }).localStorage;
   return w ?? null;
-}
-
-function parse(raw: string | null): Annotation[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as Partial<Persisted>;
-    if (parsed && Array.isArray(parsed.annotations)) return parsed.annotations;
-  } catch {
-    // Bad JSON — treat as empty.
-  }
-  return [];
-}
-
-function serialize(annotations: readonly Annotation[]): string {
-  const payload: Persisted = { version: STORAGE_VERSION, annotations: [...annotations] };
-  return JSON.stringify(payload);
-}
-
-function sort(annotations: readonly Annotation[]): Annotation[] {
-  return [...annotations].sort((a, b) => {
-    if (a.chapter !== b.chapter) return a.chapter - b.chapter;
-    if (a.start.paragraph !== b.start.paragraph) return a.start.paragraph - b.start.paragraph;
-    return a.start.charIndex - b.start.charIndex;
-  });
-}
-
-function makeId(): string {
-  if (typeof crypto !== 'undefined' && typeof (crypto as Crypto).randomUUID === 'function') {
-    return (crypto as Crypto).randomUUID();
-  }
-  return `ann-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 /**
@@ -134,7 +84,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const [annotations, setAnnotations] = useState<readonly Annotation[]>(() => {
     if (!storage) return [];
     try {
-      return sort(parse(storage.getItem(key)));
+      return sortAnnotations(parseAnnotations(storage.getItem(key)));
     } catch {
       return [];
     }
@@ -147,7 +97,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       return;
     }
     try {
-      setAnnotations(sort(parse(storage.getItem(key))));
+      setAnnotations(sortAnnotations(parseAnnotations(storage.getItem(key))));
     } catch {
       setAnnotations([]);
     }
@@ -170,7 +120,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
         if (timerRef.current) clearTimeout(timerRef.current);
         timerRef.current = setTimeout(() => {
           try {
-            storage.setItem(key, serialize(next));
+            storage.setItem(key, serializeAnnotations(next));
           } catch {
             // Quota or disabled storage — in-memory copy stays.
           }
@@ -185,11 +135,11 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
     (input) => {
       const annotation: Annotation = {
         ...input,
-        id: input.id ?? makeId(),
+        id: input.id ?? createAnnotationId(),
         createdAt: input.createdAt ?? Date.now(),
       };
       setAnnotations((current) => {
-        const next = sort([...current, annotation]);
+        const next = sortAnnotations([...current, annotation]);
         commit(next);
         return next;
       });
@@ -219,7 +169,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
           return { ...annotation, ...patch, id };
         });
         if (!changed) return current;
-        const sorted = sort(next);
+        const sorted = sortAnnotations(next);
         commit(sorted);
         return sorted;
       });
