@@ -510,7 +510,7 @@ export function ReaderClient({ slug, initialHtml }: Props) {
 }
 ```
 
-`renderEpubStatic()` skips measurement and pagination and lets the browser's native vertical-rl flow do the layout. It escapes content internally and drops executable link schemes such as `javascript:` from EPUBs round-tripped through `parseEpub()`. The output is also crawlable, so it doubles as a search-engine target and a slow-network placeholder.
+`renderEpubStatic()` skips measurement and pagination and lets the browser's native vertical-rl flow do the layout. It escapes content internally and drops executable link schemes such as `javascript:` from EPUBs round-tripped through `parseEpub()`. Its wrapper is runtime-restricted to `div`, `article`, or `section`; an invalid value falls back to `div`. The output is also crawlable, so it doubles as a search-engine target and a slow-network placeholder.
 
 ### 7.3 Persisting the reading position to a server
 

@@ -199,6 +199,35 @@ describe('parseEpub', () => {
     await expect(parseEpub(garbage)).rejects.toThrow(/Not a valid EPUB file/);
   });
 
+  it('rejects archives that exceed configured resource limits before parsing entries', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': '<package />',
+    });
+
+    await expect(parseEpub(data, { limits: { maxInputBytes: 1 } })).rejects.toThrow(
+      /compressed input limit/,
+    );
+    await expect(parseEpub(data, { limits: { maxEntries: 1 } })).rejects.toThrow(/entry limit/);
+  });
+
+  it('checks expanded entry size and compression ratio from ZIP metadata', async () => {
+    const oversizedEntry = await makeEpub({ 'large.txt': 'x'.repeat(32) });
+    await expect(parseEpub(oversizedEntry, { limits: { maxEntryBytes: 16 } })).rejects.toThrow(
+      /expanded size limit/,
+    );
+
+    const compressedZip = new JSZip();
+    compressedZip.file('repeated.txt', 'x'.repeat(8_192));
+    const compressed = await compressedZip.generateAsync({
+      type: 'arraybuffer',
+      compression: 'DEFLATE',
+    });
+    await expect(parseEpub(compressed, { limits: { maxCompressionRatio: 2 } })).rejects.toThrow(
+      /compression ratio limit/,
+    );
+  });
+
   it('throws when container.xml is missing', async () => {
     const data = await makeEpub({
       'OPS/package.opf': '<package />',

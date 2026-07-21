@@ -1,4 +1,9 @@
 import JSZip from 'jszip';
+import {
+  assertEpubArchiveWithinLimits,
+  type EpubParseOptions,
+  resolveEpubParseLimits,
+} from './limits.js';
 import { extractRubyContent } from './ruby-extractor.js';
 import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
 import { stripStylesheetLinks } from './xml-utils.js';
@@ -13,7 +18,14 @@ import { stripStylesheetLinks } from './xml-utils.js';
  * @param data - EPUB file contents as ArrayBuffer.
  * @returns Parsed book with chapters and ruby annotations.
  */
-export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
+export async function parseEpub(
+  data: ArrayBuffer,
+  options: EpubParseOptions = {},
+): Promise<EpubBook> {
+  const limits = resolveEpubParseLimits(options);
+  if (data.byteLength > limits.maxInputBytes) {
+    throw new Error(`EPUB exceeds the compressed input limit (${limits.maxInputBytes} bytes)`);
+  }
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(data);
@@ -24,6 +36,7 @@ export async function parseEpub(data: ArrayBuffer): Promise<EpubBook> {
     // type, truncated upload).
     throw new Error(`Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`);
   }
+  assertEpubArchiveWithinLimits(data, zip, limits);
 
   // 1. Read container.xml to find rootfile path
   const containerXml = await readZipText(zip, 'META-INF/container.xml');

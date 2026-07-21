@@ -343,6 +343,17 @@ describe('ChapterLayout', () => {
       expect(matches.map((m) => [m.match, m.charStart, m.charEnd])).toEqual([['漢字', 4, 6]]);
     });
 
+    it('rejects regex patterns with quantified complex groups', () => {
+      const layout = setup(['aaaaaaaaaaaaaaaa!']);
+
+      expect(() => layout.findText('(a+)+$', { regex: true })).toThrow(
+        /Unsafe regex search pattern/,
+      );
+      expect(() => layout.findText('(a|aa)+$', { regex: true })).toThrow(
+        /Unsafe regex search pattern/,
+      );
+    });
+
     it('escapes regex metacharacters in literal mode', () => {
       const layout = setup(['a.b a.b a+b']);
       // '.' must match literally, not "any char".

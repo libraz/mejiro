@@ -37,6 +37,18 @@ Steps:
 
 Empty chapters (those with no paragraphs after extraction) are omitted from the result.
 
+### Import limits for untrusted EPUBs
+
+`parseEpub()` and `EditableEpub.load()` reject archives that exceed safe defaults for compressed input size, entry count, expanded entry size, total expanded size, or compression ratio. Pass `limits` only when a trusted environment needs a different ceiling:
+
+```ts
+const book = await parseEpub(data, {
+  limits: { maxTotalBytes: 300 * 1024 * 1024 },
+});
+```
+
+`DEFAULT_EPUB_PARSE_LIMITS` and the `EpubParseLimits` / `EpubParseOptions` types are exported from `@libraz/mejiro/epub`.
+
 ## Data Model
 
 ```ts

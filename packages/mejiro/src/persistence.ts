@@ -89,11 +89,37 @@ export function parseAnnotations(raw: string | null): Annotation[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as Partial<PersistedAnnotations>;
-    if (parsed && Array.isArray(parsed.annotations)) return parsed.annotations;
+    if (parsed?.version !== ANNOTATIONS_VERSION || !Array.isArray(parsed.annotations)) return [];
+    return parsed.annotations.filter(isAnnotation);
   } catch {
     // Bad JSON — treat as empty.
   }
   return [];
+}
+
+function isAnnotation(value: unknown): value is Annotation {
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== 'string' || !isNonNegativeInteger(value.chapter)) return false;
+  if (!(isAnchor(value.start) && isAnchor(value.end))) return false;
+  if (value.color !== undefined && typeof value.color !== 'string') return false;
+  if (value.note !== undefined && typeof value.note !== 'string') return false;
+  return value.createdAt === undefined || Number.isFinite(value.createdAt);
+}
+
+function isAnchor(value: unknown): value is InChapterAnchor {
+  return (
+    isRecord(value) &&
+    isNonNegativeInteger(value.paragraph) &&
+    isNonNegativeInteger(value.charIndex)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 /** Serializes annotations with a version envelope. */

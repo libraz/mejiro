@@ -1,6 +1,11 @@
 import JSZip from 'jszip';
 import type { InlineAnnotation } from '../browser/types.js';
 import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
+import {
+  assertEpubArchiveWithinLimits,
+  type EpubParseOptions,
+  resolveEpubParseLimits,
+} from './limits.js';
 import { extractRubyContent } from './ruby-extractor.js';
 import type {
   AnnotatedParagraph,
@@ -139,8 +144,8 @@ export class EditableEpub {
   }
 
   /** Parses an EPUB and starts an editing session. */
-  static async load(data: ArrayBuffer): Promise<EditableEpub> {
-    return new EditableEpub(await parseEditableEpubBook(data));
+  static async load(data: ArrayBuffer, options: EpubParseOptions = {}): Promise<EditableEpub> {
+    return new EditableEpub(await parseEditableEpubBook(data, options));
   }
 
   get title(): string {
@@ -478,17 +483,28 @@ export type AddImageInput = AddImageInputBytes | AddImageInputUrl;
  * Parses an EPUB while retaining enough package metadata to export edits back
  * into an EPUB file.
  */
-export async function parseEditableEpub(data: ArrayBuffer): Promise<EditableEpub> {
-  return EditableEpub.load(data);
+export async function parseEditableEpub(
+  data: ArrayBuffer,
+  options: EpubParseOptions = {},
+): Promise<EditableEpub> {
+  return EditableEpub.load(data, options);
 }
 
-async function parseEditableEpubBook(data: ArrayBuffer): Promise<EditableEpubBook> {
+async function parseEditableEpubBook(
+  data: ArrayBuffer,
+  options: EpubParseOptions,
+): Promise<EditableEpubBook> {
+  const limits = resolveEpubParseLimits(options);
+  if (data.byteLength > limits.maxInputBytes) {
+    throw new Error(`EPUB exceeds the compressed input limit (${limits.maxInputBytes} bytes)`);
+  }
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(data);
   } catch (err) {
     throw new Error(`Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`);
   }
+  assertEpubArchiveWithinLimits(data, zip, limits);
   const files = new Map<string, Uint8Array>();
 
   await Promise.all(
@@ -615,10 +631,9 @@ export function addEpubChapterImage(
 ): string {
   const chapter = requireChapter(book, chapterIndex);
   const isV5 = isAddImageInput(image);
-  markChapterDirty(chapter);
-
   const requestedFilename = assertImageInputFilename(image);
   const insertAt = resolveAddImageInsertIndex(chapter, image);
+  assertAddImagePayload(image);
   const assetKey = uniqueAssetKey(requestedFilename, collectImageAssetKeys(book));
   const filename = assetKey;
   const mediaType = isV5
@@ -630,9 +645,7 @@ export function addEpubChapterImage(
   if (isV5 && (image as AddImageInputUrl).url !== undefined) {
     asset.url = (image as AddImageInputUrl).url;
   }
-  if (asset.data === undefined && asset.url === undefined) {
-    throw new Error('Image input must include either `data` or `url`');
-  }
+  markChapterDirty(chapter);
   chapter.imageAssets.set(assetKey, asset);
 
   const imageBlock: EditableImageBlock = {

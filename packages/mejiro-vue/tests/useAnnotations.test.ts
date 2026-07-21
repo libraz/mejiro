@@ -110,6 +110,16 @@ describe('useAnnotations (Vue) — onChange', () => {
     unmount();
   });
 
+  it('drops malformed stored annotations without preventing mount', () => {
+    const storage = memoryStorage();
+    storage.setItem('k', JSON.stringify({ version: 1, annotations: [{}] }));
+
+    const { result, unmount } = withSetup(() => useAnnotations({ key: 'k', storage }));
+
+    expect(result.annotations.value).toEqual([]);
+    unmount();
+  });
+
   it('does not fire on no-op remove() / update()', () => {
     const onChange = vi.fn();
     const storage = memoryStorage();

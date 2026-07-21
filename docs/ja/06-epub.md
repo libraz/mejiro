@@ -37,6 +37,18 @@ flowchart LR
 
 段落が 1 つもない章は結果から除外されます。
 
+### 未信頼 EPUB の読込上限
+
+`parseEpub()` と `EditableEpub.load()` は、圧縮入力サイズ、entry 数、entry ごとの展開サイズ、合計展開サイズ、圧縮率の安全な既定上限を超える archive を拒否します。信頼できる環境だけで上限を変更してください。
+
+```ts
+const book = await parseEpub(data, {
+  limits: { maxTotalBytes: 300 * 1024 * 1024 },
+});
+```
+
+`DEFAULT_EPUB_PARSE_LIMITS` と `EpubParseLimits` / `EpubParseOptions` は `@libraz/mejiro/epub` から export されます。
+
 ## データモデル
 
 ```ts

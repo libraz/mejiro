@@ -109,6 +109,15 @@ describe('useAnnotations (React) — onChange', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('drops malformed stored annotations instead of exposing invalid values', () => {
+    const storage = memoryStorage();
+    storage.setItem('k', JSON.stringify({ version: 1, annotations: [{}] }));
+
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage }));
+
+    expect(result.current.annotations).toEqual([]);
+  });
+
   it('does not fire on no-op remove() / update()', () => {
     const onChange = vi.fn();
     const storage = memoryStorage();

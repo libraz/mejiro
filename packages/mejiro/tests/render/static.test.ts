@@ -119,4 +119,15 @@ describe('renderEpubStatic', () => {
     expect(html).toMatch(/^<article /);
     expect(html).toContain('aria-label="Chapter 1"');
   });
+
+  it('falls back to div for runtime-invalid wrapper tags', () => {
+    const html = renderEpubStatic(
+      { paragraphs: [paragraph('hi')] },
+      { tag: 'img src=x onerror=alert(1)' as 'div' },
+    );
+
+    expect(html).toMatch(/^<div /);
+    expect(html).not.toContain('onerror');
+    expect(html).not.toContain('<img ');
+  });
 });

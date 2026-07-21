@@ -3,7 +3,7 @@
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { EditableEpub, parseEpub } from '../../src/epub/index.js';
+import { addEpubChapterImage, EditableEpub, parseEpub } from '../../src/epub/index.js';
 
 async function makeEpub(files: Record<string, string | Uint8Array>): Promise<ArrayBuffer> {
   const zip = new JSZip();
@@ -35,6 +35,18 @@ const opfXml = `<?xml version="1.0"?>
 </package>`;
 
 describe('EditableEpub', () => {
+  it('applies the same archive limits before eagerly materializing editable files', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': '<?xml version="1.0"?><html><body><p>本文</p></body></html>',
+    });
+
+    await expect(EditableEpub.load(data, { limits: { maxEntries: 1 } })).rejects.toThrow(
+      /entry limit/,
+    );
+  });
+
   it('parses namespaced container and prefixed OPF manifest/spine entries', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': `<?xml version="1.0"?>
@@ -1388,6 +1400,32 @@ describe('EditableEpub', () => {
     expect(view.getUint16(8, true)).toBe(0);
     expect(name).toBe('mimetype');
     expect(contents).toBe('application/epub+zip');
+  });
+
+  it('keeps a chapter clean when the low-level image helper rejects its target', async () => {
+    const originalChapter = `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="keep" content="yes" /></head><body><p>本文</p><aside>注記</aside></body></html>`;
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': originalChapter,
+    });
+    const editor = await EditableEpub.load(data);
+
+    expect(() =>
+      addEpubChapterImage(editor.book, 0, {
+        filename: 'figure.png',
+        data: new Uint8Array([1]),
+        afterBlockId: 'missing',
+      }),
+    ).toThrow(/Missing block/);
+    expect(editor.chapters[0].isDirty).toBeUndefined();
+
+    const out = await editor.export();
+    const zip = await JSZip.loadAsync(out);
+    await expect(zip.file('OPS/Text/chapter.xhtml')?.async('string')).resolves.toBe(
+      originalChapter,
+    );
   });
 
   describe('assetResolver', () => {

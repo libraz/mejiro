@@ -75,6 +75,14 @@ interface SpreadLayoutBuildResult {
   lineWidths: Float32Array;
 }
 
+const MAX_REGEX_SEARCH_PATTERN_LENGTH = 256;
+const MAX_REGEX_SEARCH_TEXT_LENGTH = 1_000_000;
+
+interface RegexGroupState {
+  hasAlternation: boolean;
+  hasQuantifiedTerm: boolean;
+}
+
 function emptyPageResult(): PageResult {
   return { page: { paragraphs: [] }, lines: [], slots: [], hasImages: false };
 }
@@ -523,22 +531,32 @@ export class ChapterLayout {
    * @param options - Search options.
    * @returns Matches in document order. Empty array when `query` is empty
    *   or no matches are found.
-   * @throws If `regex: true` and `query` is not a valid regex source.
+   * @throws If `regex: true` and `query` is invalid or exceeds the regex safety limits.
    */
   findText(query: string, options: FindTextOptions = {}): SearchMatch[] {
     if (!query) return [];
     const { regex = false, caseSensitive = false, maxResults } = options;
     const limit = maxResults != null && maxResults > 0 ? maxResults : Number.POSITIVE_INFINITY;
 
+    if (regex) assertSafeRegexSearch(query);
     const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const flags = caseSensitive ? 'gu' : 'giu';
     const pattern = new RegExp(source, flags);
 
     const results: SearchMatch[] = [];
+    let regexTextLength = 0;
     for (let pIdx = 0; pIdx < this.cached.length; pIdx++) {
       const chars = this.cached[pIdx].chars;
       if (chars.length === 0) continue;
       const joined = chars.join('');
+      if (regex) {
+        regexTextLength += joined.length;
+        if (regexTextLength > MAX_REGEX_SEARCH_TEXT_LENGTH) {
+          throw new RangeError(
+            `Regex search input exceeds ${MAX_REGEX_SEARCH_TEXT_LENGTH} UTF-16 code units`,
+          );
+        }
+      }
       const jsToCp = buildJsToCpOffsetMap(chars, joined.length);
 
       for (const m of joined.matchAll(pattern)) {
@@ -1281,4 +1299,86 @@ export class ChapterLayout {
     }
     return { paragraph, charIndex: lineEnd };
   }
+}
+
+/** Rejects patterns with common catastrophic-backtracking structures. */
+function assertSafeRegexSearch(source: string): void {
+  if (source.length > MAX_REGEX_SEARCH_PATTERN_LENGTH) {
+    throw new RangeError(
+      `Regex search pattern exceeds ${MAX_REGEX_SEARCH_PATTERN_LENGTH} characters`,
+    );
+  }
+
+  const groups: RegexGroupState[] = [{ hasAlternation: false, hasQuantifiedTerm: false }];
+  let inCharacterClass = false;
+  let escaped = false;
+  let closedGroup: RegexGroupState | undefined;
+
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (escaped) {
+      escaped = false;
+      closedGroup = undefined;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      closedGroup = undefined;
+      continue;
+    }
+    if (inCharacterClass) {
+      if (char === ']') inCharacterClass = false;
+      continue;
+    }
+    if (char === '[') {
+      inCharacterClass = true;
+      closedGroup = undefined;
+      continue;
+    }
+    if (char === '(') {
+      groups.push({ hasAlternation: false, hasQuantifiedTerm: false });
+      closedGroup = undefined;
+      continue;
+    }
+    if (char === ')') {
+      if (groups.length === 1) {
+        closedGroup = undefined;
+        continue;
+      }
+      const group = groups.pop();
+      if (!group) continue;
+      const parent = groups.at(-1) as RegexGroupState;
+      parent.hasAlternation ||= group.hasAlternation;
+      parent.hasQuantifiedTerm ||= group.hasQuantifiedTerm;
+      closedGroup = group;
+      continue;
+    }
+    if (char === '|') {
+      (groups.at(-1) as RegexGroupState).hasAlternation = true;
+      closedGroup = undefined;
+      continue;
+    }
+    const quantifier = regexQuantifierEnd(source, i);
+    if (quantifier > i) {
+      // `?` directly after `(` introduces a non-capturing/lookaround group.
+      if (!(char === '?' && source[i - 1] === '(')) {
+        if (closedGroup?.hasQuantifiedTerm || closedGroup?.hasAlternation) {
+          throw new Error('Unsafe regex search pattern: quantified complex group');
+        }
+        (groups.at(-1) as RegexGroupState).hasQuantifiedTerm = true;
+      }
+      closedGroup = undefined;
+      i = quantifier - 1;
+      continue;
+    }
+    closedGroup = undefined;
+  }
+}
+
+function regexQuantifierEnd(source: string, index: number): number {
+  const char = source[index];
+  if (char === '*' || char === '+' || char === '?') return index + 1;
+  if (char !== '{') return index;
+  const match = /^\{\d+(?:,\d*)?\}/u.exec(source.slice(index));
+  return match ? index + match[0].length : index;
 }

@@ -210,7 +210,9 @@ export class EpubProject {
   /** Removes a chapter by index. */
   removeChapter(index: number): void {
     if (index < 0 || index >= this.chapters.length) throw new Error(`Missing chapter: ${index}`);
+    const removedAssetHrefs = markerAssetHrefs(this.chapters[index]);
     this.chapters.splice(index, 1);
+    this.removeUnreferencedAssets(removedAssetHrefs);
   }
 
   /** Moves a chapter from `from` to `to` (clamped to the chapter list bounds). */
@@ -277,6 +279,24 @@ export class EpubProject {
     };
     this.assets.push(stored);
     return stored;
+  }
+
+  private removeUnreferencedAssets(candidates: ReadonlySet<string>): void {
+    if (candidates.size === 0) return;
+    const referencedHrefs = new Set<string>();
+    for (const chapter of this.chapters) {
+      for (const href of markerAssetHrefs(chapter)) referencedHrefs.add(href);
+    }
+    for (let i = this.assets.length - 1; i >= 0; i--) {
+      const asset = this.assets[i];
+      if (
+        asset.properties === 'cover-image' ||
+        !candidates.has(asset.href) ||
+        referencedHrefs.has(asset.href)
+      )
+        continue;
+      this.assets.splice(i, 1);
+    }
   }
 
   async export(options: EpubExportOptions = {}): Promise<ArrayBuffer> {
@@ -451,6 +471,26 @@ function manuscriptImageBlock(asset: EpubProjectAsset & { alt?: string }): strin
   const src = relativeZipPath('OPS/Text/', asset.href);
   const altPart = asset.alt ? `|${encodeURIComponent(asset.alt)}` : '';
   return `[[mejiro-image:${encodeURIComponent(src)}${altPart}]]`;
+}
+
+function resolveMarkerHref(src: string): string {
+  const parts = `OPS/Text/${src}`.split('/');
+  const normalized: string[] = [];
+  for (const part of parts) {
+    if (!part || part === '.') continue;
+    if (part === '..') normalized.pop();
+    else normalized.push(part);
+  }
+  return normalized.join('/');
+}
+
+function markerAssetHrefs(chapter: ProjectChapter): Set<string> {
+  const hrefs = new Set<string>();
+  for (const paragraph of manuscriptParagraphs(chapter.body)) {
+    const marker = parseInlineImageMarker(paragraph);
+    if (marker) hrefs.add(resolveMarkerHref(marker.src));
+  }
+  return hrefs;
 }
 
 function inlineImageFigure(image: { src: string; alt: string }): string {

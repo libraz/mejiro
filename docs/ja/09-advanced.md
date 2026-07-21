@@ -506,7 +506,7 @@ export function ReaderClient({ slug, initialHtml }: Props) {
 }
 ```
 
-`renderEpubStatic()` は計測やページ分割を行わず、ブラウザの縦書きフローに任せた素朴な HTML を返します。出力は内部で `escapeHtml` / `escapeAttr` され、`parseEpub()` 経由のリンクから `javascript:` などの実行可能スキームも落とされます。検索エンジン向けインデックス用や、低速回線でのプレースホルダとして十分使えます。
+`renderEpubStatic()` は計測やページ分割を行わず、ブラウザの縦書きフローに任せた素朴な HTML を返します。出力は内部で `escapeHtml` / `escapeAttr` され、`parseEpub()` 経由のリンクから `javascript:` などの実行可能スキームも落とされます。wrapper は実行時にも `div` / `article` / `section` に制限され、不正な値は `div` にフォールバックします。検索エンジン向けインデックス用や、低速回線でのプレースホルダとして十分使えます。
 
 ### 7.3 読書位置の永続化（サーバ同期）
 

@@ -265,6 +265,36 @@ describe('EpubProject', () => {
     expect(project.chapters.map((c) => c.title)).toEqual(['三', '一']);
   });
 
+  it('removes assets that were referenced only by a deleted chapter', () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'asset cleanup', identifier: 'urn:uuid:asset-cleanup' },
+      chapters: [
+        { title: '一', body: '本文1' },
+        { title: '二', body: '本文2' },
+      ],
+    });
+    project.addInlineImage(0, 1, {
+      href: 'OPS/Images/only-first.png',
+      data: new Uint8Array([1]),
+    });
+    project.addInlineImage(0, 2, {
+      href: 'OPS/Images/shared.png',
+      data: new Uint8Array([2]),
+    });
+    project.addInlineImage(1, 1, {
+      href: 'OPS/Images/shared.png',
+      data: new Uint8Array([3]),
+    });
+    project.addAsset({ href: 'OPS/Data/kept.bin', data: new Uint8Array([4]) });
+
+    project.removeChapter(0);
+
+    expect(project.assets.map((asset) => asset.href)).toEqual([
+      'OPS/Images/shared-2.png',
+      'OPS/Data/kept.bin',
+    ]);
+  });
+
   it('normalizes chapter and asset IDs used by OPF manifest and spine', async () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: 'ID', identifier: 'urn:uuid:id-book' },

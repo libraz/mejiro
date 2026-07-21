@@ -13,6 +13,12 @@ export interface RenderEpubStaticOptions {
   ariaLabel?: string;
 }
 
+const SAFE_WRAPPER_TAGS = new Set<NonNullable<RenderEpubStaticOptions['tag']>>([
+  'div',
+  'article',
+  'section',
+]);
+
 interface StaticChapter {
   paragraphs: readonly BookParagraph[];
 }
@@ -37,7 +43,7 @@ export function renderEpubStatic(
   chapter: StaticChapter,
   options: RenderEpubStaticOptions = {},
 ): string {
-  const tag = options.tag ?? 'div';
+  const tag = SAFE_WRAPPER_TAGS.has(options.tag ?? 'div') ? (options.tag ?? 'div') : 'div';
   const cls = ['mejiro-page', options.className].filter(Boolean).join(' ');
   const attrs = [`class="${escapeAttr(cls)}"`];
   if (options.ariaLabel) attrs.push(`aria-label="${escapeAttr(options.ariaLabel)}"`);
