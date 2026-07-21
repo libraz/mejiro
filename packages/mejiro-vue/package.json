@@ -1,6 +1,6 @@
 {
   "name": "@libraz/mejiro-vue",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Vue components and composables for mejiro — vertical text rendering, EPUB reader, and editor",
   "type": "module",
   "main": "./dist/index.js",
