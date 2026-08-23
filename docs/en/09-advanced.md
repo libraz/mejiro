@@ -208,14 +208,35 @@ interface RenderLine {
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string }
-  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
-  | { type: 'tcy'; text: string }
-  | { type: 'em'; text: string }
-  | { type: 'strong'; text: string }
-  | { type: 'link'; text: string; href: string; title?: string }
-  | { type: 'footnote-ref'; text: string; noteId: string };
+  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | {
+      type: 'emphasis';
+      text: string;
+      style: 'sesame' | 'dot' | 'circle';
+      children?: readonly RenderSegment[];
+    }
+  | { type: 'tcy'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'em'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'strong'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'link'; text: string; href: string; title?: string; children?: readonly RenderSegment[] }
+  | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
+
+`ruby` carries its base under `base`; the other seven variants carry theirs under `text`.
+Both hold the flattened text of the whole span, so a renderer that only draws characters
+can ignore `children` (nested annotations) entirely:
+
+```ts
+import type { RenderSegment } from '@libraz/mejiro/render';
+
+/** Flattened text of any segment variant. */
+function segmentText(segment: RenderSegment): string {
+  return segment.type === 'ruby' ? segment.base : segment.text;
+}
+```
+
+For DOM output, use `segmentToInlineNode()` instead — see
+[Pagination & Rendering](07-pagination-and-rendering.md).
 
 ### Canvas Rendering
 
@@ -229,12 +250,11 @@ function renderToCanvas(ctx: CanvasRenderingContext2D, page: RenderPage): void {
       x -= lineHeight;
       let y = 0;
       for (const segment of line.segments) {
-        const text = segment.type === 'text' ? segment.text : segment.base;
-        for (const char of text) {
+        for (const char of segmentText(segment)) {
           ctx.fillText(char, x, y + 16);
           y += 16;
         }
-        // Ruby rendering omitted for brevity
+        // Ruby text, emphasis marks and tate-chu-yoko rotation omitted for brevity
       }
     }
   }
@@ -250,7 +270,7 @@ function renderToString(page: RenderPage): string {
       p.lines
         .map((l) =>
           l.segments
-            .map((s) => (s.type === 'text' ? s.text : `${s.base}(${s.rubyText})`))
+            .map((s) => (s.type === 'ruby' ? `${s.base}(${s.rubyText})` : s.text))
             .join('')
         )
         .join('\n')
@@ -302,8 +322,11 @@ const result = computeBreaks({
 
 1. For each column, the engine collects all image regions that overlap it horizontally.
 2. Overlapping regions are merged into non-overlapping intervals.
-3. The largest contiguous gap (not occupied by any image) becomes the available text area for that column.
-4. The gap's height becomes the effective `lineWidth` for that column, and its vertical position (`yStart`) indicates where to render the text.
+3. **Every** contiguous gap left between those intervals becomes a slot, as long as it is at least `minGapHeight` tall (defaults to `linePitch`). A column split by an image contributes one slot above it and one below it; a column an image covers entirely contributes none.
+4. The gap's height becomes the effective `lineWidth` for that slot, and its vertical position (`yStart`) indicates where to render the text.
+5. Slots are emitted in reading order. Adjacent columns that an image splits the same way form a band group: the band above the image is filled across every column of the group before the text wraps back to the band below it. Columns split differently start a new group, so a column is never read before a column to its right.
+
+Because a column may yield several slots or none, `slots.length` is unrelated to `lineCount` and `slots[columnIndex]` is not a valid lookup — a slot's index is a line index. Use `xPos` to recover the physical column. The two-image example above produces 20 slots for 12 columns.
 
 ### Coordinate System (Vertical Writing)
 
@@ -475,6 +498,18 @@ For works that require login, attach cookies or a bearer token through `fetchOpt
 
 Paginated layout depends on Canvas/FontFace and therefore runs on the client. `renderEpubStatic(chapter)` returns a plain `writing-mode: vertical-rl` HTML string with no measurement; piping that into the `fallback` prop keeps real text on screen until the client reader hydrates.
 
+`parseEpub()` reads XHTML through the host DOM globals `DOMParser`, `XMLSerializer`, and `Node`, none of which plain Node provides. Register a DOM implementation once before the server component runs, or the call fails with an error naming what is missing.
+
+```ts
+// instrumentation.ts (or any module imported before the first parseEpub call)
+import { Window } from 'happy-dom';
+
+const window = new Window() as unknown as typeof globalThis;
+globalThis.DOMParser = window.DOMParser;
+globalThis.XMLSerializer = window.XMLSerializer;
+globalThis.Node = window.Node;
+```
+
 ```tsx
 // Next.js App Router — server component
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -570,7 +605,32 @@ const buffer = await editor.export({
 
 Omit `assetResolver` and mejiro falls back to the runtime `fetch(url, { signal })`. Write an explicit wrapper when you need to mint S3 signed URLs per request, hit an IndexedDB cache offline, or attach custom headers.
 
-The same wiring exists on the manuscript-to-EPUB path: `EpubProject` accepts `{ href, url }` via `addAsset` / `setCover`. `<MejiroEditor>`, `<MejiroManuscriptEditor>`, `useEditableEpub`, and `useEpubProject` all surface `assetResolver` as a prop / option and forward it to the internal `editor.export()` / `project.export()` calls.
+The same wiring exists on the manuscript-to-EPUB path: `EpubProject` accepts `{ href, url }` via `addAsset` / `setCover`. `<MejiroEditor>` and `useEditableEpub` register URL-only images through `editor.addImage({ filename, url })`; `useEpubProject` registers them through its own `setCover` / `setAssets`. All three surface `assetResolver` as a prop / option and forward it to the internal `editor.export()` / `project.export()` call, so the URLs are resolved only while the EPUB is assembled.
+
+```ts
+const project = useEpubProject({
+  assetResolver: async ({ url, signal }) => (await fetch(url, { signal })).arrayBuffer(),
+});
+
+project.setCover({ href: 'OPS/Images/cover.jpg', url: 'https://cdn.example.com/works/1/cover.jpg' });
+const buffer = await project.exportEpub(); // cover bytes fetched here
+```
+
+Because both paths share one resolver, `request.asset` is `AssetResolverAsset` — an
+`EditableImageAsset | EpubProjectAsset` union. The fields a resolver normally reads (`url`,
+`mediaType`, `data`) are common to both, so most resolvers never narrow. The naming fields
+differ, and so does the meaning of `assetKey`: on the editor path it is the key inside the
+chapter's `imageAssets` map, on the project path it is the ZIP href. Narrow with an `in`
+check when the source path matters:
+
+```ts
+const resolver: AssetResolver = async ({ assetKey, asset, url, signal }) => {
+  const label = 'filename' in asset ? asset.filename : asset.href;
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`asset fetch failed: ${label} (${assetKey}) ${res.status}`);
+  return res.arrayBuffer();
+};
+```
 
 Notes:
 

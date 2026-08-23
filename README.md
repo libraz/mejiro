@@ -120,7 +120,7 @@ For detailed guides with examples, see [Documentation](docs/en/).
 | `@libraz/mejiro` | Core: `computeBreaks()`, `ExclusionEngine`, `toCodepoints()`, kinsoku, hanging, ruby, pagination |
 | `@libraz/mejiro/browser` | Browser: `MejiroBrowser` class, font measurement, width caching |
 | `@libraz/mejiro/epub` | EPUB: `parseEpub()`, `EditableEpub`, `EpubProject`, `parseManuscript` |
-| `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `renderEpubStatic()`, `mejiro.css` / `mejiro-reader.css` / `mejiro-editor.css` / `mejiro-print.css` |
+| `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `renderEpubStatic()`, `mejiro.css` / `mejiro-reader.css` / `mejiro-editor.css` / `mejiro-fonts.css` / `mejiro-print.css` |
 | `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout`, `estimateReadingTime` — high-level layout, pagination, image exclusion, search, anchors, snapshots |
 | `@libraz/mejiro/image` | `prepareImage(file, opts?)` — decode / downscale / re-encode before embedding |
 | `@libraz/mejiro-react` | React: `<MejiroReader>` / `<MejiroEditor>` / `<MejiroManuscriptEditor>` / `<MejiroShelf>` / `<MejiroToc>` + `useEpub` / `useLibrary` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` |

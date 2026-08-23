@@ -85,17 +85,9 @@ for (const para of spread.right.page.paragraphs) {
   if (para.isHeading) p.style.fontWeight = '700';
   for (const line of para.lines) {
     for (const seg of line.segments) {
-      if (seg.type === 'text') {
-        p.appendChild(document.createTextNode(seg.text));
-      } else {
-        // Ruby annotation
-        const ruby = document.createElement('ruby');
-        ruby.textContent = seg.base;
-        const rt = document.createElement('rt');
-        rt.textContent = seg.rubyText;
-        ruby.appendChild(rt);
-        p.appendChild(ruby);
-      }
+      // ルビ・傍点・縦中横・em・strong・リンク・脚注参照まで、
+      // 入れ子の注釈を含めて全セグメント種別を解決します。
+      appendInlineNode(p, segmentToInlineNode(seg));
     }
   }
   pageEl.appendChild(p);
@@ -103,6 +95,28 @@ for (const para of spread.right.page.paragraphs) {
 
 container.appendChild(pageEl);
 ```
+
+`segmentToInlineNode()` は `@libraz/mejiro/render` が提供する関数で、フレームワーク非依存の小さな要素記述を返します。これを DOM に変換する処理は十数行で書けます。
+
+```ts
+import { segmentToInlineNode } from '@libraz/mejiro/render';
+import type { InlineRenderNode } from '@libraz/mejiro/render';
+
+function appendInlineNode(parent: Node, node: InlineRenderNode): void {
+  if (node.type === 'text') {
+    parent.appendChild(document.createTextNode(node.text));
+    return;
+  }
+  const el = document.createElement(node.tag);
+  if (node.className) el.className = node.className;
+  if (node.href) el.setAttribute('href', node.href);
+  if (node.title) el.title = node.title;
+  for (const child of node.children) appendInlineNode(el, child);
+  parent.appendChild(el);
+}
+```
+
+`seg.type` を「テキストかルビか」の 2 分岐で書かないでください。通常の日本語書籍では傍点・縦中横・リンク・脚注参照のセグメントも生成され、2 分岐のコードではそれらが `<ruby>undefined<rt>undefined</rt></ruby>` として出力されてしまいます。セグメント種別の一覧は[ページ分割と描画](07-pagination-and-rendering.md)を参照してください。
 
 EPUB ファイルを使わず、プレーンテキストの段落をレイアウトすることもできます:
 

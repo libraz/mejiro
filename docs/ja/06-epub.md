@@ -19,21 +19,18 @@ console.log(book.chapters.length);
 
 `parseEpub()` は、おおまかに次の流れで EPUB を段落データへ変換します。
 
-```mermaid
-flowchart LR
-    ZIP["ArrayBuffer\n(ZIP)"] -->|JSZip| C["META-INF/\ncontainer.xml"]
-    C -->|ルートファイルパス| OPF["OPF\n(メタデータ + マニフェスト + スパイン)"]
-    OPF -->|スパイン順| XHTML["XHTML\n(コンテンツ文書)"]
-    XHTML -->|extractRubyContent| AP["AnnotatedParagraph[]\n(テキスト + ルビ)"]
-```
+![parseEpub の処理フロー: EPUB の ArrayBuffer を上限チェックのうえ JSZip で展開して META-INF/container.xml を読み、ルートファイルパスから OPF パッケージ（メタデータ・マニフェスト・spine）へ進む。spine 順に XHTML コンテンツ文書をたどり、extractRubyContent で AnnotatedParagraph を取り出し、章としてまとめて EpubBook を返す。OPF からは破線の側枝がナビゲーション文書へ伸び、目次の章タイトルを EpubBook に供給する](../assets/epub-parse-flow-ja.svg)
 
 処理手順は次のとおりです。
 
-1. **ZIP 展開** -- JSZip で EPUB ファイルを展開します。
+1. **ZIP 展開** -- 後述の読込上限に照らしてアーカイブを検査したうえで、JSZip で EPUB ファイルを展開します。
 2. **container.xml** -- `META-INF/container.xml` を読み取り、ルートファイルパス（OPFファイル）を特定します。
-3. **OPF 解析** -- OPF ファイルを解析し、メタデータ（`dc:title`、`dc:creator`）と spine（コンテンツ文書の読み順）を取り出します。manifest の id から href への対応を作り、spine の itemref をファイルパスへ解決します。
+3. **OPF 解析** -- OPF ファイルを解析し、メタデータ（`dc:title`、`dc:creator`）、spine（コンテンツ文書の読み順）、ナビゲーション文書を取り出します。manifest の id から href への対応を作り、spine の itemref をファイルパスへ解決します。
 4. **XHTML 抽出** -- spine の各項目について、対応する XHTML コンテンツ文書を ZIP から読み取ります。
-5. **段落抽出** -- `extractRubyContent()` が各 XHTML 文書の DOM を走査し、本文テキストとルビ注釈を `AnnotatedParagraph[]` にまとめます。各文書で最初に見つかった見出し要素（`h1`、`h2`、`h3`）を章タイトルとして使います。
+5. **段落抽出** -- `extractRubyContent()` が各 XHTML 文書の DOM を走査し、本文テキストとルビ注釈を `AnnotatedParagraph[]` にまとめます。
+6. **章としてまとめる** -- 段落を `EpubChapter` にまとめ、OPF メタデータの書名と著者を添えた `EpubBook` として返します。
+
+章タイトルは、文書内に `id="chapter-title"` の要素があればそれを、なければ最初の `h1`、`h2`、`h3` を、それもなければナビゲーション文書の目次を使います。
 
 段落が 1 つもない章は結果から除外されます。
 
@@ -110,15 +107,18 @@ const paragraphs = extractRubyContent(xhtml);
 
 ### ブロックレベル要素
 
-次の要素を段落の境界として扱います: `p`、`div`、`h1`--`h6`、`blockquote`、`li`、`dt`、`dd`、`figcaption`。
+次の要素を段落の境界として扱います: `p`、`div`、`h1`、`h2`、`h3`、`h4`、`h5`、`h6`、`blockquote`、`li`、`dt`、`dd`、`section`、`article`、`main`、`td`、`th`、`pre`、`table`、`tr`、`figcaption`。
 
 XHTML文書にブロックレベル要素が含まれない場合、body全体が単一の段落として扱われます。
+
+ブロック要素の直下にインライン内容と入れ子のブロック要素が混在する場合、各インラインランはそれぞれ独立した段落として原文の順序どおりに出力されます。たとえば `<div>A<p>B</p>C</div>` は `A`、`B`、`C` の3段落になります。
 
 ### ルビの処理
 
 - `<ruby>base<rt>reading</rt></ruby>` は、親文字が1文字の場合はモノ注釈、複数文字の場合はグループ注釈を生成します。
 - `<rp>` 要素は完全に無視されます。
 - `<rb>` 要素は親文字テキストとして扱われます。
+- `<ruby>` の直下に `<rt>` がない場合は、`<rtc>` 内の読みが使われます。
 - 単一の `<ruby>` 要素内に複数の親文字-rtペアがある場合、各ペアに対して個別の注釈が生成されるとともに、ルビグループ全体にわたる熟語レベルの注釈が追加されます。この注釈には、親文字テキスト内で改行可能な位置を示す `jukugoSplitPoints` が含まれます。
 - `<ruby>` 内のその他のインライン要素は親文字テキストとして扱われます。
 - `<ruby>` 内の末尾の親文字テキストに続く `<rt>` がない場合、ルビ注釈なしのプレーンテキストとして出力されます。
@@ -347,7 +347,7 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 - **自動ルビ**: 親文字は `Script=Han`（漢字）または `々〆ヶ` の連続のみ対象です。ひらがな・カタカナ・記号には自動ルビが付きません。明示的にルビを付けたい場合は `｜...《...》`（パイプ式）を使ってください。
 - **パイプ式ルビ**: 親文字に制約はありません。括弧の優先順位は「パイプ式 → 自動ルビ」の順なので、ひらがな等にルビを振りたい場合は `｜` を先頭に置きます。
 - **傍点（圏点）**: `《《...》》` の対応する閉じ括弧が見つからない場合は本文としてそのまま残ります。出力は `style: 'sesame'`（ゴマ点）です。他のスタイル（黒丸 `dot` 等）を使う場合は直接 `InlineAnnotation` を構築してください。
-- **縦中横**: 内容は半角英数字と `!`、`?` のみで構成され、`〔...〕` 全体が6文字以内（括弧含む）であることが条件です。日本語混在や長い文字列はそのまま本文に残ります。
+- **縦中横**: 内容は半角英数字と `!`、`?` のみで構成され、括弧の中身が 5 文字以内（括弧を含めて 7 文字以内）であることが条件です。`〔12345〕` は注釈になりますが `〔123456〕` はなりません。日本語混在や長い文字列はそのまま本文に残ります。
 - **脚注参照**: 出力本文には `*<id>`（例: `*note-1`）が挿入され、対応する `kind: 'footnote'` 注釈が付与されます。脚注本体（参照先）の管理はアプリ側で行ってください。
 - **リンク**: `[label](href)` および `[label](href "title")` を受け付けます。`href` は空白を含まないトークン1つで、`title` 部分はダブルクォートで囲みます。
 - **強調 / 弱強調**: `**` が `*` より優先されます。`***text***`（混在）は素直にはネストされない（外側の `**` で `strong` になり、内側に余分な `*` が残る）ため、複合表現は `InlineAnnotation` を直接構築してください。
@@ -366,6 +366,8 @@ const rubyOnly = inlineAnnotations.filter((ann) => ann.kind === 'ruby');
 ## 依存関係
 
 `@libraz/mejiro/epub` は、ZIP 展開に [JSZip](https://stuk.github.io/jszip/) を使い、XML / XHTML 解析に `DOMParser` を使います。`DOMParser` はブラウザのほか、happy-dom や jsdom などの DOM 実装を入れたサーバーサイドランタイムでも使えます。
+
+使うグローバルは `DOMParser` / `XMLSerializer` / `Node` の 3 つで、素の Node にはいずれもありません。登録されていない場合、`parseEpub()` と `EditableEpub.load()` は素の `ReferenceError` ではなく、不足しているものを名指ししたエラーを投げます。登録方法は [応用 -- SSR でのファーストペイント](./09-advanced.md#722-ssr-でのファーストペイント) を参照してください。
 
 ---
 

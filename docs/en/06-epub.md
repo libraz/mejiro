@@ -19,21 +19,18 @@ console.log(book.chapters.length);
 
 The following diagram shows how `parseEpub()` transforms an EPUB file into structured paragraph data:
 
-```mermaid
-flowchart LR
-    ZIP["ArrayBuffer\n(ZIP)"] -->|JSZip| C["META-INF/\ncontainer.xml"]
-    C -->|rootfile path| OPF["OPF\n(metadata + manifest + spine)"]
-    OPF -->|spine order| XHTML["XHTML\n(content documents)"]
-    XHTML -->|extractRubyContent| AP["AnnotatedParagraph[]\n(text + ruby)"]
-```
+![parseEpub flow: the EPUB ArrayBuffer is unzipped by JSZip under a limit check into META-INF/container.xml, whose rootfile path leads to the OPF package (metadata, manifest, spine); spine order yields the XHTML content documents, extractRubyContent yields AnnotatedParagraph entries, and chapter grouping yields the EpubBook. A dashed side branch runs from the OPF to the navigation document, which supplies table-of-contents chapter titles to the EpubBook](../assets/epub-parse-flow-en.svg)
 
 Steps:
 
-1. **Unzip** -- The EPUB file is decompressed using JSZip.
+1. **Unzip** -- The EPUB file is decompressed using JSZip, after the archive is checked against the import limits described below.
 2. **container.xml** -- `META-INF/container.xml` is read to locate the rootfile path (the OPF file).
-3. **OPF parsing** -- The OPF file is parsed to extract metadata (`dc:title`, `dc:creator`) and the spine (reading order of content documents). A manifest map (id to href) is built to resolve spine itemrefs to file paths.
+3. **OPF parsing** -- The OPF file is parsed to extract metadata (`dc:title`, `dc:creator`), the spine (reading order of content documents), and the navigation document. A manifest map (id to href) is built to resolve spine itemrefs to file paths.
 4. **XHTML extraction** -- For each spine item, the corresponding XHTML content document is read from the ZIP archive.
-5. **Paragraph extraction** -- `extractRubyContent()` walks the DOM of each XHTML document, collecting base text and ruby annotations into `AnnotatedParagraph[]`. The first heading element (`h1`, `h2`, or `h3`) found in each document is used as the chapter title.
+5. **Paragraph extraction** -- `extractRubyContent()` walks the DOM of each XHTML document, collecting base text and ruby annotations into `AnnotatedParagraph[]`.
+6. **Chapter grouping** -- Paragraphs are grouped into `EpubChapter` entries and returned as an `EpubBook` with the title and author from the OPF metadata.
+
+The chapter title comes from the document's own `id="chapter-title"` element if it has one, otherwise from its first `h1`, `h2` or `h3`, and otherwise from the navigation document's table of contents.
 
 Empty chapters (those with no paragraphs after extraction) are omitted from the result.
 
@@ -110,15 +107,18 @@ const paragraphs = extractRubyContent(xhtml);
 
 ### Block-level elements
 
-The following elements create paragraph boundaries: `p`, `div`, `h1`--`h6`, `blockquote`, `li`, `dt`, `dd`, `figcaption`.
+The following elements create paragraph boundaries: `p`, `div`, `h1`, `h2`, `h3`, `h4`, `h5`, `h6`, `blockquote`, `li`, `dt`, `dd`, `section`, `article`, `main`, `td`, `th`, `pre`, `table`, `tr`, `figcaption`.
 
 If the XHTML document contains no block-level elements, the entire body is treated as a single paragraph.
+
+When a block element mixes inline content with nested block elements, each inline run becomes its own paragraph, emitted in source order. For example `<div>A<p>B</p>C</div>` yields three paragraphs: `A`, `B`, `C`.
 
 ### Ruby handling
 
 - `<ruby>base<rt>reading</rt></ruby>` produces a mono annotation (single base character) or group annotation (multiple base characters).
 - `<rp>` elements are ignored entirely.
 - `<rb>` elements are treated as base text.
+- When a `<ruby>` element has no direct `<rt>` children, the readings inside its `<rtc>` container are used instead.
 - Multiple base-rt pairs within a single `<ruby>` element produce individual annotations for each pair, plus an additional jukugo-level annotation spanning the entire ruby group with `jukugoSplitPoints` indicating where line breaks are permitted within the base text.
 - Other inline elements inside `<ruby>` are treated as base text.
 - Trailing base text inside `<ruby>` with no following `<rt>` is emitted as plain text without a ruby annotation.
@@ -347,7 +347,7 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 - **Auto ruby**: the base text must be a contiguous run of `Script=Han` (kanji) characters or one of `々〆ヶ`. Hiragana, katakana, and symbols do not trigger auto ruby — use the pipe form (`｜...《...》`) for those.
 - **Pipe ruby**: any base text is allowed. The parser tries pipe ruby before auto ruby, so prefix `｜` whenever you need ruby over non-kanji.
 - **Emphasis dots**: if the matching `》》` cannot be found, the literal `《《...` flows through as plain text. The emitted annotation uses `style: 'sesame'`; for other styles (e.g. `dot`), build the `InlineAnnotation` directly.
-- **Tate-chu-yoko**: the body inside `〔...〕` must match `[A-Za-z0-9!?]+` and the whole bracket region must be at most 6 characters wide (brackets included). Mixed Japanese or longer payloads fall through as literal body text.
+- **Tate-chu-yoko**: the body inside `〔...〕` must match `[A-Za-z0-9!?]+` and be at most 5 characters long (7 including the brackets), so `〔12345〕` is annotated but `〔123456〕` is not. Mixed Japanese or longer payloads fall through as literal body text.
 - **Footnote reference**: the body text receives `*<id>` (e.g. `*note-1`) plus the matching `kind: 'footnote'` annotation. Managing the footnote target itself is left to the host application.
 - **Link**: both `[label](href)` and `[label](href "title")` are accepted. The `href` is a single whitespace-free token and `title` must be double-quoted.
 - **Strong / Emphasis**: `**` is tried before `*`. Nested forms such as `***text***` do not nest cleanly (the outer `**` becomes `strong` and the leftover `*` remains as text). Build `InlineAnnotation`s by hand for compound styles.
@@ -366,6 +366,8 @@ const rubyOnly = inlineAnnotations.filter((ann) => ann.kind === 'ruby');
 ## Dependencies
 
 The `@libraz/mejiro/epub` module depends on [JSZip](https://stuk.github.io/jszip/) for ZIP decompression and uses `DOMParser` for XML/XHTML parsing (available in all browsers and in server-side runtimes that provide a DOM implementation such as happy-dom or jsdom).
+
+The globals used are `DOMParser`, `XMLSerializer`, and `Node`, none of which plain Node provides. When they are not registered, `parseEpub()` and `EditableEpub.load()` throw an error naming what is missing instead of a bare `ReferenceError`. See [Advanced -- First paint under SSR](./09-advanced.md#722-first-paint-under-ssr) for a registration snippet.
 
 ---
 

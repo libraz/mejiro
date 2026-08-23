@@ -14,7 +14,7 @@ The `computeBreaks` function implements a single-pass greedy algorithm with back
    - **Kinsoku line-end check** -- The character at the break position is not prohibited at line end.
    - **Kinsoku line-start check** -- The character immediately after the break is not prohibited at line start.
    - **Cluster boundary check** -- The break does not split characters belonging to the same cluster ID.
-4. **Forced break** -- If no valid position is found during backward search, the algorithm forces a break at the overflow point.
+4. **Forced break** -- If no valid position is found during backward search, the algorithm breaks at the nearest cluster boundary on the line, or at the overflow point when the line contains no cluster boundary at all. See section 6.
 5. **Width recalculation** -- After placing a break, the accumulated width is recalculated for the characters already consumed on the new line.
 
 ### Time Complexity
@@ -23,7 +23,11 @@ The algorithm is O(n) where n is the number of characters. Each character is vis
 
 ### Token Boundary Preference
 
-When `tokenBoundaries` is provided, the backward search prefers breaking at token edges. If no token boundary is found among the valid break candidates, the algorithm falls back to the first kinsoku-valid position.
+When `tokenBoundaries` is provided, the backward search prefers breaking at token edges. If no token boundary is found among the valid break candidates, the algorithm falls back to the nearest kinsoku-valid position.
+
+### Word Boundary Preference
+
+With or without token boundaries, the nearest valid position wins, because it fills the line best. An earlier space is preferred only when breaking at the nearest position would split a word -- that is, when the characters on both sides of it belong to a space-delimited script. CJK text allows a break between any two characters, so a space in it never pulls the break away from the line end.
 
 ---
 
@@ -36,6 +40,7 @@ interface LayoutInput {
   text: Uint32Array;                      // Unicode codepoints
   advances: Float32Array;                 // Per-character advance widths (px)
   lineWidth: number;                      // Available line width (px)
+  lineWidths?: Float32Array;              // Per-line widths overriding lineWidth
   mode?: KinsokuMode;                     // 'strict' (default) | 'loose'
   enableHanging?: boolean;                // Default: true
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
@@ -50,6 +55,7 @@ interface LayoutInput {
 | `text`             | Yes      | --         | Unicode codepoints as `Uint32Array`. Use `toCodepoints()` to convert from a string. |
 | `advances`         | Yes      | --         | Per-character advance widths in pixels. Must have the same length as `text`. |
 | `lineWidth`        | Yes      | --         | Maximum line width in pixels.                                      |
+| `lineWidths`       | No       | --         | Per-line widths in pixels. The i-th line uses `lineWidths[i]`; lines beyond the array fall back to `lineWidth`. Used by image exclusion, where each column has its own available height. |
 | `mode`             | No       | `'strict'` | Kinsoku processing mode. See section 4.                            |
 | `enableHanging`    | No       | `true`     | Whether to allow hanging punctuation. See section 5.               |
 | `clusterIds`       | No       | --         | Cluster IDs for indivisible character groups. See section 6.       |
@@ -101,6 +107,7 @@ interface BreakResult {
   breakPoints: Uint32Array;             // Indices of last char before each break
   hangingAdjustments?: Float32Array;    // Hanging overhang per line (px), 0 if none
   effectiveAdvances?: Float32Array;     // Per-char advances after ruby distribution
+  lineWidths?: Float32Array;            // Width actually used per line
 }
 ```
 
@@ -130,25 +137,41 @@ Kinsoku shori is the set of Japanese typographic rules that prohibit certain cha
 
 ### Strict Mode (default)
 
-**Line-start prohibited characters:**
+**Line-start prohibited characters** (the complete set returned by `getDefaultKinsokuRules().lineStartProhibited`):
 
 | Category           | Characters                                  |
 |--------------------|---------------------------------------------|
-| Closing brackets   | ）〕］｝〉》」』】                          |
+| Closing brackets   | ）〕］｝〉》」』】〗〙〛                    |
+| Closing quotes     | ’”〟                                        |
 | Punctuation        | 、。，．・：；？！                          |
-| Small kana         | ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ    |
+| Dashes and ellipses | ‥…〜—―                                     |
+| Small kana         | ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ |
 | Long vowel mark    | ー                                          |
 | Iteration marks    | 々〻ヽヾゝゞ                                |
 
-**Line-end prohibited characters:**
+**Line-end prohibited characters** (`getDefaultKinsokuRules().lineEndProhibited`):
 
 | Category           | Characters                                  |
 |--------------------|---------------------------------------------|
-| Opening brackets   | （〔［｛〈《「『【                          |
+| Opening brackets   | （〔［｛〈《「『【〖〘〚                    |
+| Opening quotes     | 〝‘“                                         |
+
+**Unbreakable pairs** (`getDefaultKinsokuRules().unbreakablePairs`) — never split between the two characters: `‥‥`, `……`, `——`, `――`.
 
 ### Loose Mode
 
-Same rules as strict mode, but **small kana** (ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ) and the **long vowel mark** (ー) are allowed at line start. This is useful for narrow columns where strict kinsoku would cause excessive whitespace.
+Same rules as strict mode, but these characters are allowed at line start:
+
+| Category           | Characters                                  |
+|--------------------|---------------------------------------------|
+| Small kana         | ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ |
+| Long vowel mark    | ー                                          |
+
+This is useful for narrow columns where strict kinsoku would cause excessive whitespace.
+Note the asymmetry between the two small ka/ke pairs: katakana `ヵヶ` are allowed at line
+start in loose mode, while hiragana `ゕゖ` stay prohibited in both modes. Everything else
+prohibited under strict mode — brackets, quotes, punctuation, dashes and iteration marks —
+stays prohibited under loose mode.
 
 ### Break Validation Logic
 
@@ -184,13 +207,13 @@ const advances = new Float32Array(11).fill(16);
 // The naive break after index 4 (あいうえお) would put っ at the start of line 2.
 // The algorithm backtracks to index 3 to avoid this.
 const strict = computeBreaks({ text, advances, lineWidth: 80, mode: 'strict' });
-// strict.breakPoints → [3, ...]
+// strict.breakPoints → [3, 8]
 // Line 1: あいうえ (4 chars), Line 2 starts with おっ...
 
 // Loose mode: っ is allowed at line start.
 // The break can stay at index 4.
 const loose = computeBreaks({ text, advances, lineWidth: 80, mode: 'loose' });
-// loose.breakPoints → [4, ...]
+// loose.breakPoints → [4, 9]
 // Line 1: あいうえお (5 chars), Line 2 starts with っか...
 ```
 
@@ -262,10 +285,12 @@ const result = computeBreaks({
   lineWidth: 80,
   enableHanging: false,
 });
-// The 、 cannot hang, so the break moves earlier.
-// result.breakPoints → [4]
-// Line 1: あいうえお (5 chars)
-// Line 2: 、かきくけこ
+// The 、 cannot hang, so it must start line 2 — but 、 is prohibited at line start,
+// so the backward search moves the break one position earlier.
+// result.breakPoints → [3, 8]
+// Line 1: あいうえ (4 chars)
+// Line 2: お、かきくけ
+// Line 3: こ
 ```
 
 Note: When `enableHanging` is `false`, `hangingAdjustments` is `undefined` in the result.
@@ -293,16 +318,20 @@ const clusterIds = new Uint32Array([0, 0, 0, 1, 1]);
 const result = computeBreaks({
   text,
   advances,
-  lineWidth: 40, // 2.5 chars fit
+  lineWidth: 48, // 3 chars fit
   clusterIds,
 });
 // Cannot break within cluster 0 (A-B or B-C) or cluster 1 (D-E).
 // The only valid break is after index 2 (between C and D).
 // result.breakPoints → [2]
-// Line 1: ABC, Line 2: DE
+// Line 1: ABC (48px), Line 2: DE (32px)
 ```
 
 If `clusterIds` is omitted, every inter-character position is eligible for a break (subject to kinsoku rules).
+
+### Clusters Wider Than the Line
+
+A cluster that is wider than the available line width fits on no line at all. In that case the forced break rule splits it at the last character that fits, and that is the only situation in which a break falls between two characters sharing a cluster ID. As long as a cluster fits on a line of its own it is never split, even when honouring it means placing a line-end prohibited character at the line end.
 
 ---
 

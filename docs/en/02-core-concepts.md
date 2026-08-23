@@ -4,16 +4,9 @@ This document covers the fundamental architecture and design decisions behind me
 
 ## 1. Architecture Overview
 
-mejiro is organized into four layers, each with a clear responsibility. Higher layers depend on lower layers but never the reverse.
+mejiro is organized into layers, each with a clear responsibility. Higher layers depend on lower layers but never the reverse. `book` and `epub` are siblings -- both sit on `render`, and an application can enter at either one. `image` is independent of the rest.
 
-```mermaid
-graph TD
-    A["Application (React / Vue / vanilla DOM)"] --> F["@libraz/mejiro/book"]
-    F --> B["@libraz/mejiro/render"]
-    B --> C["@libraz/mejiro/epub"]
-    C --> D["@libraz/mejiro/browser"]
-    D --> E["@libraz/mejiro (core)"]
-```
+![Layer stack: the application uses @libraz/mejiro/book, @libraz/mejiro/epub and the independent @libraz/mejiro/image; book and epub sit on @libraz/mejiro/render, which sits on @libraz/mejiro/browser, which sits on the @libraz/mejiro core engine](../assets/architecture-layers-en.svg)
 
 ### Book (`@libraz/mejiro/book`)
 
@@ -39,6 +32,10 @@ Parses EPUB files and extracts text with inline annotations. The parsing pipelin
 ### Render (`@libraz/mejiro/render`)
 
 Converts layout results into a framework-agnostic `RenderPage` data structure. This structure describes pages as a hierarchy of paragraphs, lines, and segments -- ready for any rendering framework to consume. Also provides `mejiro.css` with the base styles needed for vertical text display.
+
+### Image (`@libraz/mejiro/image`)
+
+A standalone browser helper, independent of the other layers. `prepareImage()` decodes an image file, downscales it to fit pixel bounds, and re-encodes it under a byte budget so it is safe to embed in an EPUB.
 
 ## 2. TypedArray-Based API
 
@@ -75,15 +72,11 @@ The typed array pair (`Uint32Array` for codepoints + `Float32Array` for advances
 
 The full layout pipeline transforms a string into renderable page data in six steps:
 
-```mermaid
-flowchart LR
-    S["String"] -->|toCodepoints| CP["Uint32Array\n(codepoints)"]
-    CP -->|measureAll| ADV["Float32Array\n(advances)"]
-    ADV -->|computeBreaks| BR["BreakResult\n{breakPoints, hangingAdjustments}"]
-    BR -->|getLineRanges| LR["[start, end)[] \n(line ranges)"]
-    LR -->|paginate| PG["PageSlice[][]\n(pages)"]
-    PG -->|buildRenderPage| RP["RenderPage\n(paragraphs→lines→segments)"]
-```
+![Layout pipeline: a String becomes a Uint32Array of codepoints via toCodepoints, a Float32Array of advances via measureAll, a BreakResult via computeBreaks, ParagraphMeasure entries via buildParagraphMeasures, PageSlice pages via paginate, and a RenderPage via buildRenderPage; getLineRanges is a dashed side branch from BreakResult to line ranges that also feeds the RenderPage](../assets/layout-pipeline-en.svg)
+
+`getLineRanges()` is a side branch: `buildRenderPage()` calls it internally to slice
+characters per line, and it is exposed for consumers that need the ranges directly.
+`paginate()` itself never sees line ranges — it works from `ParagraphMeasure[]`.
 
 ### Step 1: `toCodepoints()`
 
@@ -103,13 +96,15 @@ The core line breaking algorithm. Takes a `LayoutInput` (codepoints, advances, l
 
 The algorithm is **greedy O(n)** with backtracking limited to kinsoku rule resolution. See [Line Breaking](03-line-breaking.md) for details.
 
-### Step 4: `getLineRanges()`
+### Step 4: `buildParagraphMeasures()`
 
-Converts the flat `breakPoints` array into an array of `[start, end)` pairs, where each pair represents the codepoint range of one line.
+Turns render entries (characters, break points, annotations, heading level) into `ParagraphMeasure[]` -- per paragraph, its line count, line pitch in the block direction, and the gap before it. This is what pagination consumes; the character ranges themselves are not needed until rendering.
+
+`getLineRanges(breakPoints, length)` converts the flat `breakPoints` array into `[start, end)` pairs. `buildRenderPage()` calls it internally, and it is exported for consumers that need the ranges directly -- it is not a step in the pagination path.
 
 ### Step 5: `paginate()`
 
-Distributes lines across fixed-size pages. Takes line ranges, paragraph measures, and page dimensions, and returns `PageSlice[][]` -- an array of pages, each containing slices of paragraphs.
+Distributes lines across fixed-size pages. It takes exactly two arguments -- `paginate(pageBlockSize, paragraphs)`, where `pageBlockSize` is the available size in the block direction (the page width in vertical-rl) and `paragraphs` is the `ParagraphMeasure[]` from step 4 -- and returns `PageSlice[][]`: an array of pages, each containing slices of paragraphs. It always returns at least one page.
 
 ### Step 6: `buildRenderPage()`
 

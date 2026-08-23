@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 628" width="640" role="img">
+  <title>mejiro layout pipeline: a string becomes codepoints, advances, a BreakResult, paragraph measures, page slices and finally a RenderPage, with getLineRanges as a side branch feeding the RenderPage</title>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+    .panel { fill: #ffffff; }
+    .box { fill: #f6f8fa; stroke: #4a5763; stroke-width: 1; }
+    .box-app { fill: #eaeef2; stroke: #4a5763; stroke-width: 1; }
+    .name { fill: #1f2328; font-size: 14px; font-weight: 600; }
+    .note { fill: #55606b; font-size: 12px; }
+    .edge { stroke: #4a5763; stroke-width: 1.4; fill: none; }
+    .head { fill: #4a5763; }
+    .elabel { fill: #55606b; font-size: 11px; }
+    @media (prefers-color-scheme: dark) {
+      .panel { fill: #0d1117; }
+      .box { fill: #161b22; stroke: #8b949e; }
+      .box-app { fill: #1c2128; stroke: #8b949e; }
+      .name { fill: #e6edf3; }
+      .note { fill: #9198a1; }
+      .edge { stroke: #8b949e; }
+      .head { fill: #8b949e; }
+      .elabel { fill: #9198a1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 Z" />
+    </marker>
+  </defs>
+
+  <rect class="panel" x="0" y="0" width="640" height="628" rx="8" />
+
+  <rect class="box" x="24" y="24" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="46" text-anchor="middle">String</text>
+  <text class="note" x="164" y="63" text-anchor="middle">JavaScript string</text>
+
+  <rect class="box" x="24" y="112" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="134" text-anchor="middle">Uint32Array</text>
+  <text class="note" x="164" y="151" text-anchor="middle">codepoints</text>
+
+  <rect class="box" x="24" y="200" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="222" text-anchor="middle">Float32Array</text>
+  <text class="note" x="164" y="239" text-anchor="middle">advances (px)</text>
+
+  <rect class="box" x="24" y="288" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="310" text-anchor="middle">BreakResult</text>
+  <text class="note" x="164" y="327" text-anchor="middle">breakPoints, hangingAdjustments</text>
+
+  <rect class="box" x="24" y="376" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="398" text-anchor="middle">ParagraphMeasure[]</text>
+  <text class="note" x="164" y="415" text-anchor="middle">lineCount, linePitch, gapBefore</text>
+
+  <rect class="box" x="24" y="464" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="486" text-anchor="middle">PageSlice[][]</text>
+  <text class="note" x="164" y="503" text-anchor="middle">one entry per page</text>
+
+  <rect class="box" x="24" y="552" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="574" text-anchor="middle">RenderPage</text>
+  <text class="note" x="164" y="591" text-anchor="middle">paragraphs → lines → segments</text>
+
+  <rect class="box" x="400" y="288" width="216" height="52" rx="6" />
+  <text class="name" x="508" y="310" text-anchor="middle">[start, end)[]</text>
+  <text class="note" x="508" y="327" text-anchor="middle">line ranges</text>
+
+  <line class="edge" x1="164" y1="76" x2="164" y2="112" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="98">toCodepoints</text>
+
+  <line class="edge" x1="164" y1="164" x2="164" y2="200" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="186">measureAll</text>
+
+  <line class="edge" x1="164" y1="252" x2="164" y2="288" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="274">computeBreaks</text>
+
+  <line class="edge" x1="164" y1="340" x2="164" y2="376" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="362">buildParagraphMeasures</text>
+
+  <line class="edge" x1="164" y1="428" x2="164" y2="464" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="450">paginate</text>
+
+  <line class="edge" x1="164" y1="516" x2="164" y2="552" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="538">buildRenderPage</text>
+
+  <line class="edge" x1="304" y1="314" x2="400" y2="314" stroke-dasharray="5 4" marker-end="url(#arrow)" />
+  <text class="elabel" x="352" y="306" text-anchor="middle">getLineRanges</text>
+
+  <path class="edge" d="M508 340 L508 578 L304 578" stroke-dasharray="5 4" marker-end="url(#arrow)" />
+</svg>

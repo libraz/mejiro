@@ -55,14 +55,15 @@ interface RubyAnnotation {
 
 `preprocessRuby()` は、ルビテキストの幅を親文字へ分配し、ルビの途中で不自然に改行されないようにクラスタ ID を生成します。返す主な値は次の 2 つです。
 
-- **effectiveAdvances** -- 調整後の送り幅。ルビテキストが親文字より広い場合、はみ出す分を親文字側へ分配します。
+- **effectiveAdvances** -- 調整後の送り幅。ルビテキストが親文字より広い場合、超過分を親文字側へ分配します。
 - **clusterIds** -- 同じクラスタ ID を持つ文字は行をまたいで分割されません。グループルビではすべての親文字に同じクラスタ ID が付きます。熟語ルビでは、分割点ごとにサブグループを作ります。
 
-幅の分配はJLReqの規則に従います:
+幅の分配は次のように行われます。
 
-1. ルビテキストが親文字より広い場合、隣接するかな文字を確認します。
-2. 隣接するかな文字の送り幅の最大50%がルビのはみ出しを吸収できます（左右独立）。
-3. 残りの超過分は親文字に比例配分されます。
+1. ルビテキストが親文字以下の幅であれば、送り幅は変更されません。
+2. 親文字より広い場合は超過分を親文字に比例配分し、その範囲は「親文字幅とルビ幅の広いほう」を確保します。
+
+ルビの幅を隣接文字の送り幅に肩代わりさせることはありません。描画側は各注釈を自身のスパン内に描くため、確保した幅がそのまま描画に必要な幅になります。したがって 1 行分の effectiveAdvances の総和は実際に描画されるインライン方向の広がりの上界であり、幅の広いルビが列端で欠けることはありません。
 
 ```ts
 import { preprocessRuby, toCodepoints } from '@libraz/mejiro';
@@ -81,8 +82,11 @@ const annotations: RubyAnnotation[] = [{
 const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotations);
 // インデックス0-1の親文字幅: 32px (2 x 16)。ルビ幅: 24px。
 // ルビは親文字より狭いため、分配する超過分はなし。
-// clusterIds: [0, 0, 2, 3, 4] -- インデックス0と1が同じクラスタを共有（グループルビ）
+// effectiveAdvances: [16, 16, 16, 16, 16] -- 変化なし
+// clusterIds: [5, 5, 2, 3, 4] -- インデックス0と1が同じクラスタを共有（グループルビ）
 ```
+
+クラスタ ID の初期値は恒等写像（`clusterIds[i] === i`）です。注釈の付かない文字は自分のインデックスをそのまま持つため、どこでも改行できます。注釈の付いた範囲にはテキスト長から数え上げた新しい ID が割り当てられるので、5 文字のテキストでは最初のグループが `5` になります。意味を持つのは隣接文字どうしが等しいかどうかだけで、数値自体に順序の意味はありません。
 
 実際には `preprocessRuby()` を直接呼び出すことはほとんどありません。`LayoutInput` にコアレベルの `rubyAnnotations` を渡して `computeBreaks()` を呼び出すと、関数内部で `preprocessRuby()` が呼ばれ、結果の実効送り幅とクラスタIDが改行処理に使用されます。
 
@@ -217,15 +221,27 @@ for (const para of page.paragraphs) {
       if (segment.type === 'ruby') {
         // segment.base     -- 親文字テキスト文字列
         // segment.rubyText -- ルビテキスト文字列
+        // segment.children -- 親文字の内側に入れ子になった注釈（あれば）
         // 以下のようにレンダリング: <ruby>base<rt>rubyText</rt></ruby>
       } else {
-        // segment.type === 'text'
-        // segment.text -- プレーンテキスト文字列
+        // ルビ以外: 'text' / 'emphasis' / 'tcy' / 'em' / 'strong' / 'link' /
+        // 'footnote-ref'。いずれも `text` フィールドを持ちます。
       }
     }
   }
 }
 ```
+
+`ruby` は `RenderSegment` の 8 バリアントのうちの 1 つなので、ルビだけを特別扱いする描画コードでも残りのバリアントを処理する必要があります。`segmentToInlineNode()` は、親文字の内側に入れ子の注釈があるルビも含めて、全バリアントを解決します。
+
+```ts
+import { segmentToInlineNode } from '@libraz/mejiro/render';
+
+const node = segmentToInlineNode(segment);
+// ruby -> { type: 'element', tag: 'ruby', children: [<親文字>, { tag: 'rt', ... }] }
+```
+
+セグメント種別の一覧と、それを使った DOM 描画の実装は[ページ分割と描画](07-pagination-and-rendering.md)を参照してください。
 
 `mejiro.css` スタイルシート（`@libraz/mejiro/render/mejiro.css` からインポート）は、`.mejiro-page` 内の `<ruby>` および `<rt>` 要素をスタイリングします:
 

@@ -22,7 +22,8 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
   inlineAnnotations: p.inlineAnnotations,
-  isHeading: !!p.headingLevel,
+  kind: p.kind,
+  headingLevel: p.headingLevel,
 }));
 ```
 
@@ -31,18 +32,20 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 | `chars` | `string[]` | Character array (grapheme clusters) of the paragraph text. |
 | `breakPoints` | `Uint32Array` | Break points from the line breaking algorithm. |
 | `inlineAnnotations` | `InlineAnnotation[]` | Inline ruby / emphasis / tcy / link annotations for this paragraph. |
-| `isHeading` | `boolean` | Whether this paragraph is a heading. |
+| `kind` | `ParagraphKind \| undefined` | Structural classification (`'body'`, `'heading'`, `'blockquote'`, `'sceneBreak'`, `'pre'`, `'figure'`). Survives pagination into `RenderParagraph.kind`, where it selects the `mejiro-paragraph--*` class. Defaults to `'body'`. |
+| `headingLevel` | `number \| undefined` | Heading level (1--6). Carry it through: without it every heading gets the same size, because per-level `headingStyles` are keyed on it, and the class falls back to the generic `--heading` modifier. |
+| `isHeading` | `boolean \| undefined` | Deprecated. Set `kind: 'heading'` (with `headingLevel` when the level is known) instead. Ignored when `headingLevel` is set. |
 
 ## 2. buildParagraphMeasures()
 
-Converts render entries into `ParagraphMeasure[]` for use with `paginate()`. Computes line pitch (font size x line height) and inter-paragraph gaps based on whether each paragraph is a heading or body text.
+Converts render entries into `ParagraphMeasure[]` for use with `paginate()`. Computes line pitch (font size x line spacing) and inter-paragraph gaps based on whether each paragraph is a heading or body text.
 
 ```ts
 import { buildParagraphMeasures } from '@libraz/mejiro/render';
 
 const measures = buildParagraphMeasures(entries, {
   fontSize: 16,
-  lineHeight: 1.8,
+  lineSpacing: 1.8,
   headingScale: 1.4,
   paragraphGapEm: 0.4,
   headingGapEm: 1.2,
@@ -54,10 +57,12 @@ const measures = buildParagraphMeasures(entries, {
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `fontSize` | `number` | (required) | Base font size in px. |
-| `lineHeight` | `number` | (required) | Line height multiplier. |
-| `headingScale` | `number` | `1.4` | Scale factor for heading font size (e.g., `16 * 1.4 = 22.4`). |
+| `lineSpacing` | `number` | `1` | Line spacing multiplier. |
+| `lineHeight` | `number` | -- | Deprecated alias for `lineSpacing`, used only when `lineSpacing` is absent. |
+| `headingScale` | `number` | `1.4` | Scale factor for heading font size (e.g., `16 * 1.4 = 22.4`). Overridden per level by `headingStyles`. |
 | `paragraphGapEm` | `number` | `0.4` | Gap before body paragraphs in em units. |
-| `headingGapEm` | `number` | `1.2` | Gap after heading paragraphs in em units. |
+| `headingGapEm` | `number` | `1.2` | Gap after heading paragraphs in em units. Overridden per level by `headingStyles`. |
+| `headingStyles` | `Record<number, HeadingStyle>` | -- | Per-level overrides of `scale` and `gapAfterEm`, keyed by heading level (1--6). |
 
 ### ParagraphMeasure
 
@@ -66,7 +71,7 @@ Each returned `ParagraphMeasure` contains:
 | Field | Type | Description |
 |-------|------|-------------|
 | `lineCount` | `number` | Number of lines (`breakPoints.length + 1`). |
-| `linePitch` | `number` | Size of each line in the block direction (px). `fontSize * lineHeight` for body, `headingFontSize * lineHeight` for headings. |
+| `linePitch` | `number` | Size of each line in the block direction (px). `fontSize * lineSpacing` for body, `headingFontSize * lineSpacing` for headings. |
 | `gapBefore` | `number` | Gap before this paragraph (px). Derived from the *previous* paragraph: `headingGap` if the previous paragraph was a heading, otherwise `paragraphGap`. Ignored when the paragraph starts a page. |
 
 ## 3. paginate()
@@ -123,6 +128,7 @@ interface RenderParagraph {
   lines: RenderLine[];
   isHeading: boolean;
   headingLevel?: number;
+  kind?: ParagraphKind;
 }
 
 interface RenderLine {
@@ -131,16 +137,23 @@ interface RenderLine {
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string }
-  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
-  | { type: 'tcy'; text: string }
-  | { type: 'em'; text: string }
-  | { type: 'strong'; text: string }
-  | { type: 'link'; text: string; href: string; title?: string }
-  | { type: 'footnote-ref'; text: string; noteId: string };
+  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | {
+      type: 'emphasis';
+      text: string;
+      style: 'sesame' | 'dot' | 'circle';
+      children?: readonly RenderSegment[];
+    }
+  | { type: 'tcy'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'em'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'strong'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'link'; text: string; href: string; title?: string; children?: readonly RenderSegment[] }
+  | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
 
 Each line is split into segments. `text` contains plain text, `ruby` contains a base string and its ruby (furigana) reading, and other segment types represent inline emphasis, tate-chu-yoko, semantic emphasis, links, and footnote references.
+
+`children` carries nested annotations (ruby inside emphasis, tate-chu-yoko inside a link, and so on). When it is present, render the children instead of the parent's own `text`/`base`; the parent still carries the flattened text of the whole span, so a renderer that only needs plain text can ignore `children` entirely.
 
 ## 5. mejiro.css
 
@@ -155,41 +168,39 @@ import '@libraz/mejiro/render/mejiro.css';
 | Class | Purpose |
 |-------|---------|
 | `.mejiro-page` | Root container. Sets `writing-mode: vertical-rl; width: 100%`. |
-| `.mejiro-paragraph` | Paragraph column. `display: inline-block; white-space: nowrap; margin-left: 0.4em`. |
-| `.mejiro-paragraph:first-child` | Removes left margin on the first paragraph. |
+| `.mejiro-paragraph` | Paragraph column. `writing-mode: vertical-rl; display: inline-block; white-space: nowrap; margin-right: 0.4em`. |
+| `.mejiro-paragraph:first-child` | Removes the block-start margin (`margin-right: 0`) on the first paragraph. |
 | `.mejiro-paragraph--heading` | Heading style. `font-weight: 700; font-size: 1.4em; height: 100%`. |
-| `.mejiro-paragraph--heading + .mejiro-paragraph` | Gap after a heading (`margin-left: 1.2em`). |
+| `.mejiro-paragraph--heading + .mejiro-paragraph` | Gap after a heading (`margin-right: 1.2em`). |
 | `.mejiro-page ruby` | `ruby-align: center`. |
 | `.mejiro-page rt` | `font-size: 0.5em; font-weight: 400`. |
 
+Paragraph gaps are declared as `margin-right` because in `vertical-rl` the block-start
+side is the right side: columns flow right to left, so the gap *before* a paragraph sits
+on its right. Overriding `margin-left` adds a second gap on the opposite side instead of
+changing the existing one.
+
 ## 6. Vanilla DOM Rendering
 
-Rendering a `RenderPage` to DOM without a framework:
+Rendering a `RenderPage` to DOM without a framework. `paragraphClassName()` is the
+single source of the `mejiro-paragraph--*` modifiers, so the client renderer and
+`renderEpubStatic()` agree on the class list:
 
 ```ts
+import { paragraphClassName } from '@libraz/mejiro/render';
+
 function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
   container.innerHTML = '';
   container.classList.add('mejiro-page');
 
   for (const paragraph of page.paragraphs) {
     const div = document.createElement('div');
-    div.className = paragraph.isHeading
-      ? 'mejiro-paragraph mejiro-paragraph--heading'
-      : 'mejiro-paragraph';
+    div.className = paragraphClassName(paragraph.kind, paragraph.headingLevel);
 
     for (let li = 0; li < paragraph.lines.length; li++) {
       if (li > 0) div.appendChild(document.createElement('br'));
       for (const segment of paragraph.lines[li].segments) {
-        if (segment.type === 'text') {
-          div.appendChild(document.createTextNode(segment.text));
-        } else {
-          const ruby = document.createElement('ruby');
-          ruby.appendChild(document.createTextNode(segment.base));
-          const rt = document.createElement('rt');
-          rt.textContent = segment.rubyText;
-          ruby.appendChild(rt);
-          div.appendChild(ruby);
-        }
+        appendInlineNode(div, segmentToInlineNode(segment));
       }
     }
 
@@ -197,6 +208,45 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
   }
 }
 ```
+
+`segmentToInlineNode()` (exported from `@libraz/mejiro/render`) resolves every
+`RenderSegment` variant — including nested `children` and unsafe link URLs, which it
+degrades to plain text — into a small, framework-agnostic element description:
+
+```ts
+import { segmentToInlineNode } from '@libraz/mejiro/render';
+import type { InlineRenderNode } from '@libraz/mejiro/render';
+
+function appendInlineNode(parent: Node, node: InlineRenderNode): void {
+  if (node.type === 'text') {
+    parent.appendChild(document.createTextNode(node.text));
+    return;
+  }
+  const el = document.createElement(node.tag);
+  if (node.className) el.className = node.className;
+  if (node.href) el.setAttribute('href', node.href);
+  if (node.title) el.title = node.title;
+  for (const child of node.children) appendInlineNode(el, child);
+  parent.appendChild(el);
+}
+```
+
+The resulting markup per segment type:
+
+| Segment type | Markup |
+|--------------|--------|
+| `text` | text node |
+| `ruby` | `<ruby>base<rt>rubyText</rt></ruby>` |
+| `emphasis` | `<span class="mejiro-emphasis mejiro-emphasis--sesame">` (or `--dot` / `--circle`) |
+| `tcy` | `<span class="mejiro-tcy">` |
+| `em` | `<em>` |
+| `strong` | `<strong>` |
+| `link` | `<a href>` with an optional `title`; a URL rejected by the sanitizer becomes a text node |
+| `footnote-ref` | `<a class="mejiro-footnote-ref" href="#noteId">` |
+
+Branching on `segment.type` by hand is still fine, but the branch must be exhaustive:
+a two-way `text` / `ruby` split emits `<ruby>undefined<rt>undefined</rt></ruby>` for
+emphasis, tate-chu-yoko, links and footnote references.
 
 ## 7. Complete Example
 
@@ -230,20 +280,21 @@ const entries: RenderEntry[] = [
     chars: result.paragraphs[0].chars,
     breakPoints: result.paragraphs[0].breakResult.breakPoints,
     inlineAnnotations: [],
-    isHeading: true,
+    kind: 'heading',
+    headingLevel: 1,
   },
   {
     chars: result.paragraphs[1].chars,
     breakPoints: result.paragraphs[1].breakResult.breakPoints,
     inlineAnnotations: [],
-    isHeading: false,
+    kind: 'body',
   },
 ];
 
 // 4. Build measures and paginate
 const measures = buildParagraphMeasures(entries, {
   fontSize: 16,
-  lineHeight: 1.8,
+  lineSpacing: 1.8,
 });
 const pages = paginate(400, measures);
 

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 688 416" width="688" role="img">
+  <title>mejiro layer stack: the application uses book, epub and image; book and epub sit on render, render on browser, browser on the core engine</title>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+    .panel { fill: #ffffff; }
+    .box { fill: #f6f8fa; stroke: #4a5763; stroke-width: 1; }
+    .box-app { fill: #eaeef2; stroke: #4a5763; stroke-width: 1; }
+    .name { fill: #1f2328; font-size: 14px; font-weight: 600; }
+    .note { fill: #55606b; font-size: 12px; }
+    .edge { stroke: #4a5763; stroke-width: 1.4; fill: none; }
+    .head { fill: #4a5763; }
+    .elabel { fill: #55606b; font-size: 11px; }
+    @media (prefers-color-scheme: dark) {
+      .panel { fill: #0d1117; }
+      .box { fill: #161b22; stroke: #8b949e; }
+      .box-app { fill: #1c2128; stroke: #8b949e; }
+      .name { fill: #e6edf3; }
+      .note { fill: #9198a1; }
+      .edge { stroke: #8b949e; }
+      .head { fill: #8b949e; }
+      .elabel { fill: #9198a1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 Z" />
+    </marker>
+  </defs>
+
+  <rect class="panel" x="0" y="0" width="688" height="416" rx="8" />
+
+  <rect class="box-app" x="24" y="24" width="640" height="48" rx="6" />
+  <text class="name" x="344" y="53" text-anchor="middle">Application (React / Vue / vanilla DOM)</text>
+
+  <rect class="box" x="24" y="96" width="200" height="56" rx="6" />
+  <text class="name" x="124" y="120" text-anchor="middle">@libraz/mejiro/book</text>
+  <text class="note" x="124" y="137" text-anchor="middle">layout orchestration</text>
+
+  <rect class="box" x="244" y="96" width="200" height="56" rx="6" />
+  <text class="name" x="344" y="120" text-anchor="middle">@libraz/mejiro/epub</text>
+  <text class="note" x="344" y="137" text-anchor="middle">parse, edit, build EPUB</text>
+
+  <rect class="box" x="464" y="96" width="200" height="56" rx="6" />
+  <text class="name" x="564" y="120" text-anchor="middle">@libraz/mejiro/image</text>
+  <text class="note" x="564" y="137" text-anchor="middle">standalone image prep</text>
+
+  <rect class="box" x="24" y="176" width="420" height="56" rx="6" />
+  <text class="name" x="234" y="200" text-anchor="middle">@libraz/mejiro/render</text>
+  <text class="note" x="234" y="217" text-anchor="middle">RenderPage data + CSS</text>
+
+  <rect class="box" x="24" y="256" width="420" height="56" rx="6" />
+  <text class="name" x="234" y="280" text-anchor="middle">@libraz/mejiro/browser</text>
+  <text class="note" x="234" y="297" text-anchor="middle">font loading + measurement</text>
+
+  <rect class="box" x="24" y="336" width="420" height="56" rx="6" />
+  <text class="name" x="234" y="360" text-anchor="middle">@libraz/mejiro (core)</text>
+  <text class="note" x="234" y="377" text-anchor="middle">line breaking, kinsoku, ruby, exclusion</text>
+
+  <line class="edge" x1="124" y1="72" x2="124" y2="96" marker-end="url(#arrow)" />
+  <line class="edge" x1="344" y1="72" x2="344" y2="96" marker-end="url(#arrow)" />
+  <line class="edge" x1="564" y1="72" x2="564" y2="96" marker-end="url(#arrow)" />
+  <line class="edge" x1="124" y1="152" x2="124" y2="176" marker-end="url(#arrow)" />
+  <line class="edge" x1="344" y1="152" x2="344" y2="176" marker-end="url(#arrow)" />
+  <line class="edge" x1="234" y1="232" x2="234" y2="256" marker-end="url(#arrow)" />
+  <line class="edge" x1="234" y1="312" x2="234" y2="336" marker-end="url(#arrow)" />
+</svg>

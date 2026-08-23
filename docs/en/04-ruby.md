@@ -58,11 +58,12 @@ interface RubyAnnotation {
 - **effectiveAdvances** -- Adjusted advance widths. When ruby text is wider than its base text, the excess is distributed across the base characters.
 - **clusterIds** -- Characters sharing the same cluster ID cannot be split across lines. Group ruby assigns one cluster ID to all base characters; jukugo ruby creates sub-group clusters between split points.
 
-Width distribution follows JLReq rules:
+Width distribution works as follows:
 
-1. If ruby text is wider than base text, check for adjacent kana characters.
-2. Up to 50% of an adjacent kana character's advance can absorb ruby overhang (left and right independently).
-3. Any remaining excess is distributed proportionally across the base characters.
+1. If ruby text is not wider than its base text, advances are left untouched.
+2. Otherwise the excess is distributed proportionally across the base characters, so the span reserves the larger of the two widths.
+
+Ruby is never charged to a neighbouring character's advance. Rendering draws each annotation inside its own span, so the reserved width is what rendering needs: the sum of the effective advances on a line is an upper bound for the inline extent produced, and wide ruby is not clipped at the column end.
 
 ```ts
 import { preprocessRuby, toCodepoints } from '@libraz/mejiro';
@@ -81,8 +82,15 @@ const annotations: RubyAnnotation[] = [{
 const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotations);
 // Base width for indices 0-1: 32px (2 x 16). Ruby width: 24px.
 // Ruby is narrower than base, so no excess to distribute.
-// clusterIds: [0, 0, 2, 3, 4] -- indices 0 and 1 share a cluster (group ruby)
+// effectiveAdvances: [16, 16, 16, 16, 16] -- unchanged
+// clusterIds: [5, 5, 2, 3, 4] -- indices 0 and 1 share a cluster (group ruby)
 ```
+
+Cluster IDs start as the identity mapping (`clusterIds[i] === i`), so unannotated
+characters keep their own index and remain freely breakable. Each annotated span is
+assigned a fresh ID counted up from the text length -- hence `5` for the first group in a
+5-character text. Only equality between neighbours matters; the numbers themselves carry
+no order.
 
 In practice, you rarely call `preprocessRuby()` directly. When you pass core-level `rubyAnnotations` in a `LayoutInput` to `computeBreaks()`, the function calls `preprocessRuby()` internally and uses the resulting effective advances and cluster IDs during line breaking.
 
@@ -217,15 +225,30 @@ for (const para of page.paragraphs) {
       if (segment.type === 'ruby') {
         // segment.base     -- base text string
         // segment.rubyText -- ruby text string
+        // segment.children -- annotations nested inside the base, if any
         // Render as: <ruby>base<rt>rubyText</rt></ruby>
       } else {
-        // segment.type === 'text'
-        // segment.text -- plain text string
+        // Not ruby: 'text', 'emphasis', 'tcy', 'em', 'strong', 'link' or
+        // 'footnote-ref'. Every one of these carries a `text` field.
       }
     }
   }
 }
 ```
+
+`ruby` is one of eight `RenderSegment` variants, so a renderer that only special-cases
+ruby still has to handle the rest. `segmentToInlineNode()` resolves all of them —
+including a ruby whose base carries nested annotations:
+
+```ts
+import { segmentToInlineNode } from '@libraz/mejiro/render';
+
+const node = segmentToInlineNode(segment);
+// ruby -> { type: 'element', tag: 'ruby', children: [<base>, { tag: 'rt', ... }] }
+```
+
+See [Pagination & Rendering](07-pagination-and-rendering.md) for the full segment table
+and a DOM renderer built on it.
 
 The `mejiro.css` stylesheet (imported from `@libraz/mejiro/render/mejiro.css`) styles `<ruby>` and `<rt>` elements within `.mejiro-page`:
 

@@ -208,14 +208,32 @@ interface RenderLine {
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string }
-  | { type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }
-  | { type: 'tcy'; text: string }
-  | { type: 'em'; text: string }
-  | { type: 'strong'; text: string }
-  | { type: 'link'; text: string; href: string; title?: string }
-  | { type: 'footnote-ref'; text: string; noteId: string };
+  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | {
+      type: 'emphasis';
+      text: string;
+      style: 'sesame' | 'dot' | 'circle';
+      children?: readonly RenderSegment[];
+    }
+  | { type: 'tcy'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'em'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'strong'; text: string; children?: readonly RenderSegment[] }
+  | { type: 'link'; text: string; href: string; title?: string; children?: readonly RenderSegment[] }
+  | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
+
+`ruby` は親文字を `base` に、残り 7 バリアントは `text` に持ちます。どちらもその範囲全体のフラットなテキストなので、文字を描くだけの描画では入れ子注釈（`children`）を無視できます。
+
+```ts
+import type { RenderSegment } from '@libraz/mejiro/render';
+
+/** どのセグメント種別からもフラットなテキストを取り出します。 */
+function segmentText(segment: RenderSegment): string {
+  return segment.type === 'ruby' ? segment.base : segment.text;
+}
+```
+
+DOM へ出力する場合は `segmentToInlineNode()` を使ってください（[ページ分割と描画](07-pagination-and-rendering.md)を参照）。
 
 ### Canvas レンダリング
 
@@ -229,12 +247,11 @@ function renderToCanvas(ctx: CanvasRenderingContext2D, page: RenderPage): void {
       x -= lineHeight;
       let y = 0;
       for (const segment of line.segments) {
-        const text = segment.type === 'text' ? segment.text : segment.base;
-        for (const char of text) {
+        for (const char of segmentText(segment)) {
           ctx.fillText(char, x, y + 16);
           y += 16;
         }
-        // ルビの描画は省略
+        // ルビ本体・圏点・縦中横の回転描画は省略
       }
     }
   }
@@ -250,7 +267,7 @@ function renderToString(page: RenderPage): string {
       p.lines
         .map((l) =>
           l.segments
-            .map((s) => (s.type === 'text' ? s.text : `${s.base}(${s.rubyText})`))
+            .map((s) => (s.type === 'ruby' ? `${s.base}(${s.rubyText})` : s.text))
             .join('')
         )
         .join('\n')
@@ -302,8 +319,11 @@ const result = computeBreaks({
 
 1. 各列について、水平方向に重なるすべての画像領域を収集する。
 2. 重なる領域をマージして非重複区間にする。
-3. 画像に占有されていない最大の連続ギャップが、その列のテキスト領域になる。
-4. ギャップの高さがその列の実効的な `lineWidth` となり、垂直位置（`yStart`）がテキストの描画開始位置を示す。
+3. その区間の間に残る連続ギャップを**すべて**スロットにする（`minGapHeight`（既定は `linePitch`）以上の高さがあるものに限る）。画像に分断された列は上下 2 つのスロットを持ち、画像に完全に覆われた列はスロットを 1 つも持たない。
+4. ギャップの高さがそのスロットの実効的な `lineWidth` となり、垂直位置（`yStart`）がテキストの描画開始位置を示す。
+5. スロットは読み順で出力される。画像に同じ形で分断された隣接列は 1 つの帯グループを構成し、画像の上側の帯をグループ内の全列ぶん埋めてから、下側の帯へ折り返す。分断の形が異なる列は別グループになるため、ある列がその右隣の列より先に読まれることはない。
+
+1 つの列が複数のスロットを生む場合も 0 個の場合もあるため、`slots.length` は `lineCount` とは対応せず、`slots[columnIndex]` という参照はできない（スロットの添字は行の番号である）。物理的な列は `xPos` から復元する。上記の画像 2 枚の例では、12 列に対して 20 スロットが生成される。
 
 ### 座標系（縦書き）
 
@@ -475,6 +495,18 @@ DB スキーマは `EpubProjectMetadata`（`title`, `creators`, `subjects`, `lan
 
 Canvas/FontFace を使う本ペース表示は基本的にクライアントで走りますが、`renderEpubStatic(chapter)` で「`writing-mode: vertical-rl` の素直な HTML 文字列」を生成できます。SSR ではこれを `fallback` プロップに渡しておくと、ハイドレーション完了までの間も本文が見える状態を作れます。
 
+`parseEpub()` は XHTML の解析に `DOMParser` / `XMLSerializer` / `Node` を使いますが、素の Node にはいずれもありません。Server Component が動く前に DOM 実装を一度登録してください。登録がないと、不足しているものを名指ししたエラーで失敗します。
+
+```ts
+// instrumentation.ts など、最初の parseEpub 呼び出しより前に読み込まれるモジュール
+import { Window } from 'happy-dom';
+
+const window = new Window() as unknown as typeof globalThis;
+globalThis.DOMParser = window.DOMParser;
+globalThis.XMLSerializer = window.XMLSerializer;
+globalThis.Node = window.Node;
+```
+
 ```tsx
 // Next.js App Router の Server Component 側
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -566,7 +598,27 @@ const buffer = await editor.export({
 
 `assetResolver` を省略するとランタイムの `fetch(url, { signal })` がそのまま使われます。S3 SDK で署名付き URL を都度生成したり、IndexedDB キャッシュからオフラインで返したりといった用途では明示的にラッパーを書いてください。
 
-同じ仕組みは `EpubProject`（manuscript-to-EPUB 経路、カバー画像や挿絵を `addAsset({ href, url })` で登録）にも適用されます。`<MejiroEditor>` / `<MejiroManuscriptEditor>` / `useEpubProject` / `useEditableEpub` はすべて `assetResolver` プロップ・オプションを受け取り、内部の `editor.export()` / `project.export()` 呼び出しへ透過的に渡します。
+同じ仕組みは `EpubProject`（manuscript-to-EPUB 経路、カバー画像や挿絵を `addAsset({ href, url })` で登録）にも適用されます。`<MejiroEditor>` と `useEditableEpub` は `editor.addImage({ filename, url })`、`useEpubProject` は自身の `setCover` / `setAssets` で URL だけのアセットを登録できます。いずれも `assetResolver` をプロップ・オプションとして受け取り、内部の `editor.export()` / `project.export()` 呼び出しへ渡すため、URL の解決は EPUB 組み立て時にだけ走ります。
+
+```ts
+const project = useEpubProject({
+  assetResolver: async ({ url, signal }) => (await fetch(url, { signal })).arrayBuffer(),
+});
+
+project.setCover({ href: 'OPS/Images/cover.jpg', url: 'https://cdn.example.com/works/1/cover.jpg' });
+const buffer = await project.exportEpub(); // ここで初めてカバー画像を取得
+```
+
+両方の経路が 1 つのリゾルバを共有するため、`request.asset` は `AssetResolverAsset`（`EditableImageAsset | EpubProjectAsset` の共用体）です。リゾルバが通常読むフィールド（`url` / `mediaType` / `data`）は双方に共通なので、多くのリゾルバでは絞り込みが要りません。異なるのは名前系のフィールドと `assetKey` の意味で、エディタ経路では章の `imageAssets` マップのキー、プロジェクト経路では ZIP の href になります。経路を区別したい場合は `in` で絞り込みます。
+
+```ts
+const resolver: AssetResolver = async ({ assetKey, asset, url, signal }) => {
+  const label = 'filename' in asset ? asset.filename : asset.href;
+  const res = await fetch(url, { signal });
+  if (!res.ok) throw new Error(`asset fetch failed: ${label} (${assetKey}) ${res.status}`);
+  return res.arrayBuffer();
+};
+```
 
 注意点:
 

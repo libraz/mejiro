@@ -14,7 +14,7 @@
    - **禁則行末チェック** -- 改行位置の文字が行末禁則文字でないこと。
    - **禁則行頭チェック** -- 改行位置の直後の文字が行頭禁則文字でないこと。
    - **クラスタ境界チェック** -- 同じクラスタ ID に属する文字間で改行しないこと。
-4. **強制改行** -- 有効な位置が見つからない場合は、オーバーフロー位置で強制的に改行します。
+4. **強制改行** -- 有効な位置が見つからない場合は、その行で最も後ろのクラスタ境界で改行します。行内にクラスタ境界が 1 つもない場合はオーバーフロー位置で改行します。第6節を参照。
 5. **幅の再計算** -- 改行後、新しい行ですでに消費している文字の累積幅を計算し直します。
 
 ### 時間計算量
@@ -23,7 +23,11 @@
 
 ### トークン境界の優先
 
-`tokenBoundaries` を指定すると、後方探索ではトークン境界での改行を優先します。有効な候補の中にトークン境界がない場合は、禁則条件を満たす通常の位置にフォールバックします。
+`tokenBoundaries` を指定すると、後方探索ではトークン境界での改行を優先します。有効な候補の中にトークン境界がない場合は、禁則条件を満たす最も近い位置にフォールバックします。
+
+### 語境界の優先
+
+トークン境界の有無にかかわらず、行の充填率が最も高くなる「最も近い有効な位置」を選びます。手前の空白を優先するのは、最も近い位置で改行すると語の途中で切れてしまう場合、すなわちその前後の文字がどちらも空白区切りの文字体系に属する場合だけです。CJK は任意の文字間で改行できるため、文中の空白が改行位置を行末から引き離すことはありません。
 
 ---
 
@@ -36,6 +40,7 @@ interface LayoutInput {
   text: Uint32Array;                      // Unicode codepoints
   advances: Float32Array;                 // Per-character advance widths (px)
   lineWidth: number;                      // Available line width (px)
+  lineWidths?: Float32Array;              // Per-line widths overriding lineWidth
   mode?: KinsokuMode;                     // 'strict' (default) | 'loose'
   enableHanging?: boolean;                // Default: true
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
@@ -50,6 +55,7 @@ interface LayoutInput {
 | `text`             | はい | --       | Unicode コードポイントの `Uint32Array`。文字列からの変換には `toCodepoints()` を使用します。 |
 | `advances`         | はい | --       | 文字ごとの送り幅（ピクセル単位）。`text` と同じ長さである必要があります。 |
 | `lineWidth`        | はい | --       | 行の最大幅（ピクセル単位）。                                        |
+| `lineWidths`       | いいえ | --     | 行ごとの幅（ピクセル単位）。i 行目は `lineWidths[i]` を使い、配列長を超えた行は `lineWidth` にフォールバックします。列ごとに使える高さが変わる画像排除で使われます。 |
 | `mode`             | いいえ | `'strict'` | 禁則処理モード。第4節を参照。                                     |
 | `enableHanging`    | いいえ | `true`   | ぶら下げ組みを有効にするかどうか。第5節を参照。                     |
 | `clusterIds`       | いいえ | --       | 分割不可の文字グループ用クラスタ ID。第6節を参照。                  |
@@ -101,6 +107,7 @@ interface BreakResult {
   breakPoints: Uint32Array;             // Indices of last char before each break
   hangingAdjustments?: Float32Array;    // Hanging overhang per line (px), 0 if none
   effectiveAdvances?: Float32Array;     // Per-char advances after ruby distribution
+  lineWidths?: Float32Array;            // Width actually used per line
 }
 ```
 
@@ -130,25 +137,37 @@ interface BreakResult {
 
 ### strict モード（デフォルト）
 
-**行頭禁則文字:**
+**行頭禁則文字**（`getDefaultKinsokuRules().lineStartProhibited` の全文字）:
 
 | カテゴリ           | 文字                                        |
 |--------------------|---------------------------------------------|
-| 閉じ括弧           | ）〕］｝〉》」』】                          |
+| 閉じ括弧           | ）〕］｝〉》」』】〗〙〛                    |
+| 閉じ引用符         | ’”〟                                        |
 | 句読点             | 、。，．・：；？！                          |
-| 小書き仮名         | ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ    |
+| ダッシュ・三点リーダ | ‥…〜—―                                     |
+| 小書き仮名         | ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ |
 | 長音記号           | ー                                          |
 | 繰り返し記号       | 々〻ヽヾゝゞ                                |
 
-**行末禁則文字:**
+**行末禁則文字**（`getDefaultKinsokuRules().lineEndProhibited`）:
 
 | カテゴリ           | 文字                                        |
 |--------------------|---------------------------------------------|
-| 開き括弧           | （〔［｛〈《「『【                          |
+| 開き括弧           | （〔［｛〈《「『【〖〘〚                    |
+| 開き引用符         | 〝‘“                                         |
+
+**分割禁止ペア**（`getDefaultKinsokuRules().unbreakablePairs`）— 2 文字の間では改行しません: `‥‥`、`……`、`——`、`――`。
 
 ### loose モード
 
-strict モードを少し緩め、**小書き仮名**（ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ）と**長音記号**（ー）の行頭配置を許可します。狭い段組みで strict 禁則だと空きが目立つ場合に向いています。
+strict モードを少し緩め、次の文字の行頭配置を許可します。
+
+| カテゴリ           | 文字                                        |
+|--------------------|---------------------------------------------|
+| 小書き仮名         | ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ |
+| 長音記号           | ー                                          |
+
+狭い段組みで strict 禁則だと空きが目立つ場合に向いています。小書きのカ・ケには非対称があり、カタカナの `ヵヶ` は loose モードで行頭に置けますが、ひらがなの `ゕゖ` は両モードとも禁則のままです。括弧・引用符・句読点・ダッシュ・繰り返し記号など、strict モードで禁則となるその他の文字は loose モードでも禁則のままです。
 
 ### 改行判定ロジック
 
@@ -184,13 +203,13 @@ const advances = new Float32Array(11).fill(16);
 // インデックス4の後で単純に改行すると（あいうえお）、2行目の先頭がっになる。
 // アルゴリズムはこれを避けるためインデックス3まで後退する。
 const strict = computeBreaks({ text, advances, lineWidth: 80, mode: 'strict' });
-// strict.breakPoints → [3, ...]
+// strict.breakPoints → [3, 8]
 // 1行目: あいうえ (4文字), 2行目はおっ...から開始
 
 // loose モード: っ は行頭に許容される。
 // インデックス4で改行できる。
 const loose = computeBreaks({ text, advances, lineWidth: 80, mode: 'loose' });
-// loose.breakPoints → [4, ...]
+// loose.breakPoints → [4, 9]
 // 1行目: あいうえお (5文字), 2行目はっか...から開始
 ```
 
@@ -262,10 +281,12 @@ const result = computeBreaks({
   lineWidth: 80,
   enableHanging: false,
 });
-// 「、」はぶら下げできないため、改行位置が前に移動する。
-// result.breakPoints → [4]
-// 1行目: あいうえお (5文字)
-// 2行目: 、かきくけこ
+// 「、」はぶら下げできないため 2 行目の先頭に来るが、「、」は行頭禁則文字なので、
+// 後方探索によって改行位置がもう 1 つ手前へ移動する。
+// result.breakPoints → [3, 8]
+// 1行目: あいうえ (4文字)
+// 2行目: お、かきくけ
+// 3行目: こ
 ```
 
 注意: `enableHanging` が `false` の場合、結果の `hangingAdjustments` は `undefined` になります。
@@ -293,16 +314,20 @@ const clusterIds = new Uint32Array([0, 0, 0, 1, 1]);
 const result = computeBreaks({
   text,
   advances,
-  lineWidth: 40, // 2.5文字分
+  lineWidth: 48, // 3文字分
   clusterIds,
 });
 // クラスタ 0 内 (A-B または B-C) やクラスタ 1 内 (D-E) では改行できない。
 // 有効な改行位置はインデックス2の後（C と D の間）のみ。
 // result.breakPoints → [2]
-// 1行目: ABC, 2行目: DE
+// 1行目: ABC (48px), 2行目: DE (32px)
 ```
 
 `clusterIds` を省略した場合、すべての文字間位置が改行候補になります（禁則ルールの制約は適用されます）。
+
+### 行幅より広いクラスタ
+
+利用可能な行幅より広いクラスタは、どの行にも収まりません。この場合だけは強制改行規則が働き、収まる最後の文字でクラスタを分割します。同じクラスタ ID を持つ文字の間で改行が起こるのはこの場合のみです。クラスタが単独で 1 行に収まる限り分割されることはなく、そのために行末禁則文字が行末に来る場合でもクラスタの保持を優先します。
 
 ---
 

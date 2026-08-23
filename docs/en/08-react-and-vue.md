@@ -26,7 +26,7 @@ Peer dependencies: `react >= 18`; TypeScript projects should install `@types/rea
 
 ### MejiroReader (full reader)
 
-There are three mutually exclusive source modes, enforced by a TypeScript discriminated union:
+There are four mutually exclusive source modes, enforced by a TypeScript discriminated union:
 
 ```tsx
 import { MejiroReader } from '@libraz/mejiro-react';
@@ -39,7 +39,14 @@ import { MejiroReader } from '@libraz/mejiro-react';
 
 // 3. Let the reader collect a file via drop zone / file picker
 <MejiroReader enableDropZone />
+
+// 4. Render manuscript chapters directly, with no EPUB round-trip
+<MejiroReader manuscript={chapters} dialect="mejiro" />
 ```
+
+In manuscript mode each chapter body is split into paragraphs on blank lines and parsed
+with `parseManuscript()` before layout, which makes it the mode to use for live preview
+inside a custom manuscript editor.
 
 Use `bare` to strip all chrome at once, and reintroduce individual pieces with `enableHeader` / `enableChapterNav` / `enableSettings` / etc.:
 
@@ -118,18 +125,29 @@ useEffect(() => {
 />
 ```
 
-`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). For async, server-backed persistence, the idiomatic pattern is to leave `storage` pointing at an in-memory mirror and use `onChange` to forward each mutation:
+`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). For async, server-backed persistence, the idiomatic pattern is to leave `storage` pointing at an in-memory mirror and use `onChange` to forward each mutation. Send the bytes produced by `serializeReadingPosition` -- that is the same payload the hook writes to `storage`, and `parseReadingPosition` reads it back on the next visit:
 
 ```tsx
+import { serializeReadingPosition } from '@libraz/mejiro';
+
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${bookId}`,
   onChange: (next) => {
-    if (next) void fetch(`/api/books/${bookId}/position`, {
-      method: 'PUT',
-      body: JSON.stringify(next),
+    void fetch(`/api/books/${bookId}/position`, {
+      method: next ? 'PUT' : 'DELETE',
+      body: next ? serializeReadingPosition(next) : undefined,
     });
   },
 });
+```
+
+On the next visit, feed the stored string back through `parseReadingPosition` (or hand it to a `storage` whose `getItem` returns it) to get the anchor:
+
+```tsx
+import { parseReadingPosition } from '@libraz/mejiro';
+
+const restored = parseReadingPosition(await loadPositionFromServer(bookId));
+if (restored) reader.current?.goToAnchor(restored);
 ```
 
 `onChange` fires synchronously after `save()` or `clear()` (never on initial hydration or `key` changes). Local persistence stays on its own debounce, so you can pick a different rate for the network call without coordinating throttles.
@@ -280,9 +298,28 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 }
 ```
 
+### Keeping the reading position across a re-flow
+
+`useChapterLayout` re-runs a full layout whenever the surface resizes or a metric option changes, which produces a brand-new `ChapterLayout` and resets any downstream spread index to 0. Pass `capturePosition` to snapshot the anchor before the swap; the hook parks it in `pendingRestore`, a writable ref you consume once the new layout has committed:
+
+```tsx
+const layout = useChapterLayout(book, epub, chapter, surface, {
+  capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
+});
+
+useLayoutEffect(() => {
+  const anchor = layout.pendingRestore.current;
+  if (!(anchor && layout.layout)) return;
+  layout.pendingRestore.current = null; // consume it
+  setSpreadIdx(layout.layout.locateAnchor(anchor)?.spreadIdx ?? 0);
+}, [layout.layout]);
+```
+
+`pendingRestore` is typed as a mutable ref, so clearing it type-checks on every `@types/react` version in the supported peer range. `useManuscriptLayout` exposes the same pair for manuscript previews.
+
 ### useImageOverlay Hook
 
-`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow.
+`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow. While an overlay is active, the exclusion is re-issued when the layout is replaced or the spread changes, so the text keeps flowing around it after a resize or a page turn.
 
 ```ts
 const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
@@ -348,7 +385,7 @@ function jump(): void {
 </template>
 ```
 
-Source props mirror the React package: `epub-url`, `epub`, or neither (the reader renders its own drop zone). `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
+Source props mirror the React package: `epub-url`, `epub`, `manuscript` (with the optional `dialect` prop), or none of them (the reader renders its own drop zone). `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
 
 Persisting the reading position uses the `useReadingPosition` composable together with the controlled props (`:spread-idx` + `@spread-idx-change`).
 
@@ -593,9 +630,12 @@ Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS class
   padding: 2em;
 }
 
-/* Custom paragraph spacing */
+/* Custom paragraph spacing.
+   In vertical-rl the block-start side is the right side, so the gap before a
+   paragraph is `margin-right` — overriding `margin-left` adds a gap on the
+   opposite side instead of changing this one. */
 .mejiro-paragraph {
-  margin-left: 0.6em;
+  margin-right: 0.6em;
 }
 
 /* Custom heading style */
@@ -774,11 +814,13 @@ function Notation() {
 }
 ```
 
-Override the per-token colors via CSS variables on `.mejiro-notation-token`:
+Token colors are plain `background` declarations selected by the `data-token` attribute, not custom properties. Override them by re-declaring the same selector (in an unlayered rule, so it wins over `mejiro-editor.css`):
 
 ```css
 .mejiro-notation-token[data-token="ruby"] { background: rgba(255, 200, 200, 0.55); }
 ```
+
+The token values are `ruby`, `emphasis`, `tcy`, `em`, `strong`, `link` and `footnote`; `.mejiro-notation-token` itself only sets `border-radius`.
 
 ## 6. Highlights / comments / bookmarks
 
@@ -804,15 +846,17 @@ function Reader({ bookId, epub }) {
 
 `annotations` is an array of `{ chapter, start, end, color? }`. The Reader filters by current chapter, computes highlight rectangles via `ChapterLayout.selectionRects`, and forwards them to `MejiroSpread`. The `storage` option follows the same interface as `useReadingPosition`, so swapping `localStorage` for a server-backed store is a drop-in change.
 
-For asynchronous server sync, use `onChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration):
+For asynchronous server sync, use `onChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration). As with the reading position, send the bytes produced by `serializeAnnotations` so `parseAnnotations` accepts them on the next visit:
 
 ```tsx
+import { serializeAnnotations } from '@libraz/mejiro';
+
 const { annotations, add, remove } = useAnnotations({
   key: `mejiro:ann:${bookId}`,
   onChange: (next) => {
     void fetch(`/api/books/${bookId}/annotations`, {
       method: 'PUT',
-      body: JSON.stringify(next),
+      body: serializeAnnotations(next),
     });
   },
 });

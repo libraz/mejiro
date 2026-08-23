@@ -26,7 +26,7 @@ peer dependency は `react >= 18` です。TypeScript プロジェクトでは�
 
 ### MejiroReader（フルリーダー）
 
-ソースの渡し方は3通りあり、TypeScript の判別共用体で混在を防いでいます。
+ソースの渡し方は4通りあり、TypeScript の判別共用体で混在を防いでいます。
 
 ```tsx
 import { MejiroReader } from '@libraz/mejiro-react';
@@ -39,7 +39,12 @@ import { MejiroReader } from '@libraz/mejiro-react';
 
 // 3. ファイル入力／ドラッグ&ドロップで開かせる
 <MejiroReader enableDropZone />
+
+// 4. 原稿の章をそのまま描画する（EPUB を経由しない）
+<MejiroReader manuscript={chapters} dialect="mejiro" />
 ```
+
+原稿モードでは、各章の本文が空行で段落に分割され、`parseManuscript()` を通してからレイアウトされます。自作の原稿エディタでライブプレビューを出す場合はこのモードを使います。
 
 `bare` で chrome をまとめて消し、`enableHeader` / `enableChapterNav` / `enableSettings` などで個別に再オプトインできます。
 
@@ -118,18 +123,29 @@ useEffect(() => {
 />
 ```
 
-`storage` は `localStorage` 互換の最小インターフェース（`getItem` / `setItem` / `removeItem`）を持つ任意の実装を受け付けます。サーバへ非同期書き込みする場合は、`storage` を局所的なメモリミラーにしつつ `onChange` でサーバへ送る形が定石です。
+`storage` は `localStorage` 互換の最小インターフェース（`getItem` / `setItem` / `removeItem`）を持つ任意の実装を受け付けます。サーバへ非同期書き込みする場合は、`storage` を局所的なメモリミラーにしつつ `onChange` でサーバへ送る形が定石です。送信するバイト列は `serializeReadingPosition` で作ります。これは `storage` に書き込まれるものと同じペイロードで、次回訪問時に `parseReadingPosition` がそのまま読み戻せます。
 
 ```tsx
+import { serializeReadingPosition } from '@libraz/mejiro';
+
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${bookId}`,
   onChange: (next) => {
-    if (next) void fetch(`/api/books/${bookId}/position`, {
-      method: 'PUT',
-      body: JSON.stringify(next),
+    void fetch(`/api/books/${bookId}/position`, {
+      method: next ? 'PUT' : 'DELETE',
+      body: next ? serializeReadingPosition(next) : undefined,
     });
   },
 });
+```
+
+次回訪問時は、保存しておいた文字列を `parseReadingPosition` に通せばアンカーが得られます（`getItem` がその文字列を返す `storage` を渡しても同じです）。
+
+```tsx
+import { parseReadingPosition } from '@libraz/mejiro';
+
+const restored = parseReadingPosition(await loadPositionFromServer(bookId));
+if (restored) reader.current?.goToAnchor(restored);
 ```
 
 `onChange` は `save()` / `clear()` の直後に同期的に呼ばれます（初回ハイドレートでは発火しません）。ローカル永続化（`storage`）は debounce されたままなので、サーバ側で別レートに調整したい場合はこちらに任せます。
@@ -280,9 +296,28 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 }
 ```
 
+### リフローをまたいで読書位置を保つ
+
+`useChapterLayout` は、サーフェスのリサイズや組版に影響するオプション変更のたびに完全な再レイアウトを実行します。その結果 `ChapterLayout` は新しいインスタンスになり、下流の見開きインデックスは 0 に戻ります。`capturePosition` を渡すと差し替え直前のアンカーを取得でき、新しいレイアウトが確定したあとに書き込み可能な ref である `pendingRestore` から取り出して復元します。
+
+```tsx
+const layout = useChapterLayout(book, epub, chapter, surface, {
+  capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
+});
+
+useLayoutEffect(() => {
+  const anchor = layout.pendingRestore.current;
+  if (!(anchor && layout.layout)) return;
+  layout.pendingRestore.current = null; // 消費する
+  setSpreadIdx(layout.layout.locateAnchor(anchor)?.spreadIdx ?? 0);
+}, [layout.layout]);
+```
+
+`pendingRestore` は mutable な ref 型なので、サポート範囲内のどの `@types/react` でも上記の代入が型検査を通ります。原稿プレビュー用の `useManuscriptLayout` にも同じ組み合わせがあります。
+
 ### useImageOverlay フック
 
-`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。
+`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。レイアウトが差し替わったときや見開きが変わったときには排除を再登録するため、リサイズやページ送りのあともテキストは画像を避けて流れ続けます。
 
 ```ts
 const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
@@ -348,7 +383,7 @@ function jump(): void {
 </template>
 ```
 
-ソース指定は React 版と同じ3通り（`epub-url` / `epub` / 未指定で drop-zone）です。`MejiroReaderHandle` は React 版と同じシグネチャを公開しているため、メソッド一覧は [React 側の表](#mejiroreader-の-imperative-handle) を参照してください。Vue 版では `ref` の `.value` 経由で呼び出します。
+ソース指定は React 版と同じ4通り（`epub-url` / `epub` / `manuscript`（任意で `dialect`）/ 未指定で drop-zone）です。`MejiroReaderHandle` は React 版と同じシグネチャを公開しているため、メソッド一覧は [React 側の表](#mejiroreader-の-imperative-handle) を参照してください。Vue 版では `ref` の `.value` 経由で呼び出します。
 
 読書位置の永続化は `useReadingPosition` composable と controlled モード（`:spread-idx` + `@spread-idx-change`）の組み合わせで実装できます。
 
@@ -593,9 +628,11 @@ const [cover, setCover] = useState<File | null>(null);
   padding: 2em;
 }
 
-/* 段落間隔のカスタマイズ */
+/* 段落間隔のカスタマイズ。
+   vertical-rl ではブロック開始側が右側なので、段落前の間隔は margin-right です。
+   margin-left を上書きしても既存の間隔は変わらず、反対側に余白が足されるだけです。 */
 .mejiro-paragraph {
-  margin-left: 0.6em;
+  margin-right: 0.6em;
 }
 
 /* 見出しスタイルのカスタマイズ */
@@ -758,11 +795,13 @@ function Notation() {
 }
 ```
 
-CSS 変数で色を上書きできます。
+トークンの色は CSS 変数ではなく、`data-token` 属性セレクタに対する `background` 宣言です。同じセレクタを（`mejiro-editor.css` のレイヤーに勝つよう、レイヤー外の規則として）再宣言して上書きします。
 
 ```css
 .mejiro-notation-token[data-token="ruby"] { background: rgba(255, 200, 200, 0.55); }
 ```
+
+`data-token` の値は `ruby` / `emphasis` / `tcy` / `em` / `strong` / `link` / `footnote` です。`.mejiro-notation-token` 自体は `border-radius` だけを設定しています。
 
 ## 6. 章ハイライト / コメント / しおり
 
@@ -788,15 +827,17 @@ function Reader({ bookId, epub }) {
 
 `annotations` は `{ chapter, start, end, color? }` の配列。Reader は現在の章のものだけ自動でハイライト rect に変換して `MejiroSpread` に渡します。`useAnnotations` の `storage` オプションはサーバ送信に置き換え可能です (`useReadingPosition` と同じ interface)。
 
-サーバ同期するなら、`onChange` で確定後の全件を受け取って送ると 1 行で書けます（初回ハイドレートでは発火しません）。
+サーバ同期するなら、`onChange` で確定後の全件を受け取って送ります（初回ハイドレートでは発火しません）。読書位置と同様、送信するバイト列は `serializeAnnotations` で作れば次回訪問時に `parseAnnotations` がそのまま受理します。
 
 ```tsx
+import { serializeAnnotations } from '@libraz/mejiro';
+
 const { annotations, add, remove } = useAnnotations({
   key: `mejiro:ann:${bookId}`,
   onChange: (next) => {
     void fetch(`/api/books/${bookId}/annotations`, {
       method: 'PUT',
-      body: JSON.stringify(next),
+      body: serializeAnnotations(next),
     });
   },
 });

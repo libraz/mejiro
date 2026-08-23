@@ -83,17 +83,9 @@ for (const para of spread.right.page.paragraphs) {
   if (para.isHeading) p.style.fontWeight = '700';
   for (const line of para.lines) {
     for (const seg of line.segments) {
-      if (seg.type === 'text') {
-        p.appendChild(document.createTextNode(seg.text));
-      } else {
-        // Ruby annotation
-        const ruby = document.createElement('ruby');
-        ruby.textContent = seg.base;
-        const rt = document.createElement('rt');
-        rt.textContent = seg.rubyText;
-        ruby.appendChild(rt);
-        p.appendChild(ruby);
-      }
+      // Resolves every segment type: ruby, emphasis, tate-chu-yoko, em, strong,
+      // links and footnote references, including nested annotations.
+      appendInlineNode(p, segmentToInlineNode(seg));
     }
   }
   pageEl.appendChild(p);
@@ -101,6 +93,32 @@ for (const para of spread.right.page.paragraphs) {
 
 container.appendChild(pageEl);
 ```
+
+`segmentToInlineNode()` comes from `@libraz/mejiro/render` and returns a small
+framework-agnostic element description; turning that into DOM takes a dozen lines:
+
+```ts
+import { segmentToInlineNode } from '@libraz/mejiro/render';
+import type { InlineRenderNode } from '@libraz/mejiro/render';
+
+function appendInlineNode(parent: Node, node: InlineRenderNode): void {
+  if (node.type === 'text') {
+    parent.appendChild(document.createTextNode(node.text));
+    return;
+  }
+  const el = document.createElement(node.tag);
+  if (node.className) el.className = node.className;
+  if (node.href) el.setAttribute('href', node.href);
+  if (node.title) el.title = node.title;
+  for (const child of node.children) appendInlineNode(el, child);
+  parent.appendChild(el);
+}
+```
+
+Do not branch on `seg.type` with a two-way `text` / ruby split: a normal Japanese book
+also produces emphasis, tate-chu-yoko, link and footnote-reference segments, which such a
+branch would render as `<ruby>undefined<rt>undefined</rt></ruby>`. See
+[Pagination & Rendering](07-pagination-and-rendering.md) for the full segment table.
 
 You can also lay out plain text paragraphs without an EPUB file:
 

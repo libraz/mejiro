@@ -54,6 +54,10 @@ npx degit libraz/mejiro/examples/vue-editor my-editor
 npx degit libraz/mejiro/examples/vue-manuscript my-author
 ```
 
+Templates are workspace members, so the copied `package.json` still carries
+`workspace:*` versions — replace them with `latest` (or a pinned release)
+before running `npm install`.
+
 ## Documentation
 
 - [React / Vue guide](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md) — components, composables, props, theming, SSR

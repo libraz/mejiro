@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 540" width="640" role="img">
+  <title>parseEpub の処理フロー: ZIP の ArrayBuffer を展開して container.xml を読み、OPF パッケージの spine から XHTML 文書をたどり、AnnotatedParagraph を経て EpubBook を組み立てる。章タイトルはナビゲーション文書からも補われる</title>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+    .panel { fill: #ffffff; }
+    .box { fill: #f6f8fa; stroke: #4a5763; stroke-width: 1; }
+    .box-app { fill: #eaeef2; stroke: #4a5763; stroke-width: 1; }
+    .name { fill: #1f2328; font-size: 14px; font-weight: 600; }
+    .note { fill: #55606b; font-size: 12px; }
+    .edge { stroke: #4a5763; stroke-width: 1.4; fill: none; }
+    .head { fill: #4a5763; }
+    .elabel { fill: #55606b; font-size: 11px; }
+    @media (prefers-color-scheme: dark) {
+      .panel { fill: #0d1117; }
+      .box { fill: #161b22; stroke: #8b949e; }
+      .box-app { fill: #1c2128; stroke: #8b949e; }
+      .name { fill: #e6edf3; }
+      .note { fill: #9198a1; }
+      .edge { stroke: #8b949e; }
+      .head { fill: #8b949e; }
+      .elabel { fill: #9198a1; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 Z" />
+    </marker>
+  </defs>
+
+  <rect class="panel" x="0" y="0" width="640" height="540" rx="8" />
+
+  <rect class="box" x="24" y="24" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="46" text-anchor="middle">ArrayBuffer</text>
+  <text class="note" x="164" y="63" text-anchor="middle">EPUB の ZIP アーカイブ</text>
+
+  <rect class="box" x="24" y="112" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="134" text-anchor="middle">META-INF/container.xml</text>
+  <text class="note" x="164" y="151" text-anchor="middle">ルートファイルの位置</text>
+
+  <rect class="box" x="24" y="200" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="222" text-anchor="middle">OPF パッケージ</text>
+  <text class="note" x="164" y="239" text-anchor="middle">メタデータ + マニフェスト + spine</text>
+
+  <rect class="box" x="24" y="288" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="310" text-anchor="middle">XHTML</text>
+  <text class="note" x="164" y="327" text-anchor="middle">spine のコンテンツ文書</text>
+
+  <rect class="box" x="24" y="376" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="398" text-anchor="middle">AnnotatedParagraph[]</text>
+  <text class="note" x="164" y="415" text-anchor="middle">本文 + ルビ注釈</text>
+
+  <rect class="box" x="24" y="464" width="280" height="52" rx="6" />
+  <text class="name" x="164" y="486" text-anchor="middle">EpubBook</text>
+  <text class="note" x="164" y="503" text-anchor="middle">書名・著者・章</text>
+
+  <rect class="box" x="400" y="200" width="216" height="52" rx="6" />
+  <text class="name" x="508" y="222" text-anchor="middle">ナビゲーション文書</text>
+  <text class="note" x="508" y="239" text-anchor="middle">目次の章タイトル</text>
+
+  <line class="edge" x1="164" y1="76" x2="164" y2="112" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="98">JSZip 展開 + 上限チェック</text>
+
+  <line class="edge" x1="164" y1="164" x2="164" y2="200" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="186">ルートファイルパス</text>
+
+  <line class="edge" x1="164" y1="252" x2="164" y2="288" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="274">spine 順</text>
+
+  <line class="edge" x1="164" y1="340" x2="164" y2="376" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="362">extractRubyContent</text>
+
+  <line class="edge" x1="164" y1="428" x2="164" y2="464" marker-end="url(#arrow)" />
+  <text class="elabel" x="174" y="450">章としてまとめる</text>
+
+  <line class="edge" x1="304" y1="226" x2="400" y2="226" stroke-dasharray="5 4" marker-end="url(#arrow)" />
+
+  <path class="edge" d="M508 252 L508 490 L304 490" stroke-dasharray="5 4" marker-end="url(#arrow)" />
+</svg>

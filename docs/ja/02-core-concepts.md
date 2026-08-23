@@ -4,16 +4,9 @@
 
 ## 1. アーキテクチャ概要
 
-mejiro はいくつかのレイヤーに分かれています。上位レイヤーは下位レイヤーを利用しますが、下位レイヤーは上位レイヤーに依存しません。必要な深さの API だけを選んで使えるようにするためです。
+mejiro はいくつかのレイヤーに分かれています。上位レイヤーは下位レイヤーを利用しますが、下位レイヤーは上位レイヤーに依存しません。必要な深さの API だけを選んで使えるようにするためです。`book` と `epub` は同じ段にある兄弟で、どちらも `render` の上に乗ります。アプリケーションはどちらからでも入れます。`image` は他のレイヤーから独立しています。
 
-```mermaid
-graph TD
-    A["アプリケーション (React / Vue / vanilla DOM)"] --> F["@libraz/mejiro/book"]
-    F --> B["@libraz/mejiro/render"]
-    B --> C["@libraz/mejiro/epub"]
-    C --> D["@libraz/mejiro/browser"]
-    D --> E["@libraz/mejiro (コア)"]
-```
+![レイヤー構成: アプリケーションは @libraz/mejiro/book と @libraz/mejiro/epub、および独立した @libraz/mejiro/image を使い、book と epub は @libraz/mejiro/render の上に、render は @libraz/mejiro/browser の上に、browser は @libraz/mejiro コアエンジンの上に乗る](../assets/architecture-layers-ja.svg)
 
 ### ブック (`@libraz/mejiro/book`)
 
@@ -39,6 +32,10 @@ EPUB ファイルを解析し、本文とインライン注釈を取り出しま
 ### レンダリング (`@libraz/mejiro/render`)
 
 レイアウト結果を、React や Vue に依存しない `RenderPage` データ構造へ変換します。`RenderPage` はページを段落、行、セグメントの階層で表します。縦書き表示に必要な基本スタイルを含む `mejiro.css` もここに含まれます。
+
+### 画像 (`@libraz/mejiro/image`)
+
+他のレイヤーから独立した、ブラウザ向けの補助レイヤーです。`prepareImage()` は画像ファイルをデコードし、指定のピクセル上限に収まるよう縮小し、バイト数の上限内に収まるよう再エンコードします。EPUB に埋め込む前処理として使います。
 
 ## 2. TypedArrayベースAPI
 
@@ -75,15 +72,9 @@ cps[0];               // 0x20BB7
 
 レイアウト全体の流れは、文字列を表示用のページデータへ変換する 6 つのステップです。
 
-```mermaid
-flowchart LR
-    S["文字列"] -->|toCodepoints| CP["Uint32Array\n(コードポイント)"]
-    CP -->|measureAll| ADV["Float32Array\n(送り幅)"]
-    ADV -->|computeBreaks| BR["BreakResult\n{breakPoints, hangingAdjustments}"]
-    BR -->|getLineRanges| LR["[start, end)[] \n(行範囲)"]
-    LR -->|paginate| PG["PageSlice[][]\n(ページ)"]
-    PG -->|buildRenderPage| RP["RenderPage\n(段落→行→セグメント)"]
-```
+![レイアウトパイプライン: 文字列は toCodepoints でコードポイントの Uint32Array に、measureAll で送り幅の Float32Array に、computeBreaks で BreakResult に、buildParagraphMeasures で ParagraphMeasure に、paginate で PageSlice のページに、buildRenderPage で RenderPage になる。getLineRanges は BreakResult から行範囲へ伸びる破線の側枝で、RenderPage にも合流する](../assets/layout-pipeline-ja.svg)
+
+`getLineRanges()` は本流ではなく側枝です。`buildRenderPage()` が行ごとの文字を切り出すために内部で呼び出しており、行範囲を直接必要とする利用者向けに公開されています。`paginate()` は行範囲を受け取らず、`ParagraphMeasure[]` だけから計算します。
 
 ### ステップ1: `toCodepoints()`
 
@@ -103,13 +94,15 @@ JavaScript文字列をUnicodeコードポイントの`Uint32Array`に変換し�
 
 アルゴリズムは禁則処理の解決に限定されたバックトラッキングを伴う**貪欲法O(n)**です。詳細は[改行処理](03-line-breaking.md)を参照してください。
 
-### ステップ4: `getLineRanges()`
+### ステップ4: `buildParagraphMeasures()`
 
-フラットな`breakPoints`配列を`[start, end)`ペアの配列に変換します。各ペアは1行のコードポイント範囲を表します。
+レンダーエントリ（文字・改行位置・注釈・見出しレベル）を `ParagraphMeasure[]` に変換します。段落ごとの行数、ブロック方向の行ピッチ、段落前の間隔が入ります。ページ分割が参照するのはこのデータで、文字範囲そのものは描画まで必要になりません。
+
+`getLineRanges(breakPoints, length)` はフラットな `breakPoints` 配列を `[start, end)` ペアに変換します。`buildRenderPage()` が内部で呼び出しており、行範囲を直接必要とする利用者向けにも公開されていますが、ページ分割の経路には含まれません。
 
 ### ステップ5: `paginate()`
 
-行を固定サイズのページに配置します。行範囲、段落の寸法情報、ページサイズを受け取り、`PageSlice[][]` -- ページの配列で、各ページが段落のスライスを含む -- を返します。
+行を固定サイズのページに配置します。引数は 2 つだけで、`paginate(pageBlockSize, paragraphs)` の形です（`pageBlockSize` はブロック方向に使えるサイズ＝縦組みではページ幅、`paragraphs` はステップ4 の `ParagraphMeasure[]`）。戻り値は `PageSlice[][]` で、ページの配列の各要素が段落のスライスを含みます。どのような入力でも最低 1 ページを返します。
 
 ### ステップ6: `buildRenderPage()`
 

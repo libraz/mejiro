@@ -1,6 +1,6 @@
 # API Reference
 
-> **Note:** This document covers the full public API. For parameter details and defaults, see the TypeScript type definitions included in the package.
+> **Note:** This document covers every export of the `@libraz/mejiro` subpaths, plus the components, hooks and composables of the framework packages. Individual component props are summarized rather than listed exhaustively — see [React & Vue](./08-react-and-vue.md) for the prop tables and the bundled TypeScript definitions for exact parameter types and defaults.
 
 ---
 
@@ -48,9 +48,10 @@ Returns a copy of the default strict kinsoku rule set with pre-computed lookup s
 
 | Export | Signature |
 |---|---|
-| `buildKinsokuRules` | `(raw: { lineStartProhibited: number[]; lineEndProhibited: number[] }) => KinsokuRules` |
+| `buildKinsokuRules` | `(raw: { lineStartProhibited: number[]; lineEndProhibited: number[]; unbreakablePairs?: Array<readonly [number, number]> }) => KinsokuRules` |
+| `isUnbreakablePair` | `(left: number, right: number, rules?: KinsokuRules) => boolean` |
 
-Creates a `KinsokuRules` object from raw codepoint arrays with pre-computed lookup sets.
+`buildKinsokuRules` creates a `KinsokuRules` object from raw codepoint arrays with pre-computed lookup sets. `isUnbreakablePair` tests whether a break between two adjacent codepoints is forbidden by the pair rules (`‥‥`, `……`, `——`, `――` by default).
 
 ### Hanging Punctuation
 
@@ -72,13 +73,24 @@ Computes the hanging protrusion amount. Returns the advance if the character is 
 |---|---|
 | `preprocessRuby` | `(text: Uint32Array, advances: Float32Array, annotations: RubyAnnotation[], clusterIds?: Uint32Array) => RubyPreprocessResult` |
 
-Distributes ruby text widths across base characters and generates cluster IDs. Applies JLReq adjacent kana overhang (50%).
+Distributes ruby text widths across base characters and generates cluster IDs. An annotated span reserves the larger of its base width and its ruby width; ruby is never charged to a neighbouring character's advance.
 
 | Export | Signature |
 |---|---|
 | `isKana` | `(cp: number) => boolean` |
 
 Tests if a codepoint is hiragana (U+3040--U+309F) or katakana (U+30A0--U+30FF).
+
+### Tate-chu-yoko Preprocessing
+
+| Export | Signature |
+|---|---|
+| `buildTcyAnnotations` | `(annotations: readonly InlineAnnotation[] \| undefined, em: number) => TcyAnnotation[] \| undefined` |
+| `preprocessTcy` | `(text: Uint32Array, advances: Float32Array, annotations: readonly TcyAnnotation[], existingClusterIds?: Uint32Array) => TcyPreprocessResult` |
+
+`buildTcyAnnotations` picks the `tcy` entries out of a mixed inline-annotation list and charges each one a single em, which is what `text-combine-upright: all` renders. `preprocessTcy` then collapses each span to that width and gives it a cluster ID of its own, so the line breaker cannot split it across a column boundary. The em is distributed over the span's characters in proportion to their measured advances, keeping anchor rectangles and hit tests monotonic inside the span.
+
+Tate-chu-yoko is preprocessed *before* ruby, so a ruby span covering a combined box distributes its excess over the collapsed width rather than over the measured widths the box has already replaced. Unlike ruby, a malformed span is skipped rather than rejected — empty, reversed, out of range, non-integral, carrying a non-finite advance, or overlapping a span already applied (earlier start wins, then the longer one). These spans come from arbitrary EPUB markup, and one broken span must not stop a chapter from being laid out.
 
 ### Cluster Support
 
@@ -100,7 +112,7 @@ Tests if a break is allowed at the given position respecting cluster boundaries.
 |---|---|
 | `paginate` | `(pageBlockSize: number, paragraphs: ParagraphMeasure[]) => PageSlice[][]` |
 
-Distributes paragraph lines across fixed-size pages, splitting at page boundaries.
+Distributes paragraph lines across fixed-size pages, splitting at page boundaries. Always returns at least one page, even for empty input.
 
 | Export | Signature |
 |---|---|
@@ -176,6 +188,53 @@ Low-level API. Computes per-line widths by subtracting exclusion zones from the 
 
 Pure helpers used by image overlay UIs to move and resize overlay rectangles without mutating the input.
 
+Only the rectangle arithmetic lives here: it is DOM-free, so it belongs in core. The gesture that drives it — `createOverlayDragSession` — touches `document`, `requestAnimationFrame` and `setPointerCapture`, so it ships from `@libraz/mejiro/browser` instead.
+
+### Persistence
+
+| Export | Signature |
+|---|---|
+| `serializeReadingPosition` | `(value: ReadingPositionValue) => string` |
+| `parseReadingPosition` | `(raw: string \| null) => ReadingPositionValue \| null` |
+| `serializeAnnotations` | `(annotations: readonly Annotation[]) => string` |
+| `parseAnnotations` | `(raw: string \| null) => Annotation[]` |
+| `sortAnnotations` | `(annotations: readonly Annotation[]) => Annotation[]` |
+| `createAnnotationId` | `() => string` |
+
+Versioned payload helpers shared by the framework persistence hooks. Both parsers also
+accept a bare (unversioned) payload and reject malformed entries — `parseReadingPosition`
+returns `null` unless `chapter` / `paragraph` / `charIndex` are non-negative safe integers,
+and `parseAnnotations` drops entries that are not well-formed.
+
+When forwarding state to a server through the `onChange` callback of `useReadingPosition` /
+`useAnnotations`, send the string produced by `serializeReadingPosition` /
+`serializeAnnotations` so the matching parser accepts it on the next visit.
+
+### Internationalization
+
+| Export | Signature |
+|---|---|
+| `enMessages` / `jaMessages` | `MejiroMessages` |
+| `messageCatalogs` | `Record<MejiroLocale, MejiroMessages>` |
+| `resolveMessages` | `(locale: MejiroLocale \| undefined, overrides: Partial<MejiroMessages> \| undefined, fallback?: MejiroMessages) => MejiroMessages` |
+| `formatMessage` | `(template: string, vars: Record<string, string \| number>) => string` |
+
+UI string catalogs for the bundled components. `resolveMessages` merges partial overrides
+on top of a built-in catalog; `formatMessage` substitutes `{name}` placeholders. The
+reader / editor components take the same values through their `locale` and `messages`
+props, so a host rarely calls these directly.
+
+### Text and URL Helpers
+
+| Export | Signature |
+|---|---|
+| `normalizeText` | `(str: string) => string` |
+| `sanitizeUrl` | `(raw: string) => string \| null` |
+
+`normalizeText` applies the NFC normalization the layout pipeline expects. `sanitizeUrl`
+returns `null` for URLs that must not become an `href`; the render layer uses it to degrade
+unsafe links to plain text.
+
 ### Types
 
 **`LayoutInput`** -- Input for `computeBreaks()`:
@@ -204,13 +263,25 @@ Pure helpers used by image overlay UIs to move and resize overlay rectangles wit
 
 - `lineStartProhibited: number[]` / `lineEndProhibited: number[]`
 - `lineStartProhibitedSet: Set<number>` / `lineEndProhibitedSet: Set<number>`
+- `unbreakablePairs: Array<readonly [number, number]>` / `unbreakablePairSet: Set<string>`
 
 **`RubyAnnotation`** -- Core-level ruby annotation:
 
 - `startIndex: number` / `endIndex: number` -- Range in base text
 - `rubyText: Uint32Array` / `rubyAdvances: Float32Array`
-- `type?: 'mono' | 'group' | 'jukugo'`
+- `type?: RubyType`
 - `jukugoSplitPoints?: number[]`
+
+**`RubyType`** -- `'mono' | 'group' | 'jukugo'`. Distribution policy for a ruby span.
+
+**`RubyPreprocessResult`** -- Output of `preprocessRuby()`: `effectiveAdvances: Float32Array` / `clusterIds: Uint32Array`.
+
+**`TcyAnnotation`** -- Core-level tate-chu-yoko annotation:
+
+- `startIndex: number` / `endIndex: number` -- Range in base text
+- `advance: number` -- Inline extent of the combined box (px); one em of the font the span is drawn with
+
+**`TcyPreprocessResult`** -- Output of `preprocessTcy()`: `effectiveAdvances: Float32Array` / `clusterIds: Uint32Array`.
 
 **`ParagraphMeasure`** -- Pagination input:
 
@@ -226,22 +297,32 @@ Pure helpers used by image overlay UIs to move and resize overlay rectangles wit
 - `lineCount: number` — Number of columns
 - `linePitch: number` — Column pitch (fontSize × lineHeight) (px)
 - `contentWidth: number` — Content width in block direction (px)
+- `minGapHeight?: number` — Smallest gap usable for text (px). Defaults to `linePitch`
 
 **`ImageRect`** — Image rectangle in content-area coordinates:
 
 - `x: number` / `y: number` — Position from content area origin (px)
 - `w: number` / `h: number` — Size (px)
+- `inlineMargin?: number` — Margin in the inline direction (top/bottom in vertical-rl), applied to both sides (px). Defaults to `0`
+- `blockMargin?: number` — Margin in the block direction (left/right in vertical-rl), applied to both sides (px). Defaults to `0`
+
+**`SpreadImageRect`** — Alias of `ImageRect` used by `SpreadExclusionEngine`, where `x` is measured from the right page's top-left corner and a negative `x` places the image on the left page.
 
 **`ImageOverlayRect`** — UI overlay rectangle:
 
 - `x: number` / `y: number` — Overlay position (px)
 - `w: number` / `h: number` — Overlay size (px)
 
-**`ColumnSlot`** — Per-column rendering slot:
+`ImageOverlayRect` is the only overlay-rectangle type in the package family; `@libraz/mejiro-react` and `@libraz/mejiro-vue` re-export it (their `ImageRect` is a deprecated alias of it). The layout-side `ImageRect` above is a different type — it carries margins.
+
+**`ColumnSlot`** — Rendering slot for one laid-out line:
 
 - `xPos: number` — Offset from right edge of content area (px)
 - `yStart: number` — Vertical offset from content top (px)
 - `height: number` — Available text height (px)
+- `columnIndex?: number` — Physical column the slot belongs to (0 = nearest the right content edge). Several slots share a `columnIndex` when an image splits a column into multiple gaps. Every slot produced by this package carries it; it is optional only so hand-built slot arrays stay assignable
+
+Slots come out in reading order, and a column may contribute several slots or none, so a slot's array index is a line index — not a column index. Use `columnIndex` to identify the physical column, not `xPos`.
 
 **`ExclusionZone`** — Low-level exclusion zone:
 
@@ -263,6 +344,28 @@ Pure helpers used by image overlay UIs to move and resize overlay rectangles wit
 - `lineWidths: Float32Array` — Combined line widths (right + left) for `computeBreaks()`
 - `rightSlotCount: number` — Number of slots for right page
 
+**`MejiroStorage`** — Storage interface accepted by the persistence hooks:
+
+- `getItem(key: string): string | null` / `setItem(key: string, value: string): void` / `removeItem(key: string): void`
+
+**`ReadingPositionValue`** — Alias of `ReadingAnchor` (`{ chapter, paragraph, charIndex }`).
+
+**`Annotation`** — Persisted user annotation:
+
+- `id: string` / `chapter: number`
+- `start: InChapterAnchor` / `end: InChapterAnchor`
+- `color?: string` / `note?: string` / `createdAt?: number`
+
+**`MejiroLocale`** — `'en' | 'ja'`. **`MejiroMessages`** — UI string catalog shape.
+
+**`FontChoice`** — `{ value: string; label: string }` entry for settings-panel font pickers.
+
+**`EditableSettings`** — `Pick<BookOptions, 'fontFamily' | 'fontSize' | 'lineSpacing' | 'mode' | 'enableHanging'>`, the subset the bundled settings panels edit.
+
+**`PageHeaderData`** — `{ title?: string; pageNumber?: number | null }` for running headers.
+
+**`ManuscriptToken` / `ManuscriptTokenKind`** — Source-position notation ranges returned by `tokenizeManuscriptSource()`.
+
 ---
 
 ## `@libraz/mejiro/browser` — Browser Integration
@@ -280,7 +383,7 @@ Pure helpers used by image overlay UIs to move and resize overlay rectangles wit
 
 | Export | Signature |
 |---|---|
-| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, inlineAnnotations? }) => Promise<BreakResult>` |
+| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, inlineAnnotations?, tokenBoundaries? }) => Promise<BreakResult>` |
 
 Standalone one-shot layout function. Creates a temporary `MejiroBrowser` instance, measures the text, and computes breaks in a single call.
 
@@ -299,18 +402,51 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 - `normalizeFontFamily(fontFamily: FontFamily): string` -- Normalize a string or family-name array to a CSS font-family string
 - `toFontSpec(fontFamily: string, fontSize: number): string` -- CSS font spec
 
+### Overlay Drag Sessions
+
+| Export | Signature |
+|---|---|
+| `createOverlayDragSession` | `(options: OverlayDragSessionOptions) => OverlayDragSession` |
+
+Drives an image-overlay drag or resize from a pointer-down handler: it listens for `pointermove` / `pointerup` on the document, coalesces updates into an animation frame where the runtime provides one, and re-derives each rectangle from the pointer-down rectangle plus the cumulative delta, so rounding never accumulates during a gesture.
+
+It lives in the browser layer rather than in core because it owns pointer capture and document-level listeners — `document`, `requestAnimationFrame` and `setPointerCapture`. The rectangle arithmetic it delegates to (`moveImageOverlayRect` / `resizeImageOverlayRect`, over `ImageOverlayRect`) is DOM-free and stays in `@libraz/mejiro`.
+
+**`OverlayDragMode`** — `'move' | 'resize'`. `'move'` translates the captured rectangle; `'resize'` grows or shrinks it from the bottom-right corner.
+
+**`OverlayDragSessionOptions`** — Input for `createOverlayDragSession()`:
+
+- `mode: OverlayDragMode` — Gesture to apply to `rect`
+- `rect: ImageOverlayRect` — Rectangle captured at pointer-down; never mutated
+- `startX: number` / `startY: number` — Pointer position at pointer-down, in client coordinates (px)
+- `pointerId?: number` — Pointer that owns the gesture. Together with `captureElement` the element captures it, so the gesture survives the pointer leaving the overlay
+- `captureElement?: HTMLElement | null` — Element the pointer is captured on, usually the pointer-down target
+- `activeElement?: HTMLElement | null` — Element carrying `dragClass` while the gesture runs, often the overlay itself even when the gesture started on a child handle
+- `dragClass?: string` — Class toggled on `activeElement` for the duration of the gesture
+- `minSize?: number` — Minimum width and height in `'resize'` mode (px, default `40`)
+- `onChange: (rect: ImageOverlayRect) => void` — Receives a fresh rectangle per update
+- `onEnd?: () => void` — Called exactly once when the gesture ends, however it ended
+- `registry?: Set<() => void>` — Set the session registers its disposer in for the gesture's lifetime, so a host can end every in-flight gesture on unmount. The entry removes itself once the gesture ends
+
+**`OverlayDragSession`** — Handle returned by `createOverlayDragSession()`:
+
+- `active: boolean` — Whether the gesture is still running (readonly)
+- `cancel(): void` — Ends the gesture and releases every listener; idempotent
+
 ### Types
+
+**`FontFamily`** -- `string | readonly string[]`. A CSS-ready string (`'"Noto Serif JP", serif'`) or an array of family names, escaped and joined by `normalizeFontFamily()`. Every `fontFamily` option below takes this type.
 
 **`MejiroBrowserOptions`**:
 
-- `fixedFontFamily?: string`
+- `fixedFontFamily?: FontFamily`
 - `fixedFontSize?: number`
 - `strictFontCheck?: boolean`
 
 **`LayoutOptions`**:
 
 - `text: string`
-- `fontFamily?: string`
+- `fontFamily?: FontFamily`
 - `fontSize?: number`
 - `lineWidth: number`
 - `mode?: KinsokuMode`
@@ -320,8 +456,8 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 
 **`ChapterLayoutOptions`**:
 
-- `paragraphs: ParagraphInput[]`
-- `fontFamily?: string`
+- `paragraphs: readonly ParagraphInput[]`
+- `fontFamily?: FontFamily`
 - `fontSize?: number`
 - `lineWidth: number`
 - `mode?: KinsokuMode`
@@ -340,18 +476,30 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 
 - `text: string`
 - `inlineAnnotations?: readonly InlineAnnotation[]`
-- `fontFamily?: string`
+- `fontFamily?: FontFamily`
 - `fontSize?: number`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
 
-**`InlineAnnotation` / `InlineRubyAnnotation`**:
+**`InlineAnnotation`** — Discriminated union of the seven inline annotation kinds. Every member carries `startIndex` (inclusive) and `endIndex` (exclusive) in NFC code point offsets, plus the fields below:
 
-- `kind: 'ruby' | 'emphasis' | 'tcy' | 'em' | 'strong' | 'link' | 'footnote'`
-- `startIndex: number`
-- `endIndex: number`
-- Ruby variant: `rubyText: string`, `type?: 'mono' | 'group' | 'jukugo'`, `jukugoSplitPoints?: number[]`
+| Type | `kind` | Extra fields |
+|---|---|---|
+| `InlineRubyAnnotation` | `'ruby'` | `rubyText: string`, `type?: RubyType`, `jukugoSplitPoints?: number[]` |
+| `InlineEmphasisAnnotation` | `'emphasis'` | `style?: 'sesame' \| 'dot' \| 'circle'` — emphasis-dot (傍点) mark |
+| `InlineTcyAnnotation` | `'tcy'` | — tate-chu-yoko (縦中横): the span is drawn horizontally inside the vertical column, and reaches the line breaker as one indivisible 1 em cluster |
+| `InlineEmAnnotation` | `'em'` | — italic emphasis, rendered as `<em>` |
+| `InlineStrongAnnotation` | `'strong'` | — strong emphasis, rendered as `<strong>` |
+| `InlineLinkAnnotation` | `'link'` | `href: string`, `title?: string` |
+| `InlineFootnoteAnnotation` | `'footnote'` | `noteId: string` |
 
 `RubyInputAnnotation` remains as a deprecated alias of `InlineRubyAnnotation`.
+
+**`WidthCacheOptions`** — Bounds for `WidthCache`:
+
+- `maxFonts?: number` — Maximum number of cached font keys
+- `maxCodepointsPerFont?: number` — Maximum number of cached codepoints per font key
+
+Both default to `Infinity`, which switches LRU bookkeeping off entirely rather than merely never evicting — setting a finite value changes the read path as well.
 
 ---
 
@@ -359,8 +507,9 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 
 | Export | Signature |
 |---|---|
-| `parseEpub` | `(buffer: ArrayBuffer) => Promise<EpubBook>` |
-| `parseEditableEpub` | `(buffer: ArrayBuffer) => Promise<EditableEpub>` |
+| `parseEpub` | `(buffer: ArrayBuffer, options?: EpubParseOptions) => Promise<EpubBook>` |
+| `parseEditableEpub` | `(buffer: ArrayBuffer, options?: EpubParseOptions) => Promise<EditableEpub>` |
+| `DEFAULT_EPUB_PARSE_LIMITS` | Default resource limits applied to untrusted archives |
 | `EditableEpub` | Class for block-level paragraph/image editing and export |
 | `exportEditableEpub` | `(book: EditableEpub \| EditableEpubBook, options?: EpubExportOptions) => Promise<ArrayBuffer>` |
 | `updateEpubParagraph` | Update a paragraph block in an editable EPUB book |
@@ -373,11 +522,71 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 
 Parses an EPUB file into structured chapters with ruby annotations.
 
+Both import paths need a DOM XML parser: `parseEpub()`, `parseEditableEpub()` and
+`EditableEpub.load()` require global `DOMParser`, `XMLSerializer` and `Node`. Browsers
+provide them; on Node install a DOM implementation and expose it on `globalThis` before
+calling in.
+
+`EpubParseOptions.limits` overrides the archive resource limits applied to untrusted
+input (`DEFAULT_EPUB_PARSE_LIMITS`): `maxInputBytes` (100 MiB), `maxEntries` (10,000),
+`maxEntryBytes` (50 MiB), `maxTotalBytes` (200 MiB) and `maxCompressionRatio` (1,000).
+
 | Export | Signature |
 |---|---|
 | `extractRubyContent` | `(xhtml: string) => AnnotatedParagraph[]` |
 
 Extracts paragraphs and ruby annotations from an XHTML document string.
+
+| Export | Signature |
+|---|---|
+| `cloneEditableEpubBook` | `(book: EditableEpubBook) => EditableEpubBook` |
+| `clampEditableEpubSelection` | `(book: EditableEpubBook \| null, selection: EditableEpubSelection) => EditableEpubSelection` |
+
+`cloneEditableEpubBook` deep-copies an editable book so preview rendering and export-only transforms (watermarking, for instance) never reach the document the editor owns. `clampEditableEpubSelection` confines a `{ chapter, paragraph }` selection to the paragraphs a book actually has.
+
+### EditableEpub
+
+**`EditableEpub`** — Editing session over a parsed EPUB, with undo history. Constructed through `EditableEpub.load()` (the constructor is private).
+
+- `static load(data: ArrayBuffer, options?: EpubParseOptions): Promise<EditableEpub>` — Parse an EPUB and start a session. Requires the host DOM globals
+- `book: EditableEpubBook` — The live document model, including the package data needed to write the EPUB back out. Mutating it directly bypasses the undo history
+- `title: string` / `author: string | undefined` — Package metadata (getters)
+- `chapters: EditableEpubChapter[]` — Chapters in spine order (getter). The live array, not a copy; splicing it directly skips the undo history
+- `transaction<T>(fn: () => T): T` — Group a sequence of edits into one history entry. Nested calls fold into the outermost transaction; a throw inside `fn` rewinds the buffered changes
+- `undo(): boolean` / `redo(): boolean` — Revert or re-apply one committed change (or transaction). `false` when the corresponding stack is empty
+- `history: { canUndo: boolean; canRedo: boolean; depth: number; redoDepth: number }` — Snapshot of the undo/redo state (getter)
+- `updateParagraph(chapterIndex: number, paragraphIndex: number, next: Partial<AnnotatedParagraph>): void` — `paragraphIndex` counts the paragraph projection, excluding image blocks. When `text` changes without new `inlineAnnotations`, existing annotations are re-anchored onto the new text: each one either keeps covering exactly the same base characters or is dropped
+- `setInlineAnnotations(chapterIndex: number, paragraphIndex: number, inlineAnnotations: readonly InlineAnnotation[]): void` — Replace a paragraph's annotations; entries outside the current text are dropped
+- `insertParagraph(chapterIndex: number, atIndex: number, paragraph: Omit<EditableParagraphBlock, 'kind' | 'id'>): string` — `atIndex` is a position in `chapter.blocks`; pass `chapter.blocks.length` to append. Returns the generated block id
+- `deleteBlock(chapterIndex: number, blockId: string): void` — Remove a paragraph or image block. An image's asset goes with it when no other block references it
+- `splitParagraph(chapterIndex: number, blockId: string, charIndex: number): [string, string]` — Split at a code point index; annotations straddling the cut are dropped. Returns the two block ids
+- `mergeParagraphs(chapterIndex: number, leftId: string, rightId: string): string` — `leftId` must immediately precede `rightId`. Returns the surviving (left) block id
+- `moveBlock(chapterIndex: number, blockId: string, toIndex: number): void` — Move a block to a new index in `chapter.blocks`
+- `addImage(chapterIndex: number, image: AddImageInput | EditableEpubImage): string` — Add an image asset and an image block referencing it. Returns the generated `assetKey`
+- `removeImage(chapterIndex: number, blockIdOrAssetKey: string): void` — Remove an image block, and its asset when nothing else references it
+- `updateImage(chapterIndex: number, blockId: string, patch: Partial<Omit<EditableImageBlock, 'kind' | 'id' | 'assetKey'>>): void` — Update alt text, caption or placement
+- `setImageCaption(chapterIndex: number, blockId: string, caption: string | undefined): void` — Shorthand for the caption-only `updateImage`
+- `export(options?: EpubExportOptions): Promise<ArrayBuffer>` — Serialize the edited EPUB. Book state is captured synchronously on entry, so an edit made while the export is still awaiting asset bytes lands in the next export, never part-way through this one
+
+### EpubProject
+
+**`EpubProject`** — Builds a new EPUB 3 package from manuscript chapters.
+
+- `constructor(options: EpubProjectOptions)` — Applies the defaults, then registers `chapters` and `cover`, so an invalid cover href throws here rather than at export time
+- `static fromManuscript(options: EpubProjectOptions): EpubProject` — Named-constructor spelling of `new EpubProject(options)`
+- `metadata: EpubProjectMetadata` — Package metadata with defaults applied (`language` falls back to `'ja'`, a blank `identifier` is replaced by a fresh `urn:uuid:` value, `modified` defaults to construction time). Mutable in place
+- `chapters: readonly ProjectChapter[]` — Chapters in spine order, each with the manifest id assigned at insert time
+- `assets: readonly EpubProjectAsset[]` — Manifest assets in insertion order, with resolved id / href / media type. A cover is always the last entry
+- `includeTitlePage: boolean` / `includeTitleInFirstChapter: boolean` / `pageProgressionDirection: 'rtl' | 'ltr' | 'default'` / `dialect: ManuscriptDialect` — Settled from the constructor options
+- `stylesheet: string` — CSS written to `OPS/Styles/style.css`; replaceable any time before export
+- `addChapter(chapter: ManuscriptChapterInput): void` — Append to the spine. The id is sanitized to an XML-safe manifest id and suffixed on collision, so the stored id may differ from `chapter.id`
+- `updateChapter(index: number, patch: Partial<Omit<ManuscriptChapterInput, 'id'>>): void` — Omitted fields keep their previous value. Inline image assets the new body no longer references are dropped
+- `removeChapter(index: number): void` — Remove by index, dropping the inline image assets only that chapter referenced
+- `reorderChapters(from: number, to: number): void` — An out-of-range `from` is a no-op and `to` is clamped, because drag-and-drop reorder UIs routinely emit both
+- `addInlineImage(chapterIndex: number, atParagraphIndex: number, asset: EpubProjectAsset & { alt?: string }): void` — Register the asset and embed an image reference in the chapter body, rendered as a `<figure>` during export
+- `setCover(asset: EpubProjectAsset): void` — Register the cover, replacing any previous one. The href defaults to `'OPS/Images/cover.jpg'` and is validated like every other asset href
+- `addAsset(asset: EpubProjectAsset): EpubProjectAsset` — Add a manifest asset and return the stored copy. The href is renamed with a `-2`, `-3`, … suffix on collision, so link the returned `href` rather than the one passed in. Throws when the href is not a clean relative path inside the archive
+- `export(options?: EpubExportOptions): Promise<ArrayBuffer>` — Serialize to an EPUB 3 ZIP: `mimetype` first and uncompressed, then the container, package, nav document, stylesheet, optional title page, one XHTML document per chapter, and every asset. Asset bytes come from `EpubProjectAsset.data`, or from `EpubProjectAsset.url` through `options.assetResolver` (the runtime `fetch` when no resolver is given). Throws when the project has no chapters, when an asset cannot be resolved, or with an `AbortError` when `options.signal` fires
 
 ### Types
 
@@ -398,12 +607,69 @@ Extracts paragraphs and ruby annotations from an XHTML document string.
 - `inlineAnnotations: readonly InlineAnnotation[]`
 - `headingLevel?: number`
 
-**`EditableBlock`**:
+**`EditableBlock`** — Union of `EditableParagraphBlock` and `EditableImageBlock`:
 
-- Paragraph block: `{ kind: 'paragraph'; id; text; inlineAnnotations; paragraphKind?; headingLevel? }`
-- Image block: `{ kind: 'image'; id; assetKey; alt?; caption?; placement? }`
+- **`EditableParagraphBlock`**: `kind: 'paragraph'`, `id: string`, `text: string`, `inlineAnnotations: readonly InlineAnnotation[]`, `paragraphKind?: Exclude<ParagraphKind, 'figure'>`, `headingLevel?: number`
+- **`EditableImageBlock`**: `kind: 'image'`, `id: string`, `assetKey: string`, `alt?: string`, `caption?: string`, `placement?: 'inline' | 'fullspread'`
 
-**`EpubProjectMetadata`** includes `title`, `subtitle`, `description`, `language`, `identifier`, `publisher`, `rights`, `date`, `modified`, `creators`, `contributors`, `subjects`, `series`, `collections`, and legacy `author`.
+**`EditableEpubChapter`** — Chapter with enough source metadata to be written back:
+
+- `href: string` — ZIP path of the source chapter document
+- `originalXhtml: string` — Source markup, reused for chapters that were never edited
+- `isDirty?: boolean` — Whether the chapter has been edited since parsing
+- `blocks: EditableBlock[]` — The editable content, in document order
+- `imageAssets: Map<string, EditableImageAsset>` — Assets keyed by `assetKey`
+- `paragraphs: AnnotatedParagraph[]` — Deprecated read-only projection of `blocks`, regenerated on every mutation
+- `paragraphRefs?` / `images?` — Deprecated v0.4 fields
+
+**`EditableImageAsset`** — Image attached to an editable chapter, looked up by `assetKey` from one or more image blocks (several blocks may share one asset):
+
+- `filename: string` — Preferred file basename inside the EPUB ZIP
+- `data?: Uint8Array | ArrayBuffer` — Inline bytes, or
+- `url?: string` — Source resolved at export time through `EpubExportOptions.assetResolver`
+- `mediaType?: string` / `href?: string` / `manifestId?: string` / `manifestHref?: string` — Resolved during export
+
+**`AddImageInput`** — v0.5 input for `EditableEpub.addImage()`. A union of `AddImageInputBytes` (`data`, no `url`) and `AddImageInputUrl` (`url`, no `data`), both extending **`AddImageInputCommon`**: `filename: string`, `mediaType?: string`, `alt?: string`, `caption?: string`, `placement?: 'inline' | 'fullspread'`, `afterBlockId?: string`. **`EditableEpubImage`** is the deprecated v0.4 shape (`href`, `mediaType`, `data`, `alt?`, `afterParagraph?`), still accepted by `addImage`.
+
+**`EditableEpubSelection`** — `{ chapter: number; paragraph: number }`, the paragraph an editor UI currently targets.
+
+**`AssetResolver`** — `(request: AssetResolverRequest) => Promise<Uint8Array | ArrayBuffer> | Uint8Array | ArrayBuffer`. Called once per asset that declares a `url` and carries no inline `data`. Throw to abort the export.
+
+**`AssetResolverRequest`**:
+
+- `assetKey: string` — Identifier of the asset being resolved: the key inside the chapter's `imageAssets` map on the `EditableEpub` path, and the ZIP href on the `EpubProject` path
+- `asset: AssetResolverAsset` — The asset to resolve
+- `url: string` — External URL declared on the asset (mirrors `asset.url`)
+- `signal?: AbortSignal` — Mirror of the export `AbortSignal`, when one was passed
+
+**`AssetResolverAsset`** — `EditableImageAsset | EpubProjectAsset`, because both export paths share one resolver. The fields a resolver normally reads (`url`, `mediaType`, `data`) are common to both and need no narrowing. The naming fields differ, so narrow with `'filename' in asset` (an `EditableImageAsset`) versus `'href' in asset` (an `EpubProjectAsset`) when the source path matters.
+
+**`EpubParseLimits`** — Resource limits applied while opening an untrusted archive: `maxInputBytes`, `maxEntries`, `maxEntryBytes`, `maxTotalBytes`, `maxCompressionRatio` (all required; `DEFAULT_EPUB_PARSE_LIMITS` supplies the values above).
+
+**`ParseManuscriptOptions`** — `{ dialect?: ManuscriptDialect }` for `parseManuscript()`.
+
+**`ManuscriptSourceChapter`** — Input for `manuscriptToEpubBook()`: `id?: string`, `title: string`, `body: string`. **`ManuscriptToEpubBookOptions`**: `dialect?: ManuscriptDialect`, `title?: string`, `author?: string`.
+
+**`EpubProjectOptions`** — Constructor options for `EpubProject`:
+
+- `metadata: EpubProjectMetadata` — Required
+- `chapters?: ManuscriptChapterInput[]` / `cover?: EpubProjectAsset` — Registered through `addChapter()` / `setCover()` during construction
+- `dialect?: ManuscriptDialect` — Notation dialect chapter bodies are parsed with (default `'mejiro'`)
+- `stylesheet?: string` — Replaces the bundled default stylesheet
+- `pageProgressionDirection?: 'rtl' | 'ltr' | 'default'` — Default `'rtl'`
+- `includeTitlePage?: boolean` — Default `true`
+- `includeTitleInFirstChapter?: boolean` — Default `false`
+
+**`ManuscriptChapterInput`** — `{ id?: string; title: string; body: string }` accepted by `EpubProject.addChapter()`. **`ProjectChapter`** is its stored form, with `id` resolved and de-duplicated (all three fields required).
+
+**`EpubProjectAsset`** — A binary file packaged alongside the chapters:
+
+- `href: string` — ZIP path, relative and inside the archive
+- `id?: string` / `mediaType?: string` — Derived from `href` when omitted
+- `data?: Uint8Array | ArrayBuffer` / `url?: string` — Inline bytes, or a source fetched at export time
+- `properties?: string` — Manifest properties; `setCover()` sets `'cover-image'`
+
+**`EpubProjectMetadata`** includes `title`, `subtitle`, `description`, `language`, `identifier`, `publisher`, `rights`, `date`, `modified`, `creators`, `contributors`, `subjects`, `series`, `collections`, and legacy `author`. **`EpubContributor`** is `{ name: string; role?: string; fileAs?: string }` and **`EpubCollection`** is `{ name: string; type?: 'series' | 'set'; index?: number }`.
 
 ---
 
@@ -418,18 +684,60 @@ Computes paragraph measures for pagination.
 | Export | Signature |
 |---|---|
 | `buildRenderPage` | `(slices: PageSlice[], entries: RenderEntry[]) => RenderPage` |
-| `renderEpubStatic` | `(chapter: { paragraphs: BookParagraph[] }, options?: RenderEpubStaticOptions) => string` |
+| `renderEpubStatic` | `(chapter: StaticChapter, options?: RenderEpubStaticOptions) => string` |
 | `buildLineMetrics` | `(entries: RenderEntry[], options: MeasureOptions) => LineMetricsResult` |
 | `packPageLines` | `(metrics: LineMetric[], startIdx: number, pageWidth: number) => number` |
 | `buildColumnSlots` | `(metrics: LineMetric[], startIdx: number, count: number, columnHeight: number) => ColumnSlot[]` |
-| `adjustExclusionSlots` | `(slots: ColumnSlot[], metrics: LineMetric[], startIdx: number, basePitch: number) => ColumnSlot[]` |
+| `adjustExclusionSlots` | `(slots: ColumnSlot[], metrics: LineMetric[], startIdx: number, basePitch: number, contentWidth?: number) => ColumnSlot[]` |
 | `getImageXOffset` | `(offsets: Float32Array, spreadStartLine: number, col: number) => number` |
 | `findPhysicalColumn` | `(offsets: Float32Array, spreadStartLine: number, fromRight: number, basePitch: number) => number` |
+| `paragraphClassName` | `(kind: ParagraphKind \| undefined, headingLevel?: number) => string` |
 
 Converts page slices + entries into a renderable page structure. `renderEpubStatic`
 returns framework-agnostic HTML for a single chapter, suitable for SSR fallback
 markup before the client reader hydrates.
 The metric/slot helpers are low-level utilities for slot-based rendering and image-exclusion layout.
+`adjustExclusionSlots` takes the content width as its fifth argument; without it a slot
+whose column is widened by a heading can overflow the page edge.
+`paragraphClassName` builds the `mejiro-paragraph …` class string the bundled stylesheets
+expect from a paragraph's `kind` and `headingLevel` — use it instead of assembling the
+modifier names by hand.
+`StaticChapter` is the minimal chapter shape `renderEpubStatic` needs — `{ paragraphs: readonly BookParagraph[] }` — so an `EpubChapter` or a hand-built object both satisfy it.
+
+### Inline Segment Rendering
+
+| Export | Signature |
+|---|---|
+| `segmentToInlineNode` | `(segment: RenderSegment) => InlineRenderNode` |
+| `buildInlineNodes` | `(chars: readonly string[], annotations: readonly InlineAnnotation[], start?: number, end?: number) => InlineNode[]` |
+| `annotationNestingRank` | `(ann: InlineAnnotation) => number` |
+| `partiallyOverlaps` | `(a: InlineAnnotation, b: InlineAnnotation) => boolean` |
+
+`segmentToInlineNode` resolves any of the eight `RenderSegment` variants — nested
+`children` and unsafe link URLs included — into an `InlineRenderNode` tree
+(`{ type: 'text' }` or `{ type: 'element', tag, className?, href?, title?, children }`),
+so a third-party renderer reuses mejiro's annotation policy instead of re-deriving it:
+
+```ts
+import { segmentToInlineNode } from '@libraz/mejiro/render';
+import type { InlineRenderNode } from '@libraz/mejiro/render';
+
+function appendInlineNode(parent: Node, node: InlineRenderNode): void {
+  if (node.type === 'text') {
+    parent.appendChild(document.createTextNode(node.text));
+    return;
+  }
+  const el = document.createElement(node.tag);
+  if (node.className) el.className = node.className;
+  if (node.href) el.setAttribute('href', node.href);
+  if (node.title) el.title = node.title;
+  for (const child of node.children) appendInlineNode(el, child);
+  parent.appendChild(el);
+}
+```
+
+`buildInlineNodes` is the layer below: it turns a character range plus its annotations
+into the nested `InlineNode` tree that `buildRenderPage()` converts into segments.
 
 ### CSS
 
@@ -438,7 +746,13 @@ import '@libraz/mejiro/render/mejiro.css';
 import '@libraz/mejiro/render/mejiro-reader.css';
 import '@libraz/mejiro/render/mejiro-editor.css';
 import '@libraz/mejiro/render/mejiro-print.css';
+import '@libraz/mejiro/render/mejiro-fonts.css';
 ```
+
+The first four are the page, reader chrome, editor chrome and print stylesheets.
+`mejiro-fonts.css` is optional: it pulls the demo webfonts from Google Fonts and rebinds
+`--mejiro-font-body` / `--mejiro-font-ui` to them — skip it when self-hosting fonts or
+avoiding external requests.
 
 ### Types
 
@@ -447,8 +761,9 @@ import '@libraz/mejiro/render/mejiro-print.css';
 - `chars: string[]`
 - `breakPoints: Uint32Array`
 - `inlineAnnotations: readonly InlineAnnotation[]`
-- `isHeading: boolean`
-- `kind?: ParagraphKind`
+- `headingLevel?: number` — Heading level (1–6); undefined for body text
+- `isHeading?: boolean` — Deprecated. Ignored when `headingLevel` is set
+- `kind?: ParagraphKind` — Structural classification of the source paragraph (default `'body'`)
 
 **`RenderPage`**:
 
@@ -459,29 +774,43 @@ import '@libraz/mejiro/render/mejiro-print.css';
 - `lines: RenderLine[]`
 - `isHeading: boolean`
 - `headingLevel?: number`
+- `kind?: ParagraphKind` — Structural classification of the source paragraph, mapped to a `mejiro-paragraph--*` class by the page components
 
 **`RenderLine`**:
 
 - `segments: RenderSegment[]`
 
-**`RenderSegment`**:
+**`RenderSegment`** — every variant except `text` also accepts `children?: readonly RenderSegment[]` for nested annotations:
 
 - `{ type: 'text'; text: string }`
-- `{ type: 'ruby'; base: string; rubyText: string }`
-- `{ type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle' }`
-- `{ type: 'tcy'; text: string }`
-- `{ type: 'em'; text: string }`
-- `{ type: 'strong'; text: string }`
-- `{ type: 'link'; text: string; href: string; title?: string }`
-- `{ type: 'footnote-ref'; text: string; noteId: string }`
+- `{ type: 'ruby'; base: string; rubyText: string; children? }`
+- `{ type: 'emphasis'; text: string; style: 'sesame' | 'dot' | 'circle'; children? }`
+- `{ type: 'tcy'; text: string; children? }`
+- `{ type: 'em'; text: string; children? }`
+- `{ type: 'strong'; text: string; children? }`
+- `{ type: 'link'; text: string; href: string; title?: string; children? }`
+- `{ type: 'footnote-ref'; text: string; noteId: string; children? }`
+
+**`InlineRenderNode`** — output of `segmentToInlineNode()`:
+
+- `{ type: 'text'; text: string }`
+- `{ type: 'element'; tag: InlineRenderTag; className?: string; href?: string; title?: string; children: InlineRenderNode[] }`
+
+**`InlineRenderTag`** — `'ruby' | 'rt' | 'span' | 'em' | 'strong' | 'a'`
 
 **`MeasureOptions`**:
 
 - `fontSize: number`
-- `lineHeight: number`
+- `lineSpacing?: number` — Line spacing multiplier
+- `lineHeight?: number` — Deprecated alias of `lineSpacing`
 - `headingScale?: number` (default: 1.4)
 - `paragraphGapEm?: number` (default: 0.4)
 - `headingGapEm?: number` (default: 1.2)
+- `headingStyles?: Record<number, HeadingStyle>` — Per-level overrides of `scale` / `gapAfterEm` for levels 1–6. Pass the same value used for layout, otherwise measuring and rendering disagree on heading size
+
+**`HeadingStyle`**:
+
+- `scale?: number` / `gapAfterEm?: number`
 
 ---
 
@@ -493,7 +822,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 | Export | Description |
 |---|---|
-| `DEFAULT_HEADING_STYLES` | Default heading style overrides for levels 1–4 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... }`) |
+| `DEFAULT_HEADING_STYLES` | Default heading style overrides for levels 1–6 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`) |
 | `DEFAULT_BOOK_OPTIONS` | Default font, spacing, kinsoku, and heading options |
 | `DEFAULT_PAGE_GEOMETRY` | Default page size/line width before container measurement |
 | `DEFAULT_PAGE_PADDING` | Default page padding values in pixels (`{ x: 52, y: 56, bottom: 40 }`) |
@@ -503,12 +832,15 @@ The recommended entry point for most applications. Orchestrates font loading, la
 **`MejiroBook`** — Main orchestrator class:
 
 - `constructor(options: BookOptions)` — Create with font, spacing, and heading configuration
-- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. Font family / size changes re-measure asynchronously; other option changes apply synchronously.
+- `getOptions(): BookOptions` — Currently committed options
+- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. `lineSpacing` / `mode` / `enableHanging` apply synchronously and the returned promise is already resolved. `fontFamily` / `fontSize` / `headingStyles` / `headingScale` need re-measurement: the values are staged and become visible to `getOptions()` only after the font has loaded, so every live layout always holds advances measured with the font recorded in its own config. Overlapping calls converge on the last one; a rejection (font load failure) leaves the previous options in place
 - `setPageSize(size: PageSize): void` — Set page geometry (must be called before `layoutChapter`)
 - `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — Compute page dimensions from a container element and apply them via `setPageSize`. Uses a 1.45 aspect ratio with min 280×400, max height 780, default padding, and overridable header/gutter reservations.
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — Lay out a chapter (compatible with `EpubChapter`)
+- `layoutManuscript(options: LayoutManuscriptOptions): Promise<Map<string, ChapterLayout>>` — Lay out manuscript chapters directly, skipping the EPUB ZIP round-trip. Each body is split into paragraphs on blank lines and parsed with `parseManuscript()`; the map is keyed by `chapter.id` (or `chapter-<n>` when missing)
 - `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — Restore a layout snapshot without measuring again
 - `clearCache(fontKey?: string): void` — Clear the character width measurement cache
+- `cacheStats(): { fonts: number; codepoints: number }` — Current measurement cache size, for capacity monitoring across long reader sessions
 
 ### ChapterLayout
 
@@ -516,13 +848,15 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 - `totalPages: number` — Total page count (getter, triggers lazy computation)
 - `hasImages: boolean` — Whether any spread has image exclusions
-- `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — Update geometry; re-breaks lines if `lineWidth` changes
+- `resize(size: Partial<PageSize> & { lineSpacing?: number }): void` — Update geometry; re-breaks lines if `lineWidth` changes. Applied as a unit: a non-positive or non-finite dimension throws `RangeError` and leaves the layout untouched
 - `setImages(spreadIndex: number, images: BookImage[]): void` — Set image exclusions for a spread (empty array removes)
 - `clearImages(): void` — Remove all image exclusions
 - `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — Set images for a spread, or clear that spread when `images` is empty/omitted, then return the updated spread
 - `getSpread(spreadIndex: number): SpreadResult` — Get layout data for a two-page spread
 - `getPage(pageIndex: number): PageResult` — Get layout data for a single page
-- `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — **Scope is the current `ChapterLayout` only.** Walks the chapter's paragraphs and returns hits as `SearchMatch` (an `AnchorLocation` extended with the match length, etc.). For cross-chapter or cross-book search (e.g. a novel-site search index), keep an external full-text index server-side (Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5) and hand the resolved anchors to `MejiroReaderHandle.goToAnchor()` to navigate to the hit.
+- `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — A string is matched literally unless `options.regex` is `true`, in which case it is a regex source string; a `RegExp` always takes the regex path and keeps its own `i` / `m` / `s` flags (`options.caseSensitive`, when given, wins over `i`). Regex patterns go through a safety guard that throws on catastrophic-backtracking shapes and on oversized patterns/input. **Scope is the current `ChapterLayout` only.** Walks the chapter's paragraphs and returns hits as `SearchMatch` (an `AnchorLocation` extended with the match length, etc.). For cross-chapter or cross-book search (e.g. a novel-site search index), keep an external full-text index server-side (Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5) and hand the resolved anchors to `MejiroReaderHandle.goToAnchor()` to navigate to the hit.
+- `locateAnchor(anchor: InChapterAnchor): AnchorLocation | null` — Resolve an anchor to the spread / page / line containing it; `null` when out of range
+- `anchorAt(spreadIndex: number, side?: 'right' | 'left'): InChapterAnchor | null` — Anchor of the first character of a spread page (default `'right'`), for converting a spread index into a reflow-stable position
 - `coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null` — Convert a reading anchor to spread/page coordinates
 - `anchorAtCoord(spreadIdx: number, x: number, y: number): InChapterAnchor | null` — Convert coordinates back to an anchor
 - `selectionRects(range: AnchorRange): AnchorRect[]` — Build highlight rectangles for a text range
@@ -539,7 +873,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 **`BookOptions`**:
 
-- `fontFamily: string` — CSS font family
+- `fontFamily: FontFamily` — CSS-ready string or array of family names
 - `fontSize: number` — Base font size (px)
 - `lineSpacing?: number` — Line spacing multiplier (default: 1.8)
 - `mode?: 'strict' | 'loose'` — Kinsoku mode (default: `'strict'`)
@@ -586,15 +920,46 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `headingLevel?: number` — Heading level (undefined for body)
 - `fontSize: number` — Computed font size (px, accounts for heading scale)
 
+**`MejiroBookOptions`** — Constructor options for `MejiroBook`: `BookOptions` plus `strictFontCheck?: boolean`, which is captured at construction time and cannot be changed afterwards.
+
+**`ChapterLike`** — `{ paragraphs: readonly BookParagraph[] }`, the minimal chapter shape `estimateReadingTime()` needs.
+
+**`ManuscriptChapter`** — One chapter for `MejiroBook.layoutManuscript()`: `id?: string` (key in the returned map), `title: string` (emitted as an `h1` paragraph at the top of the layout), `body: string` (raw manuscript; blank lines separate paragraphs).
+
+**`InChapterAnchor` / `ReadingAnchor`** — Reflow-stable reading positions. `InChapterAnchor` is `{ paragraph, charIndex }`; `ReadingAnchor` extends it with `chapter: number` for a book-wide position. `AnchorLocation`, `AnchorRect`, `AnchorRange` and `SearchMatch` are the layout-side results built from them.
+
+This subpath also re-exports `RubyInputAnnotation`, the deprecated alias of `InlineRubyAnnotation`, so a `mejiro/book`-only consumer does not have to reach into `mejiro/browser` for it.
+
+**`ChapterLayoutSnapshot`** — Serialized layout produced by `ChapterLayout.snapshot()` and consumed by `MejiroBook.layoutFromSnapshot()`. Its parts are exported so a host can store them:
+
+- **`ChapterLayoutSnapshotConfig`** — Serializable subset of the layout config: `fontSize`, `lineSpacing`, `headingScale`, `mode`, `enableHanging`, `headingStyles?`
+- **`ParagraphSnapshot`** — Per-paragraph entry: `text`, `advances: number[]`, `breakPoints: number[]`, `inlineAnnotations`, `isHeading?`, `headingLevel?`, `kind?`, `layoutRubyAnnotations?`, `layoutTcyAnnotations?`
+- **`LayoutRubySnapshot`** — `RubyAnnotation` with the typed arrays widened to plain `number[]` so the snapshot survives `JSON.stringify`
+- **`SpreadImagesSnapshot`** — `{ spreadIndex: number; images: BookImage[] }`, the image exclusions of one spread
+
 ---
 
 ## `@libraz/mejiro/image` — Image Helpers
 
 | Export | Signature |
 |---|---|
-| `prepareImage` | `(file: Blob, options?: PrepareImageOptions) => Promise<PrepareImageResult>` |
+| `prepareImage` | `(file: Blob \| File, options?: PrepareImageOptions) => Promise<PrepareImageResult>` |
 
-Decodes a browser image file, optionally downscales it, re-encodes it, and returns binary data plus dimensions for EPUB embedding.
+Decodes a browser image file, optionally downscales it, re-encodes it, and returns binary data plus dimensions for EPUB embedding. Browser-only: it uses `createImageBitmap`, `OffscreenCanvas` and `HTMLCanvasElement`.
+
+**`PrepareImageOptions`** — All fields optional, so `prepareImage(file)` is safe:
+
+- `maxBytes?: number` — Target size after re-encoding (default 2 MiB). When the encoded image still exceeds it, JPEG/WebP quality keeps dropping (down to `0.4`) before a warning is emitted
+- `maxWidth?: number` / `maxHeight?: number` — Pixel bounds after downscale (default `2048` each)
+- `convertTo?: 'auto' | 'webp' | 'jpeg' | 'png'` — Output format (default `'auto'`, which keeps JPEG / PNG / WebP sources, re-encodes GIF as `image/png` with animation flattened, and falls back to `image/jpeg` for anything else). The request is not a guarantee: a platform that cannot encode the requested format silently produces another one
+- `quality?: number` — Initial JPEG/WebP quality (default `0.85`)
+
+**`PrepareImageResult`**:
+
+- `data: Uint8Array` — Re-encoded payload, ready to drop into an EPUB
+- `mediaType: string` — MIME type of `data`, taken from the encoder's output rather than from the requested format
+- `width: number` / `height: number` — Decoded pixel size after any downscale
+- `warnings: string[]` — Diagnostic notices: downscaling, quality drops and format fallbacks
 
 ---
 
@@ -607,21 +972,85 @@ npm install -D @types/react
 
 Peer dependencies: `react >= 18`; TypeScript projects should install `@types/react >= 18` matching their React version.
 
-Main components: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroNotationHighlighter`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, `MejiroPageView`, `MejiroPage`, `MejiroSpread`, `MejiroSettingsPanel`, `MejiroChapterNav`, `MejiroStats`, `MejiroDropZone`, and `MejiroImageOverlay`.
+### Components
 
-Hooks: `useEpub`, `useEditableEpub`, `useEpubProject`, `useLibrary`, `useManuscriptDraft`, `useManuscriptLayout`, `useAnnotations`, `useMejiroBook`, `useChapterLayout`, `useSpread`, `useReadingPosition`, `useI18n`, `useImageOverlay`, and `useMultiImageOverlay`.
+Every component exports a matching props type; `MejiroSettingsPanel` additionally exports the value types its form edits.
+
+| Component | Props type | Purpose |
+|---|---|---|
+| `MejiroReader` | `MejiroReaderProps` | Full reader: chrome, navigation, settings, persistence hooks |
+| `MejiroEditor` | `MejiroEditorProps` | Block editor over an `EditableEpub`, with `MejiroExportPolicy` |
+| `MejiroManuscriptEditor` | `MejiroManuscriptEditorProps` | Manuscript authoring surface with live preview |
+| `MejiroNotationHighlighter` | `MejiroNotationHighlighterProps` | Textarea with notation-token tinting |
+| `MejiroShelf` | `MejiroShelfProps` | Multi-volume shelf, pairs with `useLibrary` |
+| `MejiroToc` | `MejiroTocProps` | Table of contents |
+| `MejiroScrollView` | `MejiroScrollViewProps` | Continuous-scroll page stack |
+| `MejiroSelectionLayer` | `MejiroSelectionLayerProps` | Selection / highlight overlay |
+| `MejiroPageView` | `MejiroPageViewProps` | Single page from a `PageResult` |
+| `MejiroPage` | `MejiroPageProps` | Single page from a `RenderPage` |
+| `MejiroSpread` | `MejiroSpreadProps` | Two-page spread; running heads use `PageHeaderData` |
+| `MejiroSettingsPanel` | `MejiroSettingsPanelProps` | Font / size / kinsoku form over `EditableSettings` and `FontChoice` |
+| `MejiroChapterNav` | `MejiroChapterNavProps` | Chapter selector; `MejiroChapterNavVariant` is `'select' \| 'panel'` |
+| `MejiroStats` | `MejiroStatsProps` | Layout statistics line |
+| `MejiroPageIndicator` | `MejiroPageIndicatorProps` | "current / total" spread position |
+| `MejiroDropZone` | `MejiroDropZoneProps` | EPUB drop target / file picker |
+| `MejiroImageOverlay` | `MejiroImageOverlayProps` | Draggable, resizable image placeholder |
+| `MejiroI18nProvider` | — | Scopes a message catalog to its descendants |
+
+### Hooks
+
+| Hook | Options / return types | Other exported types |
+|---|---|---|
+| `useEpub` | `UseEpubOptions` / `UseEpubReturn` | — |
+| `useEditableEpub` | `UseEditableEpubOptions` / `UseEditableEpubReturn` | `EditableEpubSelection` |
+| `useEpubProject` | `UseEpubProjectOptions` / `UseEpubProjectReturn` | `EpubProjectChapterDraft` |
+| `useLibrary` | `UseLibraryOptions` / `UseLibraryReturn` | `VolumeInfo` |
+| `useManuscriptDraft` | `UseManuscriptDraftOptions` / `UseManuscriptDraftReturn` | — |
+| `useManuscriptLayout` | `UseManuscriptLayoutOptions` / `UseManuscriptLayoutReturn` | `ManuscriptPageDimensions`, `ManuscriptRecomputeOptions` |
+| `useAnnotations` | `UseAnnotationsOptions` / `UseAnnotationsReturn` | `Annotation`, `AnnotationsStorage` |
+| `useMejiroBook` | `UseMejiroBookOptions` / `UseMejiroBookReturn` | — |
+| `useChapterLayout` | `UseChapterLayoutOptions` / `UseChapterLayoutReturn` | `PageDimensions`, `RecomputeOptions` |
+| `useSpread` | `UseSpreadOptions` / `UseSpreadReturn` | — |
+| `useReadingPosition` | `UseReadingPositionOptions` / `UseReadingPositionReturn` | `ReadingPositionStorage`, `ReadingPositionValue` |
+| `useI18n` | `UseI18nOptions` | `MejiroLocale`, `MejiroMessages`; `enMessages`, `jaMessages`, `resolveMessages`, `format` |
+| `useImageOverlay` | `UseImageOverlayOptions` / `UseImageOverlayReturn` | `ImageOverlayRect` (and its deprecated alias `ImageRect`) |
+| `useMultiImageOverlay` | `UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn` | `MultiImageItem` |
+
+`format(template, vars)` substitutes `{name}` placeholders, the same contract as the core `formatMessage`. `AnnotationsStorage` and `ReadingPositionStorage` are both aliases of the core `MejiroStorage`. `PageDimensions` and `ManuscriptPageDimensions` are both `{ pageWidth, pageHeight, contentHeight }`, and `RecomputeOptions` / `ManuscriptRecomputeOptions` are both `{ blank?: boolean }`. `VolumeInfo` is `{ id, label, author?, cover?, meta? }`, `EpubProjectChapterDraft` and `ManuscriptEditorChapter` are both `{ id, title, body }`, and `MultiImageItem` is `{ id, rect }`.
+
+### MejiroReader types
+
+- **`MejiroReaderProps`** — Discriminated union of the four source modes, so TypeScript rejects passing more than one source at once: `MejiroReaderControlledProps` (`epub: EpubBook | null`), `MejiroReaderUrlProps` (`epubUrl: string`), `MejiroReaderFileProps` (no source; the reader exposes its drop zone / file picker), and `MejiroReaderManuscriptProps` (`manuscript: readonly ManuscriptChapter[]`, `dialect?: ManuscriptDialect`). Each variant extends **`MejiroReaderCommonProps`**, which carries everything else.
+- **`MejiroReaderHandle`** — Imperative handle from `ref`: `goToSpread`, `next`, `prev`, `goToChapter`, `getReadingPosition(): ReadingPosition`, `goToAnchor(): Promise<void>`, `getAnchor()`, `getVisibleRange()`, `setOptions(): Promise<void>`, `subscribe()`.
+- **`MejiroReaderEventMap`** — Payloads for `subscribe`: `spreadChanged({ chapter, spreadIdx })`, `turnStart({ from })`, `turnEnd({ to })`, `chapterFinished({ chapter })`.
+- **`ReadingPosition`** — `{ chapter, spreadIdx, totalPages, totalSpreads }` returned by `getReadingPosition()`.
+- **`MejiroReaderSettingsSlot`** — Context for the `renderSettings` render prop: `{ settings: EditableSettings; update; open; toggle }`.
+- **`MejiroTheme`** — `MejiroThemeName` or `{ name, override }` to layer custom CSS variables on a preset. **`MejiroThemeName`** is `'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'`.
+- **`MejiroReaderMode`** — `'paginated' | 'scroll'`. **`MejiroSpreadMode`** — `'double' | 'single' | 'auto'`. **`MejiroReaderFit`** — `'fill' | 'width'`. **`PageNumberDisplay`** — `'both' | 'right' | 'left' | 'none'`. **`MejiroChapterNavMode`** — `'select' | 'panel' | 'both' | 'none'`.
+
+### MejiroManuscriptEditor types
+
+- **`ManuscriptEditorChapter`** — `{ id, title, body }`, one chapter of the draft.
+- **`ManuscriptAutosaveDraft`** — Autosave payload: `{ title, author, cover: File | null, chapters }`.
+- **`ManuscriptPreviewProps`** — The subset of `MejiroReader` props forwarded to the live preview. Properties the editor drives itself (`manuscript`, `fonts`, `chapter`, `onChapterChange`) are ignored if supplied.
+
+### MejiroEditor types
+
+- **`MejiroExportPolicy`** — Declarative restrictions on the export pipeline, applied in order: `watermark` (on an export-only copy of the book, never on the edited document) → `encrypt` (replaces the buffer) → `allowDownload` (skips the browser download when `false`).
 
 Common headless editor returns:
 
 - `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport? })` returns `editor`, `book`, `previewBook`, `loading`, `exporting`, `error`, `revision`, `history`, `selection`, `selectedParagraph`, `setSelection`, `loadBuffer`, `loadFile`, `loadUrl`, `updateParagraph`, `setInlineAnnotations`, `addImage({ filename, data, ... })`, `undo`, `redo`, and `exportEpub(options?)`.
 - `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` returns `epub`, `loading`, `error`, `loadBuffer`, `loadFile`, `loadUrl`, and `setEpub`.
-- `useEpubProject({ metadata?, chapters?, debounceMs?, onPreview?, onExport? })` returns project metadata/chapter state plus `setMetadata`, `setChapters`, `setSelectedChapter`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `previewBook`, `previewError`, `previewing`, `buildProject`, and `exportEpub`.
+- `useEpubProject({ metadata?, chapters?, cover?, assets?, debounceMs?, onPreview?, onExport? })` returns `metadata`, `chapters`, `selectedChapter`, `currentChapter`, `cover`, `assets`, `previewBook`, `previewError`, `previewing`, plus `setMetadata`, `setChapters`, `setSelectedChapter`, `setCover`, `setAssets`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `buildProject`, and `exportEpub`. `currentChapter` is the selected draft (or `null`); `setCover(null)` drops the cover, and both the debounced preview and `exportEpub` reflect cover/asset changes.
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` returns draft chapter state plus add/remove/reorder/patch helpers.
 - `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce? })` lays out a single manuscript chapter directly, with no EPUB ZIP round-trip. Returns `{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute }` (same shape as `useChapterLayout`). Designed for live preview surfaces.
 - `useAnnotations({ key, storage?, throttleMs?, onChange? })` persists highlights / bookmarks / comments. Returns `{ annotations, add, remove, update, clear }`. `storage` follows the same `getItem` / `setItem` / `removeItem` interface as `useReadingPosition`. `onChange(next)` fires synchronously after `add` / `remove` / `update` / `clear` (skipped on initial hydration and no-ops) — handy for forwarding each mutation to a server.
 - `useReadingPosition({ key, storage?, throttleMs?, onChange? })` exposes the same `onChange(next | null)` hook, fired right after `save` / `clear`.
 
 **`MejiroReader` manuscript source** -- A fourth source mode alongside `epub` / `epubUrl`. Pass `manuscript: ManuscriptChapter[]` plus `dialect?: ManuscriptDialect` and the Reader renders the chapters directly, skipping the EPUB ZIP entirely.
+
+**`MejiroReader` presentation props** -- `theme?: MejiroTheme` (reflected as `data-mejiro-theme` on the reader root, which the bundled CSS reads to swap palettes), `mode?: MejiroReaderMode` (`'paginated'` default / `'scroll'` stacks every page in a vertical scroller), `spreadMode?: MejiroSpreadMode` (`'double'` default / `'single'` / `'auto'`), `fit?: MejiroReaderFit` (`'fill'` default / `'width'`), `pageNumbers?: PageNumberDisplay`, `locale?: MejiroLocale` and `messages?: Partial<MejiroMessages>` for UI strings, and `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` to replace the settings panel body with a custom form.
 
 **`MejiroReader` `annotations` prop** -- Pass an array of `{ chapter, start, end, color? }` and the Reader converts entries on the current chapter into highlight rectangles via `ChapterLayout.selectionRects`, forwarding them to `MejiroSpread`. Typically paired with `useAnnotations`, but any shape that satisfies the structural type works.
 
@@ -655,6 +1084,8 @@ Props:
 - `className?: string`
 - `style?: CSSProperties`
 
+Paragraph classes come from the shared `paragraphClassName(kind, headingLevel)` helper, falling back to `'heading'` when only the deprecated `isHeading` is set, so `blockquote` / `sceneBreak` / `pre` / `figure` paragraphs get the same `mejiro-paragraph--*` modifiers the static renderer emits.
+
 ---
 
 ## `@libraz/mejiro-vue` — Vue Component
@@ -665,11 +1096,77 @@ npm install @libraz/mejiro @libraz/mejiro-vue vue
 
 Peer dependency: `vue >= 3.3`.
 
-Main components and composables mirror the React package: `MejiroReader`, `MejiroEditor`, `MejiroManuscriptEditor`, `MejiroNotationHighlighter`, `MejiroShelf`, `MejiroToc`, `MejiroScrollView`, `MejiroSelectionLayer`, page/spread/chrome components, and `useEpub` / `useEditableEpub` / `useEpubProject` / `useLibrary` / `useManuscriptDraft` / `useManuscriptLayout` / `useAnnotations` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useI18n` / `useImageOverlay` / `useMultiImageOverlay`.
+### Components and prop types
 
-Public component prop types are exported for the same component set, including `MejiroReaderProps`, `MejiroEditorProps`, `MejiroManuscriptEditorProps`, `MejiroPageViewProps`, `MejiroSpreadProps`, `MejiroSettingsPanelProps`, and the other `Mejiro*Props` aliases.
+The component set matches the React package. Each component exports a props alias declared as `InstanceType<typeof Component>['$props']`, so it always tracks the component's own `props` block — including the `default` values, which is why every field appears optional even when the runtime default is `undefined`.
 
-The Vue composables expose the same operations as the React hooks. Reactive state is returned as `Ref` / `ComputedRef` values.
+| Component | Props alias |
+|---|---|
+| `MejiroReader` | `MejiroReaderProps` |
+| `MejiroEditor` | `MejiroEditorProps` |
+| `MejiroManuscriptEditor` | `MejiroManuscriptEditorProps` |
+| `MejiroNotationHighlighter` | `MejiroNotationHighlighterProps` |
+| `MejiroShelf` | `MejiroShelfProps` |
+| `MejiroToc` | `MejiroTocProps` |
+| `MejiroScrollView` | `MejiroScrollViewProps` |
+| `MejiroSelectionLayer` | `MejiroSelectionLayerProps` |
+| `MejiroPageView` | `MejiroPageViewProps` |
+| `MejiroPage` | `MejiroPageProps` |
+| `MejiroSpread` | `MejiroSpreadProps` |
+| `MejiroSettingsPanel` | `MejiroSettingsPanelProps` |
+| `MejiroChapterNav` | `MejiroChapterNavProps` |
+| `MejiroStats` | `MejiroStatsProps` |
+| `MejiroPageIndicator` | `MejiroPageIndicatorProps` |
+| `MejiroDropZone` | `MejiroDropZoneProps` |
+| `MejiroImageOverlay` | `MejiroImageOverlayProps` |
+| `MejiroManuscriptEditor` (preview passthrough) | `ManuscriptPreviewProps` |
+
+`MejiroI18nProvider` is a component too, and takes `locale` / `messages` like its React counterpart.
+
+Unlike React, `MejiroReaderProps` is a single object type rather than a discriminated union, so the source props are not mutually exclusive at the type level: `epub` wins over `epubUrl`, and `manuscript` cannot be combined with either. `MejiroReaderCommonProps` / `MejiroReaderControlledProps` / `MejiroReaderUrlProps` / `MejiroReaderFileProps` / `MejiroReaderManuscriptProps` exist only in the React package.
+
+### Composables
+
+The Vue composables expose the same operations as the React hooks and share the option / return type names: `useEpub` (`UseEpubOptions` / `UseEpubReturn`), `useEditableEpub` (`UseEditableEpubOptions` / `UseEditableEpubReturn`, `EditableEpubSelection`), `useEpubProject` (`UseEpubProjectOptions` / `UseEpubProjectReturn`, `EpubProjectChapterDraft`), `useLibrary` (`UseLibraryOptions` / `UseLibraryReturn`, `VolumeInfo`), `useManuscriptDraft` (`UseManuscriptDraftOptions` / `UseManuscriptDraftReturn`), `useManuscriptLayout` (`UseManuscriptLayoutOptions` / `UseManuscriptLayoutReturn`, `ManuscriptPageDimensions`, `ManuscriptRecomputeOptions`), `useAnnotations` (`UseAnnotationsOptions` / `UseAnnotationsReturn`, `Annotation`, `AnnotationsStorage`), `useMejiroBook` (`UseMejiroBookOptions` / `UseMejiroBookReturn`), `useChapterLayout` (`UseChapterLayoutOptions` / `UseChapterLayoutReturn`, `PageDimensions`, `RecomputeOptions`), `useSpread` (`UseSpreadOptions` / `UseSpreadReturn`), `useReadingPosition` (`UseReadingPositionOptions` / `UseReadingPositionReturn`, `ReadingPositionStorage`), `useI18n` (`UseI18nOptions`, plus `enMessages` / `jaMessages` / `resolveMessages` / `format`), `useImageOverlay` (`UseImageOverlayOptions` / `UseImageOverlayReturn`) and `useMultiImageOverlay` (`UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn`, `MultiImageItem`).
+
+Reactive state is returned as `Ref` / `ComputedRef` values, and composables that take a layout or index accept refs rather than plain values.
+
+### `MejiroReader` presentation props
+
+The same set as React, declared as Vue props:
+
+- `theme?: MejiroTheme` (default `'light'`) — reflected as `data-mejiro-theme` on the reader root, which the bundled CSS reads to swap palettes. `MejiroThemeName` is `'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'`; the object form `{ name, override }` layers custom CSS variables on a preset
+- `mode?: MejiroReaderMode` (default `'paginated'`) — `'scroll'` stacks every page of the chapter in a vertical scroller
+- `spreadMode?: MejiroSpreadMode` (default `'double'`) — `'single'` renders only the right page; `'auto'` flips to single for portrait viewports, observed with a `ResizeObserver`
+- `fit?: MejiroReaderFit` (default `'fill'`) — `'width'` makes the reader self-size from its width and the page aspect, and defaults the reserved `gutterOffset` / `headerOffset` to 0 so the spread fills edge-to-edge
+- `pageNumbers?: PageNumberDisplay` (default `'both'`) — which page of a spread shows its number in the running head; the "n / total" indicator is independent
+- `chapterNavMode?: MejiroChapterNavMode` (default `'select'`) — where the built-in chapter navigation renders
+- `locale?: MejiroLocale` and `messages?: Partial<MejiroMessages>` — UI strings
+- `title` / `subtitle` — header logo text
+- `bare?: boolean` (default `false`) — flips the defaults of `enableHeader`, `enableChapterNav`, `enableSettings`, `enableStats` and `enablePageIndicator` to `false`; explicitly passed `enable*` props still win
+- `enableHeader` / `enableChapterNav` / `enableSettings` / `enableStats` / `enablePageIndicator` (default `!bare`), `enableDropZone` / `enableImageOverlay` (default `false`), `enableKeyboard` / `enableSurfaceTap` (default `true`)
+- `fallbackHtml?: string` — static hydration fallback, typically the output of `renderEpubStatic`
+- `fetchOptions?: RequestInit`, `limits?: EpubParseLimits`, `fetchEpub?: (url: string) => Promise<ArrayBuffer>` — EPUB loading in URL mode
+- `annotations?` — `{ chapter, start, end, color? }` entries converted to highlight rectangles via `ChapterLayout.selectionRects`
+
+Where React takes a `renderSettings` render prop, Vue uses slots: `settings` (receives the same `MejiroReaderSettingsSlot` context), plus `header`, `logo`, `dropZone`, `fallback` and `loading`.
+
+Events are emitted rather than passed as callbacks: `load`, `chapter-change`, `spread-change`, `spread-idx-change`, `error`, `page-read` and `chapter-completed`. `MejiroReaderEventMap` still describes the payloads of the imperative `MejiroReaderHandle.subscribe()`, and `MejiroReaderHandle` exposes the same methods as in React (`goToSpread`, `next`, `prev`, `goToChapter`, `getReadingPosition`, `goToAnchor`, `getAnchor`, `getVisibleRange`, `setOptions`, `subscribe`).
+
+### `MejiroManuscriptEditor` and `MejiroEditor` types
+
+`ManuscriptEditorChapter`, `ManuscriptAutosaveDraft`, `ManuscriptPreviewProps` and `MejiroExportPolicy` have the same shapes as in the React package.
+
+### Supporting types
+
+The Vue barrel exports these alongside the components, with the same shapes as their React counterparts, so a Vue-only host never has to import from the React package:
+
+- `MejiroChapterNavVariant` — `'select' | 'panel'`, the layout `MejiroChapterNav` renders in
+- `EditableSettings` and `FontChoice` — the value and option types `MejiroSettingsPanel` edits
+- `PageHeaderData` — `{ title?, pageNumber? }` for the running heads `MejiroSpread` draws
+- `ReadingPosition` — `{ chapter, spreadIdx, totalPages, totalSpreads }` from `MejiroReaderHandle.getReadingPosition()`
+- `ReadingPositionValue` — the persisted anchor `useReadingPosition` stores
+- `ImageOverlayRect` — the core overlay rectangle, re-exported so `useImageOverlay` callers get it from one place. `ImageRect` remains as its deprecated alias
 
 **`MejiroPageView`** -- Recommended lower-level page renderer. Renders a `PageResult` from `ChapterLayout`. Automatically switches between CSS vertical-rl and slot-based rendering.
 
@@ -694,6 +1191,8 @@ Returns: `{ imageRect: Ref, hasImage: Ref, toggleImage, onOverlayPointerDown, on
 Props:
 
 - `page: RenderPage` -- Required
+
+Paragraph classes come from the same shared `paragraphClassName(kind, headingLevel)` helper the React component uses, so `blockquote` / `sceneBreak` / `pre` / `figure` paragraphs get identical `mejiro-paragraph--*` modifiers in both frameworks and in `renderEpubStatic` output.
 
 ---
 
