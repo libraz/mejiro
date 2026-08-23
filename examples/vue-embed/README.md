@@ -24,7 +24,7 @@ yarn workspace @mejiro/example-vue-embed dev
 ```bash
 npx degit libraz/mejiro/examples/vue-embed my-page
 cd my-page
-node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.8.0\"'));"
+node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.9.0\"'));"
 npm install
 npm run dev
 ```
