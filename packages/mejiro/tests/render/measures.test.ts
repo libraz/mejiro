@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { ColumnSlot } from '../../src/exclusion.js';
 import {
   adjustExclusionSlots,
   buildColumnSlots,
@@ -8,7 +9,7 @@ import {
   getImageXOffset,
   packPageLines,
 } from '../../src/render/measures.js';
-import type { RenderEntry } from '../../src/render/types.js';
+import type { LineMetric, RenderEntry } from '../../src/render/types.js';
 
 function makeEntry(charCount: number, breakCount: number, headingLevel?: number): RenderEntry {
   return {
@@ -349,6 +350,42 @@ describe('adjustExclusionSlots', () => {
     // Column 1 shifts by one heading pitch excess
     expect(adjusted[2].xPos).toBeCloseTo(basePitch + (h1Pitch - basePitch));
   });
+
+  // Slots arrive in reading order: an image spanning columns 1-2 makes those
+  // columns come back a second time after the whole upper band is filled.
+  const bandPitch = 30;
+  const bandMetrics: LineMetric[] = [
+    { pitch: bandPitch, gapBefore: 0 },
+    { pitch: bandPitch, gapBefore: 0 },
+    { pitch: bandPitch, gapBefore: 0 },
+    { pitch: bandPitch, gapBefore: 10 },
+    { pitch: bandPitch, gapBefore: 0 },
+    { pitch: bandPitch, gapBefore: 0 },
+  ];
+  const bandSlots: ColumnSlot[] = [
+    { xPos: 0, yStart: 0, height: 400, columnIndex: 0 },
+    { xPos: bandPitch, yStart: 0, height: 150, columnIndex: 1 },
+    { xPos: bandPitch * 2, yStart: 0, height: 150, columnIndex: 2 },
+    { xPos: bandPitch, yStart: 250, height: 150, columnIndex: 1 },
+    { xPos: bandPitch * 2, yStart: 250, height: 150, columnIndex: 2 },
+    { xPos: bandPitch * 3, yStart: 0, height: 400, columnIndex: 3 },
+  ];
+
+  it('gives every gap of a column the same xPos when slots come in band order', () => {
+    const adjusted = adjustExclusionSlots(bandSlots, bandMetrics, 0, bandPitch);
+
+    expect(adjusted.map((s) => s.xPos)).toEqual([0, 30, 60, 30, 60, 90]);
+    expect(adjusted.map((s) => s.columnIndex)).toEqual([0, 1, 2, 1, 2, 3]);
+  });
+
+  it('drops an overflowing column from every band instead of truncating the rest', () => {
+    // Content box holds columns 0-1 only: column 2 would end at x=90 > 85.
+    const adjusted = adjustExclusionSlots(bandSlots, bandMetrics, 0, bandPitch, 85);
+
+    // Column 1 keeps both of its gaps; columns 2 and 3 are dropped entirely.
+    expect(adjusted.map((s) => s.columnIndex)).toEqual([0, 1, 1]);
+    expect(adjusted.map((s) => s.yStart)).toEqual([0, 0, 250]);
+  });
 });
 
 describe('getImageXOffset', () => {
@@ -377,5 +414,27 @@ describe('findPhysicalColumn', () => {
     const offsets = new Float32Array([0, -10, -20]);
 
     expect(findPhysicalColumn(offsets, 0, 85, 50)).toBe(2);
+  });
+
+  it('terminates on a degenerate pitch or distance', () => {
+    const offsets = new Float32Array([0, 10, 20]);
+
+    expect(findPhysicalColumn(offsets, 0, 100, 0)).toBe(0);
+    expect(findPhysicalColumn(offsets, 0, 100, Number.NaN)).toBe(0);
+    expect(findPhysicalColumn(offsets, 0, 100, -50)).toBe(0);
+    expect(findPhysicalColumn(offsets, 0, 100, Number.POSITIVE_INFINITY)).toBe(0);
+    expect(findPhysicalColumn(offsets, 0, Number.NaN, 50)).toBe(0);
+    expect(findPhysicalColumn(offsets, 0, Number.POSITIVE_INFINITY, 50)).toBe(0);
+    expect(findPhysicalColumn(offsets, 0, -100, 50)).toBe(0);
+  });
+
+  it('keeps the column inside the spread for an out-of-range distance', () => {
+    const offsets = new Float32Array([0, 0, 0, 0]);
+
+    const col = findPhysicalColumn(offsets, 1, 1e9, 0.5);
+
+    expect(Number.isInteger(col)).toBe(true);
+    expect(col).toBeGreaterThanOrEqual(0);
+    expect(col).toBeLessThanOrEqual(offsets.length - 1 - 1);
   });
 });

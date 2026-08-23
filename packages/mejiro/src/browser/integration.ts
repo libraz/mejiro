@@ -1,6 +1,9 @@
 import { computeBreaks } from '../layout.js';
+import { normalizeAnnotatedText } from '../normalize.js';
 import type { RubyAnnotation } from '../ruby.js';
-import { normalizeText, toCodepoints } from '../text.js';
+import type { TcyAnnotation } from '../tcy.js';
+import { buildTcyAnnotations } from '../tcy.js';
+import { toCodepoints } from '../text.js';
 import type { BreakResult } from '../types.js';
 import { FontLoader } from './font-loader.js';
 import { CharMeasurer, deriveRubyFont } from './measure.js';
@@ -45,8 +48,9 @@ export function verticalLineWidth(containerHeight: number, fontSize: number): nu
 /**
  * Filters inline annotations to ruby variants and measures their advance widths.
  *
- * Non-ruby variants (emphasis, tcy, em/strong, link, footnote) are render-only
- * in v0.5 and bypass the line-breaker's ruby pipeline.
+ * Tate-chu-yoko takes the separate {@link buildTcyAnnotations} path; the
+ * remaining variants (emphasis, em/strong, link, footnote) are render-only and
+ * reach the line breaker not at all.
  */
 function buildRubyAnnotations(
   annotations: readonly InlineAnnotation[],
@@ -69,8 +73,54 @@ function buildRubyAnnotations(
 }
 
 /**
+ * Glyphs used to detect that a requested family silently resolved to a
+ * fallback font. Latin letters carry family-specific metrics; full-width CJK
+ * glyphs are one em in nearly every font and cannot discriminate.
+ */
+const FALLBACK_PROBE_CODEPOINTS = [0x4d, 0x69, 0x57, 0x67]; // M i W g
+
+/** Family name no host can provide, so it always measures as the default font. */
+const FALLBACK_SENTINEL_FAMILY = '"__mejiro_absent_family__"';
+
+/**
+ * Reports whether `fontFamily` measures exactly like a family that is
+ * guaranteed to be missing — the observable signature of a silent fallback.
+ *
+ * Heuristic by nature: it catches the common case where the requested family
+ * resolves to the host's default font, and stays silent when the family's own
+ * CSS fallback list absorbs the miss.
+ */
+function measuresAsFallback(
+  measurer: CharMeasurer,
+  fontFamily: FontFamily,
+  fontSize: number,
+): boolean {
+  const wanted = toFontSpec(fontFamily, fontSize);
+  const sentinel = `${fontSize}px ${FALLBACK_SENTINEL_FAMILY}`;
+  if (wanted === sentinel) return false;
+  return FALLBACK_PROBE_CODEPOINTS.every(
+    (cp) => measurer.measure(wanted, cp) === measurer.measure(sentinel, cp),
+  );
+}
+
+/** Concatenates every ruby reading so font readiness covers their ranges too. */
+function rubyTextOf(annotations: readonly InlineAnnotation[]): string {
+  let out = '';
+  for (const ann of annotations) {
+    if (ann.kind === 'ruby') out += ann.rubyText;
+  }
+  return out;
+}
+
+/**
  * Standalone function to lay out text with a specified font.
  * Handles font loading, measurement, and line break computation in one call.
+ *
+ * Accepts the same fields as {@link MejiroBrowser.layout} and produces the same
+ * {@link BreakResult} for them, except that `fontFamily` and `fontSize` are
+ * required: there is no instance to inherit fixed values from. Prefer
+ * {@link MejiroBrowser} when laying out repeatedly, so the width cache and the
+ * loaded-font set survive between calls.
  */
 export async function layoutText(options: {
   text: string;
@@ -80,21 +130,31 @@ export async function layoutText(options: {
   mode?: 'strict' | 'loose';
   enableHanging?: boolean;
   inlineAnnotations?: readonly InlineAnnotation[];
+  /**
+   * Token boundary indices for morphological-aware line breaking.
+   * @see {@link LayoutOptions.tokenBoundaries}
+   */
+  tokenBoundaries?: Uint32Array | readonly number[];
 }): Promise<BreakResult> {
   const fontSpec = toFontSpec(options.fontFamily, options.fontSize);
   const loader = new FontLoader();
-  await loader.ensureLoaded(fontSpec);
+  const { text, inlineAnnotations } = normalizeAnnotatedText(
+    options.text,
+    options.inlineAnnotations ?? [],
+  );
+  await loader.ensureLoaded(fontSpec, text);
 
   const measurer = new CharMeasurer();
-  const text = normalizeText(options.text);
   const codepoints = toCodepoints(text);
   const advances = measurer.measureAll(fontSpec, codepoints);
 
   let rubyAnnotations: RubyAnnotation[] | undefined;
-  if (options.inlineAnnotations?.length) {
+  let tcyAnnotations: TcyAnnotation[] | undefined;
+  if (inlineAnnotations.length) {
     const rubyFontSpec = deriveRubyFont(options.fontFamily, options.fontSize);
-    await loader.ensureLoaded(rubyFontSpec);
-    rubyAnnotations = buildRubyAnnotations(options.inlineAnnotations, rubyFontSpec, measurer);
+    await loader.ensureLoaded(rubyFontSpec, rubyTextOf(inlineAnnotations));
+    rubyAnnotations = buildRubyAnnotations(inlineAnnotations, rubyFontSpec, measurer);
+    tcyAnnotations = buildTcyAnnotations(inlineAnnotations, options.fontSize);
   }
 
   return computeBreaks({
@@ -104,6 +164,8 @@ export async function layoutText(options: {
     mode: options.mode,
     enableHanging: options.enableHanging,
     rubyAnnotations,
+    tcyAnnotations,
+    tokenBoundaries: options.tokenBoundaries,
   });
 }
 
@@ -116,6 +178,15 @@ export class MejiroBrowser {
   private measurer: CharMeasurer;
   private options: MejiroBrowserOptions;
 
+  /**
+   * Wires a fresh measurer to a font loader that clears the width cache on
+   * every `loadingdone`, so widths measured against a fallback face are
+   * discarded once the real font arrives.
+   *
+   * @param options - Fixed font family / size used when a layout call omits
+   *   them, plus the `strictFontCheck` guard. Captured at construction; layout
+   *   calls override the fixed values per call rather than mutating these.
+   */
   constructor(options?: MejiroBrowserOptions) {
     this.options = options ?? {};
     this.measurer = new CharMeasurer();
@@ -128,8 +199,16 @@ export class MejiroBrowser {
 
   /**
    * Computes line breaks for the given text and font.
+   *
+   * The text is normalized to NFC and the supplied `inlineAnnotations` move
+   * with it, so a decomposed `が` and a precomposed `が` produce the same
+   * break points and keep every annotation over the character it was authored
+   * for. Annotations left covering nothing by the composition are dropped.
+   *
    * @param options - Layout options including text, font, and line width.
    * @throws If no font family or font size is specified and no fixed values were configured.
+   * @throws If `strictFontCheck` is enabled and the requested family measures
+   *   like the host's default font, i.e. it silently fell back.
    */
   async layout(options: LayoutOptions): Promise<BreakResult> {
     const fontFamily = options.fontFamily ?? this.options.fixedFontFamily;
@@ -138,25 +217,26 @@ export class MejiroBrowser {
     if (!fontSize) throw new Error('fontSize must be specified');
 
     const fontSpec = toFontSpec(fontFamily, fontSize);
-    await this.fontLoader.ensureLoaded(fontSpec);
+    const { text, inlineAnnotations } = normalizeAnnotatedText(
+      options.text,
+      options.inlineAnnotations ?? [],
+    );
+    await this.fontLoader.ensureLoaded(fontSpec, text);
 
-    if (this.options.strictFontCheck && !this.fontLoader.isAvailable(fontSpec)) {
+    if (this.options.strictFontCheck && measuresAsFallback(this.measurer, fontFamily, fontSize)) {
       throw new Error(`Font not available (possible fallback): ${fontSpec}`);
     }
 
-    const text = normalizeText(options.text);
     const codepoints = toCodepoints(text);
     const advances = this.measurer.measureAll(fontSpec, codepoints);
 
     let rubyAnnotations: RubyAnnotation[] | undefined;
-    if (options.inlineAnnotations?.length) {
+    let tcyAnnotations: TcyAnnotation[] | undefined;
+    if (inlineAnnotations.length) {
       const rubyFontSpec = deriveRubyFont(fontFamily, fontSize);
-      await this.fontLoader.ensureLoaded(rubyFontSpec);
-      rubyAnnotations = buildRubyAnnotations(
-        options.inlineAnnotations,
-        rubyFontSpec,
-        this.measurer,
-      );
+      await this.fontLoader.ensureLoaded(rubyFontSpec, rubyTextOf(inlineAnnotations));
+      rubyAnnotations = buildRubyAnnotations(inlineAnnotations, rubyFontSpec, this.measurer);
+      tcyAnnotations = buildTcyAnnotations(inlineAnnotations, fontSize);
     }
 
     return computeBreaks({
@@ -166,6 +246,7 @@ export class MejiroBrowser {
       mode: options.mode,
       enableHanging: options.enableHanging,
       rubyAnnotations,
+      tcyAnnotations,
       tokenBoundaries: options.tokenBoundaries,
     });
   }
@@ -189,6 +270,9 @@ export class MejiroBrowser {
    * Each paragraph is measured and broken into lines. Paragraphs can
    * optionally override the font family and size (e.g. for headings).
    *
+   * Paragraph text is normalized to NFC together with its annotations, so the
+   * returned `chars` and the annotation indices address the same characters.
+   *
    * @param options - Chapter layout options.
    * @returns Per-paragraph layout results with break points and character arrays.
    */
@@ -201,7 +285,12 @@ export class MejiroBrowser {
 
     const results: ChapterLayoutResult['paragraphs'] = [];
     for (const para of inputs) {
-      const text = normalizeText(para.text);
+      // Normalize here rather than leaving it to `layout()`, so the `chars` we
+      // hand back are the same NFC characters the annotations now address.
+      const { text, inlineAnnotations } = normalizeAnnotatedText(
+        para.text,
+        para.inlineAnnotations ?? [],
+      );
       const breakResult = await this.layout({
         text,
         fontFamily: para.fontFamily ?? fontFamily,
@@ -209,7 +298,7 @@ export class MejiroBrowser {
         lineWidth,
         mode,
         enableHanging,
-        inlineAnnotations: para.inlineAnnotations?.length ? para.inlineAnnotations : undefined,
+        inlineAnnotations: inlineAnnotations.length ? inlineAnnotations : undefined,
         tokenBoundaries: para.tokenBoundaries,
       });
       results.push({ breakResult, chars: [...text] });

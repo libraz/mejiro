@@ -12,9 +12,13 @@ export {
   DEFAULT_PAGE_GEOMETRY,
   DEFAULT_PAGE_PADDING,
 } from './constants.js';
-export type { LayoutManuscriptOptions, ManuscriptChapter } from './mejiro-book.js';
+export type {
+  LayoutManuscriptOptions,
+  ManuscriptChapter,
+  MejiroBookOptions,
+} from './mejiro-book.js';
 export { MejiroBook } from './mejiro-book.js';
-export type { ReadingTimeOptions } from './reading-time.js';
+export type { ChapterLike, ReadingTimeOptions } from './reading-time.js';
 export { estimateReadingTime, formatReadingTime } from './reading-time.js';
 export type { FindTextOptions, SearchMatch } from './search.js';
 export type {
@@ -22,6 +26,7 @@ export type {
   ChapterLayoutSnapshotConfig,
   LayoutRubySnapshot,
   ParagraphSnapshot,
+  SpreadImagesSnapshot,
 } from './snapshot.js';
 export type {
   BookImage,

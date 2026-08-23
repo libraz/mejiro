@@ -16,11 +16,19 @@ import {
 } from '../render/measures.js';
 import { buildRenderPage } from '../render/page.js';
 import type { LineMetric, RenderEntry, RenderLine, RenderParagraph } from '../render/types.js';
-import type { RubyAnnotation } from '../ruby.js';
+import { preprocessRuby, type RubyAnnotation } from '../ruby.js';
+import { preprocessTcy, type TcyAnnotation } from '../tcy.js';
 import type { AnchorLocation, AnchorRange, AnchorRect, InChapterAnchor } from './anchor.js';
 import type { FindTextOptions, SearchMatch } from './search.js';
 import type { ChapterLayoutSnapshot, LayoutRubySnapshot, ParagraphSnapshot } from './snapshot.js';
-import type { BookImage, PageLine, PageResult, PageSize, SpreadResult } from './types.js';
+import type {
+  BookImage,
+  PageLine,
+  PageResult,
+  PageSize,
+  ParagraphKind,
+  SpreadResult,
+} from './types.js';
 
 /** @internal Cached per-paragraph data for fast re-layout. */
 export interface CachedParagraph {
@@ -29,8 +37,20 @@ export interface CachedParagraph {
   chars: string[];
   inlineAnnotations: readonly InlineAnnotation[];
   layoutRubyAnnotations?: RubyAnnotation[];
+  /**
+   * Tate-chu-yoko spans with their box width already resolved against this
+   * paragraph's font size. Kept alongside the advances so every re-break
+   * (resize, re-measure, image exclusion) reserves the same one em per span
+   * and refuses to split it, exactly as the initial layout did.
+   */
+  layoutTcyAnnotations?: TcyAnnotation[];
   isHeading?: boolean;
   headingLevel?: number;
+  /**
+   * Structural classification of the source paragraph, kept here so a re-break
+   * (resize, re-measure, image exclusion) can put it back on the render entry.
+   */
+  kind?: ParagraphKind;
 }
 
 /** @internal Layout configuration snapshot. */
@@ -55,6 +75,8 @@ interface ExclusionCache {
   lines: PageLine[];
   lineParaIndex: number[];
   entries: RenderEntry[];
+  /** Global index of each paragraph's first line, parallel to `entries`. */
+  paraLineStarts: number[];
   metrics: LineMetric[];
   spreadLayouts: SpreadLayoutInfo[];
   totalPages: number;
@@ -75,16 +97,176 @@ interface SpreadLayoutBuildResult {
   lineWidths: Float32Array;
 }
 
+/** A contiguous run of selected characters inside one line of one paragraph. */
+interface SelectionRun {
+  paragraph: number;
+  /** Line index within the paragraph. */
+  inParaLine: number;
+  /** First character index of the line the run sits on. */
+  lineStart: number;
+  charStart: number;
+  charEnd: number;
+}
+
+/** Line breaks and the advances they were produced from, before committing. */
+interface BrokenChapter {
+  entries: RenderEntry[];
+  /** Per paragraph: the advance array {@link BrokenChapter.entries} came from. */
+  layoutAdvances: Float32Array[];
+}
+
+/**
+ * Spreads of line widths computed past the end of the chapter, so text pushed
+ * out of image-shortened columns still finds a width to reflow into.
+ */
+const SPREAD_REFLOW_MARGIN = 10;
+
 const MAX_REGEX_SEARCH_PATTERN_LENGTH = 256;
 const MAX_REGEX_SEARCH_TEXT_LENGTH = 1_000_000;
 
 interface RegexGroupState {
   hasAlternation: boolean;
+  /** Whether any term anywhere inside this group carries a quantifier. */
   hasQuantifiedTerm: boolean;
+  /** The alternative being scanned ends with a quantifier nothing separates. */
+  quantifierOpen: boolean;
+  /** The alternative being scanned has a quantifier before any consuming term. */
+  startsQuantified: boolean;
+  /** The alternative being scanned has a term that always consumes input. */
+  consumes: boolean;
+  /** {@link RegexGroupState.quantifierOpen} for any finished alternative. */
+  anyQuantifierOpen: boolean;
+  /** {@link RegexGroupState.startsQuantified} for any finished alternative. */
+  anyStartsQuantified: boolean;
+  /** {@link RegexGroupState.consumes} for every finished alternative. */
+  allConsume: boolean;
+}
+
+/**
+ * A scanned regex term, described only by how it can interact with the terms
+ * next to it. Character classes, escapes, literals and groups all reduce to
+ * these three properties.
+ */
+interface RegexTerm {
+  /** The term can begin with a quantifier that nothing on its left separates. */
+  startsQuantified: boolean;
+  /** The term can end with a quantifier that nothing on its right separates. */
+  endsQuantified: boolean;
+  /** The term always consumes at least one character, so it separates neighbours. */
+  consumes: boolean;
+  /** The group this term stands for, when the term is parenthesised. */
+  group?: RegexGroupState;
+}
+
+function newRegexGroupState(): RegexGroupState {
+  return {
+    hasAlternation: false,
+    hasQuantifiedTerm: false,
+    quantifierOpen: false,
+    startsQuantified: false,
+    consumes: false,
+    anyQuantifierOpen: false,
+    anyStartsQuantified: false,
+    allConsume: true,
+  };
+}
+
+/** A plain term that always consumes exactly one position of the input. */
+function consumingRegexTerm(): RegexTerm {
+  return { startsQuantified: false, endsQuantified: false, consumes: true };
+}
+
+/**
+ * Appends `term` to the alternative being scanned.
+ *
+ * Rejects the pattern when the term opens with a quantifier while the previous
+ * quantifier is still unseparated: only then can the input be split between the
+ * two quantifiers in exponentially many ways. A term that always consumes input
+ * closes the previous quantifier, because it anchors where the next attempt can
+ * start.
+ */
+function commitRegexTerm(group: RegexGroupState, term: RegexTerm | undefined): void {
+  if (!term) return;
+  if (term.startsQuantified && group.quantifierOpen) {
+    throw new Error('Unsafe regex search pattern: adjacent quantifiers');
+  }
+  group.startsQuantified ||= term.startsQuantified && !group.consumes;
+  group.quantifierOpen = term.endsQuantified || (group.quantifierOpen && !term.consumes);
+  group.consumes ||= term.consumes;
+}
+
+/** Folds the alternative being scanned into the group's cross-alternative state. */
+function endRegexAlternative(group: RegexGroupState): void {
+  group.anyQuantifierOpen ||= group.quantifierOpen;
+  group.anyStartsQuantified ||= group.startsQuantified;
+  group.allConsume &&= group.consumes;
+  group.quantifierOpen = false;
+  group.startsQuantified = false;
+  group.consumes = false;
+}
+
+/**
+ * Returns the length of the marker that follows `(` for a non-capturing group,
+ * a lookaround or a named group, so the scanner can skip it.
+ */
+function regexGroupPrefixLength(source: string, index: number): number {
+  const marker = source.slice(index + 1).match(/^\?(?::|=|!|<=|<!|<[A-Za-z_$][\w$]*>)/u);
+  return marker ? marker[0].length : 0;
+}
+
+/**
+ * Rejects a {@link ChapterLayout.resize} dimension that cannot produce a
+ * consistent layout. `undefined` means "leave this dimension alone".
+ */
+function assertResizeDimension(name: string, value: number | undefined, positive: boolean): void {
+  if (value == null) return;
+  if (!Number.isFinite(value) || (positive ? value <= 0 : value < 0)) {
+    const requirement = positive ? 'positive' : 'non-negative';
+    throw new RangeError(`ChapterLayout.resize: ${name} must be a ${requirement} finite number`);
+  }
+}
+
+/**
+ * Returns the flags {@link ChapterLayout.findText} compiles a query with.
+ *
+ * Matching is always global and Unicode-aware. A `RegExp` query keeps its own
+ * `i` / `m` / `s` flags, and its `v` mode instead of `u`; an explicit
+ * `caseSensitive` option overrides the pattern's own `i` flag. A string query
+ * is case-insensitive unless `caseSensitive` is `true`.
+ */
+function searchFlags(query: string | RegExp, caseSensitive?: boolean): string {
+  const pattern = query instanceof RegExp ? query : undefined;
+  const ignoreCase = caseSensitive != null ? !caseSensitive : (pattern?.ignoreCase ?? true);
+  return [
+    'g',
+    ignoreCase ? 'i' : '',
+    pattern?.multiline ? 'm' : '',
+    pattern?.dotAll ? 's' : '',
+    pattern?.flags.includes('v') ? 'v' : 'u',
+  ].join('');
 }
 
 function emptyPageResult(): PageResult {
   return { page: { paragraphs: [] }, lines: [], slots: [], hasImages: false };
+}
+
+/**
+ * Builds the render paragraph for a run of exclusion-mode lines, mirroring the
+ * heading and kind resolution {@link buildRenderPage} applies in normal mode.
+ */
+function exclusionParagraph(entry: RenderEntry, lines: RenderLine[]): RenderParagraph {
+  const headingLevel = entry.headingLevel;
+  return {
+    lines,
+    isHeading: headingLevel != null || entry.isHeading === true,
+    headingLevel,
+    kind: entry.kind,
+  };
+}
+
+/** Returns whether `value` can address a paragraph or a character position. */
+function isNonNegativeSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
 }
 
 /**
@@ -151,6 +333,26 @@ function lineEndChar(breakPoints: Uint32Array, inParaLine: number, charCount: nu
   return inParaLine < breakPoints.length ? breakPoints[inParaLine] + 1 : charCount;
 }
 
+/**
+ * Copies an inline annotation deeply enough that nothing inside it is shared
+ * with the source. Only the ruby variant carries a nested array.
+ */
+function cloneInlineAnnotation(annotation: InlineAnnotation): InlineAnnotation {
+  if (annotation.kind === 'ruby' && annotation.jukugoSplitPoints) {
+    return { ...annotation, jukugoSplitPoints: [...annotation.jukugoSplitPoints] };
+  }
+  return { ...annotation };
+}
+
+/** Copies a heading-style table and each style object it holds. */
+function cloneHeadingStyles(styles: Record<number, HeadingStyle>): Record<number, HeadingStyle> {
+  const out: Record<number, HeadingStyle> = {};
+  for (const [level, style] of Object.entries(styles)) {
+    out[Number(level)] = { ...style };
+  }
+  return out;
+}
+
 function sameBreakPoints(a: readonly RenderEntry[], b: readonly RenderEntry[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -175,6 +377,12 @@ function sameBreakPoints(a: readonly RenderEntry[], b: readonly RenderEntry[]): 
 export class ChapterLayout {
   private cached: CachedParagraph[];
   private entries: RenderEntry[];
+  /**
+   * @internal Per paragraph: the advances `entries[i].breakPoints` were
+   * computed from. Filled on re-break and lazily for externally supplied
+   * entries; see {@link ChapterLayout.layoutAdvancesOf}.
+   */
+  private layoutAdvances: (Float32Array | undefined)[] = [];
   private config: LayoutConfig;
   private size: Required<PageSize>;
   private images = new Map<number, BookImage[]>();
@@ -200,6 +408,11 @@ export class ChapterLayout {
   ) {
     this.cached = cached;
     this.entries = entries;
+    // `entries` and `cached` describe the same paragraphs; adopt the structural
+    // kind so re-breaking from `cached` alone still carries it to the renderer.
+    for (let i = 0; i < cached.length; i++) {
+      if (cached[i].kind == null && entries[i]?.kind != null) cached[i].kind = entries[i].kind;
+    }
     this.config = { ...config };
     this.size = { ...size };
   }
@@ -261,19 +474,32 @@ export class ChapterLayout {
    * Updates page geometry and/or line spacing.
    * Re-computes line breaks if `lineWidth` changes.
    *
+   * The update is applied as a unit: dimensions are validated and the new line
+   * breaks are computed before any visible state changes, so a rejected size
+   * leaves the layout on its previous geometry, entries and caches.
+   *
    * @param size - Partial page size overrides plus optional `lineSpacing`.
+   * @throws RangeError If `lineWidth` / `pageWidth` / `lineSpacing` is not a
+   *   positive finite number, or a padding is not a non-negative finite number.
    */
   resize(size: Partial<PageSize> & { lineSpacing?: number }): void {
-    let needRebreak = false;
-    if (size.lineWidth != null && size.lineWidth !== this.size.lineWidth) {
-      this.size.lineWidth = size.lineWidth;
-      needRebreak = true;
-    }
+    assertResizeDimension('lineWidth', size.lineWidth, true);
+    assertResizeDimension('pageWidth', size.pageWidth, true);
+    assertResizeDimension('lineSpacing', size.lineSpacing, true);
+    assertResizeDimension('pagePaddingX', size.pagePaddingX, false);
+    assertResizeDimension('pagePaddingY', size.pagePaddingY, false);
+
+    const nextLineWidth = size.lineWidth ?? this.size.lineWidth;
+    // Break with the new width first: if it throws, nothing has been committed.
+    const rebroken =
+      nextLineWidth !== this.size.lineWidth ? this.breakEntries(nextLineWidth) : null;
+
+    this.size.lineWidth = nextLineWidth;
     if (size.pageWidth != null) this.size.pageWidth = size.pageWidth;
     if (size.pagePaddingX != null) this.size.pagePaddingX = size.pagePaddingX;
     if (size.pagePaddingY != null) this.size.pagePaddingY = size.pagePaddingY;
     if (size.lineSpacing != null) this.config.lineSpacing = size.lineSpacing;
-    if (needRebreak) this.recomputeBreaks();
+    if (rebroken) this.commitBreaks(rebroken);
     this.invalidate();
   }
 
@@ -348,14 +574,13 @@ export class ChapterLayout {
    * Locates a reading position in the current layout.
    *
    * @param anchor - In-chapter anchor (paragraph + char index).
-   * @returns The spread / page / line containing the anchor, or `null` if
-   *   the anchor is out of range or the chapter is empty.
+   * @returns The spread / page / line containing the anchor, or `null` if the
+   *   anchor is out of range, either field is not a non-negative safe integer,
+   *   or the chapter is empty.
    */
   locateAnchor(anchor: InChapterAnchor): AnchorLocation | null {
     const { paragraph, charIndex } = anchor;
-    if (paragraph < 0 || paragraph >= this.cached.length) return null;
-    const text = this.cached[paragraph].text;
-    if (charIndex < 0 || charIndex > text.length) return null;
+    if (!this.isAnchorInRange(paragraph, charIndex)) return null;
 
     if (this.images.size > 0) {
       return this.locateAnchorInExclusion(paragraph, charIndex);
@@ -390,12 +615,29 @@ export class ChapterLayout {
    * top-left (see {@link AnchorRect}). Pass `null` results through — they
    * indicate the anchor is out of range for the current layout.
    *
+   * Sizes follow the advances the current line breaks were computed from, so
+   * ruby-widened characters get the extent they actually occupy.
+   *
    * @param anchor - In-chapter anchor (paragraph + char index).
    * @returns Character rectangle, or `null` when the anchor cannot be located.
    */
   coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null {
+    if (!this.isAnchorInRange(anchor.paragraph, anchor.charIndex)) return null;
     if (this.images.size > 0) return this.coordOfAnchorInExclusion(anchor);
     return this.coordOfAnchorInNormal(anchor);
+  }
+
+  /**
+   * Returns whether the anchor addresses a character position that exists.
+   *
+   * Both fields must be non-negative safe integers so that no lookup keyed on
+   * them can be fractional or `NaN`; `charIndex` may equal the paragraph
+   * length, which addresses the position past its last character.
+   */
+  private isAnchorInRange(paragraph: number, charIndex: number): boolean {
+    if (!isNonNegativeSafeInteger(paragraph) || paragraph >= this.cached.length) return false;
+    if (!isNonNegativeSafeInteger(charIndex)) return false;
+    return charIndex <= this.cached[paragraph].text.length;
   }
 
   /**
@@ -424,38 +666,18 @@ export class ChapterLayout {
    * line. The range is normalized — `start` and `end` may be passed in either
    * order. An empty range (`start` equal to `end`) returns an empty array.
    *
+   * Each page the range crosses is located and built once, so the cost follows
+   * the number of pages spanned rather than the number of characters selected.
+   *
    * @param range - The character range to highlight.
    * @returns Spread-local rectangles in document order.
    */
   selectionRects(range: AnchorRange): AnchorRect[] {
     const norm = normalizeAnchorRange(range);
     if (!norm) return [];
-    const { start, end } = norm;
-    const rects: AnchorRect[] = [];
-    let current: AnchorRect | null = null;
-    let currentKey = '';
-
-    for (let p = start.paragraph; p <= end.paragraph; p++) {
-      if (p < 0 || p >= this.cached.length) continue;
-      const chars = this.cached[p].chars;
-      const lo = p === start.paragraph ? start.charIndex : 0;
-      const hi = p === end.paragraph ? end.charIndex : chars.length;
-      for (let c = lo; c < hi; c++) {
-        const r = this.coordOfAnchor({ paragraph: p, charIndex: c });
-        if (!r) continue;
-        const key = `${r.spreadIdx}:${r.pageIdx}:${r.x}`;
-        if (key !== currentKey) {
-          if (current) rects.push(current);
-          current = { ...r };
-          currentKey = key;
-        } else if (current) {
-          const bottom = r.y + r.height;
-          if (bottom > current.y + current.height) current.height = bottom - current.y;
-        }
-      }
-    }
-    if (current) rects.push(current);
-    return rects;
+    return this.images.size > 0
+      ? this.selectionRectsInExclusion(norm)
+      : this.selectionRectsInNormal(norm);
   }
 
   /**
@@ -475,10 +697,11 @@ export class ChapterLayout {
         text: para.chars.join(''),
         advances: Array.from(para.advances),
         breakPoints: Array.from(entry.breakPoints),
-        inlineAnnotations: para.inlineAnnotations,
+        inlineAnnotations: para.inlineAnnotations.map(cloneInlineAnnotation),
       };
       if (para.isHeading === true) snap.isHeading = true;
       if (para.headingLevel != null) snap.headingLevel = para.headingLevel;
+      if (para.kind != null && para.kind !== 'body') snap.kind = para.kind;
       if (para.layoutRubyAnnotations) {
         snap.layoutRubyAnnotations = para.layoutRubyAnnotations.map((r): LayoutRubySnapshot => {
           const out: LayoutRubySnapshot = {
@@ -491,6 +714,9 @@ export class ChapterLayout {
           if (r.jukugoSplitPoints) out.jukugoSplitPoints = [...r.jukugoSplitPoints];
           return out;
         });
+      }
+      if (para.layoutTcyAnnotations) {
+        snap.layoutTcyAnnotations = para.layoutTcyAnnotations.map((t) => ({ ...t }));
       }
       return snap;
     });
@@ -510,7 +736,9 @@ export class ChapterLayout {
         headingScale: this.config.headingScale,
         mode: this.config.mode,
         enableHanging: this.config.enableHanging,
-        ...(this.config.headingStyles ? { headingStyles: this.config.headingStyles } : {}),
+        ...(this.config.headingStyles
+          ? { headingStyles: cloneHeadingStyles(this.config.headingStyles) }
+          : {}),
       },
       size: { ...this.size },
       paragraphs,
@@ -526,22 +754,36 @@ export class ChapterLayout {
    * Codepoint offsets (`charStart` / `charEnd`) are compatible with
    * {@link InChapterAnchor.charIndex} and survive reflow.
    *
-   * @param query - Literal substring (default) or regex source string
-   *   (when {@link FindTextOptions.regex} is `true`).
+   * @param query - Literal substring (default), a regex source string (when
+   *   {@link FindTextOptions.regex} is `true`), or a `RegExp` — whose `source`
+   *   takes the regex path whatever {@link FindTextOptions.regex} says. A
+   *   `RegExp` keeps its own `i` / `m` / `s` flags unless
+   *   {@link FindTextOptions.caseSensitive} is set, which then wins; `g` and
+   *   Unicode mode are always applied and `y` is ignored.
    * @param options - Search options.
    * @returns Matches in document order. Empty array when `query` is empty
    *   or no matches are found.
-   * @throws If `regex: true` and `query` is invalid or exceeds the regex safety limits.
+   * @throws If the pattern is invalid or exceeds the regex safety limits. To
+   *   keep matching time bounded, the guard also refuses patterns that can
+   *   backtrack catastrophically: a quantified group that itself contains a
+   *   quantifier or an alternation, and two quantified terms in the same
+   *   concatenation with nothing between them that always consumes input
+   *   (`a*a*b`, `a*b?a*c`). A term that always consumes anchors the quantifiers
+   *   on either side of it, so `\d+年\d+月` is accepted.
    */
-  findText(query: string, options: FindTextOptions = {}): SearchMatch[] {
-    if (!query) return [];
-    const { regex = false, caseSensitive = false, maxResults } = options;
+  findText(query: string | RegExp, options: FindTextOptions = {}): SearchMatch[] {
+    const { regex = false, caseSensitive, maxResults } = options;
+    const isRegExp = query instanceof RegExp;
+    if (!(isRegExp || query)) return [];
     const limit = maxResults != null && maxResults > 0 ? maxResults : Number.POSITIVE_INFINITY;
 
-    if (regex) assertSafeRegexSearch(query);
-    const source = regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const flags = caseSensitive ? 'gu' : 'giu';
-    const pattern = new RegExp(source, flags);
+    const asRegex = isRegExp || regex;
+    const source = isRegExp ? query.source : query;
+    if (asRegex) assertSafeRegexSearch(source);
+    const pattern = new RegExp(
+      asRegex ? source : source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      searchFlags(query, caseSensitive),
+    );
 
     const results: SearchMatch[] = [];
     let regexTextLength = 0;
@@ -549,7 +791,7 @@ export class ChapterLayout {
       const chars = this.cached[pIdx].chars;
       if (chars.length === 0) continue;
       const joined = chars.join('');
-      if (regex) {
+      if (asRegex) {
         regexTextLength += joined.length;
         if (regexTextLength > MAX_REGEX_SEARCH_TEXT_LENGTH) {
           throw new RangeError(
@@ -623,23 +865,66 @@ export class ChapterLayout {
   }
 
   private recomputeBreaks(): void {
-    this.entries = this.cached.map((para) => {
+    this.commitBreaks(this.breakEntries(this.size.lineWidth));
+  }
+
+  /**
+   * Breaks every paragraph at `lineWidth` without touching visible state, so
+   * callers can validate the result before committing it.
+   */
+  private breakEntries(lineWidth: number): BrokenChapter {
+    const entries: RenderEntry[] = [];
+    const layoutAdvances: Float32Array[] = [];
+    for (const para of this.cached) {
       const br = computeBreaks({
         text: para.text,
         advances: para.advances,
-        lineWidth: this.size.lineWidth,
+        lineWidth,
         mode: this.config.mode,
         enableHanging: this.config.enableHanging,
         rubyAnnotations: para.layoutRubyAnnotations,
+        tcyAnnotations: para.layoutTcyAnnotations,
       });
-      return {
+      entries.push({
         chars: para.chars,
         breakPoints: br.breakPoints,
         inlineAnnotations: para.inlineAnnotations,
         isHeading: para.isHeading,
         headingLevel: para.headingLevel,
-      };
-    });
+        kind: para.kind,
+      });
+      layoutAdvances.push(br.effectiveAdvances ?? para.advances);
+    }
+    return { entries, layoutAdvances };
+  }
+
+  private commitBreaks(broken: BrokenChapter): void {
+    this.entries = broken.entries;
+    this.layoutAdvances = broken.layoutAdvances;
+  }
+
+  /**
+   * Returns the advances the paragraph's current `breakPoints` were produced
+   * from: the measured advances with tate-chu-yoko collapsing and ruby width
+   * distribution applied, in the order {@link computeBreaks} applies them.
+   * Anchor geometry reads these so rectangles and hit tests follow the same
+   * metric the line breaker used.
+   */
+  private layoutAdvancesOf(paragraph: number): Float32Array {
+    const known = this.layoutAdvances[paragraph];
+    if (known) return known;
+    const para = this.cached[paragraph];
+    const tcy = para.layoutTcyAnnotations;
+    const ruby = para.layoutRubyAnnotations;
+    let advances = para.advances;
+    if (tcy?.length) {
+      advances = preprocessTcy(para.text, advances, tcy).effectiveAdvances;
+    }
+    if (ruby?.length) {
+      advances = preprocessRuby(para.text, advances, ruby).effectiveAdvances;
+    }
+    this.layoutAdvances[paragraph] = advances;
+    return advances;
   }
 
   // ── Normal (non-exclusion) mode ──
@@ -809,12 +1094,16 @@ export class ChapterLayout {
       this.spreadExclusionCache.set(si, result);
     }
 
-    const totalChars = this.cached.reduce((s, p) => s + p.text.length, 0);
     let entries = this.entries;
     for (let attempt = 0; attempt < 6; attempt++) {
+      // Reflow can only lengthen the chapter by shortening columns, so the
+      // widths are computed for the current line count plus a margin — sized
+      // in lines, never in characters. Each attempt re-derives the margin from
+      // the lines the previous attempt produced, so repeated growth converges.
+      const actualLines = entries.reduce((sum, e) => sum + e.breakPoints.length + 1, 0);
       const lineLimit =
-        entries.reduce((sum, e) => sum + e.breakPoints.length + 1, 0) +
-        Math.max(normalLinesPerSpread * 10, totalChars);
+        actualLines +
+        Math.max(normalLinesPerSpread * SPREAD_REFLOW_MARGIN, Math.ceil(actualLines / 2));
       const candidateMetrics = buildLineMetrics(entries, opts).metrics;
       const candidateWidths = this.buildSpreadLayoutsAndWidths(
         exclBySpread,
@@ -857,10 +1146,18 @@ export class ChapterLayout {
 
     const { layouts } = this.buildSpreadLayoutsAndWidths(exclBySpread, lm, allLines.length);
 
+    const paraLineStarts: number[] = [];
+    let paraLine = 0;
+    for (const entry of entries) {
+      paraLineStarts.push(paraLine);
+      paraLine += entry.breakPoints.length + 1;
+    }
+
     this.excl = {
       lines: allLines,
       lineParaIndex: lineParaIdx,
       entries,
+      paraLineStarts,
       metrics: lm,
       spreadLayouts: layouts,
       totalPages: this.exclusionTotalPages(layouts),
@@ -871,8 +1168,11 @@ export class ChapterLayout {
     let gi = 0;
     const entries: RenderEntry[] = [];
     for (const para of this.cached) {
-      const rem = lineWidths.length - gi;
-      const plw = rem > 0 ? lineWidths.slice(gi, gi + rem) : undefined;
+      // A paragraph can occupy at most one line per character, so it never
+      // needs to see the widths beyond that. The view is a subarray, so no
+      // per-paragraph copy of the remaining widths is made.
+      const end = Math.min(lineWidths.length, gi + para.text.length + 1);
+      const plw = end > gi ? lineWidths.subarray(gi, end) : undefined;
       const br = computeBreaks({
         text: para.text,
         advances: para.advances,
@@ -881,6 +1181,7 @@ export class ChapterLayout {
         mode: this.config.mode,
         enableHanging: this.config.enableHanging,
         rubyAnnotations: para.layoutRubyAnnotations,
+        tcyAnnotations: para.layoutTcyAnnotations,
       });
       gi += br.breakPoints.length + 1;
       entries.push({
@@ -889,6 +1190,7 @@ export class ChapterLayout {
         inlineAnnotations: para.inlineAnnotations,
         isHeading: para.isHeading,
         headingLevel: para.headingLevel,
+        kind: para.kind,
       });
     }
     return entries;
@@ -941,8 +1243,11 @@ export class ChapterLayout {
       let lHasImg = false;
 
       if (excl) {
-        rHasImg = excl.rightSlots.some((s) => s.height < this.size.lineWidth - 0.5);
-        lHasImg = excl.leftSlots.some((s) => s.height < this.size.lineWidth - 0.5);
+        // Ask the engine whether it changed the page's slot coverage. Probing
+        // for a shortened slot misses a column that an image blocks entirely,
+        // because such a column drops out of the slot list at full height.
+        rHasImg = excl.rightAffected;
+        lHasImg = excl.leftAffected;
 
         if (rHasImg) {
           rSlots = adjustExclusionSlots(excl.rightSlots, metrics, li, lp, cw);
@@ -1027,12 +1332,7 @@ export class ChapterLayout {
       const pi = lineParaIndex[i];
       if (pi !== curPi) {
         if (curLines.length > 0) {
-          const hl = entries[curPi].headingLevel;
-          paragraphs.push({
-            lines: curLines,
-            isHeading: hl != null || entries[curPi].isHeading === true,
-            headingLevel: hl,
-          });
+          paragraphs.push(exclusionParagraph(entries[curPi], curLines));
         }
         curPi = pi;
         curLines = [];
@@ -1040,12 +1340,7 @@ export class ChapterLayout {
       curLines.push({ segments: lines[i].segments });
     }
     if (curLines.length > 0 && curPi >= 0) {
-      const hl = entries[curPi].headingLevel;
-      paragraphs.push({
-        lines: curLines,
-        isHeading: hl != null || entries[curPi].isHeading === true,
-        headingLevel: hl,
-      });
+      paragraphs.push(exclusionParagraph(entries[curPi], curLines));
     }
 
     return { page: { paragraphs }, lines: pageLines, slots, hasImages };
@@ -1078,12 +1373,9 @@ export class ChapterLayout {
 
   private locateAnchorInExclusion(paragraph: number, charIndex: number): AnchorLocation | null {
     this.ensureExclusion();
-    const { entries, spreadLayouts } = this.excl as ExclusionCache;
+    const { entries, paraLineStarts, spreadLayouts } = this.excl as ExclusionCache;
     const inParaLine = findInParaLine(entries[paragraph].breakPoints, charIndex);
-    let globalLine = inParaLine;
-    for (let i = 0; i < paragraph; i++) {
-      globalLine += entries[i].breakPoints.length + 1;
-    }
+    const globalLine = paraLineStarts[paragraph] + inParaLine;
 
     for (let s = 0; s < spreadLayouts.length; s++) {
       const sl = spreadLayouts[s];
@@ -1115,17 +1407,13 @@ export class ChapterLayout {
 
   private anchorAtInExclusion(spreadIndex: number, side: 'right' | 'left'): InChapterAnchor | null {
     this.ensureExclusion();
-    const { entries, lineParaIndex, spreadLayouts } = this.excl as ExclusionCache;
+    const { entries, lineParaIndex, paraLineStarts, spreadLayouts } = this.excl as ExclusionCache;
     const sl = spreadLayouts[spreadIndex];
     if (!sl) return null;
     const targetLine = sl.lineStart + (side === 'right' ? 0 : sl.rightSlotCount);
     if (targetLine < 0 || targetLine >= lineParaIndex.length) return null;
     const paragraph = lineParaIndex[targetLine];
-    let base = 0;
-    for (let i = 0; i < paragraph; i++) {
-      base += entries[i].breakPoints.length + 1;
-    }
-    const inParaLine = targetLine - base;
+    const inParaLine = targetLine - paraLineStarts[paragraph];
     const bp = entries[paragraph].breakPoints;
     const charIndex = lineStartChar(bp, inParaLine);
     return { paragraph, charIndex };
@@ -1180,7 +1468,7 @@ export class ChapterLayout {
     loc: AnchorLocation,
     breakPoints: Uint32Array,
   ): AnchorRect {
-    const advances = this.cached[anchor.paragraph].advances;
+    const advances = this.layoutAdvancesOf(anchor.paragraph);
     const inParaLine = findInParaLine(breakPoints, anchor.charIndex);
     const lineStart = lineStartChar(breakPoints, inParaLine);
     let yOffset = 0;
@@ -1197,6 +1485,137 @@ export class ChapterLayout {
       y: slot.yStart + yOffset,
       width: colPitch,
       height: charAdvance,
+    };
+  }
+
+  // ── Selection rectangles ──
+
+  /**
+   * Splits a normalized range into per-line runs, using the break points the
+   * given entries carry. Runs are returned in document order.
+   */
+  private selectionRuns(range: AnchorRange, entries: readonly RenderEntry[]): SelectionRun[] {
+    const runs: SelectionRun[] = [];
+    const firstPara = Math.max(0, range.start.paragraph);
+    const lastPara = Math.min(range.end.paragraph, this.cached.length - 1, entries.length - 1);
+    for (let p = firstPara; p <= lastPara; p++) {
+      const charCount = this.cached[p].chars.length;
+      const lo = p === range.start.paragraph ? Math.max(0, range.start.charIndex) : 0;
+      const hi = p === range.end.paragraph ? Math.min(range.end.charIndex, charCount) : charCount;
+      const bp = entries[p].breakPoints;
+      let c = lo;
+      for (let line = findInParaLine(bp, lo); line <= bp.length && c < hi; line++) {
+        const runEnd = Math.min(hi, lineEndChar(bp, line, charCount));
+        if (runEnd <= c) continue;
+        runs.push({
+          paragraph: p,
+          inParaLine: line,
+          lineStart: lineStartChar(bp, line),
+          charStart: c,
+          charEnd: runEnd,
+        });
+        c = runEnd;
+      }
+    }
+    return runs;
+  }
+
+  private selectionRectsInNormal(range: AnchorRange): AnchorRect[] {
+    this.ensureNormal();
+    const { pages, paraLineStarts, metrics } = this.normal as NormalCache;
+
+    // Global line span of every page, so each run only needs a cursor step.
+    const pageRanges: { start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const slices of pages) {
+      const first = slices[0];
+      const start = first ? paraLineStarts[first.paragraphIndex] + first.lineStart : cursor;
+      cursor = start + slices.reduce((sum, s) => sum + (s.lineEnd - s.lineStart), 0);
+      pageRanges.push({ start, end: cursor });
+    }
+
+    const rects: AnchorRect[] = [];
+    let pageIdx = 0;
+    let page: PageResult | null = null;
+
+    for (const run of this.selectionRuns(range, this.entries)) {
+      const globalLine = paraLineStarts[run.paragraph] + run.inParaLine;
+      while (pageIdx < pageRanges.length && globalLine >= pageRanges[pageIdx].end) {
+        pageIdx++;
+        page = null;
+      }
+      if (pageIdx >= pageRanges.length) break;
+      const { start } = pageRanges[pageIdx];
+      if (globalLine < start) continue;
+      page ??= this.buildNormalPage(pageIdx);
+      const slot = page.slots[globalLine - start];
+      if (!slot) continue;
+      rects.push(
+        this.makeRunRect(run, slot, metrics[globalLine]?.pitch ?? this.linePitch(), {
+          spreadIdx: Math.floor(pageIdx / 2),
+          pageIdx,
+          lineIdx: globalLine,
+          side: pageIdx % 2 === 0 ? 'right' : 'left',
+        }),
+      );
+    }
+    return rects;
+  }
+
+  private selectionRectsInExclusion(range: AnchorRange): AnchorRect[] {
+    this.ensureExclusion();
+    const { entries, paraLineStarts, metrics, spreadLayouts } = this.excl as ExclusionCache;
+    const rects: AnchorRect[] = [];
+    let s = 0;
+
+    for (const run of this.selectionRuns(range, entries)) {
+      const globalLine = paraLineStarts[run.paragraph] + run.inParaLine;
+      while (
+        s < spreadLayouts.length &&
+        globalLine >= spreadLayouts[s].lineStart + spreadLayouts[s].slotCount
+      ) {
+        s++;
+      }
+      if (s >= spreadLayouts.length) break;
+      const sl = spreadLayouts[s];
+      if (globalLine < sl.lineStart) continue;
+      const offset = globalLine - sl.lineStart;
+      const onRight = offset < sl.rightSlotCount;
+      const slot = onRight ? sl.rightSlots[offset] : sl.leftSlots[offset - sl.rightSlotCount];
+      if (!slot) continue;
+      rects.push(
+        this.makeRunRect(run, slot, metrics[globalLine]?.pitch ?? this.linePitch(), {
+          spreadIdx: s,
+          pageIdx: s * 2 + (onRight ? 0 : 1),
+          lineIdx: globalLine,
+          side: onRight ? 'right' : 'left',
+        }),
+      );
+    }
+    return rects;
+  }
+
+  /** Builds the rectangle covering one line-local run of selected characters. */
+  private makeRunRect(
+    run: SelectionRun,
+    slot: ColumnSlot,
+    colPitch: number,
+    loc: AnchorLocation,
+  ): AnchorRect {
+    const advances = this.layoutAdvancesOf(run.paragraph);
+    let yOffset = 0;
+    for (let i = run.lineStart; i < run.charStart; i++) yOffset += advances[i];
+    let height = 0;
+    for (let i = run.charStart; i < run.charEnd; i++) height += advances[i];
+    const rightEdge = loc.side === 'right' ? this.contentWidth() - slot.xPos : -slot.xPos;
+    return {
+      spreadIdx: loc.spreadIdx,
+      pageIdx: loc.pageIdx,
+      side: loc.side,
+      x: rightEdge - colPitch,
+      y: slot.yStart + yOffset,
+      width: colPitch,
+      height,
     };
   }
 
@@ -1239,7 +1658,8 @@ export class ChapterLayout {
     y: number,
   ): InChapterAnchor | null {
     this.ensureExclusion();
-    const { entries, lineParaIndex, metrics, spreadLayouts } = this.excl as ExclusionCache;
+    const { entries, lineParaIndex, paraLineStarts, metrics, spreadLayouts } = this
+      .excl as ExclusionCache;
     const sl = spreadLayouts[spreadIdx];
     if (!sl) return null;
     const side: 'right' | 'left' = x >= 0 ? 'right' : 'left';
@@ -1255,9 +1675,7 @@ export class ChapterLayout {
     const globalLine = sl.lineStart + (side === 'right' ? slotIdx : sl.rightSlotCount + slotIdx);
     if (globalLine < 0 || globalLine >= lineParaIndex.length) return null;
     const paragraph = lineParaIndex[globalLine];
-    let base = 0;
-    for (let i = 0; i < paragraph; i++) base += entries[i].breakPoints.length + 1;
-    const inParaLine = globalLine - base;
+    const inParaLine = globalLine - paraLineStarts[paragraph];
     const bp = entries[paragraph].breakPoints;
     return this.charFromY(paragraph, inParaLine, bp, y - slots[slotIdx].yStart);
   }
@@ -1287,7 +1705,7 @@ export class ChapterLayout {
     breakPoints: Uint32Array,
     yInLine: number,
   ): InChapterAnchor {
-    const advances = this.cached[paragraph].advances;
+    const advances = this.layoutAdvancesOf(paragraph);
     const lineStart = lineStartChar(breakPoints, inParaLine);
     const lineEnd = lineEndChar(breakPoints, inParaLine, advances.length);
     if (yInLine <= 0) return { paragraph, charIndex: lineStart };
@@ -1301,7 +1719,22 @@ export class ChapterLayout {
   }
 }
 
-/** Rejects patterns with common catastrophic-backtracking structures. */
+/**
+ * Rejects patterns with common catastrophic-backtracking structures.
+ *
+ * Two structures are refused:
+ * - a quantifier applied to a group that itself contains a quantifier or an
+ *   alternation (`(a+)+`, `(a|aa)+`);
+ * - two quantified terms that backtracking can reach as neighbours, because
+ *   the input can then be split between them in exponentially many ways. They
+ *   are neighbours when nothing separates them (`a*a*b`, `(a*)(a*)b`) or when
+ *   only optional terms do (`a*b?a*c`).
+ *
+ * A term that always consumes at least one character separates the quantifiers
+ * around it into independent search spans, so `\d+年\d+月` is accepted. So is
+ * any pattern with a single quantified term such as `第\d+章`, and alternatives
+ * are scanned separately, so `あ*|い*` is accepted as well.
+ */
 function assertSafeRegexSearch(source: string): void {
   if (source.length > MAX_REGEX_SEARCH_PATTERN_LENGTH) {
     throw new RangeError(
@@ -1309,76 +1742,108 @@ function assertSafeRegexSearch(source: string): void {
     );
   }
 
-  const groups: RegexGroupState[] = [{ hasAlternation: false, hasQuantifiedTerm: false }];
+  const groups: RegexGroupState[] = [newRegexGroupState()];
   let inCharacterClass = false;
   let escaped = false;
-  let closedGroup: RegexGroupState | undefined;
+  // The term scanned most recently, held back until the next character shows
+  // whether a quantifier applies to it.
+  let term: RegexTerm | undefined;
 
   for (let i = 0; i < source.length; i++) {
     const char = source[i];
+    const group = groups.at(-1) as RegexGroupState;
+
+    // A character class is a single term; its contents never form terms.
+    if (inCharacterClass) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === ']') inCharacterClass = false;
+      continue;
+    }
     if (escaped) {
       escaped = false;
-      closedGroup = undefined;
+      // `\b` / `\B` are zero-width word boundaries, so they separate nothing.
+      if (term && (char === 'b' || char === 'B')) term.consumes = false;
       continue;
     }
     if (char === '\\') {
       escaped = true;
-      closedGroup = undefined;
-      continue;
-    }
-    if (inCharacterClass) {
-      if (char === ']') inCharacterClass = false;
+      commitRegexTerm(group, term);
+      term = consumingRegexTerm();
       continue;
     }
     if (char === '[') {
       inCharacterClass = true;
-      closedGroup = undefined;
+      commitRegexTerm(group, term);
+      term = consumingRegexTerm();
       continue;
     }
     if (char === '(') {
-      groups.push({ hasAlternation: false, hasQuantifiedTerm: false });
-      closedGroup = undefined;
+      commitRegexTerm(group, term);
+      term = undefined;
+      groups.push(newRegexGroupState());
+      i += regexGroupPrefixLength(source, i);
       continue;
     }
     if (char === ')') {
-      if (groups.length === 1) {
-        closedGroup = undefined;
-        continue;
-      }
-      const group = groups.pop();
-      if (!group) continue;
+      // A stray `)` is left for the RegExp constructor to reject.
+      if (groups.length === 1) continue;
+      commitRegexTerm(group, term);
+      endRegexAlternative(group);
+      groups.pop();
       const parent = groups.at(-1) as RegexGroupState;
       parent.hasAlternation ||= group.hasAlternation;
       parent.hasQuantifiedTerm ||= group.hasQuantifiedTerm;
-      closedGroup = group;
+      // An unquantified group is spliced into the enclosing concatenation, so
+      // it carries its own edges outwards: `(a*)(a*)b` behaves like `a*a*b`.
+      term = {
+        startsQuantified: group.anyStartsQuantified,
+        endsQuantified: group.anyQuantifierOpen,
+        consumes: group.allConsume,
+        group,
+      };
       continue;
     }
     if (char === '|') {
-      (groups.at(-1) as RegexGroupState).hasAlternation = true;
-      closedGroup = undefined;
+      commitRegexTerm(group, term);
+      term = undefined;
+      group.hasAlternation = true;
+      endRegexAlternative(group);
       continue;
     }
     const quantifier = regexQuantifierEnd(source, i);
     if (quantifier > i) {
-      // `?` directly after `(` introduces a non-capturing/lookaround group.
-      if (!(char === '?' && source[i - 1] === '(')) {
-        if (closedGroup?.hasQuantifiedTerm || closedGroup?.hasAlternation) {
+      if (term) {
+        if (term.group?.hasQuantifiedTerm || term.group?.hasAlternation) {
           throw new Error('Unsafe regex search pattern: quantified complex group');
         }
-        (groups.at(-1) as RegexGroupState).hasQuantifiedTerm = true;
+        group.hasQuantifiedTerm = true;
+        // A quantified term may match nothing, so it never separates.
+        term = { startsQuantified: true, endsQuantified: true, consumes: false };
       }
-      closedGroup = undefined;
       i = quantifier - 1;
       continue;
     }
-    closedGroup = undefined;
+    commitRegexTerm(group, term);
+    // `^` and `$` are zero-width anchors, so they separate nothing.
+    term = { ...consumingRegexTerm(), consumes: char !== '^' && char !== '$' };
   }
+
+  commitRegexTerm(groups.at(-1) as RegexGroupState, term);
 }
 
 function regexQuantifierEnd(source: string, index: number): number {
   const char = source[index];
-  if (char === '*' || char === '+' || char === '?') return index + 1;
+  if (char === '*' || char === '+' || char === '?') return lazyQuantifierEnd(source, index + 1);
   if (char !== '{') return index;
   const match = /^\{\d+(?:,\d*)?\}/u.exec(source.slice(index));
-  return match ? index + match[0].length : index;
+  return match ? lazyQuantifierEnd(source, index + match[0].length) : index;
+}
+
+/**
+ * Skips a `?` directly following a quantifier: it only makes the quantifier
+ * lazy, so `a*?` stays a single quantified term.
+ */
+function lazyQuantifierEnd(source: string, end: number): number {
+  return source[end] === '?' ? end + 1 : end;
 }

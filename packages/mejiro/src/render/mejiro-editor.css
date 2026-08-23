@@ -19,9 +19,6 @@
     /* Width of the side panel (manuscript controls). Override on the host to
      * tighten or widen the editing column, or set to 100% on small screens. */
     --mejiro-editor-panel-width: 360px;
-    /* Which side the panel sits on. `right` (default) places the preview on
-     * the left; flip to `left` to mirror the layout for right-handed editing. */
-    --mejiro-editor-panel-side: right;
 
     height: 100%;
     display: grid;
@@ -51,6 +48,9 @@
     overflow: auto;
   }
 
+  /* Mirrored layout: the panel moves to the left and the preview to the right.
+   * Set `data-panel-side` on the editor root — the shipped editor components
+   * write it from their `panelSide` prop. */
   .mejiro-editor[data-panel-side="left"] {
     grid-template-columns: var(--mejiro-editor-panel-width) minmax(0, 1fr);
   }

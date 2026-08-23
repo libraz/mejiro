@@ -235,9 +235,30 @@ export function buildColumnSlots(
       xPos += metrics[startIdx + i - 1].pitch;
       xPos += metrics[startIdx + i].gapBefore;
     }
-    slots.push({ xPos, yStart: 0, height: columnHeight });
+    slots.push({ xPos, yStart: 0, height: columnHeight, columnIndex: i });
   }
   return slots;
+}
+
+/**
+ * Returns the physical column index of every slot.
+ *
+ * Slots produced by this package carry {@link ColumnSlot.columnIndex}. A
+ * hand-built array that omits it falls back to ranking the distinct `xPos`
+ * values, which recovers the columns of a reading-order array too — the
+ * exclusion engine gives every gap of one column the same `xPos`, so equal
+ * positions mean the same column however far apart they sit.
+ */
+function slotColumnIndices(slots: readonly ColumnSlot[]): number[] {
+  if (slots.every((slot) => slot.columnIndex != null)) {
+    return slots.map((slot) => slot.columnIndex as number);
+  }
+  const ranks = new Map<number, number>();
+  const sorted = [...new Set(slots.map((slot) => slot.xPos))].sort((a, b) => a - b);
+  for (let i = 0; i < sorted.length; i++) {
+    ranks.set(sorted[i], i);
+  }
+  return slots.map((slot) => ranks.get(slot.xPos) as number);
 }
 
 /**
@@ -246,22 +267,29 @@ export function buildColumnSlots(
  * the slot positions to account for heading lines being wider and inter-paragraph
  * spacing.
  *
+ * Slots arrive in reading order, so a column split into several gaps by an
+ * image is revisited later in the array rather than occupying a contiguous run.
+ * The offset of a column is therefore established the first time that column is
+ * seen and replayed on every later slot of the same column, keeping all gaps of
+ * one column on a single physical x position.
+ *
  * The exclusion engine also derives its column count from the uniform base
  * pitch (`floor(contentWidth / basePitch)`), so a spread with a wider-than-body
  * heading produces more columns than physically fit once the heading excess is
- * re-added here. When `contentWidth` is supplied, trailing columns whose
- * adjusted physical extent (`xPos + pitch`) would overflow the content box are
- * dropped, so the caller can reflow those lines onto the following page/spread
- * instead of letting them clip past the page's leading edge. The slot array is
- * ordered by non-decreasing `xPos`, so the overflowing slots are always a
- * trailing run. At least one slot is always kept so layout makes progress.
+ * re-added here. When `contentWidth` is supplied, a column whose adjusted
+ * physical extent (`xPos + pitch`) would overflow the content box is dropped —
+ * including its gaps further along the reading order — so the caller can reflow
+ * those lines onto the following page/spread instead of letting them clip past
+ * the page's leading edge. Trimming is decided per column, at that column's
+ * first gap, so a column is kept whole or not at all. At least one slot is
+ * always kept so layout makes progress.
  *
  * @param slots - Column slots from the exclusion engine.
  * @param metrics - Per-line metrics from {@link buildLineMetrics}.
  * @param startIdx - Global line index of the first slot.
  * @param basePitch - Base body line pitch (from {@link LineMetricsResult.linePitch}).
  * @param contentWidth - Page content-box width (px). When set, overflowing
- *   trailing slots are dropped. When omitted, no trimming is applied.
+ *   columns are dropped. When omitted, no trimming is applied.
  * @returns New array of adjusted slots (input is not mutated).
  */
 export function adjustExclusionSlots(
@@ -271,31 +299,52 @@ export function adjustExclusionSlots(
   basePitch: number,
   contentWidth?: number,
 ): ColumnSlot[] {
+  const columns = slotColumnIndices(slots);
+  const offsetByColumn = new Map<number, number>();
+  const droppedColumns = new Set<number>();
   const adjusted: ColumnSlot[] = [];
   let extraOffset = 0;
+  let seenColumn = false;
   for (let i = 0; i < slots.length; i++) {
-    const li = startIdx + i;
+    // Lines are consumed in the order slots are kept, so a dropped column
+    // shifts the following slots onto the lines it would have carried.
+    const li = startIdx + adjusted.length;
     if (li >= metrics.length) break;
-    // Only accumulate pitch excess and paragraph gaps when moving to a
-    // new physical column.  When an image splits a column into multiple
-    // gaps (slots), they share the same xPos and should receive the same
-    // offset — incrementing here would double-count the heading excess.
-    if (i > 0 && slots[i].xPos !== slots[i - 1].xPos) {
-      extraOffset += metrics[li - 1].pitch - basePitch;
-      extraOffset += metrics[li].gapBefore;
+    const column = columns[i];
+    if (droppedColumns.has(column)) continue;
+    const known = offsetByColumn.get(column);
+    const firstGapOfColumn = known == null;
+    if (firstGapOfColumn) {
+      // Only accumulate pitch excess and paragraph gaps when a new physical
+      // column starts; the first column of the page carries no excess.
+      if (seenColumn) {
+        extraOffset += metrics[li - 1].pitch - basePitch;
+        extraOffset += metrics[li].gapBefore;
+      }
+      offsetByColumn.set(column, extraOffset);
+    } else {
+      // A later gap of a column already positioned — reuse its offset so every
+      // gap of that column lands on the same physical x position.
+      extraOffset = known;
     }
+    seenColumn = true;
     const xPos = slots[i].xPos + extraOffset;
-    // Drop trailing columns that would overflow the content box once the
-    // heading excess has been re-applied. Keep at least one slot so the
-    // page is never empty (which would stall the line walk).
+    // Drop columns that would overflow the content box once the heading excess
+    // has been re-applied. The verdict is reached the first time a column is
+    // met in reading order and then binds its remaining gaps, so a column is
+    // never half-kept — its later bands would otherwise leave a hole that text
+    // skips over into a column further left. Keep at least one slot so the page
+    // is never empty (which would stall the line walk).
     if (
+      firstGapOfColumn &&
       contentWidth != null &&
       adjusted.length > 0 &&
       xPos + metrics[li].pitch > contentWidth + 0.5
     ) {
-      break;
+      droppedColumns.add(column);
+      continue;
     }
-    adjusted.push({ xPos, yStart: slots[i].yStart, height: slots[i].height });
+    adjusted.push({ xPos, yStart: slots[i].yStart, height: slots[i].height, columnIndex: column });
   }
   return adjusted;
 }
@@ -327,11 +376,16 @@ export function getImageXOffset(
  * heading lines are wider than body lines. This function refines the estimate
  * downward until the physical position fits within `fromRight`.
  *
+ * Degenerate inputs resolve to the first column: a `basePitch` that is not a
+ * positive finite number carries no scale to search along, and a non-finite
+ * `fromRight` has no column to point at.
+ *
  * @param offsets - Cumulative offsets from {@link LineMetricsResult.offsets}.
  * @param spreadStartLine - Global line index of the spread's first line.
  * @param fromRight - Physical distance from the right content edge (px).
  * @param basePitch - Base body line pitch (px).
- * @returns Column index at that physical distance.
+ * @returns Column index at that physical distance, always a finite integer in
+ *   `[0, offsets.length - spreadStartLine - 1]`.
  */
 export function findPhysicalColumn(
   offsets: Float32Array,
@@ -339,8 +393,9 @@ export function findPhysicalColumn(
   fromRight: number,
   basePitch: number,
 ): number {
-  let col = Math.max(0, Math.floor(fromRight / basePitch));
   const maxCol = Math.max(0, offsets.length - spreadStartLine - 1);
+  if (!(basePitch > 0 && Number.isFinite(basePitch) && Number.isFinite(fromRight))) return 0;
+  let col = Math.min(maxCol, Math.max(0, Math.floor(fromRight / basePitch)));
   while (col > 0) {
     const physicalPos = col * basePitch + relativeOffsetAt(offsets, spreadStartLine, col);
     if (physicalPos <= fromRight) break;

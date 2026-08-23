@@ -1,5 +1,6 @@
 import type { BookParagraph, ParagraphKind } from '../book/types.js';
 import type { InlineAnnotation } from '../browser/types.js';
+import { normalizeText } from '../text.js';
 import { sanitizeUrl } from '../url.js';
 import { buildInlineNodes, type InlineNode } from './inline-tree.js';
 
@@ -19,7 +20,15 @@ const SAFE_WRAPPER_TAGS = new Set<NonNullable<RenderEpubStaticOptions['tag']>>([
   'section',
 ]);
 
-interface StaticChapter {
+/**
+ * Minimal chapter shape {@link renderEpubStatic} needs.
+ *
+ * Structural on purpose, so an `EpubChapter` or a plain object literal can be
+ * rendered without constructing a book first — the static path performs no
+ * measurement and therefore needs nothing beyond the paragraphs.
+ */
+export interface StaticChapter {
+  /** Paragraphs rendered in order, each as one block element. */
   paragraphs: readonly BookParagraph[];
 }
 
@@ -52,12 +61,25 @@ export function renderEpubStatic(
 }
 
 function renderParagraph(p: BookParagraph): string {
-  const cls = paragraphClass(p.kind, p.headingLevel);
+  const cls = paragraphClassName(p.kind, p.headingLevel);
   const content = renderInline(p.text, p.inlineAnnotations ?? []);
   return `<div class="${escapeAttr(cls)}">${content}</div>`;
 }
 
-function paragraphClass(kind: ParagraphKind | undefined, headingLevel?: number): string {
+/**
+ * Builds the class attribute for a paragraph element.
+ *
+ * This is the single source of the `mejiro-paragraph--*` naming the bundled
+ * stylesheets match on, shared by {@link renderEpubStatic} and by the framework
+ * page components, so a chapter renders identically before and after hydration.
+ * `headingLevel` wins over `kind` when both are present, and `'body'` adds no
+ * modifier.
+ *
+ * @param kind - Structural classification of the paragraph.
+ * @param headingLevel - Heading level (1–6), if any.
+ * @returns Space-separated class names, always starting with `mejiro-paragraph`.
+ */
+export function paragraphClassName(kind: ParagraphKind | undefined, headingLevel?: number): string {
   const parts = ['mejiro-paragraph'];
   if (headingLevel != null) {
     parts.push(`mejiro-paragraph--h${headingLevel}`);
@@ -74,7 +96,9 @@ function paragraphKindClass(kind: Exclude<ParagraphKind, 'body' | 'heading'>): s
 }
 
 function renderInline(text: string, annotations: readonly InlineAnnotation[]): string {
-  const chars = [...text];
+  // Annotation indices are NFC code point offsets, so the static renderer has
+  // to split the text exactly like the measuring client renderer does.
+  const chars = [...normalizeText(text)];
   return buildInlineNodes(chars, annotations).map(renderInlineNode).join('');
 }
 
@@ -97,7 +121,10 @@ function renderInlineNode(node: InlineNode): string {
       return `<strong>${renderChildren(node)}</strong>`;
     case 'link': {
       const href = sanitizeUrl(node.href);
-      if (!href) return escapeHtml(node.text);
+      // An unsafe scheme drops the anchor, never the content: the base text is
+      // escaped and line-broken exactly like every other branch, and nested
+      // annotations such as ruby keep rendering.
+      if (!href) return renderChildren(node);
       const title = node.title ? ` title="${escapeAttr(node.title)}"` : '';
       return `<a href="${escapeAttr(href)}"${title}>${renderChildren(node)}</a>`;
     }

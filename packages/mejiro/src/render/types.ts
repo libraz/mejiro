@@ -1,3 +1,4 @@
+import type { ParagraphKind } from '../book/types.js';
 import type { InlineAnnotation } from '../browser/types.js';
 
 /** A text segment within a rendered line. */
@@ -36,6 +37,11 @@ export interface RenderParagraph {
   readonly isHeading: boolean;
   /** Heading level (1–6), or undefined for body text. */
   readonly headingLevel?: number;
+  /**
+   * Structural classification carried over from the source paragraph, mapped to
+   * the `mejiro-paragraph--*` class the bundled stylesheets expect.
+   */
+  readonly kind?: ParagraphKind;
 }
 
 /** A full rendered page containing paragraphs. */
@@ -79,4 +85,6 @@ export interface RenderEntry {
   isHeading?: boolean;
   /** Heading level (1–6), or undefined for body text. */
   headingLevel?: number;
+  /** Structural classification of the source paragraph. @defaultValue 'body' */
+  kind?: ParagraphKind;
 }

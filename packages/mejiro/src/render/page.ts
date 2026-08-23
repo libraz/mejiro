@@ -8,9 +8,11 @@ import type { RenderEntry, RenderLine, RenderPage, RenderSegment } from './types
 /**
  * Builds line segments from characters and inline annotations for a single line.
  *
- * Each non-`jukugo` annotation whose start falls within the line opens a new
- * segment (ruby / emphasis / tcy / em / strong / link / footnote). Annotations
- * are processed in start-index order; overlapping spans are not supported.
+ * Every annotation intersecting `[lineStart, lineEnd)` contributes a segment
+ * covering the intersection (ruby / emphasis / tcy / em / strong / link /
+ * footnote), so a span crossing the line boundary keeps its type and metadata on
+ * both lines instead of degrading to plain text. Annotations are processed in
+ * start-index order; partially overlapping spans are not supported.
  *
  * @param chars - Character array for the paragraph.
  * @param annotations - Inline annotations for the paragraph.
@@ -89,7 +91,12 @@ export function buildRenderPage(slices: PageSlice[], entries: RenderEntry[]): Re
     }
 
     const headingLevel = entry.headingLevel;
-    return { lines, isHeading: headingLevel != null || entry.isHeading === true, headingLevel };
+    return {
+      lines,
+      isHeading: headingLevel != null || entry.isHeading === true,
+      headingLevel,
+      kind: entry.kind,
+    };
   });
 
   return { paragraphs };

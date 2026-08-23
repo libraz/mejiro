@@ -39,8 +39,9 @@ describe('MejiroBook', () => {
     expect(DEFAULT_HEADING_STYLES[6]).toEqual({ scale: 1.0, gapAfterEm: 0.6 });
   });
 
-  it('setOptions patches only provided fields', () => {
-    book.setOptions({ fontSize: 24, mode: 'loose' });
+  it('setOptions patches only provided fields', async () => {
+    // fontSize needs re-measurement, so the patch lands once the font resolves.
+    await book.setOptions({ fontSize: 24, mode: 'loose' });
     const opts = book.getOptions();
     expect(opts.fontSize).toBe(24);
     expect(opts.mode).toBe('loose');
@@ -107,6 +108,28 @@ describe('MejiroBook', () => {
     expect(stats.codepoints).toBeGreaterThan(0);
     book.clearCache();
     expect(book.cacheStats()).toEqual({ fonts: 0, codepoints: 0 });
+  });
+
+  it('carries paragraph kinds through to the render page', async () => {
+    book.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    const layout = await book.layoutChapter({
+      paragraphs: [
+        { text: '見出し', kind: 'heading', headingLevel: 2 },
+        { text: '引用文です', kind: 'blockquote' },
+        { text: '＊＊＊', kind: 'sceneBreak' },
+        { text: 'const x = 1;', kind: 'pre' },
+        { text: '図版キャプション', kind: 'figure' },
+      ],
+    });
+
+    const { page } = layout.getSpread(0).right;
+    expect(page.paragraphs.map((p) => p.kind)).toEqual([
+      'heading',
+      'blockquote',
+      'sceneBreak',
+      'pre',
+      'figure',
+    ]);
   });
 
   it('setOptions propagates lineSpacing changes to live layouts', async () => {
@@ -181,6 +204,24 @@ describe('MejiroBook', () => {
     // The restored layout serves data identical to the original.
     expect(restored.totalPages).toBe(layout.totalPages);
     expect(restored.getSpread(0)).toBeDefined();
+  });
+
+  it('snapshot ↔ layoutFromSnapshot round-trips the structural kind of each paragraph', async () => {
+    book.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    const layout = await book.layoutChapter({
+      paragraphs: [
+        { text: '第一章', kind: 'heading', headingLevel: 1 },
+        { text: '本文です。' },
+        { text: '引用です。', kind: 'blockquote' },
+        { text: '＊', kind: 'sceneBreak' },
+      ],
+    });
+
+    const restored = new MejiroBook(baseOptions).layoutFromSnapshot(layout.snapshot());
+
+    const kinds = restored.getPage(0).page.paragraphs.map((p) => p.kind);
+    expect(kinds).toEqual(layout.getPage(0).page.paragraphs.map((p) => p.kind));
+    expect(kinds).toEqual(['heading', undefined, 'blockquote', 'sceneBreak']);
   });
 
   it('snapshot ↔ layoutFromSnapshot preserves image exclusions', async () => {

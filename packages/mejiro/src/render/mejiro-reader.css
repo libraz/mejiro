@@ -36,6 +36,7 @@
     --mejiro-border: #d8d0c4;
     --mejiro-control-bg: #fff;
     --mejiro-control-border: #ccc5b8;
+    --mejiro-selection-bg: rgba(255, 214, 0, 0.35);
     --mejiro-shadow-book:
       0 1px 2px rgba(0, 0, 0, 0.07), 0 4px 12px rgba(0, 0, 0, 0.1), 0 16px 40px rgba(0, 0, 0, 0.14);
     --mejiro-font-ui: "Helvetica Neue", system-ui, sans-serif;
@@ -836,6 +837,22 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
+  }
+
+  /* Selection / annotation highlight overlay. The layer shares the page
+     content coordinate frame and never intercepts pointer events; each
+     rectangle takes the theme fill unless the host supplies a per-rectangle
+     colour, which arrives as an inline `background-color`. */
+  .mejiro-selection-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .mejiro-selection-rect {
+    position: absolute;
+    background-color: var(--mejiro-selection-bg, rgba(255, 214, 0, 0.35));
+    border-radius: 2px;
   }
 
   .mejiro-reader-page-content {

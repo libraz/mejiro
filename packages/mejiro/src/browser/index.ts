@@ -2,6 +2,12 @@ export { FontLoader } from './font-loader.js';
 export { layoutText, MejiroBrowser, verticalLineWidth } from './integration.js';
 export { CharMeasurer, deriveRubyFont } from './measure.js';
 export type {
+  OverlayDragMode,
+  OverlayDragSession,
+  OverlayDragSessionOptions,
+} from './overlay-drag.js';
+export { createOverlayDragSession } from './overlay-drag.js';
+export type {
   ChapterLayoutOptions,
   ChapterLayoutResult,
   FontFamily,

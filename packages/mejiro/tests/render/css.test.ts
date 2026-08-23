@@ -37,6 +37,21 @@ describe('render CSS', () => {
     expect(css).toContain('margin-right: 0.6em');
   });
 
+  it('consumes every custom property the editor CSS declares', () => {
+    const css = readCss('mejiro-editor.css');
+    const declared = [...css.matchAll(/^\s*(--[\w-]+)\s*:/gmu)].map((m) => m[1] as string);
+    expect(declared.length).toBeGreaterThan(0);
+    for (const name of declared) {
+      expect(new RegExp(`var\\(\\s*${name}\\s*[,)]`, 'u').test(css)).toBe(true);
+    }
+  });
+
+  it('drives the mirrored editor layout from the data-panel-side attribute', () => {
+    const css = readCss('mejiro-editor.css');
+    expect(css).toContain('.mejiro-editor[data-panel-side="left"]');
+    expect(css).not.toContain('--mejiro-editor-panel-side');
+  });
+
   it('styles structural paragraph kind classes in page and reader CSS', () => {
     for (const css of [readCss('mejiro.css'), readCss('mejiro-reader.css')]) {
       expect(css).toContain('.mejiro-paragraph--blockquote');

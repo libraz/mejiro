@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { estimateReadingTime, formatReadingTime } from '../../src/book/reading-time.js';
+import {
+  estimateReadingTime,
+  formatReadingTime,
+  isHeadingParagraph,
+} from '../../src/book/reading-time.js';
 import type { BookParagraph } from '../../src/book/types.js';
 
 function chapterOf(...texts: Array<[string, number?]>): { paragraphs: BookParagraph[] } {
@@ -35,10 +39,28 @@ describe('estimateReadingTime', () => {
     expect(estimateReadingTime(chapter, { includeHeadings: true })).toBe(120_000);
   });
 
+  it('excludes headings marked only by kind, with no heading level', () => {
+    const chapter: { paragraphs: BookParagraph[] } = {
+      paragraphs: [{ text: '本文'.repeat(300) }, { text: '見出し'.repeat(200), kind: 'heading' }],
+    };
+    expect(estimateReadingTime(chapter)).toBe(60_000);
+    expect(estimateReadingTime(chapter, { includeHeadings: true })).toBe(120_000);
+  });
+
   it('returns zero for zero or negative cpm', () => {
     const chapter = chapterOf(['x'.repeat(1000)]);
     expect(estimateReadingTime(chapter, { cpm: 0 })).toBe(0);
     expect(estimateReadingTime(chapter, { cpm: -1 })).toBe(0);
+  });
+});
+
+describe('isHeadingParagraph', () => {
+  it('accepts either heading marker and rejects body paragraphs', () => {
+    expect(isHeadingParagraph({ headingLevel: 1 })).toBe(true);
+    expect(isHeadingParagraph({ kind: 'heading' })).toBe(true);
+    expect(isHeadingParagraph({ headingLevel: 1, kind: 'heading' })).toBe(true);
+    expect(isHeadingParagraph({})).toBe(false);
+    expect(isHeadingParagraph({ kind: 'blockquote' })).toBe(false);
   });
 });
 

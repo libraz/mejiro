@@ -6,12 +6,20 @@ export interface MejiroBrowserOptions {
   fixedFontFamily?: FontFamily;
   /** Fixed font size in pixels. When set, all layouts use this font size. */
   fixedFontSize?: number;
-  /** When true, throws an error if font fallback is detected. */
+  /**
+   * When true, `layout()` throws if the requested family measures exactly like
+   * the host's default font, which is how a silent fallback presents itself.
+   * When false (the default), layout proceeds with whatever the host resolved.
+   */
   strictFontCheck?: boolean;
 }
 
 /** Ruby variant of {@link InlineAnnotation}. */
 export interface InlineRubyAnnotation {
+  /**
+   * Discriminant of the {@link InlineAnnotation} union. `'ruby'` and `'tcy'` are
+   * the two variants the line breaker consumes; the rest are render-only.
+   */
   kind: 'ruby';
   /** Start index in the base text string (character index, not byte). */
   startIndex: number;
@@ -27,47 +35,86 @@ export interface InlineRubyAnnotation {
 
 /** Emphasis-dot (傍点) annotation. */
 export interface InlineEmphasisAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
   kind: 'emphasis';
+  /** Start index in the base text string (character index, not byte). */
   startIndex: number;
+  /** End index in the base text string (exclusive). */
   endIndex: number;
   /** Dot glyph style. @defaultValue 'sesame' */
   style?: 'sesame' | 'dot' | 'circle';
 }
 
-/** Tate-chu-yoko (縦中横) annotation — display the span horizontally inside a vertical column. */
+/**
+ * Tate-chu-yoko (縦中横) annotation — display the span horizontally inside a
+ * vertical column.
+ *
+ * Reaches the line breaker: the span is given a fresh cluster ID of its own, so
+ * it cannot be split across a column boundary, and its effective advances sum to
+ * exactly one em — the width `text-combine-upright: all` draws — distributed
+ * over the span's characters in proportion to their measured advances.
+ *
+ * Preprocessing runs before ruby, so a ruby span covering a combined box
+ * distributes its excess over the collapsed width rather than over the measured
+ * widths the box has already replaced. Unlike ruby, a malformed span (empty,
+ * reversed, out of range, non-integral, non-finite advance, or overlapping an
+ * already-applied span) is skipped instead of throwing, because these spans come
+ * from arbitrary EPUB markup and one broken span must not fail a whole chapter.
+ */
 export interface InlineTcyAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
   kind: 'tcy';
+  /** Start index in the base text string (character index, not byte). */
   startIndex: number;
+  /** End index in the base text string (exclusive). */
   endIndex: number;
 }
 
 /** Italic emphasis (`<em>`). */
 export interface InlineEmAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
   kind: 'em';
+  /** Start index in the base text string (character index, not byte). */
   startIndex: number;
+  /** End index in the base text string (exclusive). */
   endIndex: number;
 }
 
 /** Strong emphasis (`<strong>`). */
 export interface InlineStrongAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
   kind: 'strong';
+  /** Start index in the base text string (character index, not byte). */
   startIndex: number;
+  /** End index in the base text string (exclusive). */
   endIndex: number;
 }
 
 /** Hyperlink annotation. */
 export interface InlineLinkAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
   kind: 'link';
+  /** Start index in the base text string (character index, not byte). */
   startIndex: number;
+  /** End index in the base text string (exclusive). */
   endIndex: number;
+  /**
+   * Destination URL, stored as authored. Renderers sanitize it on the way out:
+   * a scheme other than `http`, `https` or `mailto` degrades to plain text
+   * instead of producing a link.
+   */
   href: string;
+  /** Advisory text for the link's `title` attribute. */
   title?: string;
 }
 
 /** Footnote reference annotation. */
 export interface InlineFootnoteAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
   kind: 'footnote';
+  /** Start index in the base text string (character index, not byte). */
   startIndex: number;
+  /** End index in the base text string (exclusive). */
   endIndex: number;
   /** Identifier of the corresponding footnote entry. */
   noteId: string;
@@ -80,8 +127,11 @@ export interface InlineFootnoteAnnotation {
  * the same model can carry ruby, emphasis dots, tate-chu-yoko, simple emphasis,
  * hyperlinks, and footnote references through the layout / render pipeline.
  *
- * Only the `ruby`, `emphasis`, and `tcy` variants currently affect line
- * breaking; the remainder are render-only.
+ * The `ruby` and `tcy` variants reach the line breaker — both are resolved to
+ * effective advances and cluster IDs before breaking (tate-chu-yoko first, so
+ * ruby distributes over the already-collapsed width). Every other variant is
+ * render-only: it contributes no cluster ID and no advance correction, so the
+ * breaker may split such a span across a column boundary.
  */
 export type InlineAnnotation =
   | InlineRubyAnnotation
@@ -94,7 +144,8 @@ export type InlineAnnotation =
 
 /**
  * @deprecated Renamed to {@link InlineRubyAnnotation}; use {@link InlineAnnotation}
- * for new code. This alias will be removed in v0.6.
+ * for new code. Removal of this alias is deferred to a future major release; no
+ * removal version is scheduled.
  */
 export type RubyInputAnnotation = InlineRubyAnnotation;
 

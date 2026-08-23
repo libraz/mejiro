@@ -4,15 +4,31 @@ import { deriveRubyFont } from '../browser/measure.js';
 import type { FontFamily, InlineAnnotation, InlineRubyAnnotation } from '../browser/types.js';
 import { toFontSpec } from '../browser/types.js';
 import { type ManuscriptDialect, parseManuscript } from '../manuscript.js';
+import { normalizeAnnotatedText } from '../normalize.js';
 import type { HeadingStyle } from '../render/measures.js';
 import type { RenderEntry } from '../render/types.js';
 import type { RubyAnnotation } from '../ruby.js';
+import type { TcyAnnotation } from '../tcy.js';
+import { buildTcyAnnotations } from '../tcy.js';
 import { toCodepoints } from '../text.js';
 import type { CachedParagraph, LayoutConfig } from './chapter-layout.js';
 import { ChapterLayout } from './chapter-layout.js';
 import { DEFAULT_PAGE_GEOMETRY, DEFAULT_PAGE_PADDING } from './constants.js';
 import type { ChapterLayoutSnapshot } from './snapshot.js';
 import type { BookOptions, BookParagraph, ComputePageSizeOptions, PageSize } from './types.js';
+
+/**
+ * Constructor options for {@link MejiroBook} — {@link BookOptions} plus the
+ * browser-integration switches a book owns on the caller's behalf.
+ */
+export interface MejiroBookOptions extends BookOptions {
+  /**
+   * When true, layout throws if the requested font family measures exactly
+   * like the host's default font, which is how a silent fallback presents
+   * itself. @defaultValue false
+   */
+  strictFontCheck?: boolean;
+}
 
 /** Manuscript chapter input accepted by {@link MejiroBook.layoutManuscript}. */
 export interface ManuscriptChapter {
@@ -26,6 +42,11 @@ export interface ManuscriptChapter {
 
 /** Options for {@link MejiroBook.layoutManuscript}. */
 export interface LayoutManuscriptOptions {
+  /**
+   * Chapters to lay out. Laid out sequentially, and keyed in the returned map
+   * by `id` — or by `chapter-<position>` when a chapter carries no id, so
+   * duplicate or missing ids collapse entries.
+   */
   chapters: readonly ManuscriptChapter[];
   /** Manuscript notation dialect. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
@@ -140,7 +161,7 @@ function buildLayoutRubyAnnotations(
 export class MejiroBook {
   private opts: InternalOptions;
   private size: Required<PageSize> | null = null;
-  private browser = new MejiroBrowser();
+  private browser: MejiroBrowser;
   // Share the browser's measurer so MejiroBook's caching and propagation
   // touch the same WidthCache instance the browser populates during initial
   // layout. Splitting these into two CharMeasurers used to silently double
@@ -152,8 +173,25 @@ export class MejiroBook {
   // alive. `setOptions` walks the set on each call and prunes refs whose
   // referent has been collected.
   private layouts = new Set<WeakRef<ChapterLayout>>();
+  // Desired options of the in-flight measurement, staged until the font has
+  // loaded so a failed load never becomes observable through `getOptions`.
+  private pendingOpts: InternalOptions | null = null;
+  // Monotonic counter used to abandon a `setOptions` call that a later one
+  // superseded while its font was still loading.
+  private optionsGeneration = 0;
 
-  constructor(options: BookOptions) {
+  /**
+   * Records the typographic options and creates the browser-side measurer.
+   * Nothing is measured or loaded yet: fonts are loaded lazily on the first
+   * layout, and page geometry is still unset, so call
+   * {@link MejiroBook.setPageSize} (or {@link MejiroBook.computePageSize})
+   * before laying out a chapter — otherwise `layoutChapter` throws.
+   *
+   * @param options - Typography plus the optional `strictFontCheck` guard,
+   *   which is forwarded to the measurer and cannot be changed afterwards.
+   */
+  constructor(options: MejiroBookOptions) {
+    this.browser = new MejiroBrowser({ strictFontCheck: options.strictFontCheck });
     this.opts = {
       fontFamily: options.fontFamily,
       fontSize: options.fontSize,
@@ -182,34 +220,66 @@ export class MejiroBook {
    * Updates book options and propagates the change to every live
    * {@link ChapterLayout} produced by this book.
    *
-   * Returns a `Promise` because font-family / font-size changes require
-   * re-measurement. Non-font changes are applied synchronously; consumers
-   * that only tweak `lineSpacing` / `mode` / `enableHanging` / heading
-   * styles can ignore the promise. Fire-and-forget is safe.
+   * Changes that need no re-measurement (`lineSpacing` / `mode` /
+   * `enableHanging`) are applied synchronously and the returned promise is
+   * already resolved. Font family / size / heading scale changes require
+   * re-measurement: the new values are staged and only become visible to
+   * {@link getOptions} once the font has loaded, so every live layout always
+   * holds advances measured with the font recorded in its own config.
+   *
+   * Overlapping calls converge on the last one — an earlier call whose font is
+   * still loading resolves without overwriting the newer options.
+   *
+   * @throws If the font of a staged change fails to load. The rejection leaves
+   *   the previously applied options in place.
    */
   setOptions(options: Partial<BookOptions>): Promise<void> {
-    const fontFamilyChanged =
-      options.fontFamily !== undefined && options.fontFamily !== this.opts.fontFamily;
-    const fontSizeChanged =
-      options.fontSize !== undefined && options.fontSize !== this.opts.fontSize;
-    const headingStylesChanged =
-      options.headingStyles !== undefined && options.headingStyles !== this.opts.headingStyles;
-    const headingScaleChanged =
-      options.headingScale !== undefined && options.headingScale !== this.opts.headingScale;
+    // Stack the patch on the in-flight request when there is one, so a change
+    // that is still loading is not silently dropped by the next call.
+    const next: InternalOptions = { ...(this.pendingOpts ?? this.opts) };
+    if (options.fontFamily != null) next.fontFamily = options.fontFamily;
+    if (options.fontSize != null) next.fontSize = options.fontSize;
+    if (options.lineSpacing != null) next.lineSpacing = options.lineSpacing;
+    if (options.mode != null) next.mode = options.mode;
+    if (options.enableHanging != null) next.enableHanging = options.enableHanging;
+    if (options.headingStyles !== undefined) next.headingStyles = options.headingStyles;
+    if (options.headingScale != null) next.headingScale = options.headingScale;
 
-    if (options.fontFamily != null) this.opts.fontFamily = options.fontFamily;
-    if (options.fontSize != null) this.opts.fontSize = options.fontSize;
-    if (options.lineSpacing != null) this.opts.lineSpacing = options.lineSpacing;
-    if (options.mode != null) this.opts.mode = options.mode;
-    if (options.enableHanging != null) this.opts.enableHanging = options.enableHanging;
-    if (options.headingStyles !== undefined) this.opts.headingStyles = options.headingStyles;
-    if (options.headingScale != null) this.opts.headingScale = options.headingScale;
+    const needsMeasurement =
+      next.fontFamily !== this.opts.fontFamily ||
+      next.fontSize !== this.opts.fontSize ||
+      next.headingStyles !== this.opts.headingStyles ||
+      next.headingScale !== this.opts.headingScale;
 
-    if (fontFamilyChanged || fontSizeChanged || headingStylesChanged || headingScaleChanged) {
-      return this.remeasureLayouts();
+    const generation = ++this.optionsGeneration;
+    if (!needsMeasurement) {
+      this.pendingOpts = null;
+      this.opts = next;
+      this.applyConfigToLayouts();
+      return Promise.resolve();
     }
-    this.applyConfigToLayouts();
-    return Promise.resolve();
+    this.pendingOpts = next;
+    return this.commitMeasuredOptions(next, generation);
+  }
+
+  /**
+   * Loads the font for a staged option set, then commits it and re-measures
+   * every live layout in one synchronous step so advances and config can never
+   * be observed out of sync.
+   */
+  private async commitMeasuredOptions(next: InternalOptions, generation: number): Promise<void> {
+    try {
+      await this.browser.preloadFont(next.fontFamily, next.fontSize);
+    } catch (err) {
+      if (this.optionsGeneration === generation) this.pendingOpts = null;
+      throw err;
+    }
+    // A later setOptions has taken over; committing here would pair its config
+    // with advances measured for this (now stale) font spec.
+    if (this.optionsGeneration !== generation) return;
+    this.pendingOpts = null;
+    this.opts = next;
+    this.remeasureLayouts();
   }
 
   /** Walks tracked layouts, pruning collected ones and yielding the rest. */
@@ -226,11 +296,15 @@ export class MejiroBook {
     for (const layout of this.liveLayouts()) layout.applyConfig(cfg);
   }
 
-  private async remeasureLayouts(): Promise<void> {
+  /**
+   * Re-measures every live layout against the committed options. Runs to
+   * completion synchronously so no other call can interleave between the
+   * advances and the config they belong to.
+   */
+  private remeasureLayouts(): void {
     const { fontFamily, fontSize } = this.opts;
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
-    const rubySpec = deriveRubyFont(fontFamily, fontSize);
-    await this.browser.preloadFont(fontFamily, fontSize);
+    const cfg = this.layoutConfigSnapshot();
 
     for (const layout of this.liveLayouts()) {
       const cached = layout.getCachedParagraphs();
@@ -241,14 +315,20 @@ export class MejiroBook {
             ? Math.round(fontSize * scale)
             : fontSize;
         const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
+        // Ruby is measured at half the *paragraph's* scaled size, matching the
+        // initial layout path and the shipped `rt { font-size: 0.5em }` rule.
+        const rubySpec = deriveRubyFont(fontFamily, pFontSize);
         para.advances = this.measurer.measureAll(spec, para.text);
         para.layoutRubyAnnotations = buildLayoutRubyAnnotations(
           para.inlineAnnotations,
           rubySpec,
           this.measurer,
         );
+        // The combined box is one em of the paragraph's own size, so it has to
+        // be rebuilt whenever that size changes.
+        para.layoutTcyAnnotations = buildTcyAnnotations(para.inlineAnnotations, pFontSize);
       }
-      layout.applyConfig(this.layoutConfigSnapshot(), { rebreak: false });
+      layout.applyConfig(cfg, { rebreak: false });
       layout.recomputeAfterMeasurement();
     }
   }
@@ -339,6 +419,11 @@ export class MejiroBook {
    * The chapter object is compatible with `EpubChapter` from `@libraz/mejiro/epub`.
    * Font loading and character measurement are handled automatically.
    *
+   * The page geometry and options in effect when the call starts are captured
+   * up front, so a concurrent {@link setPageSize} / {@link setOptions} cannot
+   * leave the returned layout holding geometry its break points were not
+   * computed for.
+   *
    * @param chapter - Chapter with paragraphs to lay out.
    * @returns A layout object for retrieving pages and managing image exclusions.
    * @throws If {@link setPageSize} has not been called.
@@ -346,24 +431,31 @@ export class MejiroBook {
   async layoutChapter(chapter: { paragraphs: readonly BookParagraph[] }): Promise<ChapterLayout> {
     if (!this.size) throw new Error('Page size not set. Call setPageSize() first.');
 
-    const { fontFamily, fontSize, lineSpacing, mode, enableHanging } = this.opts;
-    const { lineWidth } = this.size;
+    const opts: InternalOptions = { ...this.opts };
+    const size: Required<PageSize> = { ...this.size };
+    const { fontFamily, fontSize, lineSpacing, mode, enableHanging } = opts;
+    const { lineWidth } = size;
+
+    // Normalize once, up front: text and its annotations have to move to NFC
+    // together, and the same pair has to feed the initial break, the render
+    // entries and the cached paragraphs every later re-break works from.
+    const normalized = chapter.paragraphs.map((p) => {
+      const isHeading = paragraphIsHeading(p);
+      const scale = paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, opts);
+      return {
+        ...normalizeAnnotatedText(p.text, p.inlineAnnotations ?? []),
+        isHeading,
+        paragraphFontSize: isHeading ? Math.round(fontSize * scale) : fontSize,
+      };
+    });
 
     // Initial layout via MejiroBrowser (handles font loading + ruby)
     const result = await this.browser.layoutChapter({
-      paragraphs: chapter.paragraphs.map((p) => {
-        const isHeading = paragraphIsHeading(p);
-        return {
-          text: p.text,
-          inlineAnnotations: p.inlineAnnotations?.length ? p.inlineAnnotations : undefined,
-          fontSize: isHeading
-            ? Math.round(
-                fontSize *
-                  paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, this.opts),
-              )
-            : undefined,
-        };
-      }),
+      paragraphs: normalized.map((p) => ({
+        text: p.text,
+        inlineAnnotations: p.inlineAnnotations.length ? p.inlineAnnotations : undefined,
+        fontSize: p.isHeading ? p.paragraphFontSize : undefined,
+      })),
       fontFamily,
       fontSize,
       lineWidth,
@@ -375,31 +467,32 @@ export class MejiroBook {
     const renderEntries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
       chars: result.paragraphs[i].chars,
       breakPoints: result.paragraphs[i].breakResult.breakPoints,
-      inlineAnnotations: p.inlineAnnotations ?? [],
-      isHeading: paragraphIsHeading(p),
+      inlineAnnotations: normalized[i].inlineAnnotations,
+      isHeading: normalized[i].isHeading,
       headingLevel: p.headingLevel,
+      kind: p.kind,
     }));
 
     // Cache paragraph data for re-layout on resize/exclusion
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
     const cached: CachedParagraph[] = chapter.paragraphs.map((p, i) => {
-      const isHeading = paragraphIsHeading(p);
-      const scale = paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, this.opts);
-      const pFontSize = isHeading ? Math.round(fontSize * scale) : fontSize;
-      const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
-      const rubySpec = deriveRubyFont(fontFamily, pFontSize);
-      const codepoints = toCodepoints(p.text);
+      const { text, inlineAnnotations, isHeading, paragraphFontSize } = normalized[i];
+      const spec =
+        paragraphFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, paragraphFontSize);
+      const rubySpec = deriveRubyFont(fontFamily, paragraphFontSize);
+      const codepoints = toCodepoints(text);
       const advances = this.measurer.measureAll(spec, codepoints);
       return {
         text: codepoints,
         advances,
         chars: result.paragraphs[i].chars,
-        inlineAnnotations: p.inlineAnnotations ?? [],
+        inlineAnnotations,
         layoutRubyAnnotations: buildLayoutRubyAnnotations(
-          p.inlineAnnotations,
+          inlineAnnotations,
           rubySpec,
           this.measurer,
         ),
+        layoutTcyAnnotations: buildTcyAnnotations(inlineAnnotations, paragraphFontSize),
         isHeading,
         headingLevel: p.headingLevel,
       };
@@ -408,13 +501,13 @@ export class MejiroBook {
     const config: LayoutConfig = {
       fontSize,
       lineSpacing,
-      headingStyles: this.opts.headingStyles,
-      headingScale: this.opts.headingScale,
+      headingStyles: opts.headingStyles,
+      headingScale: opts.headingScale,
       mode,
       enableHanging,
     };
 
-    const layout = new ChapterLayout(cached, renderEntries, config, { ...this.size });
+    const layout = new ChapterLayout(cached, renderEntries, config, size);
     this.layouts.add(new WeakRef(layout));
     return layout;
   }
@@ -478,12 +571,17 @@ export class MejiroBook {
           ...(r.jukugoSplitPoints ? { jukugoSplitPoints: [...r.jukugoSplitPoints] } : {}),
         }),
       );
+      const layoutTcyAnnotations: TcyAnnotation[] | undefined = p.layoutTcyAnnotations?.map(
+        (t) => ({ ...t }),
+      );
       return {
         text: codepoints,
         advances,
         chars,
         inlineAnnotations: p.inlineAnnotations,
         ...(layoutRubyAnnotations ? { layoutRubyAnnotations } : {}),
+        ...(layoutTcyAnnotations ? { layoutTcyAnnotations } : {}),
+        ...(p.kind != null ? { kind: p.kind } : {}),
         ...(p.isHeading === true ? { isHeading: true } : {}),
         ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
       };
@@ -492,6 +590,7 @@ export class MejiroBook {
       chars: cached[i].chars,
       breakPoints: new Uint32Array(p.breakPoints),
       inlineAnnotations: p.inlineAnnotations,
+      ...(p.kind != null ? { kind: p.kind } : {}),
       ...(p.isHeading === true ? { isHeading: true } : {}),
       ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
     }));

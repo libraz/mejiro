@@ -17,8 +17,8 @@ export {
 export { buildRenderPage } from './page.js';
 export type { InlineRenderNode, InlineRenderTag } from './segment-descriptor.js';
 export { segmentToInlineNode } from './segment-descriptor.js';
-export type { RenderEpubStaticOptions } from './static.js';
-export { renderEpubStatic } from './static.js';
+export type { RenderEpubStaticOptions, StaticChapter } from './static.js';
+export { paragraphClassName, renderEpubStatic } from './static.js';
 export type {
   LineMetric,
   LineMetricsResult,

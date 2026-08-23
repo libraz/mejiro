@@ -33,6 +33,13 @@ export class WidthCache {
   private readonly maxFonts: number;
   private readonly maxCodepointsPerFont: number;
 
+  /**
+   * Creates an empty cache. Both bounds default to `Infinity`, which turns the
+   * LRU bookkeeping off entirely — reads skip the reinsertion that maintains
+   * recency order — so leave them unset unless memory actually needs capping.
+   *
+   * @param options - Optional per-font and per-codepoint LRU limits.
+   */
   constructor(options: WidthCacheOptions = {}) {
     this.maxFonts = options.maxFonts ?? Number.POSITIVE_INFINITY;
     this.maxCodepointsPerFont = options.maxCodepointsPerFont ?? Number.POSITIVE_INFINITY;

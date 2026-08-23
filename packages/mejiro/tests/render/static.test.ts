@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BookParagraph } from '../../src/book/types.js';
 import { renderEpubStatic } from '../../src/render/static.js';
+import { toCodepoints } from '../../src/text.js';
 
 function paragraph(text: string, extra: Partial<BookParagraph> = {}): BookParagraph {
   return { text, ...extra };
@@ -96,6 +97,39 @@ describe('renderEpubStatic', () => {
     expect(html).not.toContain('javascript:');
   });
 
+  it('renders newlines inside an unsafe link as line breaks', () => {
+    const html = renderEpubStatic({
+      paragraphs: [
+        paragraph('一行目\n二行目', {
+          inlineAnnotations: [
+            { kind: 'link', startIndex: 0, endIndex: 7, href: 'javascript:alert(1)' },
+          ],
+        }),
+      ],
+    });
+
+    expect(html).toContain('一行目<br />二行目');
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('javascript:');
+  });
+
+  it('keeps annotations nested inside an unsafe link', () => {
+    const html = renderEpubStatic({
+      paragraphs: [
+        paragraph('漢字', {
+          inlineAnnotations: [
+            { kind: 'link', startIndex: 0, endIndex: 2, href: 'javascript:alert(1)' },
+            { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+          ],
+        }),
+      ],
+    });
+
+    expect(html).toContain('<ruby>漢字<rt>かんじ</rt></ruby>');
+    expect(html).not.toContain('<a ');
+    expect(html).not.toContain('javascript:');
+  });
+
   it('renders contained annotations such as ruby inside links', () => {
     const html = renderEpubStatic({
       paragraphs: [
@@ -109,6 +143,21 @@ describe('renderEpubStatic', () => {
     });
 
     expect(html).toContain('<a href="https://example.test"><ruby>漢字<rt>かんじ</rt></ruby></a>');
+  });
+
+  it('splits decomposed text on NFC boundaries like the measured layout does', () => {
+    // Decomposed `がぎ` followed by `漢字`.
+    const text = `${String.fromCodePoint(0x304b, 0x3099, 0x304d, 0x3099)}漢字`;
+    const html = renderEpubStatic({
+      paragraphs: [
+        paragraph(text, {
+          inlineAnnotations: [{ kind: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'かん' }],
+        }),
+      ],
+    });
+
+    expect(toCodepoints(text)).toHaveLength(4);
+    expect(html).toContain('がぎ<ruby>漢<rt>かん</rt></ruby>字');
   });
 
   it('honors tag and ariaLabel options', () => {
