@@ -3,6 +3,7 @@ import { type CachedParagraph, ChapterLayout } from '../../src/book/chapter-layo
 import { computeBreaks } from '../../src/layout.js';
 import type { RenderEntry } from '../../src/render/types.js';
 import { toCodepoints, uniformAdvances } from '../helpers.js';
+import { expectElapsedUnder } from '../timing.js';
 
 const counters = vi.hoisted(() => ({ buildRenderPage: 0, breakChars: 0 }));
 
@@ -108,7 +109,7 @@ function dragBreakChars(layout: ChapterLayout): number {
 describe('image reflow cost', () => {
   it('reflows a book-length chapter within a frame budget', () => {
     // The frame budget is 16.7ms; the bound is loosened for slower machines.
-    expect(medianDragMs(makeBookLayout(80_000))).toBeLessThan(50);
+    expectElapsedUnder(medianDragMs(makeBookLayout(80_000)), 50);
   }, 30_000);
 
   it('scales with the line count rather than the character count', () => {
@@ -157,6 +158,6 @@ describe('selectionRects cost', () => {
     const pagesSpanned = new Set(deep.map((r) => r.pageIdx)).size;
     expect(counters.buildRenderPage).toBe(pagesSpanned);
     expect(deep).toHaveLength(100);
-    expect(elapsed).toBeLessThan(50);
+    expectElapsedUnder(elapsed, 50);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractStylesheetLinks, stripStylesheetLinks } from '../../src/epub/xml-utils.js';
+import { expectElapsedUnder } from '../timing.js';
 
 describe('stripStylesheetLinks', () => {
   it('removes stylesheet links written as self-closing, bare and explicitly closed tags', () => {
@@ -51,7 +52,7 @@ describe('stripStylesheetLinks', () => {
 
     expect(stripped).toBe(xhtml);
     expect(links).toEqual([]);
-    expect(elapsed).toBeLessThan(1_000);
+    expectElapsedUnder(elapsed, 1_000);
   });
 
   it('completes in linear time on many unterminated tags followed by a stylesheet link', () => {
@@ -64,6 +65,6 @@ describe('stripStylesheetLinks', () => {
 
     // The unterminated starts are part of the tag that finally closes.
     expect(stripped).toBe('');
-    expect(elapsed).toBeLessThan(1_000);
+    expectElapsedUnder(elapsed, 1_000);
   });
 });

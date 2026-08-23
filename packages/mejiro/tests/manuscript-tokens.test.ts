@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseManuscript } from '../src/manuscript.js';
 import { tokenizeManuscriptSource } from '../src/manuscript-tokens.js';
+import { expectElapsedUnder } from './timing.js';
 
 describe('tokenizeManuscriptSource', () => {
   it('detects bar-notation ruby spans with correct source ranges', () => {
@@ -87,7 +88,7 @@ describe('tokenizeManuscriptSource', () => {
     const elapsed = performance.now() - start;
 
     expect(tokens).toEqual([]);
-    expect(elapsed).toBeLessThan(500);
+    expectElapsedUnder(elapsed, 500);
   });
 
   it('tokenizes text dense with unclosed markers in linear time', () => {
@@ -98,9 +99,9 @@ describe('tokenizeManuscriptSource', () => {
     const fullElapsed = fastestRun(() => tokenizeManuscriptSource(full));
 
     expect(tokenizeManuscriptSource(full)).toEqual([]);
-    expect(fullElapsed).toBeLessThan(500);
+    expectElapsedUnder(fullElapsed, 500);
     // Quadratic scanning would roughly quadruple when the source doubles.
-    expect(fullElapsed).toBeLessThan(halfElapsed * 3 + 5);
+    expectElapsedUnder(fullElapsed, halfElapsed * 3 + 5);
   });
 
   it('scans a long base run without ruby in linear time', () => {
@@ -109,7 +110,7 @@ describe('tokenizeManuscriptSource', () => {
     const elapsed = fastestRun(() => tokenizeManuscriptSource(text));
 
     expect(tokenizeManuscriptSource(text)).toEqual([]);
-    expect(elapsed).toBeLessThan(500);
+    expectElapsedUnder(elapsed, 500);
   });
 
   it('still matches markers on later lines after an unclosed marker', () => {
