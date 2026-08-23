@@ -1,9 +1,11 @@
 # @libraz/mejiro
 
-[![npm version](https://img.shields.io/npm/v/@libraz/mejiro.svg)](https://www.npmjs.com/package/@libraz/mejiro)
-[![license](https://img.shields.io/npm/l/@libraz/mejiro.svg)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/libraz/mejiro/ci.yml?branch=main&label=CI)](https://github.com/libraz/mejiro/actions)
+[![npm](https://img.shields.io/npm/v/@libraz/mejiro)](https://www.npmjs.com/package/@libraz/mejiro)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6-blue?logo=typescript)](https://www.typescriptlang.org/)
 
-Japanese vertical text layout engine for the web — line breaking, kinsoku shori, hanging punctuation, ruby, image exclusion, and EPUB parsing/authoring. The core has zero DOM dependencies. Pairs with [`@libraz/mejiro-react`](https://www.npmjs.com/package/@libraz/mejiro-react) / [`@libraz/mejiro-vue`](https://www.npmjs.com/package/@libraz/mejiro-vue) for ready-to-use reader/editor components.
+**Japanese vertical text layout engine for the web.** It handles line breaking, kinsoku shori, hanging punctuation, ruby, tate-chu-yoko, pagination, image exclusion, and EPUB parsing and authoring. The core has zero DOM dependencies. Pairs with [`@libraz/mejiro-react`](https://www.npmjs.com/package/@libraz/mejiro-react) / [`@libraz/mejiro-vue`](https://www.npmjs.com/package/@libraz/mejiro-vue) for ready-to-use reader/editor components.
 
 ## Install
 
@@ -34,12 +36,42 @@ const spread = layout.getSpread(0);
 
 | Import path | Description |
 |---|---|
-| `@libraz/mejiro` | Core: line breaking, kinsoku, hanging, ruby, image exclusion |
-| `@libraz/mejiro/browser` | Font measurement + browser integration |
-| `@libraz/mejiro/epub` | EPUB parsing, `EditableEpub`, `EpubProject` |
-| `@libraz/mejiro/render` | Layout → render data + CSS |
-| `@libraz/mejiro/book` | High-level `MejiroBook` / `ChapterLayout` API |
-| `@libraz/mejiro/image` | Browser-side image decode / downscale helpers |
+| `@libraz/mejiro` | Core: line breaking, kinsoku, hanging, ruby (`preprocessRuby`), tate-chu-yoko (`preprocessTcy` / `buildTcyAnnotations`), NFC normalization (`normalizeText`), pagination (`paginate` / `getLineRanges`), image exclusion, annotation / reading-position persistence, i18n message catalogs |
+| `@libraz/mejiro/browser` | Font measurement (`MejiroBrowser`, `CharMeasurer`), ruby font derivation, image drag and resize sessions (`createOverlayDragSession`) |
+| `@libraz/mejiro/epub` | EPUB parsing (`parseEpub`) with untrusted-archive resource limits, `EditableEpub` write-back, `cloneEditableEpubBook` / `clampEditableEpubSelection`, manuscript parsing (`parseManuscript`), `EpubProject` authoring |
+| `@libraz/mejiro/render` | Layout → `RenderPage` data, `paragraphClassName`, static HTML (`renderEpubStatic`), stylesheets |
+| `@libraz/mejiro/book` | High-level `MejiroBook` / `ChapterLayout`: pagination, full-text search (`findText`), reading anchors, layout snapshots, `estimateReadingTime` |
+| `@libraz/mejiro/image` | Browser-side image decode / downscale helpers (`prepareImage`) |
+
+## Stylesheets
+
+Five stylesheets ship as separate subpaths, so a host app imports only what it renders:
+
+| Import path | Purpose |
+|---|---|
+| `@libraz/mejiro/render/mejiro.css` | Base vertical text layout — required whenever `RenderPage` data is rendered |
+| `@libraz/mejiro/render/mejiro-reader.css` | Reader chrome: header, spread frame, page navigation |
+| `@libraz/mejiro/render/mejiro-editor.css` | Editor chrome: toolbars, inline editing, image overlays |
+| `@libraz/mejiro/render/mejiro-fonts.css` | Optional Japanese webfont declarations |
+| `@libraz/mejiro/render/mejiro-print.css` | Print / PDF output |
+
+## Untrusted EPUB archives
+
+`parseEpub()` and `parseEditableEpub()` enforce resource limits by default, so a hostile
+or malformed archive cannot exhaust memory: caps on compressed input size, entry count,
+per-entry and total expanded size, and per-entry compression ratio. Limits are checked
+against the bytes the decompressor really produces, not the sizes the archive declares
+for itself, and reading stops as soon as a cap would be passed.
+
+The defaults are exported as `DEFAULT_EPUB_PARSE_LIMITS`. In a trusted environment —
+a build step over your own files, say — raise individual caps through
+`EpubParseOptions.limits`:
+
+```ts
+import { parseEpub } from '@libraz/mejiro/epub';
+
+const book = await parseEpub(buffer, { limits: { maxTotalBytes: 1024 * 1024 * 1024 } });
+```
 
 ## Documentation
 

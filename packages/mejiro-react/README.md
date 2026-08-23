@@ -1,9 +1,11 @@
 # @libraz/mejiro-react
 
-[![npm version](https://img.shields.io/npm/v/@libraz/mejiro-react.svg)](https://www.npmjs.com/package/@libraz/mejiro-react)
-[![license](https://img.shields.io/npm/l/@libraz/mejiro-react.svg)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+[![CI](https://img.shields.io/github/actions/workflow/status/libraz/mejiro/ci.yml?branch=main&label=CI)](https://github.com/libraz/mejiro/actions)
+[![npm](https://img.shields.io/npm/v/@libraz/mejiro-react)](https://www.npmjs.com/package/@libraz/mejiro-react)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/libraz/mejiro/blob/main/LICENSE)
+[![core](https://img.shields.io/npm/v/@libraz/mejiro?label=%40libraz%2Fmejiro)](https://www.npmjs.com/package/@libraz/mejiro)
 
-React components and hooks for [mejiro](https://www.npmjs.com/package/@libraz/mejiro) — vertical text rendering plus full-featured `MejiroReader` / `MejiroEditor` / `MejiroManuscriptEditor` components.
+**React components and hooks for [mejiro](https://www.npmjs.com/package/@libraz/mejiro).** Render vertical text yourself with the hooks, or drop in the `MejiroReader` / `MejiroEditor` / `MejiroManuscriptEditor` components, with `MejiroShelf` and `MejiroToc` for library and table-of-contents screens.
 
 ## Install
 
@@ -51,11 +53,14 @@ npx degit libraz/mejiro/examples/react my-reader
 npx degit libraz/mejiro/examples/react-shelf my-library
 npx degit libraz/mejiro/examples/react-editor my-editor
 npx degit libraz/mejiro/examples/react-manuscript my-author
+npx degit libraz/mejiro/examples/react-embed my-embed
+npx degit libraz/mejiro/examples/react-headless my-headless
 ```
 
 Templates are workspace members, so the copied `package.json` still carries
-`workspace:*` versions — replace them with `latest` (or a pinned release)
-before running `npm install`.
+`workspace:*` versions. Each starter's own `README.md` carries the exact
+one-liner that rewrites them to the matching published release — run it before
+`npm install`.
 
 ## Documentation
 

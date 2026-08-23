@@ -1,6 +1,6 @@
 # mejiro ドキュメント
 
-mejiro は、Web で日本語の縦書きを扱うための組版エンジンです。改行、禁則処理、ぶら下げ、ルビ、ページ分割、EPUB の読み書き、静的レンダリング、React / Vue 向けのリーダー・エディタコンポーネントをまとめて扱えます。
+mejiro は、Web で日本語の縦書きを扱うための組版エンジンです。改行、禁則処理、ぶら下げ、ルビ、縦中横、ページ分割、EPUB の読み書き、静的レンダリング、React / Vue 向けのリーダー・エディタコンポーネントをまとめて扱えます。
 
 ## ドキュメント
 
@@ -14,7 +14,7 @@ mejiro は、Web で日本語の縦書きを扱うための組版エンジンで
 | 06 | [EPUB](06-epub.md) | EPUB の解析、編集、ルビ抽出 |
 | 07 | [ページ分割とレンダリング](07-pagination-and-rendering.md) | paginate、buildRenderPage、CSS |
 | 08 | [React と Vue](08-react-and-vue.md) | React / Vue コンポーネント |
-| 09 | [応用](09-advanced.md) | カスタム禁則、トークン境界、パフォーマンス、画像回り込み、見開きレイアウト |
+| 09 | [応用](09-advanced.md) | カスタム禁則、トークン境界、パフォーマンス、サーバーサイド利用、カスタムレンダリング、画像回り込み、小説投稿サイトへの統合 |
 | 10 | [API リファレンス](10-api-reference.md) | 公開 API 一覧 |
 
 ## 何を読むべきか
@@ -37,7 +37,7 @@ mejiro は、Web で日本語の縦書きを扱うための組版エンジンで
 **画像の周りにテキストを回り込ませたい**
 → [API リファレンス](10-api-reference.md) の `MejiroBook` + `layout.setImages()`、または低レベル制御は [応用](09-advanced.md)
 
-**v0.5 のリーダー / エディタ UI を確認したい**
+**リーダー / エディタ UI を確認したい**
 → [React と Vue](08-react-and-vue.md) → [API リファレンス](10-api-reference.md)
 
 ---
