@@ -28,7 +28,7 @@ export interface RubyAnnotation {
  * that encode ruby constraints for the line breaking algorithm.
  */
 export interface RubyPreprocessResult {
-  /** Adjusted advance widths accounting for ruby overhang. */
+  /** Adjusted advance widths accounting for the width ruby text reserves. */
   effectiveAdvances: Float32Array;
   /** Cluster IDs encoding ruby grouping constraints. */
   clusterIds: Uint32Array;
@@ -44,17 +44,21 @@ export function isKana(cp: number): boolean {
 /**
  * Preprocesses ruby annotations into effective advances and cluster IDs.
  *
- * Ruby width distribution follows JLReq: when ruby text is wider than base text,
- * excess width is first absorbed by overhang into adjacent kana (up to 50% of
- * the kana's advance), then distributed proportionally across base characters.
- * Overhang is not applied into an adjacent ruby annotation. Final line-edge
- * clipping is handled by the line breaker because actual line edges are not
- * known during preprocessing.
+ * When ruby text is wider than its base text, the excess is distributed
+ * proportionally across the base characters, so an annotated span reserves the
+ * larger of its base width and its ruby width. Ruby is never charged to a
+ * neighbouring character: the render layer draws each annotation inside its own
+ * span, so the sum of the effective advances on a line is an upper bound for
+ * the inline extent that rendering produces and ruby is never clipped.
  *
  * Clustering prevents line breaks within ruby groups:
  * - `group`: all base characters share one cluster ID (no internal breaks).
  * - `jukugo`: sub-groups between split points share cluster IDs.
  * - `mono`: single base character, no clustering needed.
+ *
+ * A `jukugo` annotation that fully covers other annotations is an aggregate:
+ * it only contributes split points, while the covered annotations own the
+ * ruby text and therefore the width. Annotations must not otherwise overlap.
  *
  * @param text - Base text codepoints.
  * @param advances - Original advance widths.
@@ -68,7 +72,10 @@ export function preprocessRuby(
   annotations: RubyAnnotation[],
   existingClusterIds?: Uint32Array,
 ): RubyPreprocessResult {
-  validateRubyInput(text, advances, annotations, existingClusterIds);
+  // Sort annotations (outermost first) for consistent processing
+  const sorted = normalizeRubyAnnotations(annotations);
+  const aggregates = new Set(sorted.filter((ann) => isAggregateJukugo(ann, sorted)));
+  validateRubyInput(text, advances, sorted, aggregates, existingClusterIds);
   const len = text.length;
   const effectiveAdvances = new Float32Array(advances);
 
@@ -92,59 +99,40 @@ export function preprocessRuby(
     nextClusterId = len;
   }
 
-  // Sort annotations by startIndex for consistent processing
-  const sorted = normalizeRubyAnnotations(annotations);
+  // Aggregate jukugo annotations carry no width of their own: the covered
+  // annotations already reserve room for the same ruby text.
+  const sized = sorted.filter((ann) => !aggregates.has(ann));
 
-  for (let annIndex = 0; annIndex < sorted.length; annIndex++) {
-    const ann = sorted[annIndex];
+  for (const ann of sized) {
     const { startIndex, endIndex, rubyAdvances } = ann;
-    const type = ann.type ?? 'mono';
 
-    if (type !== 'jukugo') {
-      // Calculate base and ruby widths
-      let baseWidth = 0;
-      for (let i = startIndex; i < endIndex; i++) {
-        baseWidth += advances[i];
-      }
-
-      let rubyWidth = 0;
-      for (let i = 0; i < rubyAdvances.length; i++) {
-        rubyWidth += rubyAdvances[i];
-      }
-
-      // Ruby overhang into adjacent kana (JLReq)
-      const excess = rubyWidth - baseWidth;
-      if (excess > 0) {
-        let leftOverhang = 0;
-        let rightOverhang = 0;
-
-        if (
-          startIndex > 0 &&
-          isKana(text[startIndex - 1]) &&
-          sorted[annIndex - 1]?.endIndex !== startIndex
-        ) {
-          leftOverhang = Math.min(advances[startIndex - 1] * 0.5, excess * 0.5);
-        }
-        if (
-          endIndex < len &&
-          isKana(text[endIndex]) &&
-          sorted[annIndex + 1]?.startIndex !== endIndex
-        ) {
-          rightOverhang = Math.min(advances[endIndex] * 0.5, excess * 0.5);
-        }
-
-        const netExcess = Math.max(0, excess - leftOverhang - rightOverhang);
-
-        // Distribute net excess proportionally across base chars
-        if (netExcess > 0 && baseWidth > 0) {
-          for (let i = startIndex; i < endIndex; i++) {
-            effectiveAdvances[i] += netExcess * (advances[i] / baseWidth);
-          }
-        }
-      }
+    // Calculate base and ruby widths
+    let baseWidth = 0;
+    for (let i = startIndex; i < endIndex; i++) {
+      baseWidth += advances[i];
     }
 
-    // Clustering based on ruby type
+    let rubyWidth = 0;
+    for (let i = 0; i < rubyAdvances.length; i++) {
+      rubyWidth += rubyAdvances[i];
+    }
+
+    // Ruby wider than its base reserves the whole difference on the base
+    // characters, distributed proportionally.
+    const excess = rubyWidth - baseWidth;
+    if (excess > 0 && baseWidth > 0) {
+      for (let i = startIndex; i < endIndex; i++) {
+        effectiveAdvances[i] += excess * (advances[i] / baseWidth);
+      }
+    }
+  }
+
+  // Clustering runs over every annotation, outermost first, so a covered
+  // annotation's stronger constraint wins over the aggregate's split points.
+  for (const ann of sorted) {
+    const { startIndex, endIndex } = ann;
+    const type = ann.type ?? 'mono';
+
     if (type === 'group') {
       const cid = nextClusterId++;
       for (let i = startIndex; i < endIndex; i++) {
@@ -173,7 +161,8 @@ export function preprocessRuby(
 function validateRubyInput(
   text: Uint32Array,
   advances: Float32Array,
-  annotations: readonly RubyAnnotation[],
+  sorted: readonly RubyAnnotation[],
+  aggregates: ReadonlySet<RubyAnnotation>,
   existingClusterIds?: Uint32Array,
 ): void {
   const len = text.length;
@@ -193,8 +182,9 @@ function validateRubyInput(
     }
   }
 
-  const sorted = [...annotations].sort((a, b) => a.startIndex - b.startIndex);
-  let previousEnd = -1;
+  // Aggregate jukugo annotations open a nesting level: the annotations they
+  // cover must be disjoint among themselves and stay inside the aggregate.
+  const levels: { end: number; previousEnd: number }[] = [{ end: len, previousEnd: -1 }];
   for (const ann of sorted) {
     if (!(Number.isInteger(ann.startIndex) && Number.isInteger(ann.endIndex))) {
       throw new RangeError('preprocessRuby: annotation indices must be integers');
@@ -204,10 +194,17 @@ function validateRubyInput(
         `preprocessRuby: annotation range [${ann.startIndex}, ${ann.endIndex}) is outside text length ${len}`,
       );
     }
-    if (ann.startIndex < previousEnd) {
+    while (levels.length > 1 && ann.startIndex >= levels[levels.length - 1].end) {
+      levels.pop();
+    }
+    const level = levels[levels.length - 1];
+    if (ann.startIndex < level.previousEnd || ann.endIndex > level.end) {
       throw new RangeError('preprocessRuby: overlapping ruby annotations are not supported');
     }
-    previousEnd = ann.endIndex;
+    level.previousEnd = ann.endIndex;
+    if (aggregates.has(ann)) {
+      levels.push({ end: ann.endIndex, previousEnd: -1 });
+    }
 
     if (ann.rubyAdvances.length !== ann.rubyText.length) {
       throw new RangeError(
@@ -229,9 +226,26 @@ function validateRubyInput(
   }
 }
 
+/**
+ * Returns true when `ann` is a jukugo annotation that fully covers at least one
+ * other annotation — i.e. it aggregates per-segment ruby and only supplies
+ * split points.
+ */
+function isAggregateJukugo(ann: RubyAnnotation, annotations: readonly RubyAnnotation[]): boolean {
+  if ((ann.type ?? 'mono') !== 'jukugo') return false;
+  const span = ann.endIndex - ann.startIndex;
+  return annotations.some(
+    (other) =>
+      other !== ann &&
+      other.startIndex >= ann.startIndex &&
+      other.endIndex <= ann.endIndex &&
+      (other.endIndex - other.startIndex < span || (other.type ?? 'mono') !== 'jukugo'),
+  );
+}
+
 function normalizeRubyAnnotations(annotations: readonly RubyAnnotation[]): RubyAnnotation[] {
   return [...annotations]
-    .sort((a, b) => a.startIndex - b.startIndex)
+    .sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex)
     .map((ann) => {
       if ((ann.type ?? 'mono') !== 'jukugo') return ann;
       const span = ann.endIndex - ann.startIndex;

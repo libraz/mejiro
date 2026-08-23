@@ -64,6 +64,33 @@ describe('paginate', () => {
   it('returns one empty page for no paragraphs', () => {
     expect(paginate(100, [])).toEqual([[]]);
   });
+
+  it('returns one empty page when no paragraph has lines', () => {
+    expect(paginate(100, [{ lineCount: 0, linePitch: 20, gapBefore: 10 }])).toEqual([[]]);
+  });
+
+  it('consumes the gap of a zero-line paragraph', () => {
+    // 100px page, 20px pitch. Without the spacer's 30px gap the two body
+    // paragraphs (4 lines + 10px gap = 90px) share one page.
+    const withoutSpacer = paginate(100, [
+      { lineCount: 2, linePitch: 20, gapBefore: 10 },
+      { lineCount: 2, linePitch: 20, gapBefore: 10 },
+    ]);
+    expect(withoutSpacer).toHaveLength(1);
+
+    const withSpacer = paginate(100, [
+      { lineCount: 2, linePitch: 20, gapBefore: 10 },
+      { lineCount: 0, linePitch: 20, gapBefore: 30 },
+      { lineCount: 2, linePitch: 20, gapBefore: 10 },
+    ]);
+    expect(withSpacer).toEqual([
+      [
+        { paragraphIndex: 0, lineStart: 0, lineEnd: 2 },
+        { paragraphIndex: 2, lineStart: 0, lineEnd: 1 },
+      ],
+      [{ paragraphIndex: 2, lineStart: 1, lineEnd: 2 }],
+    ]);
+  });
 });
 
 describe('getLineRanges', () => {

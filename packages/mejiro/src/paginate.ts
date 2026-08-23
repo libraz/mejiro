@@ -25,7 +25,11 @@ export function getLineRanges(breakPoints: Uint32Array, charCount: number): [num
  * Measurement for a single paragraph used in pagination.
  */
 export interface ParagraphMeasure {
-  /** Number of lines (columns in vertical-rl) in this paragraph. */
+  /**
+   * Number of lines (columns in vertical-rl) in this paragraph. A paragraph
+   * with no lines contributes no {@link PageSlice}; only its `gapBefore` is
+   * consumed.
+   */
   lineCount: number;
   /** Size of each line in the block direction (px). Typically fontSize * lineHeight. */
   linePitch: number;
@@ -54,13 +58,17 @@ export interface PageSlice {
  * and inter-paragraph gaps are added before the first line of each
  * paragraph (except at page start).
  *
+ * A paragraph with `lineCount: 0` has nothing to place, so it produces no
+ * slice; its `gapBefore` is still consumed, which keeps a spacer paragraph
+ * separating the paragraphs around it. Consequently not every input paragraph
+ * is guaranteed to appear in the output.
+ *
  * @param pageBlockSize - Available size in the block direction per page (px).
  * @param paragraphs - Measurements for each paragraph.
  * @returns Array of pages, each containing an array of paragraph slices.
+ *   Always at least one page, empty when nothing could be placed.
  */
 export function paginate(pageBlockSize: number, paragraphs: ParagraphMeasure[]): PageSlice[][] {
-  if (paragraphs.length === 0) return [[]];
-
   const pages: PageSlice[][] = [];
   let currentPage: PageSlice[] = [];
   let usedBlock = 0;
@@ -68,6 +76,13 @@ export function paginate(pageBlockSize: number, paragraphs: ParagraphMeasure[]):
 
   for (let pi = 0; pi < paragraphs.length; pi++) {
     const { lineCount, linePitch, gapBefore } = paragraphs[pi];
+
+    // A paragraph with no lines still separates its neighbours, so it consumes
+    // its gap without claiming a slice.
+    if (lineCount <= 0) {
+      if (!isPageStart) usedBlock += gapBefore;
+      continue;
+    }
 
     for (let li = 0; li < lineCount; li++) {
       const isNewPara = li === 0;
@@ -97,7 +112,8 @@ export function paginate(pageBlockSize: number, paragraphs: ParagraphMeasure[]):
     }
   }
 
-  if (currentPage.length > 0) {
+  // Always hand back at least one page so `pages[0]` is safe for any input.
+  if (currentPage.length > 0 || pages.length === 0) {
     pages.push(currentPage);
   }
 

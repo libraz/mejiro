@@ -17,15 +17,26 @@ export interface ExclusionZone {
 }
 
 /**
+ * Smallest line width (px) any exclusion computation may produce.
+ *
+ * `computeBreaks()` rejects non-positive `lineWidths` entries, so a line whose
+ * exclusions consume all of its inline size is clamped to this value instead of
+ * to 0. Such a line holds at most one character.
+ */
+const MIN_EXCLUSION_LINE_WIDTH = 1;
+
+/**
  * Computes per-line widths by subtracting exclusion zones from the base line width.
  *
  * Multiple exclusion zones may overlap; their inline sizes are summed per line.
- * The resulting width for any line is clamped to a minimum of 0.
+ * A line whose exclusions consume its whole inline size is clamped to a small
+ * positive width rather than to 0, so the result is always a valid `lineWidths`
+ * input for `computeBreaks()`.
  *
  * @param baseLineWidth - Default line width in pixels.
  * @param lineCount - Number of lines to generate widths for.
  * @param exclusions - Exclusion zones that reduce available line width.
- * @returns A `Float32Array` of per-line widths.
+ * @returns A `Float32Array` of per-line widths, every entry strictly positive.
  */
 export function computeLineWidths(
   baseLineWidth: number,
@@ -39,7 +50,7 @@ export function computeLineWidths(
     const start = Math.max(0, zone.blockStart);
     const end = Math.min(lineCount, zone.blockEnd);
     for (let i = start; i < end; i++) {
-      widths[i] = Math.max(0, widths[i] - zone.inlineSize);
+      widths[i] = Math.max(MIN_EXCLUSION_LINE_WIDTH, widths[i] - zone.inlineSize);
     }
   }
 
@@ -57,6 +68,10 @@ export function computeLineWidths(
  *
  * Coordinates are relative to the content area origin (top-left of the
  * area where text is rendered, after padding).
+ *
+ * This is the layout-side shape: it adds the margins the exclusion engine
+ * reserves around the image. The bare `{ x, y, w, h }` shape a host drags
+ * around in its UI is `ImageOverlayRect`.
  */
 export interface ImageRect {
   /** Horizontal offset from the left edge of the content area (px). */
@@ -74,11 +89,14 @@ export interface ImageRect {
 }
 
 /**
- * Per-column rendering slot computed from image exclusions.
+ * Rendering slot computed from image exclusions.
  *
- * Each slot describes where text should be placed within a column
- * and how much vertical space is available. A single physical column
- * may produce multiple slots (e.g. one above and one below an image).
+ * Each slot describes where text should be placed and how much vertical space
+ * is available there. A single physical column may produce several slots (e.g.
+ * one above and one below an image) or none at all, and slots are emitted in
+ * reading order rather than in column order — so a slot's position in the array
+ * is a line index, not a column index. The physical column a slot belongs to is
+ * given by `columnIndex`.
  */
 export interface ColumnSlot {
   /** Horizontal offset from the right edge of the content area (px). */
@@ -87,6 +105,13 @@ export interface ColumnSlot {
   yStart: number;
   /** Available height for text in this column (px). */
   height: number;
+  /**
+   * Physical column this slot belongs to (0 = the column nearest the right
+   * content edge). Several slots share a `columnIndex` when an image splits a
+   * column into multiple gaps. Every slot produced by this package carries it;
+   * it is optional only so hand-built slot arrays stay assignable.
+   */
+  columnIndex?: number;
 }
 
 /**
@@ -113,9 +138,11 @@ export interface ExclusionPageGeometry {
  * layout slot with its own line width and rendering position.
  *
  * For a column partially blocked by an image, the engine produces
- * multiple slots (e.g. one above and one below the image), each
- * with its own line width entry. Text flows through all usable gaps
- * in order, filling the space above, then below the image.
+ * multiple slots (e.g. one above and one below the image), each with
+ * its own line width entry. Slots are emitted in reading order: a run
+ * of adjacent columns split the same way by an image forms a band
+ * group, and text fills the band above the image across the whole
+ * group before wrapping back to the band below it.
  *
  * @example
  * ```ts
@@ -137,6 +164,13 @@ export class ExclusionEngine {
   private geometry: ExclusionPageGeometry;
   private images: ImageRect[] = [];
 
+  /**
+   * Creates an engine for one page's geometry with an empty image set. The
+   * geometry is retained by reference until {@link ExclusionEngine.setGeometry}
+   * replaces it, so pass a value the caller will not mutate afterwards.
+   *
+   * @param geometry - Column count, pitch and content extent of the page.
+   */
   constructor(geometry: ExclusionPageGeometry) {
     this.geometry = geometry;
   }
@@ -183,22 +217,35 @@ export class ExclusionEngine {
   }
 
   /**
-   * Computes per-column slots and line widths for the current images.
+   * Computes slots and line widths for the current images.
    *
    * For each physical column, finds **all** contiguous vertical gaps
    * not occupied by any image. Each gap becomes a separate slot.
-   * Affected columns may produce multiple slots (and thus multiple
-   * entries in `lineWidths`), so `slots.length >= lineCount`.
+   * Affected columns may produce several slots (and thus several
+   * entries in `lineWidths`), or none at all when an image blocks the
+   * whole column, so `slots.length` may be above or below `lineCount`
+   * and a slot cannot be looked up by column index — read
+   * {@link ColumnSlot.columnIndex} to recover the physical column.
    *
-   * @returns Column slots for rendering and line widths for `computeBreaks()`.
+   * Slots come out in reading order, not column order: adjacent columns
+   * split identically by an image form a band group whose upper band is
+   * filled across every column of the group before the band below it.
+   *
+   * Every `lineWidths` entry is strictly positive: a gap with no usable
+   * height produces no slot rather than a zero-width one.
+   *
+   * @returns Slots for rendering, line widths for `computeBreaks()`,
+   *   and whether any column's slot coverage differs from the unobstructed
+   *   layout (one full-height slot per column).
    */
-  compute(): { slots: ColumnSlot[]; lineWidths: Float32Array } {
+  compute(): { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean } {
     const { lineWidth, lineCount, linePitch, contentWidth } = this.geometry;
     const minGapHeight = this.geometry.minGapHeight ?? linePitch;
-    const slots: ColumnSlot[] = [];
+    const columns: ColumnGaps[] = [];
+    let affected = false;
 
     for (let col = 0; col < lineCount; col++) {
-      const gaps = computeColumnGaps(
+      const column = computeColumnGaps(
         col,
         linePitch,
         contentWidth,
@@ -206,17 +253,17 @@ export class ExclusionEngine {
         this.images,
         minGapHeight,
       );
-      for (const gap of gaps) {
-        slots.push(gap);
-      }
+      if (column.obstructed) affected = true;
+      columns.push(column);
     }
 
+    const slots = orderGapsForReading(columns);
     const widths = new Float32Array(slots.length);
     for (let i = 0; i < slots.length; i++) {
       widths[i] = slots[i].height;
     }
 
-    return { slots, lineWidths: widths };
+    return { slots, lineWidths: widths, affected };
   }
 }
 
@@ -228,14 +275,15 @@ export class ExclusionEngine {
  * images are added/removed incrementally.
  *
  * @param options - Page geometry and image placements.
- * @returns Column slots for rendering and line widths for layout.
+ * @returns Column slots for rendering, line widths for layout, and whether
+ *   any column's slot coverage differs from the unobstructed layout.
  */
 export function computeExclusionSlots(
   options: ExclusionPageGeometry & {
     /** Image rectangles in content-area coordinates. */
     images: readonly ImageRect[];
   },
-): { slots: ColumnSlot[]; lineWidths: Float32Array } {
+): { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean } {
   const { images, ...geometry } = options;
   const engine = new ExclusionEngine(geometry);
   for (const img of images) {
@@ -244,10 +292,66 @@ export function computeExclusionSlots(
   return engine.compute();
 }
 
+/** Usable gaps of one physical column, in top-to-bottom order. */
+interface ColumnGaps {
+  gaps: ColumnSlot[];
+  obstructed: boolean;
+}
+
+/** True when two columns are split into the same vertical gaps. */
+function sameGapPartition(a: readonly ColumnSlot[], b: readonly ColumnSlot[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].yStart !== b[i].yStart || a[i].height !== b[i].height) return false;
+  }
+  return true;
+}
+
+/**
+ * Flattens per-column gaps into the order a reader traverses them.
+ *
+ * Adjacent columns cut into the same gaps by an image form a band group. Within
+ * a group the gaps are emitted band by band — the whole band above the image
+ * across every column of the group, then the band below it — which is how text
+ * wraps around a figure placed in the middle of a run of columns. Columns whose
+ * gaps differ start a new group, so a column is never read before a column to
+ * its right. A fully blocked column contributes nothing and does not split the
+ * group around it.
+ */
+function orderGapsForReading(columns: readonly ColumnGaps[]): ColumnSlot[] {
+  const slots: ColumnSlot[] = [];
+  let start = 0;
+  while (start < columns.length) {
+    const reference = columns[start].gaps;
+    if (reference.length === 0) {
+      start++;
+      continue;
+    }
+    let end = start + 1;
+    while (
+      end < columns.length &&
+      (columns[end].gaps.length === 0 || sameGapPartition(reference, columns[end].gaps))
+    ) {
+      end++;
+    }
+    for (let band = 0; band < reference.length; band++) {
+      for (let col = start; col < end; col++) {
+        const gap = columns[col].gaps[band];
+        if (gap) slots.push(gap);
+      }
+    }
+    start = end;
+  }
+  return slots;
+}
+
 /**
  * Computes all usable vertical gaps in a single column
  * after subtracting all overlapping image regions.
- * Returns one slot per gap (possibly multiple per column).
+ * Returns one slot per gap (possibly multiple per column, or none when the
+ * column is fully blocked), plus whether any image took inline space away
+ * from this column — the latter is independent of how many gaps survived
+ * the `minGapHeight` filter.
  */
 function computeColumnGaps(
   colIndex: number,
@@ -256,7 +360,7 @@ function computeColumnGaps(
   lineWidth: number,
   images: readonly ImageRect[],
   minGapHeight: number,
-): ColumnSlot[] {
+): ColumnGaps {
   const xPos = colIndex * linePitch;
   // Column horizontal range (in content coords, measured from left)
   const colRight = contentW - colIndex * linePitch;
@@ -277,7 +381,10 @@ function computeColumnGaps(
   }
 
   if (intervals.length === 0) {
-    return [{ xPos, yStart: 0, height: lineWidth }];
+    return {
+      gaps: [{ xPos, yStart: 0, height: lineWidth, columnIndex: colIndex }],
+      obstructed: false,
+    };
   }
 
   // Merge overlapping intervals
@@ -292,22 +399,24 @@ function computeColumnGaps(
     }
   }
 
-  // Collect all gaps (above, between, below images)
+  // Collect all gaps (above, between, below images).
+  // A gap of zero (or negative) height is never emitted, even when
+  // `minGapHeight` is 0 — `computeBreaks()` requires positive line widths.
   const gaps: ColumnSlot[] = [];
   let prevEnd = 0;
   for (const [top, bottom] of merged) {
     const gapH = top - prevEnd;
-    if (gapH >= minGapHeight) {
-      gaps.push({ xPos, yStart: prevEnd, height: gapH });
+    if (gapH > 0 && gapH >= minGapHeight) {
+      gaps.push({ xPos, yStart: prevEnd, height: gapH, columnIndex: colIndex });
     }
     prevEnd = bottom;
   }
   const tailGap = lineWidth - prevEnd;
-  if (tailGap >= minGapHeight) {
-    gaps.push({ xPos, yStart: prevEnd, height: tailGap });
+  if (tailGap > 0 && tailGap >= minGapHeight) {
+    gaps.push({ xPos, yStart: prevEnd, height: tailGap, columnIndex: colIndex });
   }
 
-  return gaps;
+  return { gaps, obstructed: true };
 }
 
 // ── Spread (two-page) exclusion ──
@@ -352,6 +461,14 @@ export interface SpreadExclusionResult {
   lineWidths: Float32Array;
   /** Number of layout lines (slots) allocated to the right page. */
   rightSlotCount: number;
+  /**
+   * Whether any right-page column's slot coverage differs from the
+   * unobstructed layout (one full-height slot per column). True also when a
+   * column is blocked entirely and therefore produces no slot at all.
+   */
+  rightAffected: boolean;
+  /** Same as {@link SpreadExclusionResult.rightAffected} for the left page. */
+  leftAffected: boolean;
 }
 
 /**
@@ -393,6 +510,15 @@ export class SpreadExclusionEngine {
   private geometry: SpreadGeometry;
   private images: ImageRect[] = [];
 
+  /**
+   * Creates an engine for one spread's geometry with an empty image set. Column
+   * counts are derived from the geometry on every {@link
+   * SpreadExclusionEngine.compute} call, so only the geometry needs replacing on
+   * resize. The value is retained by reference until
+   * {@link SpreadExclusionEngine.setGeometry} replaces it.
+   *
+   * @param geometry - Page extent, padding and column pitch of the spread.
+   */
   constructor(geometry: SpreadGeometry) {
     this.geometry = geometry;
   }
@@ -449,6 +575,10 @@ export class SpreadExclusionEngine {
    * distributes images to the correct page with proper coordinate conversion
    * (accounting for page padding / gutter), and concatenates the results into
    * a single continuous `lineWidths` array.
+   *
+   * Each page also reports whether its slot coverage was changed by the images,
+   * so callers can tell "no image effect" from "image effect that happens to
+   * leave every surviving slot at full height".
    */
   compute(): SpreadExclusionResult {
     const { pageWidth, pagePaddingX, pagePaddingY, lineWidth, linePitch } = this.geometry;
@@ -504,6 +634,8 @@ export class SpreadExclusionEngine {
       leftSlots: leftResult.slots,
       lineWidths,
       rightSlotCount: rightResult.slots.length,
+      rightAffected: rightResult.affected,
+      leftAffected: leftResult.affected,
     };
   }
 }

@@ -14,8 +14,13 @@ export interface PrepareImageOptions {
   /** Maximum height in CSS pixels after downscale. Default: 2048. */
   maxHeight?: number;
   /**
-   * Output format. `auto` keeps the source format unless it is unsupported
-   * (e.g. AVIF) — in that case the image is re-encoded as `image/jpeg`.
+   * Output format. `auto` keeps the source format when it is JPEG, PNG or WebP,
+   * re-encodes GIF as `image/png` (animation is flattened), and falls back to
+   * `image/jpeg` for anything else (e.g. AVIF).
+   *
+   * The request is not a guarantee: a platform that cannot encode the requested
+   * format silently produces another one, and
+   * {@link PrepareImageResult.mediaType} then reports what was actually written.
    */
   convertTo?: 'auto' | 'webp' | 'jpeg' | 'png';
   /** Initial JPEG/WebP quality. Default: 0.85. */
@@ -26,7 +31,12 @@ export interface PrepareImageOptions {
 export interface PrepareImageResult {
   /** Re-encoded binary payload, ready to drop into an EPUB. */
   data: Uint8Array;
-  /** MIME type of {@link PrepareImageResult.data}. */
+  /**
+   * MIME type of the bytes in {@link PrepareImageResult.data}, taken from the
+   * encoder's output rather than from the requested format. Browsers that
+   * cannot encode the requested format fall back to another one; a warning is
+   * added whenever that happens.
+   */
   mediaType: string;
   /** Decoded pixel width after any downscale step. */
   width: number;
@@ -60,31 +70,43 @@ export async function prepareImage(
   const warnings: string[] = [];
 
   const bitmap = await decodeImage(file);
-  const sourceWidth = bitmap.width;
-  const sourceHeight = bitmap.height;
 
-  const scale = Math.min(1, config.maxWidth / sourceWidth, config.maxHeight / sourceHeight);
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-
-  if (scale < 1) {
-    warnings.push(`Image downscaled from ${sourceWidth}x${sourceHeight} to ${width}x${height}`);
-  }
-
-  const sourceType = await sniffMediaType(file, warnings);
-  const targetType = resolveTargetType(config.convertTo, sourceType, warnings);
-  warnAboutPotentialFlattening(sourceType, targetType, warnings);
-
+  // Everything that runs after the bitmap exists belongs inside the try, so no
+  // exit path can leave a decoded bitmap holding GPU/CPU memory.
   try {
+    const sourceWidth = bitmap.width;
+    const sourceHeight = bitmap.height;
+
+    const scale = Math.min(1, config.maxWidth / sourceWidth, config.maxHeight / sourceHeight);
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+
+    if (scale < 1) {
+      warnings.push(`Image downscaled from ${sourceWidth}x${sourceHeight} to ${width}x${height}`);
+    }
+
+    const sourceType = await sniffMediaType(file, warnings);
+    const targetType = resolveTargetType(config.convertTo, sourceType, warnings);
+    warnAboutPotentialFlattening(sourceType, targetType, warnings);
+
     let quality = config.quality;
     let blob = await renderToBlob(bitmap, width, height, targetType, quality);
+    // Quality only affects lossy encoders, so the decay loop is driven by what
+    // the canvas actually produced — not by what was asked for.
+    let encodedType = encodedMediaType(blob, targetType);
     while (
       blob.size > config.maxBytes &&
       quality > 0.4 &&
-      (targetType === 'image/jpeg' || targetType === 'image/webp')
+      (encodedType === 'image/jpeg' || encodedType === 'image/webp')
     ) {
       quality = Math.max(0.4, quality - 0.1);
       blob = await renderToBlob(bitmap, width, height, targetType, quality);
+      encodedType = encodedMediaType(blob, targetType);
+    }
+    if (encodedType !== targetType) {
+      warnings.push(
+        `Canvas encoded the image as "${encodedType}" instead of the requested "${targetType}"`,
+      );
     }
     if (blob.size > config.maxBytes) {
       warnings.push(
@@ -95,10 +117,19 @@ export async function prepareImage(
     }
 
     const data = new Uint8Array(await blob.arrayBuffer());
-    return { data, mediaType: targetType, width, height, warnings };
+    return { data, mediaType: encodedType, width, height, warnings };
   } finally {
     bitmap.close?.();
   }
+}
+
+/**
+ * MIME type of an encoded blob, without any parameters. Falls back to the
+ * requested type when the platform leaves `Blob.type` empty.
+ */
+function encodedMediaType(blob: Blob, targetType: string): string {
+  const declared = blob.type.split(';', 1)[0].trim().toLowerCase();
+  return declared || targetType;
 }
 
 async function decodeImage(file: Blob): Promise<ImageBitmap> {

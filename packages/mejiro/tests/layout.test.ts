@@ -2,44 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { buildKinsokuRules } from '../src/kinsoku.js';
 import { canBreakAt, computeBreaks } from '../src/layout.js';
 import { tokenLengthsToBoundaries } from '../src/tokenize.js';
-import basicBreak from './golden/basic-break.json';
-import forcedBreak from './golden/forced-break.json';
-import hangingComma from './golden/hanging-comma.json';
-import hangingPeriod from './golden/hanging-period.json';
-import kinsokuLineEnd from './golden/kinsoku-line-end.json';
-import kinsokuLineStart from './golden/kinsoku-line-start.json';
-import mixedWidth from './golden/mixed-width.json';
 import { toCodepoints, uniformAdvances } from './helpers.js';
 
-function runGolden(fixture: {
-  description: string;
-  input: { text: string; advanceWidth?: number; advances?: number[]; lineWidth: number };
-  expected: { breakPoints: number[]; hangingAdjustments?: number[]; lines?: string[] };
-}) {
-  const text = toCodepoints(fixture.input.text);
-  const advances = fixture.input.advances
-    ? new Float32Array(fixture.input.advances)
-    : uniformAdvances(text.length, fixture.input.advanceWidth ?? 10);
-
-  const result = computeBreaks({
-    text,
-    advances,
-    lineWidth: fixture.input.lineWidth,
-  });
-
-  expect([...result.breakPoints]).toEqual(fixture.expected.breakPoints);
-  if (fixture.expected.lines) {
-    expect(linesFromBreakPoints(fixture.input.text, result.breakPoints)).toEqual(
-      fixture.expected.lines,
-    );
+function lineAdvanceSums(advances: Float32Array, breakPoints: Uint32Array): number[] {
+  const sums: number[] = [];
+  let start = 0;
+  for (const breakPoint of breakPoints) {
+    sums.push(advances.slice(start, breakPoint + 1).reduce((sum, a) => sum + a, 0));
+    start = breakPoint + 1;
   }
-
-  if (fixture.expected.hangingAdjustments) {
-    expect(result.hangingAdjustments).toBeDefined();
-    expect(result.hangingAdjustments ? [...result.hangingAdjustments] : undefined).toEqual(
-      fixture.expected.hangingAdjustments,
-    );
+  if (start < advances.length) {
+    sums.push(advances.slice(start).reduce((sum, a) => sum + a, 0));
   }
+  return sums;
 }
 
 function linesFromBreakPoints(text: string, breakPoints: Uint32Array): string[] {
@@ -53,16 +28,6 @@ function linesFromBreakPoints(text: string, breakPoints: Uint32Array): string[] 
   if (start < chars.length) lines.push(chars.slice(start).join(''));
   return lines;
 }
-
-describe('golden tests', () => {
-  it(basicBreak.description, () => runGolden(basicBreak));
-  it(kinsokuLineStart.description, () => runGolden(kinsokuLineStart));
-  it(kinsokuLineEnd.description, () => runGolden(kinsokuLineEnd));
-  it(hangingComma.description, () => runGolden(hangingComma));
-  it(hangingPeriod.description, () => runGolden(hangingPeriod));
-  it(forcedBreak.description, () => runGolden(forcedBreak));
-  it(mixedWidth.description, () => runGolden(mixedWidth));
-});
 
 describe('edge cases', () => {
   it('returns empty breakPoints for empty text', () => {
@@ -282,6 +247,58 @@ describe('tokenBoundaries support', () => {
 
     expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['hello ', 'world']);
   });
+
+  it('does not let an early space empty a CJK line', () => {
+    // 21 chars with an ASCII space at index 2; 20 chars fill the line exactly.
+    const value = `ああ ${'あ'.repeat(18)}`;
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 200,
+    });
+
+    expect(result.breakPoints[0]).toBe(19);
+  });
+
+  it('prefers a space over splitting a Latin word inside CJK text', () => {
+    // The nearest valid position falls inside "world", so the space wins.
+    const value = 'あいうえお hello world';
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 150,
+    });
+
+    expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['あいうえお hello ', 'world']);
+  });
+
+  it('keeps the space preference when token boundaries yield no candidate', () => {
+    const value = 'hello world';
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 80,
+      tokenBoundaries: tokenLengthsToBoundaries([11]),
+    });
+
+    expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['hello ', 'world']);
+  });
+
+  it('does not prefer a distant space over a nearer CJK position with token boundaries', () => {
+    const value = `ああ ${'あ'.repeat(18)}`;
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 200,
+      tokenBoundaries: tokenLengthsToBoundaries([text.length]),
+    });
+
+    expect(result.breakPoints[0]).toBe(19);
+  });
 });
 
 describe('cluster-safe forced breaks', () => {
@@ -295,6 +312,52 @@ describe('cluster-safe forced breaks', () => {
     });
 
     expect([...result.breakPoints]).toEqual([2]);
+  });
+
+  it('keeps a cluster whole when the only cluster boundary is at line start', () => {
+    // 「 is line-end prohibited, but the cluster あああ fits on a line of its
+    // own, so the break goes there rather than into the cluster.
+    const text = toCodepoints('「あああ');
+    const advances = uniformAdvances(text.length, 16);
+    const result = computeBreaks({
+      text,
+      advances,
+      clusterIds: new Uint32Array([0, 1, 1, 1]),
+      lineWidth: 48,
+    });
+
+    expect([...result.breakPoints]).toEqual([0]);
+    expect(lineAdvanceSums(advances, result.breakPoints).every((sum) => sum <= 48)).toBe(true);
+  });
+
+  it('splits a cluster wider than the line at the last character that fits', () => {
+    const text = toCodepoints('ああああ');
+    const advances = uniformAdvances(text.length, 16);
+    const result = computeBreaks({
+      text,
+      advances,
+      clusterIds: new Uint32Array([0, 0, 0, 0]),
+      lineWidth: 48,
+    });
+
+    // 3 of the 4 clustered characters fit, so the cluster is split after index 2.
+    expect([...result.breakPoints]).toEqual([2]);
+    expect(lineAdvanceSums(advances, result.breakPoints)).toEqual([48, 16]);
+  });
+
+  it('breaks only at cluster boundaries while every cluster fits the line', () => {
+    const text = toCodepoints('ABCDE');
+    const advances = uniformAdvances(text.length, 16);
+    const clusterIds = new Uint32Array([0, 0, 0, 1, 1]);
+    const result = computeBreaks({ text, advances, lineWidth: 48, clusterIds });
+
+    expect([...result.breakPoints]).toEqual([2]);
+    for (const sum of lineAdvanceSums(advances, result.breakPoints)) {
+      expect(sum).toBeLessThanOrEqual(48);
+    }
+    for (const bp of result.breakPoints) {
+      expect(clusterIds[bp]).not.toBe(clusterIds[bp + 1]);
+    }
   });
 });
 

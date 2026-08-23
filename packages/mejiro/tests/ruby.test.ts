@@ -75,24 +75,23 @@ describe('preprocessRuby', () => {
     }
   });
 
-  it('absorbs ruby overhang into adjacent kana', () => {
-    // あ漢い — ruby "かんかん" (4 chars × 10px = 40px) on 漢 (16px base)
-    // excess = 24px, left kana overhang = min(8, 12) = 8, right kana overhang = min(8, 12) = 8
-    // net excess = 24 - 8 - 8 = 8px
+  it('reserves the full ruby width next to adjacent kana', () => {
+    // あ漢い — ruby "かんかん" (4 chars × 10px = 40px) on 漢 (16px base).
+    // The kana neighbours grant no credit: rendering cannot draw the ruby
+    // outside its own span, so the base must reserve all 40px.
     const text = toCodepoints('あ漢い');
     const advances = uniformAdvances(text.length, 16);
     const ann = makeAnnotation(1, 2, 'かんかん', 10, 'mono');
 
     const result = preprocessRuby(text, advances, [ann]);
 
-    // Base char gets net excess: 16 + 8 = 24
-    expect(result.effectiveAdvances[1]).toBeCloseTo(24);
-    // Adjacent kana unchanged (overhang doesn't modify their advances)
+    expect(result.effectiveAdvances[1]).toBeCloseTo(40);
+    // Neighbouring advances are never modified.
     expect(result.effectiveAdvances[0]).toBeCloseTo(16);
     expect(result.effectiveAdvances[2]).toBeCloseTo(16);
   });
 
-  it('does not overhang into adjacent ruby annotations', () => {
+  it('reserves the full ruby width between adjacent ruby annotations', () => {
     const text = toCodepoints('あ漢');
     const advances = uniformAdvances(text.length, 16);
     const left = makeAnnotation(0, 1, 'ああ', 10, 'mono');
@@ -117,18 +116,19 @@ describe('preprocessRuby', () => {
     expect(result.clusterIds[3]).not.toBe(result.clusterIds[1]);
   });
 
-  it('creates sub-group clusters for jukugo ruby', () => {
-    // 東京都 with splitPoints [1, 2] → groups: [東], [京], [都] (all size 1, no clustering needed)
-    const text = toCodepoints('東京都');
+  it('leaves every character breakable when jukugo splits at each boundary', () => {
+    // 東京都 with splitPoints [1, 2] gives the sub-groups [東], [京], [都].
+    const text = toCodepoints('東京都です');
     const advances = uniformAdvances(text.length, 16);
     const ann = makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [1, 2]);
 
     const result = preprocessRuby(text, advances, [ann]);
 
-    // All individual chars, splitPoints at every boundary = no forced clustering
-    // Each char should be independently breakable
-    expect(result.clusterIds[0]).not.toBe(result.clusterIds[1]);
-    expect(result.clusterIds[1]).not.toBe(result.clusterIds[2]);
+    // Every neighbouring pair inside the span sits in a different cluster, and
+    // the sub-groups do not bleed into the unannotated tail.
+    const ids = Array.from(result.clusterIds);
+    expect(new Set(ids.slice(0, 3)).size).toBe(3);
+    expect(ids.slice(3)).not.toContain(ids[2]);
   });
 
   it('creates sub-group clusters for jukugo ruby with multi-char groups', () => {
@@ -146,13 +146,71 @@ describe('preprocessRuby', () => {
   });
 
   it('does not expand advances for jukugo aggregate annotations', () => {
+    // The per-character annotations already reserve the ruby width, so the
+    // aggregate spanning all of them must not add width a second time.
+    const text = toCodepoints('東京都');
+    const advances = uniformAdvances(text.length, 16);
+    const aggregate = makeAnnotation(0, 3, 'とうきょうと', 20, 'jukugo', [1, 2]);
+    const parts = [
+      makeAnnotation(0, 1, 'とう', 8, 'mono'),
+      makeAnnotation(1, 2, 'きょう', 4, 'mono'),
+      makeAnnotation(2, 3, 'と', 8, 'mono'),
+    ];
+
+    const result = preprocessRuby(text, advances, [aggregate, ...parts]);
+
+    expect(Array.from(result.effectiveAdvances)).toEqual(Array.from(advances));
+  });
+
+  it('accepts a jukugo aggregate that covers per-character ruby annotations', () => {
+    // 東<rt>とう</rt>京<rt>きょう</rt>都<rt>と</rt> — the shape produced for
+    // multi-rt ruby markup: one annotation per pair plus a covering aggregate.
+    const text = toCodepoints('東京都に行く');
+    const advances = uniformAdvances(text.length, 16);
+    const annotations = [
+      makeAnnotation(0, 1, 'とう', 10, 'mono'),
+      makeAnnotation(1, 2, 'きょう', 10, 'mono'),
+      makeAnnotation(2, 3, 'と', 10, 'mono'),
+      makeAnnotation(0, 3, 'とうきょうと', 10, 'jukugo', [1, 2]),
+    ];
+
+    const result = preprocessRuby(text, advances, annotations);
+
+    // Width comes from the covered annotations: 京 carries 3 ruby chars (30px)
+    // against a 16px base, so its advance grows.
+    expect(result.effectiveAdvances[1]).toBeCloseTo(30);
+    // Split points at every boundary leave each character independently breakable.
+    expect(result.clusterIds[0]).not.toBe(result.clusterIds[1]);
+    expect(result.clusterIds[1]).not.toBe(result.clusterIds[2]);
+  });
+
+  it('keeps a covered group ruby unbreakable inside a jukugo aggregate', () => {
+    // 東京<rt>とうきょう</rt>都<rt>と</rt> — split point only after 東京.
+    const text = toCodepoints('東京都');
+    const advances = uniformAdvances(text.length, 16);
+    const annotations = [
+      makeAnnotation(0, 2, 'とうきょう', 8, 'group'),
+      makeAnnotation(2, 3, 'と', 8, 'mono'),
+      makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [2]),
+    ];
+
+    const result = preprocessRuby(text, advances, annotations);
+
+    expect(result.clusterIds[0]).toBe(result.clusterIds[1]);
+    expect(result.clusterIds[2]).not.toBe(result.clusterIds[0]);
+  });
+
+  it('reserves width for a standalone jukugo annotation', () => {
     const text = toCodepoints('東京都');
     const advances = uniformAdvances(text.length, 16);
     const ann = makeAnnotation(0, 3, 'とうきょうと', 20, 'jukugo', [1, 2]);
 
     const result = preprocessRuby(text, advances, [ann]);
 
-    expect(Array.from(result.effectiveAdvances)).toEqual(Array.from(advances));
+    const reserved = result.effectiveAdvances.slice(0, 3).reduce((sum, a) => sum + a, 0);
+    const rubyWidth = ann.rubyAdvances.reduce((sum, a) => sum + a, 0);
+    expect(reserved).toBeGreaterThanOrEqual(Math.max(...ann.rubyAdvances));
+    expect(reserved).toBeCloseTo(rubyWidth);
   });
 
   it('preserves existing cluster IDs', () => {
@@ -209,6 +267,19 @@ describe('preprocessRuby', () => {
     ).toThrow(/overlapping/);
   });
 
+  it('throws when an annotation only partially overlaps a jukugo aggregate', () => {
+    const text = toCodepoints('東京都です');
+    const advances = uniformAdvances(text.length, 16);
+
+    expect(() =>
+      preprocessRuby(text, advances, [
+        makeAnnotation(0, 1, 'とう', 8, 'mono'),
+        makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [1, 2]),
+        makeAnnotation(2, 4, 'とで', 8, 'group'),
+      ]),
+    ).toThrow(/overlapping/);
+  });
+
   it('throws for mismatched ruby advances and multi-character mono ruby', () => {
     const text = toCodepoints('漢字');
     const advances = uniformAdvances(text.length, 16);
@@ -231,13 +302,27 @@ describe('preprocessRuby', () => {
   });
 
   it('sorts, deduplicates, and clamps jukugo split points', () => {
+    // Out of order, repeated, and out of range points must reduce to [1, 2] —
+    // the same grouping a caller who passed [1, 2] would get, and different
+    // from the grouping any of the raw values on their own would produce.
     const text = toCodepoints('東京都');
     const advances = uniformAdvances(text.length, 16);
-    const ann = makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [2, 1, 2, 99, -5]);
+    const messy = preprocessRuby(text, advances, [
+      makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [2, 1, 2, 99, -5]),
+    ]);
+    const clean = preprocessRuby(text, advances, [
+      makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [1, 2]),
+    ]);
 
-    const result = preprocessRuby(text, advances, [ann]);
+    expect(Array.from(messy.clusterIds)).toEqual(Array.from(clean.clusterIds));
+    expect(new Set(Array.from(messy.clusterIds)).size).toBe(3);
 
-    expect(result.clusterIds[0]).not.toBe(result.clusterIds[1]);
-    expect(result.clusterIds[1]).not.toBe(result.clusterIds[2]);
+    // A single in-range point keeps the remaining characters together, so the
+    // normalized result is not simply "every point accepted" either.
+    const single = preprocessRuby(text, advances, [
+      makeAnnotation(0, 3, 'とうきょうと', 8, 'jukugo', [1]),
+    ]);
+    expect(single.clusterIds[1]).toBe(single.clusterIds[2]);
+    expect(single.clusterIds[0]).not.toBe(single.clusterIds[1]);
   });
 });

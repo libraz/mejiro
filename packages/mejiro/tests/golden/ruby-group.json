@@ -1,9 +1,9 @@
 {
-  "description": "Group ruby prevents break within base text span",
+  "description": "Group ruby keeps its base characters on one line",
   "input": {
     "text": "あいうえお明日かきくけこ",
     "advanceWidth": 16,
-    "lineWidth": 112,
+    "lineWidth": 96,
     "rubyAnnotations": [
       {
         "startIndex": 5,
@@ -15,7 +15,9 @@
     ]
   },
   "expected": {
-    "breakPoints": [4, 9],
-    "clusterGroupIndices": [5, 6]
+    "breakPoints": [4, 10],
+    "lines": ["あいうえお", "明日かきくけ", "こ"],
+    "effectiveAdvances": [16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16],
+    "comment": "Six characters fit the line, but breaking after index 5 would split 明日, so the break backtracks to index 4"
   }
 }

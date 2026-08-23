@@ -107,10 +107,53 @@ describe('prepareImage', () => {
     expect(result.warnings.some((w) => /GIF animation is flattened/.test(w))).toBe(true);
   });
 
+  it('reports the media type the canvas actually encoded', async () => {
+    class PngOnlyOffscreen {
+      constructor(
+        readonly width: number,
+        readonly height: number,
+      ) {}
+      getContext(_kind: string): { drawImage: () => void } {
+        return { drawImage: () => {} };
+      }
+      async convertToBlob(_opts: { type: string; quality?: number }): Promise<Blob> {
+        // Mirrors browsers without a WebP encoder: the requested type is ignored
+        // and PNG comes back instead.
+        return new Blob([new Uint8Array(64)], { type: 'image/png' });
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', PngOnlyOffscreen as unknown as typeof OffscreenCanvas);
+
+    const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
+    const result = await prepareImage(file, { convertTo: 'webp' });
+
+    expect(result.mediaType).toBe('image/png');
+    expect(result.warnings.some((w) => /encoded the image as "image\/png"/.test(w))).toBe(true);
+  });
+
   it('throws when createImageBitmap is unavailable', async () => {
     vi.stubGlobal('createImageBitmap', undefined);
     const file = new Blob([new Uint8Array(16)], { type: 'image/png' });
     await expect(prepareImage(file)).rejects.toThrow(/createImageBitmap/);
+  });
+
+  it('closes the decoded bitmap when source type detection fails', async () => {
+    const close = vi.fn();
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async () => ({ width: 16, height: 16, close }) as unknown as ImageBitmap),
+    );
+    const file = {
+      type: 'image/png',
+      slice: () => ({
+        arrayBuffer: async () => {
+          throw new Error('sniff failed');
+        },
+      }),
+    } as unknown as Blob;
+
+    await expect(prepareImage(file)).rejects.toThrow(/sniff failed/);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('closes the decoded bitmap when encoding fails', async () => {

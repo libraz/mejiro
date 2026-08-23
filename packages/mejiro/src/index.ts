@@ -48,6 +48,8 @@ export {
 } from './persistence.js';
 export type { RubyAnnotation, RubyPreprocessResult, RubyType } from './ruby.js';
 export { isKana, preprocessRuby } from './ruby.js';
+export type { TcyAnnotation, TcyPreprocessResult } from './tcy.js';
+export { buildTcyAnnotations, preprocessTcy } from './tcy.js';
 export { formatDialogueLineBreaks, normalizeText, toCodepoints } from './text.js';
 export { tokenLengthsToBoundaries } from './tokenize.js';
 export type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';

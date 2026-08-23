@@ -1,4 +1,5 @@
 import type { RubyAnnotation } from './ruby.js';
+import type { TcyAnnotation } from './tcy.js';
 
 /**
  * Input parameters for the line breaking algorithm.
@@ -28,6 +29,12 @@ export interface LayoutInput {
   /** Ruby annotations for furigana support. */
   rubyAnnotations?: RubyAnnotation[];
   /**
+   * Tate-chu-yoko spans. Each one is collapsed to a single indivisible box of
+   * its own width before breaking, so a combined run is never split across a
+   * column boundary and reserves one em instead of the sum of its characters.
+   */
+  tcyAnnotations?: readonly TcyAnnotation[];
+  /**
    * Sorted array of codepoint indices representing token boundaries.
    * Each value is the index of the last codepoint in a token.
    * The algorithm prefers breaking at these positions over mid-token positions.
@@ -46,7 +53,10 @@ export interface BreakResult {
   breakPoints: Uint32Array;
   /** Hanging adjustment amount in pixels for each line. 0 if no hanging occurs. */
   hangingAdjustments?: Float32Array;
-  /** Per-character effective advances after ruby width distribution. Present when ruby was provided. */
+  /**
+   * Per-character effective advances after tate-chu-yoko collapsing and ruby
+   * width distribution. Present when either kind of annotation was provided.
+   */
   effectiveAdvances?: Float32Array;
   /** Actual line width used for each line. Present when per-line `lineWidths` was provided. */
   lineWidths?: Float32Array;

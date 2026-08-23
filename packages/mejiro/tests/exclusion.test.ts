@@ -28,9 +28,25 @@ describe('computeLineWidths', () => {
     expect([...widths]).toEqual([80, 80, 50, 70, 70]);
   });
 
-  it('clamps to zero when exclusion exceeds line width', () => {
+  it('clamps to a positive width when exclusion exceeds line width', () => {
     const widths = computeLineWidths(50, 3, [{ blockStart: 0, blockEnd: 3, inlineSize: 80 }]);
-    expect([...widths]).toEqual([0, 0, 0]);
+    // computeBreaks rejects non-positive line widths, so a fully covered line
+    // keeps a small positive width instead of collapsing to 0.
+    for (const w of widths) expect(w).toBeGreaterThan(0);
+  });
+
+  it('produces a computeBreaks-safe array for a full-height exclusion', () => {
+    const text = toCodepoints('あいうえおかきくけこ');
+    const lineWidths = computeLineWidths(50, 3, [{ blockStart: 0, blockEnd: 3, inlineSize: 50 }]);
+    for (const w of lineWidths) expect(w).toBeGreaterThan(0);
+    expect(() =>
+      computeBreaks({
+        text,
+        advances: uniformAdvances(text.length, 16),
+        lineWidth: 50,
+        lineWidths,
+      }),
+    ).not.toThrow();
   });
 
   it('handles out-of-range exclusion zones gracefully', () => {
@@ -212,12 +228,12 @@ describe('computeExclusionSlots', () => {
     // Col 0: 1 slot (unaffected), Col 1: 2 slots (above+below), Cols 2-4: 1 each → 6
     expect(slots.length).toBe(6);
     // Col 0: full height
-    expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 400 });
+    expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 400, columnIndex: 0 });
     // Col 1: above (0..100 = 100px) then below (260..400 = 140px)
-    expect(slots[1]).toEqual({ xPos: 30, yStart: 0, height: 100 });
-    expect(slots[2]).toEqual({ xPos: 30, yStart: 260, height: 140 });
+    expect(slots[1]).toEqual({ xPos: 30, yStart: 0, height: 100, columnIndex: 1 });
+    expect(slots[2]).toEqual({ xPos: 30, yStart: 260, height: 140, columnIndex: 1 });
     // Col 2: full height
-    expect(slots[3]).toEqual({ xPos: 60, yStart: 0, height: 400 });
+    expect(slots[3]).toEqual({ xPos: 60, yStart: 0, height: 400, columnIndex: 2 });
   });
 
   it('handles image at top of content area (single gap below)', () => {
@@ -245,11 +261,23 @@ describe('computeExclusionSlots', () => {
         { x: 0, y: 200, w: 150, h: 100 },
       ],
     });
-    // 5 columns × 2 gaps each = 10 slots
+    // 5 columns × 2 gaps each = 10 slots, emitted band by band
     expect(slots).toHaveLength(10);
-    // First column: gap at 80..200 (120px), gap at 300..400 (100px)
-    expect(slots[0]).toEqual({ xPos: 0, yStart: 80, height: 120 });
-    expect(slots[1]).toEqual({ xPos: 0, yStart: 300, height: 100 });
+    // Upper band (80..200) across all five columns, then the lower band (300..400)
+    expect(slots.slice(0, 5)).toEqual([
+      { xPos: 0, yStart: 80, height: 120, columnIndex: 0 },
+      { xPos: 30, yStart: 80, height: 120, columnIndex: 1 },
+      { xPos: 60, yStart: 80, height: 120, columnIndex: 2 },
+      { xPos: 90, yStart: 80, height: 120, columnIndex: 3 },
+      { xPos: 120, yStart: 80, height: 120, columnIndex: 4 },
+    ]);
+    expect(slots.slice(5)).toEqual([
+      { xPos: 0, yStart: 300, height: 100, columnIndex: 0 },
+      { xPos: 30, yStart: 300, height: 100, columnIndex: 1 },
+      { xPos: 60, yStart: 300, height: 100, columnIndex: 2 },
+      { xPos: 90, yStart: 300, height: 100, columnIndex: 3 },
+      { xPos: 120, yStart: 300, height: 100, columnIndex: 4 },
+    ]);
   });
 
   it('handles overlapping images (merged intervals)', () => {
@@ -262,10 +290,11 @@ describe('computeExclusionSlots', () => {
         { x: 0, y: 150, w: 150, h: 200 },
       ],
     });
-    // 5 columns × 2 gaps each = 10 slots
+    // 5 columns × 2 gaps each = 10 slots, emitted band by band
     expect(slots).toHaveLength(10);
-    expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 50 });
-    expect(slots[1]).toEqual({ xPos: 0, yStart: 350, height: 50 });
+    expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 50, columnIndex: 0 });
+    expect(slots[4]).toEqual({ xPos: 120, yStart: 0, height: 50, columnIndex: 4 });
+    expect(slots[5]).toEqual({ xPos: 0, yStart: 350, height: 50, columnIndex: 0 });
   });
 
   it('images only affect overlapping columns', () => {
@@ -298,6 +327,26 @@ describe('computeExclusionSlots', () => {
     expect(custom.slots).toHaveLength(10);
   });
 
+  it('lets slot count run above and below the column count', () => {
+    // The documented post-condition is that slots.length is unrelated to
+    // lineCount, so per-column indexing is invalid in both directions.
+    const more = computeExclusionSlots({
+      ...base,
+      images: [{ x: 90, y: 100, w: 30, h: 160 }],
+    });
+    expect(more.slots.length).toBeGreaterThan(base.lineCount);
+
+    const fewer = computeExclusionSlots({
+      ...base,
+      images: [{ x: 90, y: 0, w: 60, h: 400 }],
+    });
+    expect(fewer.slots.length).toBeLessThan(base.lineCount);
+
+    for (const widths of [more.lineWidths, fewer.lineWidths]) {
+      for (const w of widths) expect(w).toBeGreaterThan(0);
+    }
+  });
+
   it('lineWidths matches slot heights', () => {
     const { slots, lineWidths } = computeExclusionSlots({
       ...base,
@@ -319,6 +368,68 @@ describe('computeExclusionSlots', () => {
     expect(lineWidths).toHaveLength(0);
   });
 
+  it('never emits a zero-height gap when minGapHeight is 0', () => {
+    // The image touches the top edge, so the gap above it has zero height.
+    const { slots, lineWidths } = computeExclusionSlots({
+      ...base,
+      minGapHeight: 0,
+      images: [{ x: 0, y: 0, w: 150, h: 100 }],
+    });
+    expect(slots).toHaveLength(5);
+    for (const w of lineWidths) expect(w).toBeGreaterThan(0);
+
+    const text = toCodepoints('あいうえおかきくけこ');
+    expect(() =>
+      computeBreaks({
+        text,
+        advances: uniformAdvances(text.length, 16),
+        lineWidth: base.lineWidth,
+        lineWidths,
+      }),
+    ).not.toThrow();
+  });
+
+  it('emits no slot for a column covered over its full inline height', () => {
+    // Mixed page: column 0 is fully blocked, column 1 is partially blocked.
+    const { slots, lineWidths } = computeExclusionSlots({
+      ...base,
+      minGapHeight: 0,
+      images: [
+        { x: 120, y: 0, w: 30, h: 400 },
+        { x: 90, y: 100, w: 30, h: 100 },
+      ],
+    });
+    expect(slots.every((s) => s.xPos !== 0)).toBe(true);
+    for (const w of lineWidths) expect(w).toBeGreaterThan(0);
+
+    const text = toCodepoints('あいうえおかきくけこさしすせそ');
+    expect(() =>
+      computeBreaks({
+        text,
+        advances: uniformAdvances(text.length, 16),
+        lineWidth: base.lineWidth,
+        lineWidths,
+      }),
+    ).not.toThrow();
+  });
+
+  it('reports whether images changed the slot coverage', () => {
+    expect(computeExclusionSlots({ ...base, images: [] }).affected).toBe(false);
+    // Image beyond the last column leaves every column untouched.
+    expect(
+      computeExclusionSlots({ ...base, images: [{ x: -100, y: 0, w: 20, h: 100 }] }).affected,
+    ).toBe(false);
+    // A fully blocked column leaves every surviving slot at full height,
+    // yet the page's coverage still differs from the unobstructed layout.
+    const blocked = computeExclusionSlots({
+      ...base,
+      images: [{ x: 120, y: 0, w: 30, h: 400 }],
+    });
+    expect(blocked.slots).toHaveLength(4);
+    expect(blocked.slots.every((s) => s.height === base.lineWidth)).toBe(true);
+    expect(blocked.affected).toBe(true);
+  });
+
   it('inlineMargin expands image in inline direction', () => {
     // Image at y=100, h=100 with inlineMargin=20 → effective y=80..220
     // Gaps: 0..80 (80px) and 220..400 (180px)
@@ -326,10 +437,94 @@ describe('computeExclusionSlots', () => {
       ...base,
       images: [{ x: 0, y: 100, w: 150, h: 100, inlineMargin: 20 }],
     });
-    // 5 columns × 2 gaps each = 10 slots
+    // 5 columns × 2 gaps each = 10 slots, emitted band by band
     expect(slots).toHaveLength(10);
-    expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 80 });
-    expect(slots[1]).toEqual({ xPos: 0, yStart: 220, height: 180 });
+    expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 80, columnIndex: 0 });
+    expect(slots[4]).toEqual({ xPos: 120, yStart: 0, height: 80, columnIndex: 4 });
+    expect(slots[5]).toEqual({ xPos: 0, yStart: 220, height: 180, columnIndex: 0 });
+  });
+
+  it('fills the band above a mid-column image before the band below it', () => {
+    // 8 columns of pitch 30 over a 240px content width, lineWidth 400.
+    // Columns are numbered from the right edge, so columns 2..5 span
+    // x = 60..180 and the image sits across exactly those four columns.
+    const { slots } = computeExclusionSlots({
+      lineWidth: 400,
+      lineCount: 8,
+      linePitch: 30,
+      contentWidth: 240,
+      images: [{ x: 60, y: 150, w: 120, h: 100 }],
+    });
+
+    // Columns 0-1 and 6-7 keep a single full-height slot; columns 2-5
+    // contribute an upper and a lower band slot each.
+    expect(slots).toHaveLength(12);
+    expect(slots.map((s) => [s.xPos, s.yStart, s.height])).toEqual([
+      [0, 0, 400],
+      [30, 0, 400],
+      [60, 0, 150],
+      [90, 0, 150],
+      [120, 0, 150],
+      [150, 0, 150],
+      [60, 250, 150],
+      [90, 250, 150],
+      [120, 250, 150],
+      [150, 250, 150],
+      [180, 0, 400],
+      [210, 0, 400],
+    ]);
+  });
+
+  it('tags every slot with the physical column it belongs to', () => {
+    const { slots } = computeExclusionSlots({
+      lineWidth: 400,
+      lineCount: 8,
+      linePitch: 30,
+      contentWidth: 240,
+      images: [{ x: 60, y: 150, w: 120, h: 100 }],
+    });
+
+    // Band order revisits columns 2-5, so the array position is not the column.
+    expect(slots.map((s) => s.columnIndex)).toEqual([0, 1, 2, 3, 4, 5, 2, 3, 4, 5, 6, 7]);
+    for (const slot of slots) {
+      expect(slot.xPos).toBe((slot.columnIndex as number) * 30);
+    }
+  });
+
+  it('does not read a column before a column to its right', () => {
+    // Two images that leave column 0 usable only at the bottom and
+    // column 1 usable only at the top. Column 0 is still read first.
+    const { slots } = computeExclusionSlots({
+      lineWidth: 400,
+      lineCount: 2,
+      linePitch: 30,
+      contentWidth: 60,
+      images: [
+        { x: 30, y: 0, w: 30, h: 200 },
+        { x: 0, y: 100, w: 30, h: 300 },
+      ],
+    });
+
+    expect(slots.map((s) => [s.xPos, s.yStart, s.height])).toEqual([
+      [0, 200, 200],
+      [30, 0, 100],
+    ]);
+  });
+
+  it('matches the slot count of the documented two-image example', () => {
+    // Same geometry and images as docs/{en,ja}/09-advanced.md.
+    const { slots } = computeExclusionSlots({
+      lineWidth: 600,
+      lineCount: 12,
+      linePitch: 30.4,
+      contentWidth: 380,
+      images: [
+        { x: 100, y: 50, w: 120, h: 160 },
+        { x: 50, y: 300, w: 80, h: 100 },
+      ],
+    });
+
+    expect(slots).toHaveLength(20);
   });
 
   it('blockMargin expands image in block direction', () => {
@@ -471,6 +666,28 @@ describe('SpreadExclusionEngine', () => {
 
     expect(rightSlots.length).toBeGreaterThan(5);
     expect(leftSlots.length).toBeGreaterThan(5);
+  });
+
+  it('reports a fully blocked right column as affected', () => {
+    // 400px page, 40px padding → 320px content, 30.4px pitch → 10 columns.
+    // The image covers the rightmost column over the full line width, so that
+    // column drops out entirely and every surviving slot is still full height.
+    const engine = new SpreadExclusionEngine({
+      pageWidth: 400,
+      pagePaddingX: 40,
+      pagePaddingY: 40,
+      lineWidth: 600,
+      linePitch: 30.4,
+    });
+    engine.addImage({ x: 330, y: 40, w: 30, h: 600 });
+    const { rightSlots, leftSlots, rightAffected, leftAffected } = engine.compute();
+
+    expect(rightSlots).toHaveLength(9);
+    expect(rightSlots[0].xPos).toBeCloseTo(30.4, 5);
+    expect(rightSlots.every((s) => s.height === 600)).toBe(true);
+    expect(rightAffected).toBe(true);
+    expect(leftSlots).toHaveLength(10);
+    expect(leftAffected).toBe(false);
   });
 
   it('rightSlotCount splits lineWidths correctly', () => {

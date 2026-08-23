@@ -90,6 +90,37 @@ describe('tokenizeManuscriptSource', () => {
     expect(elapsed).toBeLessThan(500);
   });
 
+  it('tokenizes text dense with unclosed markers in linear time', () => {
+    const half = unclosedMarkerSource(320_000);
+    const full = unclosedMarkerSource(640_000);
+
+    const halfElapsed = fastestRun(() => tokenizeManuscriptSource(half));
+    const fullElapsed = fastestRun(() => tokenizeManuscriptSource(full));
+
+    expect(tokenizeManuscriptSource(full)).toEqual([]);
+    expect(fullElapsed).toBeLessThan(500);
+    // Quadratic scanning would roughly quadruple when the source doubles.
+    expect(fullElapsed).toBeLessThan(halfElapsed * 3 + 5);
+  });
+
+  it('scans a long base run without ruby in linear time', () => {
+    const text = `${'漢'.repeat(2_000)}\n`.repeat(160);
+
+    const elapsed = fastestRun(() => tokenizeManuscriptSource(text));
+
+    expect(tokenizeManuscriptSource(text)).toEqual([]);
+    expect(elapsed).toBeLessThan(500);
+  });
+
+  it('still matches markers on later lines after an unclosed marker', () => {
+    const source = '[未対応\n*強調* [ラベル](https://example.test)';
+    const tokens = tokenizeManuscriptSource(source);
+    const parsed = parseManuscript(source);
+
+    expect(tokens.map((token) => token.kind)).toEqual(['em', 'link']);
+    expect(source.slice(tokens[1].start, tokens[1].end)).toBe('[ラベル](https://example.test)');
+    expect(parsed.text).toBe('[未対応\n強調 ラベル');
+  });
   it('rejects unsafe markdown link targets', () => {
     const source = '[x](javascript:alert(1)) [y](https://example.test)';
     const parsed = parseManuscript(source);
@@ -109,3 +140,20 @@ describe('tokenizeManuscriptSource', () => {
     ]);
   });
 });
+
+/** Builds a source of about `bytes` characters whose markers never close. */
+function unclosedMarkerSource(bytes: number): string {
+  const line = `${'｜漢[い《う〔え'.repeat(8)}*お\n`;
+  return line.repeat(Math.ceil(bytes / line.length));
+}
+
+/** Returns the fastest of a few runs, to keep timing noise out of the ratio. */
+function fastestRun(run: () => unknown): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < 3; i++) {
+    const start = performance.now();
+    run();
+    best = Math.min(best, performance.now() - start);
+  }
+  return best;
+}

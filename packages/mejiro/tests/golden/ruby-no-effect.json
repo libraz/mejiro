@@ -1,5 +1,5 @@
 {
-  "description": "Ruby narrower than base text leaves advances unchanged",
+  "description": "Ruby narrower than its base text leaves advances unchanged",
   "input": {
     "text": "漢字です",
     "advanceWidth": 16,
@@ -16,7 +16,8 @@
   },
   "expected": {
     "breakPoints": [],
-    "hasEffectiveAdvances": true,
-    "effectiveAdvancesUnchanged": [0, 1, 2, 3]
+    "lines": ["漢字です"],
+    "effectiveAdvances": [16, 16, 16, 16],
+    "comment": "Ruby is 3 x 8px against a 2 x 16px base, so nothing has to grow"
   }
 }
