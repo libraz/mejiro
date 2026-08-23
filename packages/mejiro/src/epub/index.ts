@@ -1,8 +1,12 @@
+export type { EditableEpubSelection } from './clone.js';
+export { clampEditableEpubSelection, cloneEditableEpubBook } from './clone.js';
 export type {
   AddImageInput,
   AddImageInputBytes,
+  AddImageInputCommon,
   AddImageInputUrl,
   AssetResolver,
+  AssetResolverAsset,
   AssetResolverRequest,
   EpubExportOptions,
 } from './editor.js';
@@ -31,6 +35,7 @@ export type {
   ManuscriptChapterInput,
   ManuscriptDialect,
   ParseManuscriptOptions,
+  ProjectChapter,
 } from './project.js';
 export { EpubProject, parseManuscript, parseManuscriptRuby } from './project.js';
 export { extractRubyContent } from './ruby-extractor.js';

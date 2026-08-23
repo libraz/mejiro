@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  insertManuscriptParagraph,
   manuscriptParagraphs,
   manuscriptToEpubBook,
   parseInlineImageMarker,
@@ -61,6 +62,57 @@ describe('manuscriptToEpubBook', () => {
       '段落1',
       '段落2',
     ]);
+  });
+
+  it('preserves ideographic spaces that indent paragraphs and divide scenes', () => {
+    expect(manuscriptParagraphs('　一段落目です。\n\n　\n\n　二段落目です。')).toEqual([
+      '　一段落目です。',
+      '　',
+      '　二段落目です。',
+    ]);
+    expect(manuscriptParagraphs('  余白  \n\n　字下げ  ')).toEqual(['余白', '　字下げ']);
+  });
+
+  it('keeps indented paragraphs in the synthesized preview book', () => {
+    const book = manuscriptToEpubBook([
+      { title: 'T', body: '　一段落目です。\n\n　\n\n　二段落目です。' },
+    ]);
+
+    expect(book.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual([
+      'T',
+      '　一段落目です。',
+      '　',
+      '　二段落目です。',
+    ]);
+  });
+
+  it('inserts a block at the requested index of the shared paragraph space', () => {
+    const cases = [
+      '段落1\n\n段落2',
+      '\n\n段落1\n\n段落2',
+      '段落1\n\n\n\n段落2\n\n',
+      '\n段落1\n\n段落2',
+    ];
+
+    for (const body of cases) {
+      for (let index = 0; index <= 2; index++) {
+        const inserted = insertManuscriptParagraph(body, index, 'BLOCK');
+        expect(manuscriptParagraphs(inserted).indexOf('BLOCK')).toBe(index);
+        expect(manuscriptParagraphs(inserted)).toHaveLength(3);
+      }
+    }
+  });
+
+  it('clamps insertion indices and replaces a body with no paragraphs at all', () => {
+    expect(manuscriptParagraphs(insertManuscriptParagraph('段落1', 9, 'BLOCK'))).toEqual([
+      '段落1',
+      'BLOCK',
+    ]);
+    expect(manuscriptParagraphs(insertManuscriptParagraph('段落1', -3, 'BLOCK'))).toEqual([
+      'BLOCK',
+      '段落1',
+    ]);
+    expect(insertManuscriptParagraph('\n \n', 0, 'BLOCK')).toBe('BLOCK');
   });
 
   it('honors the book-level title and author options', () => {

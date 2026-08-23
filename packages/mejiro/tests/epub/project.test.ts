@@ -10,6 +10,8 @@ import {
   parseManuscript,
   parseManuscriptRuby,
 } from '../../src/epub/index.js';
+import { manuscriptParagraphs } from '../../src/epub/manuscript-source.js';
+import { stripStylesheetLinks } from '../../src/epub/xml-utils.js';
 
 beforeAll(() => {
   vi.stubGlobal(
@@ -17,6 +19,21 @@ beforeAll(() => {
     vi.fn(async () => new Response('', { status: 200 })),
   );
 });
+
+/**
+ * Reports whether a string carries a character XML 1.0 forbids: a C0 control
+ * other than tab / line feed / carriage return, a lone surrogate, or one of the
+ * two BMP non-characters.
+ */
+function hasXmlIllegalChar(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return true;
+    if (code >= 0xd800 && code <= 0xdfff) return true;
+    if (code === 0xfffe || code === 0xffff) return true;
+  }
+  return false;
+}
 
 describe('EpubProject', () => {
   it('parses emphasis, tcy, em, strong, links, and footnote refs under the mejiro dialect', () => {
@@ -216,6 +233,26 @@ describe('EpubProject', () => {
     expect(bodyParagraphs).toEqual(['本文', '一行目です。\n続きです。', '次の段落です。']);
   });
 
+  it('exports paragraph indentation and scene dividers written with ideographic spaces', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: {
+        title: '字下げ',
+        identifier: 'urn:uuid:ideographic-space-book',
+        modified: new Date('2026-05-20T00:00:00Z'),
+      },
+      includeTitlePage: false,
+      chapters: [{ title: '一', body: '　一段落目です。\n\n　\n\n　二段落目です。' }],
+    });
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const xhtml = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+
+    expect(xhtml).toContain('<p>　一段落目です。</p>');
+    expect(xhtml).toContain('<p>　</p>');
+    expect(xhtml).toContain('<p>　二段落目です。</p>');
+    expect(xhtml.match(/<p>/gu) ?? []).toHaveLength(3);
+  });
+
   it('can place the book title at the beginning of the first chapter', async () => {
     const project = EpubProject.fromManuscript({
       metadata: {
@@ -265,6 +302,37 @@ describe('EpubProject', () => {
     expect(project.chapters.map((c) => c.title)).toEqual(['三', '一']);
   });
 
+  it('leaves the chapter list untouched when reorderChapters gets an out-of-range from', () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'reorder bounds', identifier: 'urn:uuid:reorder-bounds' },
+      chapters: [
+        { title: '一', body: '本文1' },
+        { title: '二', body: '本文2' },
+      ],
+    });
+
+    expect(() => project.reorderChapters(5, 0)).not.toThrow();
+    expect(() => project.reorderChapters(-1, 1)).not.toThrow();
+    expect(project.chapters.map((chapter) => chapter.title)).toEqual(['一', '二']);
+  });
+
+  it('clamps an out-of-range to in reorderChapters', () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'reorder clamp', identifier: 'urn:uuid:reorder-clamp' },
+      chapters: [
+        { title: '一', body: '本文1' },
+        { title: '二', body: '本文2' },
+        { title: '三', body: '本文3' },
+      ],
+    });
+
+    project.reorderChapters(0, 99);
+    expect(project.chapters.map((chapter) => chapter.title)).toEqual(['二', '三', '一']);
+
+    project.reorderChapters(2, -5);
+    expect(project.chapters.map((chapter) => chapter.title)).toEqual(['一', '二', '三']);
+  });
+
   it('removes assets that were referenced only by a deleted chapter', () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: 'asset cleanup', identifier: 'urn:uuid:asset-cleanup' },
@@ -293,6 +361,55 @@ describe('EpubProject', () => {
       'OPS/Images/shared-2.png',
       'OPS/Data/kept.bin',
     ]);
+  });
+
+  it('removes assets whose marker a chapter update deleted', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: '差し替え', identifier: 'urn:uuid:update-chapter-cleanup' },
+      cover: { href: 'OPS/Images/cover.png', data: new Uint8Array([9]) },
+      chapters: [
+        { title: '一', body: '本文1' },
+        { title: '二', body: '本文2' },
+      ],
+    });
+    project.addInlineImage(0, 1, { href: 'OPS/Images/dropped.png', data: new Uint8Array([1]) });
+    project.addInlineImage(0, 2, { href: 'OPS/Images/kept.png', data: new Uint8Array([2]) });
+    project.addInlineImage(1, 1, { href: 'OPS/Images/shared.png', data: new Uint8Array([3]) });
+    project.addAsset({ href: 'OPS/Data/manual.bin', data: new Uint8Array([4]) });
+    const keptMarker = manuscriptParagraphs(project.chapters[0].body)[2];
+    const sharedMarker = manuscriptParagraphs(project.chapters[1].body)[1];
+
+    project.updateChapter(0, { body: `改稿\n\n${keptMarker}\n\n${sharedMarker}` });
+
+    expect(project.assets.map((asset) => asset.href)).toEqual([
+      'OPS/Images/cover.png',
+      'OPS/Images/kept.png',
+      'OPS/Images/shared.png',
+      'OPS/Data/manual.bin',
+    ]);
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
+
+    expect(zip.file('OPS/Images/dropped.png')).toBeNull();
+    expect(opf).not.toContain('dropped.png');
+    expect(opf).toContain('href="Images/kept.png"');
+    expect(opf).toContain('href="Images/shared.png"');
+    expect(opf).toContain('href="Data/manual.bin"');
+    expect(opf).toContain('href="Images/cover.png"');
+  });
+
+  it('keeps chapter assets when an update only changes the title', () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: '改題', identifier: 'urn:uuid:update-chapter-title-only' },
+      chapters: [{ title: '一', body: '本文' }],
+    });
+    project.addInlineImage(0, 1, { href: 'OPS/Images/figure.png', data: new Uint8Array([1]) });
+
+    project.updateChapter(0, { title: '一改' });
+
+    expect(project.chapters[0].title).toBe('一改');
+    expect(project.assets.map((asset) => asset.href)).toEqual(['OPS/Images/figure.png']);
   });
 
   it('normalizes chapter and asset IDs used by OPF manifest and spine', async () => {
@@ -435,6 +552,27 @@ describe('EpubProject', () => {
     expect(Array.from(image ?? [])).toEqual([1, 2, 3]);
   });
 
+  it('counts inline image paragraph indices in the exported paragraph space', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: '前置き空行', identifier: 'urn:uuid:inline-image-index-book' },
+      chapters: [{ title: '一', body: '\n\n段落1\n\n段落2' }],
+    });
+
+    project.addInlineImage(0, 1, {
+      href: 'OPS/Images/figure.png',
+      data: new Uint8Array([1]),
+      alt: '挿絵',
+    });
+
+    expect(manuscriptParagraphs(project.chapters[0].body)[1]).toMatch(/^\[\[mejiro-image:/u);
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const xhtml = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+    expect(xhtml).toMatch(
+      /<p>段落1<\/p>\s*<figure><img src="\.\.\/Images\/figure\.png"[^>]*\/><\/figure>\s*<p>段落2<\/p>/u,
+    );
+  });
+
   it('escapes inline image markers so special filename and alt characters survive export', async () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: '特殊画像', identifier: 'urn:uuid:inline-image-special-book' },
@@ -524,6 +662,64 @@ describe('EpubProject', () => {
     expect(opf).toContain('href="Images/figure-3.png"');
     expect(xhtml).toContain('src="../Images/figure.png" alt="一枚目"');
     expect(xhtml).toContain('src="../Images/figure-2.png" alt="二枚目"');
+  });
+
+  it('moves asset hrefs off generated package paths so every ZIP entry is written once', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: '予約パス', identifier: 'urn:uuid:reserved-path-book' },
+      chapters: [{ title: '一', body: '段落' }],
+    });
+
+    const opfAsset = project.addAsset({ href: 'OPS/package.opf', data: new Uint8Array([1]) });
+    const mimetypeAsset = project.addAsset({ href: 'mimetype', data: new Uint8Array([2]) });
+    const containerAsset = project.addAsset({
+      href: 'META-INF/container.xml',
+      data: new Uint8Array([3]),
+    });
+    const chapterAsset = project.addAsset({
+      href: 'OPS/Text/chapter-001.xhtml',
+      data: new Uint8Array([4]),
+    });
+    project.setCover({ href: 'OPS/nav.xhtml', data: new Uint8Array([5]) });
+    project.addInlineImage(0, 1, { href: 'OPS/Styles/style.css', data: new Uint8Array([6]) });
+
+    expect(opfAsset.href).toBe('OPS/package-2.opf');
+    expect(mimetypeAsset.href).toBe('mimetype-2');
+    expect(containerAsset.href).toBe('META-INF/container-2.xml');
+    expect(chapterAsset.href).toBe('OPS/Text/chapter-001-2.xhtml');
+    expect(project.assets.map((asset) => asset.href)).toEqual([
+      'OPS/package-2.opf',
+      'mimetype-2',
+      'META-INF/container-2.xml',
+      'OPS/Text/chapter-001-2.xhtml',
+      'OPS/nav-2.xhtml',
+      'OPS/Styles/style-2.css',
+    ]);
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
+    const nav = (await zip.file('OPS/nav.xhtml')?.async('string')) ?? '';
+    const css = (await zip.file('OPS/Styles/style.css')?.async('string')) ?? '';
+    const chapter = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+
+    expect(await zip.file('mimetype')?.async('string')).toBe('application/epub+zip');
+    expect(await zip.file('META-INF/container.xml')?.async('string')).toContain('<rootfiles>');
+    expect(opf).toContain('<package');
+    expect(nav).toContain('epub:type="toc"');
+    expect(css).toContain('writing-mode: vertical-rl');
+    expect(chapter).toContain('<figure>');
+    expect(Array.from((await zip.file('OPS/package-2.opf')?.async('uint8array')) ?? [])).toEqual([
+      1,
+    ]);
+    expect(Array.from((await zip.file('OPS/nav-2.xhtml')?.async('uint8array')) ?? [])).toEqual([5]);
+    expect(
+      Array.from((await zip.file('OPS/Styles/style-2.css')?.async('uint8array')) ?? []),
+    ).toEqual([6]);
+
+    const manifestHrefs = Array.from(opf.matchAll(/<item\b[^>]*\bhref="([^"]*)"/gu)).map(
+      (match) => match[1],
+    );
+    expect(new Set(manifestHrefs).size).toBe(manifestHrefs.length);
   });
 
   it('rejects invalid project asset hrefs before exporting broken ZIP paths', () => {
@@ -702,6 +898,79 @@ describe('EpubProject', () => {
     expect(css).toContain('.title-page h1');
     expect(css).toContain('writing-mode: vertical-rl');
     expect(Array.from(cover ?? [])).toEqual([1, 2, 3]);
+  });
+
+  it('drops XML-illegal control characters from every generated document', async () => {
+    const bel = String.fromCharCode(0x07);
+    const verticalTab = String.fromCharCode(0x0b);
+    const formFeed = String.fromCharCode(0x0c);
+    const project = EpubProject.fromManuscript({
+      metadata: {
+        title: `題${bel}名`,
+        subtitle: `副${verticalTab}題`,
+        author: `作${formFeed}者`,
+        publisher: `版${bel}元`,
+        subjects: [`分${verticalTab}類`],
+        identifier: 'urn:uuid:control-char-book',
+        modified: new Date('2026-05-20T00:00:00Z'),
+      },
+      chapters: [{ title: `第${bel}一話`, body: `本${verticalTab}文${formFeed}です。` }],
+    });
+    project.addInlineImage(0, 1, {
+      href: 'OPS/Images/figure.png',
+      data: new Uint8Array([1]),
+      alt: `挿${bel}絵`,
+    });
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const documents = [
+      'META-INF/container.xml',
+      'OPS/package.opf',
+      'OPS/nav.xhtml',
+      'OPS/Text/titlepage.xhtml',
+      'OPS/Text/chapter-001.xhtml',
+    ];
+    for (const path of documents) {
+      const xml = (await zip.file(path)?.async('string')) ?? '';
+      expect(xml).not.toBe('');
+      expect(hasXmlIllegalChar(xml)).toBe(false);
+      const reparsed = new DOMParser().parseFromString(
+        stripStylesheetLinks(xml),
+        'application/xml',
+      );
+      expect(reparsed.getElementsByTagName('parsererror')).toHaveLength(0);
+    }
+
+    const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
+    const chapter = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+    expect(opf).toContain('<dc:title id="title">題名</dc:title>');
+    expect(opf).toContain('<dc:creator id="creator-1">作者</dc:creator>');
+    expect(chapter).toContain('<h1>第一話</h1>');
+    expect(chapter).toContain('<p>本文です。</p>');
+    expect(chapter).toContain('alt="挿絵"');
+  });
+
+  it('encodes attribute white space that XML normalization would otherwise flatten', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'Attribute white space', identifier: 'urn:uuid:attribute-space-book' },
+      chapters: [{ title: '一', body: '段落' }],
+    });
+    project.addInlineImage(0, 1, {
+      href: 'OPS/Images/figure.png',
+      data: new Uint8Array([1]),
+      alt: '一行目\n二行目',
+    });
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const chapter = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+
+    expect(chapter).toContain('alt="一行目&#10;二行目"');
+    const reparsed = new DOMParser().parseFromString(
+      stripStylesheetLinks(chapter),
+      'application/xml',
+    );
+    expect(reparsed.getElementsByTagName('parsererror')).toHaveLength(0);
+    expect(reparsed.getElementsByTagName('img')[0]?.getAttribute('alt')).toBe('一行目\n二行目');
   });
 
   describe('assetResolver', () => {

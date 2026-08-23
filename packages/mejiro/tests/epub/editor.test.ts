@@ -3,7 +3,13 @@
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { addEpubChapterImage, EditableEpub, parseEpub } from '../../src/epub/index.js';
+import { MejiroBook } from '../../src/book/mejiro-book.js';
+import {
+  type AnnotatedParagraph,
+  addEpubChapterImage,
+  EditableEpub,
+  parseEpub,
+} from '../../src/epub/index.js';
 
 async function makeEpub(files: Record<string, string | Uint8Array>): Promise<ArrayBuffer> {
   const zip = new JSZip();
@@ -1561,6 +1567,362 @@ describe('EditableEpub', () => {
       expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
       expect(editor.chapters[0].imageAssets.has('empty.png')).toBe(false);
       expect(editor.history).toMatchObject({ depth: 0, redoDepth: 1, canRedo: true });
+    });
+  });
+
+  describe('exported chapter XHTML', () => {
+    it('writes exactly one XML declaration at the start of an edited chapter', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>章</title></head><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      editor.updateParagraph(0, 0, { text: '編集済み' });
+      const out = await editor.export();
+      const zip = await JSZip.loadAsync(out);
+      const chapter = (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '';
+
+      expect(chapter.match(/<\?xml/gu) ?? []).toHaveLength(1);
+      expect(chapter.indexOf('<?xml')).toBe(0);
+
+      const reparsed = new DOMParser().parseFromString(chapter, 'application/xml');
+      expect(reparsed.getElementsByTagName('parsererror')).toHaveLength(0);
+      expect(reparsed.getElementsByTagName('p')[0]?.textContent).toBe('編集済み');
+
+      // The exported archive must survive a full re-import.
+      const reloaded = await EditableEpub.load(out);
+      expect(reloaded.chapters[0].paragraphs[0].text).toBe('編集済み');
+    });
+
+    it('writes exactly one XML declaration when the chapter shell is rebuilt from scratch', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+
+      const editor = await EditableEpub.load(data);
+      // Without a reusable source document the serializer builds the chapter
+      // from its own skeleton, which carries its own declaration.
+      editor.chapters[0].originalXhtml = '';
+      editor.updateParagraph(0, 0, { text: '骨組み' });
+      const out = await editor.export();
+      const zip = await JSZip.loadAsync(out);
+      const chapter = (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '';
+
+      expect(chapter.match(/<\?xml/gu) ?? []).toHaveLength(1);
+      expect(chapter.indexOf('<?xml')).toBe(0);
+      const reparsed = new DOMParser().parseFromString(chapter, 'application/xml');
+      expect(reparsed.getElementsByTagName('parsererror')).toHaveLength(0);
+    });
+  });
+
+  describe('inline annotation anchoring', () => {
+    async function loadRubyChapter(): Promise<EditableEpub> {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>むかしむかし<ruby>漢字<rt>かんじ</rt></ruby>がありました</p></body></html>`,
+      });
+      return EditableEpub.load(data);
+    }
+
+    function annotationBases(paragraph: AnnotatedParagraph): string[] {
+      const chars = [...paragraph.text];
+      return paragraph.inlineAnnotations.map((ann) =>
+        chars.slice(ann.startIndex, ann.endIndex).join(''),
+      );
+    }
+
+    function expectAnnotationsInRange(paragraph: AnnotatedParagraph): void {
+      const length = [...paragraph.text].length;
+      for (const ann of paragraph.inlineAnnotations) {
+        expect(ann.startIndex).toBeGreaterThanOrEqual(0);
+        expect(ann.endIndex).toBeGreaterThan(ann.startIndex);
+        expect(ann.endIndex).toBeLessThanOrEqual(length);
+      }
+    }
+
+    it('keeps annotations over the same base text when the prefix is shortened', async () => {
+      const editor = await loadRubyChapter();
+      const before = annotationBases(editor.chapters[0].paragraphs[0]);
+      expect(before).toEqual(['漢字']);
+
+      editor.updateParagraph(0, 0, { text: 'むかし漢字がありました' });
+
+      const after = editor.chapters[0].paragraphs[0];
+      expectAnnotationsInRange(after);
+      expect(annotationBases(after)).toEqual(before);
+
+      const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
+      book.setPageSize({ pageWidth: 400, lineWidth: 200 });
+      await expect(book.layoutChapter({ paragraphs: [after] })).resolves.toBeDefined();
+    });
+
+    it('keeps annotations over the same base text when the suffix is shortened', async () => {
+      const editor = await loadRubyChapter();
+
+      editor.updateParagraph(0, 0, { text: 'むかしむかし漢字が' });
+
+      const after = editor.chapters[0].paragraphs[0];
+      expectAnnotationsInRange(after);
+      expect(annotationBases(after)).toEqual(['漢字']);
+    });
+
+    it('drops annotations whose base characters were edited away', async () => {
+      const editor = await loadRubyChapter();
+
+      editor.updateParagraph(0, 0, { text: 'むかしむかしがありました' });
+
+      const after = editor.chapters[0].paragraphs[0];
+      expect(after.inlineAnnotations).toEqual([]);
+      expectAnnotationsInRange(after);
+
+      const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
+      book.setPageSize({ pageWidth: 400, lineWidth: 200 });
+      await expect(book.layoutChapter({ paragraphs: [after] })).resolves.toBeDefined();
+    });
+
+    it('exports a text-only update without corrupting the ruby base', async () => {
+      const editor = await loadRubyChapter();
+      editor.updateParagraph(0, 0, { text: 'むかし漢字がありました' });
+
+      const zip = await JSZip.loadAsync(await editor.export());
+      const chapter = await zip.file('OPS/Text/chapter.xhtml')?.async('string');
+
+      expect(chapter).toContain('<p>むかし<ruby>漢字<rt>かんじ</rt></ruby>がありました</p>');
+    });
+
+    it('drops explicitly supplied annotations that fall outside the paragraph text', async () => {
+      const editor = await loadRubyChapter();
+
+      editor.setInlineAnnotations(0, 0, [
+        { kind: 'emphasis', startIndex: 0, endIndex: 2, style: 'dot' },
+        { kind: 'ruby', startIndex: 90, endIndex: 99, rubyText: 'そと', type: 'group' },
+        { kind: 'tcy', startIndex: 3, endIndex: 3 },
+      ]);
+
+      const after = editor.chapters[0].paragraphs[0];
+      expect(after.inlineAnnotations).toEqual([
+        { kind: 'emphasis', startIndex: 0, endIndex: 2, style: 'dot' },
+      ]);
+      expectAnnotationsInRange(after);
+    });
+
+    it('drops out-of-range annotations supplied alongside a text update', async () => {
+      const editor = await loadRubyChapter();
+
+      editor.updateParagraph(0, 0, {
+        text: '短い',
+        inlineAnnotations: [
+          { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'みじか', type: 'group' },
+          { kind: 'ruby', startIndex: 5, endIndex: 8, rubyText: 'なし', type: 'group' },
+        ],
+      });
+
+      const after = editor.chapters[0].paragraphs[0];
+      expect(after.inlineAnnotations).toHaveLength(1);
+      expectAnnotationsInRange(after);
+    });
+  });
+
+  describe('import parity with parseEpub', () => {
+    async function makeMixedSpineEpub(): Promise<ArrayBuffer> {
+      return makeEpub({
+        mimetype: 'application/epub+zip',
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>取り込み</dc:title>
+    <dc:creator>作者</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml" properties="cover-image" />
+    <item id="css" href="Styles/style.css" media-type="text/css" />
+    <item id="skip" href="Text/skip.xhtml" media-type="application/xhtml+xml" />
+    <item id="missing" href="Text/missing.xhtml" media-type="application/xhtml+xml" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+    <item id="c2" href="Text/ch2.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine page-progression-direction="rtl">
+    <itemref idref="nav" />
+    <itemref idref="cover" />
+    <itemref idref="css" />
+    <itemref idref="skip" linear="no" />
+    <itemref idref="missing" />
+    <itemref idref="c1" />
+    <itemref idref="c2" />
+  </spine>
+</package>`,
+        'OPS/nav.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc"><ol>
+      <li><a href="Text/ch1.xhtml">第一章</a></li>
+      <li><a href="Text/ch2.xhtml">目次側の題</a></li>
+    </ol></nav>
+  </body>
+</html>`,
+        'OPS/cover.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>表紙</p></body></html>`,
+        'OPS/Styles/style.css': 'html { writing-mode: vertical-rl; }',
+        'OPS/Text/skip.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>付録</p></body></html>`,
+        // OPS/Text/missing.xhtml is intentionally absent from the archive.
+        'OPS/Text/ch1.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文一</p></body></html>`,
+        'OPS/Text/ch2.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第二章</h1><p>本文二</p></body></html>`,
+      });
+    }
+
+    it('selects the same chapters, titles, and page progression as the reader', async () => {
+      const data = await makeMixedSpineEpub();
+
+      const reader = await parseEpub(data);
+      const editor = await EditableEpub.load(data);
+
+      expect(editor.chapters.map((chapter) => chapter.href)).toEqual([
+        'OPS/Text/ch1.xhtml',
+        'OPS/Text/ch2.xhtml',
+      ]);
+      expect(editor.chapters.map((chapter) => chapter.title)).toEqual(
+        reader.chapters.map((chapter) => chapter.title),
+      );
+      expect(editor.chapters.map((chapter) => chapter.title)).toEqual(['第一章', '第二章']);
+      expect(
+        editor.chapters.map((chapter) => chapter.paragraphs.map((paragraph) => paragraph.text)),
+      ).toEqual(reader.chapters.map((chapter) => chapter.paragraphs.map((p) => p.text)));
+      expect(editor.book.pageProgressionDirection).toBe(reader.pageProgressionDirection);
+      expect(editor.book.pageProgressionDirection).toBe('rtl');
+      expect(editor.title).toBe(reader.title);
+      expect(editor.author).toBe(reader.author);
+    });
+
+    it('keeps skipped spine documents in the package so export round-trips them', async () => {
+      const data = await makeMixedSpineEpub();
+      const editor = await EditableEpub.load(data);
+      editor.updateParagraph(0, 0, { text: '編集済み' });
+
+      const zip = await JSZip.loadAsync(await editor.export());
+
+      for (const path of [
+        'OPS/nav.xhtml',
+        'OPS/cover.xhtml',
+        'OPS/Styles/style.css',
+        'OPS/Text/skip.xhtml',
+      ]) {
+        expect(zip.file(path)).not.toBeNull();
+      }
+      await expect(zip.file('OPS/Text/ch1.xhtml')?.async('string')).resolves.toContain('編集済み');
+    });
+  });
+
+  describe('export snapshot', () => {
+    const twoChapterOpf = `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>スナップショット</dc:title>
+  </metadata>
+  <manifest>
+    <item id="c1" href="Text/chapter-1.xhtml" media-type="application/xhtml+xml" />
+    <item id="c2" href="Text/chapter-2.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine>
+    <itemref idref="c1" />
+    <itemref idref="c2" />
+  </spine>
+</package>`;
+
+    async function loadTwoChapterEditor(): Promise<EditableEpub> {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': twoChapterOpf,
+        'OPS/Text/chapter-1.xhtml': `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>第一章</p></body></html>`,
+        'OPS/Text/chapter-2.xhtml': `<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>第二章</p></body></html>`,
+      });
+      return EditableEpub.load(data);
+    }
+
+    async function readPackage(out: ArrayBuffer): Promise<Record<string, string | undefined>> {
+      const zip = await JSZip.loadAsync(out);
+      return {
+        first: await zip.file('OPS/Text/chapter-1.xhtml')?.async('string'),
+        second: await zip.file('OPS/Text/chapter-2.xhtml')?.async('string'),
+        opf: await zip.file('OPS/package.opf')?.async('string'),
+      };
+    }
+
+    it('ignores edits made while asset resolution is still pending', async () => {
+      const editor = await loadTwoChapterEditor();
+      editor.addImage(0, { filename: 'remote.png', url: 'https://example.com/remote.png' });
+
+      // Reference output for the state the export is about to start from.
+      const expected = await readPackage(
+        await editor.export({ assetResolver: () => new Uint8Array([1, 2, 3]) }),
+      );
+
+      let release = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const exporting = editor.export({
+        async assetResolver() {
+          await gate;
+          return new Uint8Array([1, 2, 3]);
+        },
+      });
+
+      // The export is now parked on the asset: chapter 1 is already serialized
+      // and chapter 2 has not been reached yet. Edit both.
+      editor.updateParagraph(0, 0, { text: '編集後一' });
+      editor.updateParagraph(1, 0, { text: '編集後二' });
+      release();
+
+      await expect(readPackage(await exporting)).resolves.toEqual(expected);
+
+      // The edits are not lost — they belong to the next export.
+      expect(editor.chapters[0].paragraphs[0].text).toBe('編集後一');
+      const later = await readPackage(
+        await editor.export({ assetResolver: () => new Uint8Array([1, 2, 3]) }),
+      );
+      expect(later.first).toContain('編集後一');
+      expect(later.second).toContain('編集後二');
+    });
+
+    it('keeps mid-export block insertions and deletions out of the running export', async () => {
+      const editor = await loadTwoChapterEditor();
+      editor.addImage(1, { filename: 'remote.png', url: 'https://example.com/remote.png' });
+
+      const expected = await readPackage(
+        await editor.export({ assetResolver: () => new Uint8Array([9]) }),
+      );
+
+      let release = (): void => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const exporting = editor.export({
+        async assetResolver() {
+          await gate;
+          return new Uint8Array([9]);
+        },
+      });
+
+      editor.insertParagraph(0, 0, { text: '挿入' });
+      editor.deleteBlock(1, editor.chapters[1].blocks[0].id);
+      release();
+
+      await expect(readPackage(await exporting)).resolves.toEqual(expected);
     });
   });
 });

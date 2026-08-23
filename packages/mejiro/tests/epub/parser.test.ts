@@ -107,6 +107,92 @@ describe('parseEpub', () => {
     expect(book.chapters[0].title).toBe('第一話');
   });
 
+  it('keeps the outer toc title for a chapter whose nav entry has nested sections', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Nested TOC</dc:title>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine>
+    <itemref idref="c1" />
+  </spine>
+</package>`,
+      'OPS/nav.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol>
+        <li><a href="#top">目次</a></li>
+        <li>
+          <a href="Text/ch1.xhtml">第一章</a>
+          <ol>
+            <li><a href="Text/ch1.xhtml#s1">第一節</a></li>
+            <li><a href="Text/ch1.xhtml#s2">第二節</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+    <nav epub:type="landmarks">
+      <ol><li><a href="Text/ch1.xhtml">Begin Reading</a></li></ol>
+    </nav>
+  </body>
+</html>`,
+      'OPS/Text/ch1.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+    });
+
+    const book = await parseEpub(data);
+
+    expect(book.chapters[0].title).toBe('第一章');
+  });
+
+  it('ignores landmarks navigation when it is the only entry for a chapter', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': `<?xml version="1.0"?>
+<package>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Landmarks Only</dc:title>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+    <item id="c2" href="Text/ch2.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine>
+    <itemref idref="c1" />
+    <itemref idref="c2" />
+  </spine>
+</package>`,
+      'OPS/nav.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc">
+      <ol><li><a href="Text/ch2.xhtml">第二章</a></li></ol>
+    </nav>
+    <nav epub:type="landmarks">
+      <ol><li><a href="Text/ch1.xhtml">Begin Reading</a></li></ol>
+    </nav>
+  </body>
+</html>`,
+      'OPS/Text/ch1.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      'OPS/Text/ch2.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>続き</p></body></html>`,
+    });
+
+    const book = await parseEpub(data);
+
+    expect(book.chapters[0].title).toBeUndefined();
+    expect(book.chapters[1].title).toBe('第二章');
+  });
+
   it('falls back to nav titles when auxiliary chapter title parsing fails', async () => {
     const OriginalDOMParser = globalThis.DOMParser;
     class FailingTitleDOMParser extends OriginalDOMParser {

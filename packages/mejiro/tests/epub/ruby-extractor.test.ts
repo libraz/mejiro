@@ -3,6 +3,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { extractRubyContent } from '../../src/epub/ruby-extractor.js';
+import { renderEpubStatic } from '../../src/render/static.js';
+import { toCodepoints } from '../../src/text.js';
+
+/** Kana plus a combining voiced sound mark: the decomposed form of `が`. */
+const DECOMPOSED_GA = String.fromCodePoint(0x304b, 0x3099);
+/** Decomposed form of `がぎ`. */
+const DECOMPOSED_KANA = `${DECOMPOSED_GA}${String.fromCodePoint(0x304d, 0x3099)}`;
 
 function wrapXhtml(body: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -304,6 +311,154 @@ describe('extractRubyContent', () => {
     expect(result[0].text).toBe('吾輩は猫である\n　次行');
   });
 
+  it('keeps annotation spans identical whether or not the source is line wrapped', () => {
+    const inline =
+      'これは<ruby>漢字<rt>かんじ</rt></ruby>と<em class="mejiro-emphasis" data-style="dot">傍点</em>と<span class="mejiro-tcy">12</span>年と<a href="https://example.test">参照</a>です';
+    const wrapped =
+      'これは\n  <ruby>漢字<rt>かんじ</rt></ruby>と\n  <em class="mejiro-emphasis" data-style="dot">傍点</em>と<span class="mejiro-tcy">12</span>年と\n  <a href="https://example.test">参照</a>です';
+
+    const flat = extractRubyContent(wrapXhtml(`<p>${inline}</p>`))[0];
+    const folded = extractRubyContent(wrapXhtml(`<p>${wrapped}</p>`))[0];
+
+    expect(folded.text).toBe(flat.text);
+    expect(folded.inlineAnnotations).toEqual(flat.inlineAnnotations);
+
+    const chars = [...folded.text];
+    const covered = (kind: string): string[] =>
+      folded.inlineAnnotations
+        .filter((ann) => ann.kind === kind)
+        .map((ann) => chars.slice(ann.startIndex, ann.endIndex).join(''));
+    expect(covered('ruby')).toEqual(['漢字']);
+    expect(covered('emphasis')).toEqual(['傍点']);
+    expect(covered('tcy')).toEqual(['12']);
+    expect(covered('link')).toEqual(['参照']);
+  });
+
+  it('keeps annotation spans aligned across astral and decomposed characters', () => {
+    const astral = '\u{20B9F}'; // Han character outside the BMP (surrogate pair)
+    const decomposed = '\u304B\u3099'; // kana plus combining voiced sound mark (NFD)
+    const xhtml = wrapXhtml(
+      `<p>${astral}\n  ${astral}<ruby>${decomposed}<rt>が</rt></ruby>る` +
+        `<a href="https://example.test">${astral}</a>る</p>`,
+    );
+    const result = extractRubyContent(xhtml);
+
+    const composed = decomposed.normalize('NFC');
+    expect(result[0].text).toBe(`${astral}${astral}${composed}る${astral}る`);
+    const chars = [...result[0].text];
+    const spans = result[0].inlineAnnotations.map((ann) =>
+      chars.slice(ann.startIndex, ann.endIndex).join(''),
+    );
+    expect(spans).toEqual([composed, astral]);
+  });
+
+  it('moves jukugo split points when a folded space is removed from the base', () => {
+    const xhtml = wrapXhtml('<p><ruby>東<rt>とう</rt>京\n都<rt>きょうと</rt></ruby>に行く</p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('東京都に行く');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', type: 'mono' },
+      { kind: 'ruby', startIndex: 1, endIndex: 3, rubyText: 'きょうと', type: 'group' },
+      {
+        kind: 'ruby',
+        startIndex: 0,
+        endIndex: 3,
+        rubyText: 'とうきょうと',
+        type: 'jukugo',
+        jukugoSplitPoints: [1],
+      },
+    ]);
+  });
+
+  it('drops annotations whose characters are all removed', () => {
+    const xhtml = wrapXhtml('<p>本文<a href="https://example.test"> </a></p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('本文');
+    expect(result[0].inlineAnnotations).toEqual([]);
+  });
+
+  it('returns NFC text with annotation offsets in NFC code points', () => {
+    const nfd = DECOMPOSED_KANA;
+    const result = extractRubyContent(
+      wrapXhtml(`<p>${nfd}<ruby>漢<rt>かん</rt></ruby>${nfd}<em>字</em></p>`),
+    );
+
+    const { text, inlineAnnotations } = result[0];
+    expect(text).toBe('がぎ漢がぎ字');
+    expect(text).toBe(text.normalize('NFC'));
+
+    const chars = [...text];
+    for (const ann of inlineAnnotations) {
+      expect(ann.startIndex).toBeGreaterThanOrEqual(0);
+      expect(ann.endIndex).toBeLessThanOrEqual(chars.length);
+      expect(ann.endIndex).toBeGreaterThan(ann.startIndex);
+    }
+    const covered = (kind: string): string[] =>
+      inlineAnnotations
+        .filter((ann) => ann.kind === kind)
+        .map((ann) => chars.slice(ann.startIndex, ann.endIndex).join(''));
+    expect(covered('ruby')).toEqual(['漢']);
+    expect(covered('em')).toEqual(['字']);
+  });
+
+  it('keeps annotations covering a decomposed character after composition', () => {
+    const result = extractRubyContent(
+      wrapXhtml(`<p><ruby>${DECOMPOSED_GA}<rt>が</rt></ruby>行</p>`),
+    );
+
+    expect(result[0].text).toBe('が行');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'が', type: 'mono' },
+    ]);
+  });
+
+  it('splits text identically for static rendering and layout input', () => {
+    const nfd = DECOMPOSED_KANA;
+    const paragraph = extractRubyContent(
+      wrapXhtml(`<p>${nfd}<ruby>漢<rt>かん</rt></ruby>${nfd}</p>`),
+    )[0];
+
+    expect(toCodepoints(paragraph.text)).toHaveLength([...paragraph.text].length);
+    expect(renderEpubStatic({ paragraphs: [paragraph] })).toContain('<ruby>漢<rt>かん</rt></ruby>');
+  });
+
+  it('excludes script and style source text from the base text', () => {
+    const withCode = extractRubyContent(
+      wrapXhtml(
+        "<div>本文です<script>alert('x')</script><style>p { color: red; }</style>続きます" +
+          '<ruby>漢<rt>かん</rt></ruby>字</div>',
+      ),
+    );
+    const withoutCode = extractRubyContent(
+      wrapXhtml('<div>本文です続きます<ruby>漢<rt>かん</rt></ruby>字</div>'),
+    );
+
+    expect(withCode[0].text).toBe('本文です続きます漢字');
+    expect(withCode[0].text).toBe(withoutCode[0].text);
+    expect(withCode[0].inlineAnnotations).toEqual(withoutCode[0].inlineAnnotations);
+  });
+
+  it('emits no paragraph for a block whose only content is script or style', () => {
+    const result = extractRubyContent(
+      wrapXhtml('<p><script>alert(1)</script></p><p>本文</p><div><style>p{}</style></div>'),
+    );
+
+    expect(result.map((p) => p.text)).toEqual(['本文']);
+  });
+
+  it('keeps ruby base indices unaffected by script inside the ruby markup', () => {
+    const result = extractRubyContent(
+      wrapXhtml('<p><ruby>漢<script>alert(1)</script><rt>かん</rt></ruby>字</p>'),
+    );
+
+    expect(result[0].text).toBe('漢字');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', type: 'mono' },
+    ]);
+  });
+
   it('keeps direct inline runs inside section elements with nested blocks', () => {
     const xhtml = wrapXhtml(
       '<section>序文<p>本文</p></section><table><tr><td>セル</td></tr></table>',
@@ -311,5 +466,55 @@ describe('extractRubyContent', () => {
     const result = extractRubyContent(xhtml);
 
     expect(result.map((p) => p.text)).toEqual(['序文', '本文', 'セル']);
+  });
+
+  it('reads rb pairs from an rtc container when ruby has no direct rt', () => {
+    const xhtml = wrapXhtml(
+      '<p><ruby><rb>東</rb><rb>京</rb><rtc><rt>とう</rt><rt>きょう</rt></rtc></ruby></p>',
+    );
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('東京');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', type: 'mono' },
+      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'きょう', type: 'mono' },
+      {
+        kind: 'ruby',
+        startIndex: 0,
+        endIndex: 2,
+        rubyText: 'とうきょう',
+        type: 'jukugo',
+        jukugoSplitPoints: [1],
+      },
+    ]);
+  });
+
+  it('reads a plain base annotated only by an rtc container', () => {
+    const xhtml = wrapXhtml('<p><ruby>東京<rtc><rt>とうきょう</rt></rtc></ruby>に行く</p>');
+    const result = extractRubyContent(xhtml);
+
+    expect(result[0].text).toBe('東京に行く');
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'とうきょう', type: 'group' },
+    ]);
+  });
+
+  it('emits inline runs around nested blocks as separate paragraphs in source order', () => {
+    const result = extractRubyContent(wrapXhtml('<div>前<p>中</p>後</div>'));
+
+    expect(result.map((p) => p.text)).toEqual(['前', '中', '後']);
+  });
+
+  it('anchors annotations to the paragraph that contains them in mixed content', () => {
+    const result = extractRubyContent(
+      wrapXhtml('<div>序<ruby>漢<rt>かん</rt></ruby><p>本文</p>末<em>尾</em></div>'),
+    );
+
+    expect(result.map((p) => p.text)).toEqual(['序漢', '本文', '末尾']);
+    expect(result[0].inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', type: 'mono' },
+    ]);
+    expect(result[1].inlineAnnotations).toEqual([]);
+    expect(result[2].inlineAnnotations).toEqual([{ kind: 'em', startIndex: 1, endIndex: 2 }]);
   });
 });

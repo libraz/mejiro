@@ -1,11 +1,22 @@
 import JSZip from 'jszip';
 import type { InlineAnnotation } from '../browser/types.js';
 import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
+import { cloneEditableBlock } from './clone.js';
 import {
   assertEpubArchiveWithinLimits,
+  EpubExpansionBudget,
   type EpubParseOptions,
   resolveEpubParseLimits,
 } from './limits.js';
+import {
+  assertEpubDomAvailable,
+  collectNavTitles,
+  extractChapterTitleOrUndefined,
+  type OpfManifestItem,
+  parseOpfPackage,
+  resolveZipPath,
+} from './parser.js';
+import type { EpubProjectAsset } from './project.js';
 import { extractRubyContent } from './ruby-extractor.js';
 import type {
   AnnotatedParagraph,
@@ -23,6 +34,12 @@ const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 
 /** Reusable EPUB editing session with read/modify/write-back support. */
 export class EditableEpub {
+  /**
+   * The live document model, including the package metadata needed to write the
+   * EPUB back out. Exposed for reading and for handing to a renderer; mutating
+   * it directly bypasses the undo history, so route edits through the session's
+   * methods instead.
+   */
   readonly book: EditableEpubBook;
 
   private undoStack: HistoryEntry[] = [];
@@ -136,26 +153,37 @@ export class EditableEpub {
     for (const [chapterIndex, snapshot] of entry) {
       const chapter = this.book.chapters[chapterIndex];
       if (!chapter) continue;
-      chapter.blocks = snapshot.blocks.map(cloneBlock);
+      chapter.blocks = snapshot.blocks.map(cloneEditableBlock);
       chapter.imageAssets = new Map(snapshot.imageAssets);
       chapter.isDirty = snapshot.isDirty;
       syncParagraphsView(chapter);
     }
   }
 
-  /** Parses an EPUB and starts an editing session. */
+  /**
+   * Parses an EPUB and starts an editing session.
+   *
+   * Requires host DOM globals (`DOMParser`, `XMLSerializer`, `Node`). Node and
+   * SSR runtimes must register a DOM implementation (happy-dom, jsdom) first.
+   */
   static async load(data: ArrayBuffer, options: EpubParseOptions = {}): Promise<EditableEpub> {
     return new EditableEpub(await parseEditableEpubBook(data, options));
   }
 
+  /** Book title read from the package metadata. */
   get title(): string {
     return this.book.title;
   }
 
+  /** Primary creator from the package metadata, or undefined when absent. */
   get author(): string | undefined {
     return this.book.author;
   }
 
+  /**
+   * Chapters in spine order. The live array, not a copy — it reflects
+   * subsequent edits, and splicing it directly skips the undo history.
+   */
   get chapters(): EditableEpubChapter[] {
     return this.book.chapters;
   }
@@ -165,6 +193,13 @@ export class EditableEpub {
    *
    * `paragraphIndex` is the position in the chapter's paragraph projection
    * (excluding image blocks). Image blocks remain untouched.
+   *
+   * When `text` changes without new `inlineAnnotations`, the existing
+   * annotations are re-anchored onto the new text: each one either keeps
+   * covering exactly the same base characters or is dropped. Annotations
+   * passed in explicitly are indexed into the new text, and any that fall
+   * outside it are dropped. Either way the block is left with annotations
+   * that the layout engine can consume.
    */
   updateParagraph(
     chapterIndex: number,
@@ -177,7 +212,10 @@ export class EditableEpub {
     applyParagraphUpdate(chapter, block, next);
   }
 
-  /** Adds or replaces inline annotations for one paragraph. */
+  /**
+   * Adds or replaces inline annotations for one paragraph. Annotations that
+   * do not fall inside the paragraph's current text are dropped.
+   */
   setInlineAnnotations(
     chapterIndex: number,
     paragraphIndex: number,
@@ -384,11 +422,30 @@ export class EditableEpub {
     this.updateImage(chapterIndex, blockId, { caption });
   }
 
-  /** Exports the current edited EPUB as an ArrayBuffer. */
+  /**
+   * Exports the current edited EPUB as an ArrayBuffer.
+   *
+   * Book state is captured synchronously on entry, so an edit made while the
+   * export is still awaiting asset bytes lands in the next export, never
+   * part-way through this one.
+   */
   export(options?: EpubExportOptions): Promise<ArrayBuffer> {
     return exportEditableEpubBook(this.book, options);
   }
 }
+
+/**
+ * Asset handed to an {@link AssetResolver}.
+ *
+ * Both export paths route through the same resolver, so the value is either a
+ * chapter image asset from `EditableEpub.export()` or a packaged project asset
+ * from `EpubProject.export()`. The fields a resolver normally reads — `url`,
+ * `mediaType` and `data` — are common to both and need no narrowing; the naming
+ * fields differ, so narrow with `'filename' in asset` (an
+ * {@link EditableImageAsset}) versus `'href' in asset` (an
+ * {@link EpubProjectAsset}) when the source path matters.
+ */
+export type AssetResolverAsset = EditableImageAsset | EpubProjectAsset;
 
 /**
  * Request passed to {@link EpubExportOptions.assetResolver}. The resolver
@@ -396,10 +453,14 @@ export class EditableEpub {
  * EPUB ZIP.
  */
 export interface AssetResolverRequest {
-  /** Asset key inside the chapter's `imageAssets` map. */
+  /**
+   * Identifier of the asset being resolved: the key inside the chapter's
+   * `imageAssets` map on the {@link EditableEpub} path, and the ZIP href on the
+   * `EpubProject` path.
+   */
   assetKey: string;
-  /** The image asset to resolve. */
-  asset: EditableImageAsset;
+  /** The asset to resolve. */
+  asset: AssetResolverAsset;
   /** External URL declared on the asset (mirrors `asset.url`). */
   url: string;
   /** Mirror of the export `AbortSignal`, when one was passed. */
@@ -407,10 +468,10 @@ export interface AssetResolverRequest {
 }
 
 /**
- * Resolves an image asset to its bytes at export time. Called once per
- * {@link EditableImageAsset} that declares a `url` and has no inline `data`.
+ * Resolves an asset to its bytes at export time. Called once per
+ * {@link AssetResolverAsset} that declares a `url` and has no inline `data`.
  * Throw to abort export; return a `Uint8Array` or `ArrayBuffer` containing
- * the image bytes.
+ * the asset bytes.
  */
 export type AssetResolver = (
   request: AssetResolverRequest,
@@ -440,18 +501,32 @@ export interface EpubExportOptions {
 }
 
 /** Common fields of the {@link AddImageInput} variants. */
-interface AddImageInputCommon {
+export interface AddImageInputCommon {
   /**
    * Filename used inside the EPUB ZIP (e.g. `figure-01.png`). The returned
    * `assetKey` starts from this basename and is uniqued when needed. The image
    * is written to `OPS/Images/<assetKey>` by default.
    */
   filename: string;
+  /**
+   * OPF media type for the manifest entry. Inferred from the `filename`
+   * extension when omitted.
+   */
   mediaType?: string;
+  /** Alternative text for the generated `<img>`. */
   alt?: string;
+  /** Text for the generated `<figcaption>`. Omitted produces no caption element. */
   caption?: string;
+  /**
+   * Layout hint stored verbatim on the resulting block for renderers to act on;
+   * it does not change the exported markup. Left unset when omitted, so the
+   * renderer's own default applies.
+   */
   placement?: 'inline' | 'fullspread';
-  /** Insert the block immediately after this block id. Defaults to the end. */
+  /**
+   * Insert the block immediately after this block id. Defaults to the end of
+   * the chapter; an id no block carries throws.
+   */
   afterBlockId?: string;
 }
 
@@ -459,6 +534,7 @@ interface AddImageInputCommon {
 export interface AddImageInputBytes extends AddImageInputCommon {
   /** Binary image data. */
   data: Uint8Array | ArrayBuffer;
+  /** Never set on this variant — it is what makes the union discriminate. */
   url?: never;
 }
 
@@ -469,6 +545,7 @@ export interface AddImageInputUrl extends AddImageInputCommon {
    * {@link EpubExportOptions.assetResolver} (or the runtime `fetch`).
    */
   url: string;
+  /** Never set on this variant — it is what makes the union discriminate. */
   data?: never;
 }
 
@@ -482,6 +559,9 @@ export type AddImageInput = AddImageInputBytes | AddImageInputUrl;
 /**
  * Parses an EPUB while retaining enough package metadata to export edits back
  * into an EPUB file.
+ *
+ * Requires host DOM globals (`DOMParser`, `XMLSerializer`, `Node`). Node and
+ * SSR runtimes must register a DOM implementation (happy-dom, jsdom) first.
  */
 export async function parseEditableEpub(
   data: ArrayBuffer,
@@ -505,27 +585,32 @@ async function parseEditableEpubBook(
     throw new Error(`Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`);
   }
   assertEpubArchiveWithinLimits(data, zip, limits);
+  const budget = new EpubExpansionBudget(limits);
   const files = new Map<string, Uint8Array>();
 
-  await Promise.all(
-    Object.keys(zip.files).map(async (path) => {
-      const file = zip.file(path);
-      if (!file) return;
-      files.set(path, await file.async('uint8array'));
-    }),
-  );
+  // Entries are expanded one at a time so the running total is charged before
+  // the next entry starts, keeping peak memory at the configured limits even
+  // when the archive under-reports its own sizes.
+  for (const path of Object.keys(zip.files)) {
+    const file = zip.file(path);
+    if (!file) continue;
+    files.set(path, await budget.readBytes(file));
+  }
 
-  const containerXml = await readZipText(zip, 'META-INF/container.xml');
+  const containerXml = readEntryText(files, 'META-INF/container.xml');
   const rootfilePath = extractRootfilePath(containerXml);
-  const opfXml = await readZipText(zip, rootfilePath);
+  const opfXml = readEntryText(files, rootfilePath);
   const opfDir = rootfilePath.includes('/')
     ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
     : '';
-  const { title, author, spineHrefs, manifestItems } = parseOpf(opfXml, opfDir);
+  const { title, author, spineHrefs, manifestItems, navHref, pageProgressionDirection } =
+    parseOpfPackage(opfXml, opfDir);
+  const navTitles = navHref ? readNavTitles(files, navHref) : new Map<string, string>();
 
   const chapters: EditableEpubChapter[] = [];
   for (const href of spineHrefs) {
-    const xhtml = await readZipText(zip, href);
+    const xhtml = readEntryTextOrNull(files, href);
+    if (xhtml == null) continue;
     let extracted: {
       blocks: EditableBlock[];
       imageAssets: Map<string, EditableImageAsset>;
@@ -538,7 +623,7 @@ async function parseEditableEpubBook(
         `Failed to parse chapter XHTML: ${href} (${err instanceof Error ? err.message : String(err)})`,
       );
     }
-    const chapterTitle = extractChapterTitle(xhtml);
+    const chapterTitle = extractChapterTitleOrUndefined(xhtml) ?? navTitles.get(href);
     if (extracted.blocks.length > 0) {
       const chapter: EditableEpubChapter = {
         href,
@@ -559,11 +644,23 @@ async function parseEditableEpubBook(
     title,
     author,
     chapters,
+    ...(pageProgressionDirection ? { pageProgressionDirection } : {}),
     packageData: { rootfilePath, opfDir, opfXml, files },
   };
 }
 
-/** Updates one paragraph's text and optional inline annotations. */
+/** Reads the navigation document out of the already-expanded ZIP entries. */
+function readNavTitles(files: Map<string, Uint8Array>, navHref: string): Map<string, string> {
+  const navXhtml = readEntryTextOrNull(files, navHref);
+  return navXhtml == null ? new Map() : collectNavTitles(navXhtml, navHref);
+}
+
+/**
+ * Updates one paragraph's text and optional inline annotations.
+ *
+ * Mirrors {@link EditableEpub.updateParagraph}, including its re-anchoring of
+ * existing annotations across a text-only update.
+ */
 export function updateEpubParagraph(
   book: EditableEpubBook,
   chapterIndex: number,
@@ -581,8 +678,17 @@ function applyParagraphUpdate(
   block: EditableParagraphBlock,
   next: Partial<AnnotatedParagraph>,
 ): void {
-  if (next.text !== undefined) block.text = next.text;
-  if (next.inlineAnnotations !== undefined) block.inlineAnnotations = next.inlineAnnotations;
+  if (next.text !== undefined) {
+    block.inlineAnnotations = reanchorInlineAnnotations(
+      block.inlineAnnotations,
+      block.text,
+      next.text,
+    );
+    block.text = next.text;
+  }
+  if (next.inlineAnnotations !== undefined) {
+    block.inlineAnnotations = validInlineAnnotations(next.inlineAnnotations, block.text);
+  }
   if (Object.hasOwn(next, 'headingLevel')) {
     if (next.headingLevel == null) {
       delete block.headingLevel;
@@ -595,7 +701,10 @@ function applyParagraphUpdate(
   syncParagraphsView(chapter);
 }
 
-/** Adds or replaces inline annotations for one paragraph. */
+/**
+ * Adds or replaces inline annotations for one paragraph. Annotations that do
+ * not fall inside the paragraph's current text are dropped.
+ */
 export function setEpubInlineAnnotations(
   book: EditableEpubBook,
   chapterIndex: number,
@@ -613,8 +722,64 @@ function applyInlineAnnotations(
   block: EditableParagraphBlock,
   inlineAnnotations: readonly InlineAnnotation[],
 ): void {
-  block.inlineAnnotations = inlineAnnotations;
+  block.inlineAnnotations = validInlineAnnotations(inlineAnnotations, block.text);
   syncParagraphsView(chapter);
+}
+
+/**
+ * Keeps only the annotations whose range addresses real characters of `text`,
+ * i.e. `0 <= startIndex < endIndex <= [...text].length`. The input array is
+ * returned unchanged when nothing has to be dropped.
+ */
+function validInlineAnnotations(
+  annotations: readonly InlineAnnotation[],
+  text: string,
+): readonly InlineAnnotation[] {
+  const length = [...text].length;
+  const kept = annotations.filter(
+    (ann) => ann.startIndex >= 0 && ann.startIndex < ann.endIndex && ann.endIndex <= length,
+  );
+  return kept.length === annotations.length ? annotations : kept;
+}
+
+/**
+ * Moves annotations indexed into `oldText` onto `newText`.
+ *
+ * The untouched head and tail of the paragraph are matched character by
+ * character. An annotation living entirely in one of them keeps covering the
+ * exact same base characters; one overlapping the edited span is dropped
+ * rather than silently re-pointed at different characters.
+ */
+function reanchorInlineAnnotations(
+  annotations: readonly InlineAnnotation[],
+  oldText: string,
+  newText: string,
+): readonly InlineAnnotation[] {
+  if (oldText === newText || annotations.length === 0) return annotations;
+  const oldChars = [...oldText];
+  const newChars = [...newText];
+  const common = Math.min(oldChars.length, newChars.length);
+  let prefix = 0;
+  while (prefix < common && oldChars[prefix] === newChars[prefix]) prefix++;
+  let suffix = 0;
+  while (
+    suffix < common - prefix &&
+    oldChars[oldChars.length - 1 - suffix] === newChars[newChars.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+
+  const tailStart = oldChars.length - suffix;
+  const shift = newChars.length - oldChars.length;
+  const kept: InlineAnnotation[] = [];
+  for (const ann of annotations) {
+    if (ann.endIndex <= prefix) {
+      kept.push(ann);
+    } else if (ann.startIndex >= tailStart) {
+      kept.push({ ...ann, startIndex: ann.startIndex + shift, endIndex: ann.endIndex + shift });
+    }
+  }
+  return validInlineAnnotations(kept, newText);
 }
 
 /**
@@ -709,6 +874,9 @@ function assertImageInputFilename(image: AddImageInput | EditableEpubImage): str
 /**
  * Exports an edited EPUB. Existing files are preserved; edited chapter XHTML,
  * added image assets, and OPF manifest entries are written back.
+ *
+ * Book state is captured synchronously on entry, so one call always
+ * serializes one consistent snapshot of the book.
  */
 export async function exportEditableEpub(
   book: EditableEpub | EditableEpubBook,
@@ -724,35 +892,42 @@ async function exportEditableEpubBook(
   const { onProgress, signal, assetResolver } = options;
   throwIfAborted(signal);
 
-  const files = new Map(book.packageData.files);
-  let opfXml = book.packageData.opfXml;
+  // Asset resolution can await for seconds, and the live book stays editable
+  // meanwhile. Freeze the whole book synchronously so the export reflects one
+  // point in time instead of a mix of pre- and mid-export states.
+  const snapshot = snapshotBookForExport(book);
+  const files = snapshot.packageData.files;
+  let opfXml = snapshot.packageData.opfXml;
   const originalImageHrefs = new Set<string>();
   const retainedImageHrefs = new Set<string>();
 
-  const total = Math.max(1, book.chapters.length);
-  for (let i = 0; i < book.chapters.length; i++) {
+  const total = Math.max(1, snapshot.chapters.length);
+  for (let i = 0; i < snapshot.chapters.length; i++) {
     throwIfAborted(signal);
-    const chapter = book.chapters[i];
+    const chapter = snapshot.chapters[i];
     for (const href of chapter.originalImageHrefs ?? []) originalImageHrefs.add(href);
     for (const assetKey of chapter.imageAssets.keys()) {
-      retainedImageHrefs.add(imageAssetHref(book, chapter, assetKey));
+      retainedImageHrefs.add(imageAssetHref(snapshot, chapter, assetKey));
     }
 
     if (chapter.isDirty || !chapter.originalXhtml) {
-      files.set(chapter.href, encodeText(serializeChapterXhtml(chapter, book.packageData.opfDir)));
+      files.set(
+        chapter.href,
+        encodeText(serializeChapterXhtml(chapter, snapshot.packageData.opfDir)),
+      );
     } else {
       files.set(chapter.href, encodeText(chapter.originalXhtml));
     }
 
     for (const [assetKey, asset] of chapter.imageAssets) {
       throwIfAborted(signal);
-      const assetHref = imageAssetHref(book, chapter, assetKey);
+      const assetHref = imageAssetHref(snapshot, chapter, assetKey);
       const bytes = await resolveAssetBytes(assetKey, asset, assetResolver, signal);
       files.set(assetHref, bytes);
       opfXml = ensureManifestItem(
         opfXml,
         asset.manifestId ?? manifestIdFromAssetKey(assetKey),
-        asset.manifestHref ?? relativeZipPath(book.packageData.opfDir, assetHref),
+        asset.manifestHref ?? relativeZipPath(snapshot.packageData.opfDir, assetHref),
         asset.mediaType ?? mediaTypeFromFilename(asset.filename),
       );
     }
@@ -764,13 +939,13 @@ async function exportEditableEpubBook(
     files.delete(href);
     opfXml = removeManifestItemByHref(
       opfXml,
-      relativeZipPath(book.packageData.opfDir, href),
+      relativeZipPath(snapshot.packageData.opfDir, href),
       href,
-      book.packageData.opfDir,
+      snapshot.packageData.opfDir,
     );
   }
 
-  files.set(book.packageData.rootfilePath, encodeText(opfXml));
+  files.set(snapshot.packageData.rootfilePath, encodeText(opfXml));
 
   const zip = new JSZip();
   zip.file('mimetype', 'application/epub+zip', {
@@ -836,14 +1011,14 @@ function makeAbortError(signal: AbortSignal): Error {
 }
 
 /**
- * Resolves the bytes for one {@link EditableImageAsset}. When `asset.data` is
+ * Resolves the bytes for one {@link AssetResolverAsset}. When `asset.data` is
  * already present it is returned directly. Otherwise the asset must declare a
  * `url`, which is passed through `assetResolver` (or fetched via the global
  * `fetch` when no resolver is supplied).
  */
 async function resolveAssetBytes(
   assetKey: string,
-  asset: EditableImageAsset,
+  asset: AssetResolverAsset,
   resolver: AssetResolver | undefined,
   signal: AbortSignal | undefined,
 ): Promise<Uint8Array> {
@@ -867,11 +1042,11 @@ async function resolveAssetBytes(
  */
 export async function resolveAssetData(
   assetKey: string,
-  asset: { data?: Uint8Array | ArrayBuffer; url?: string },
+  asset: AssetResolverAsset,
   resolver: AssetResolver | undefined,
   signal: AbortSignal | undefined,
 ): Promise<Uint8Array> {
-  return resolveAssetBytes(assetKey, asset as EditableImageAsset, resolver, signal);
+  return resolveAssetBytes(assetKey, asset, resolver, signal);
 }
 
 async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
@@ -886,6 +1061,9 @@ async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<Arr
  * Rebuilds a chapter's XHTML from `blocks`. Pure `createElementNS` —
  * `innerHTML` is never invoked. Unrelated source attributes / asides from
  * the original document are dropped.
+ *
+ * The result always begins with exactly one XML declaration, so it stays
+ * well-formed XHTML regardless of the host DOM implementation.
  */
 function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): string {
   assertEditableChapterStructure(chapter);
@@ -912,10 +1090,17 @@ function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): st
     if (el.getAttribute('xmlns') === XHTML_NS) el.removeAttribute('xmlns');
   }
 
-  const xmlDecl = '<?xml version="1.0" encoding="utf-8"?>\n';
-  return (
-    xmlDecl + restoreStylesheetLinks(new XMLSerializer().serializeToString(doc), stylesheetLinks)
-  );
+  // Some DOM implementations (happy-dom among them) re-emit the declaration of
+  // the source document, so drop any leading one before prepending ours.
+  const serialized = stripXmlDeclaration(new XMLSerializer().serializeToString(doc));
+  return XML_DECLARATION + restoreStylesheetLinks(serialized, stylesheetLinks);
+}
+
+const XML_DECLARATION = '<?xml version="1.0" encoding="utf-8"?>\n';
+
+/** Removes a leading XML declaration (and the whitespace that follows it). */
+function stripXmlDeclaration(xml: string): string {
+  return xml.replace(/^\s*<\?xml\s[\s\S]*?\?>\s*/u, '');
 }
 
 function createSerializationDocument(chapter: EditableEpubChapter): Document {
@@ -928,6 +1113,7 @@ function createSerializationDocument(chapter: EditableEpubChapter): Document {
       // are not well-formed XML for full-document reuse.
     }
   }
+  assertEpubDomAvailable();
   const skeleton = `<?xml version="1.0" encoding="utf-8"?><html xmlns="${XHTML_NS}"><head/><body/></html>`;
   return new DOMParser().parseFromString(skeleton, 'application/xhtml+xml');
 }
@@ -1148,7 +1334,7 @@ function extractEditableBlocks(
   xhtml: string,
   chapterHref: string,
   files: Map<string, Uint8Array>,
-  manifestItems: Map<string, ManifestItem>,
+  manifestItems: Map<string, OpfManifestItem>,
 ): {
   blocks: EditableBlock[];
   imageAssets: Map<string, EditableImageAsset>;
@@ -1344,6 +1530,7 @@ function syncParagraphsView(chapter: EditableEpubChapter): void {
 }
 
 function parseXml(xml: string): Document {
+  assertEpubDomAvailable();
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length > 0) {
@@ -1352,10 +1539,17 @@ function parseXml(xml: string): Document {
   return doc;
 }
 
-async function readZipText(zip: JSZip, path: string): Promise<string> {
-  const file = zip.file(path);
-  if (!file) throw new Error(`Missing file in EPUB: ${path}`);
-  return file.async('string');
+function readEntryText(files: Map<string, Uint8Array>, path: string): string {
+  const text = readEntryTextOrNull(files, path);
+  if (text == null) throw new Error(`Missing file in EPUB: ${path}`);
+  return text;
+}
+
+/** Decodes a ZIP entry, or returns `null` when the archive omits it. */
+function readEntryTextOrNull(files: Map<string, Uint8Array>, path: string): string | null {
+  const bytes = files.get(path);
+  if (!bytes) return null;
+  return new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
 }
 
 function extractRootfilePath(containerXml: string): string {
@@ -1363,63 +1557,6 @@ function extractRootfilePath(containerXml: string): string {
   const fullPath = firstElementByName(doc, 'rootfile')?.getAttribute('full-path');
   if (!fullPath) throw new Error('Cannot find rootfile path in container.xml');
   return fullPath;
-}
-
-function extractChapterTitle(xhtml: string): string | undefined {
-  const doc = parseXml(stripStylesheetLinks(xhtml));
-  const explicitTitle = doc.getElementById('chapter-title');
-  if (explicitTitle?.textContent?.trim()) return explicitTitle.textContent.trim();
-  for (const tag of ['h1', 'h2', 'h3']) {
-    const el = firstElementByName(doc, tag);
-    if (el?.textContent?.trim()) return el.textContent.trim();
-  }
-  return undefined;
-}
-
-function parseOpf(
-  opfXml: string,
-  opfDir: string,
-): {
-  title: string;
-  author?: string;
-  spineHrefs: string[];
-  manifestItems: Map<string, ManifestItem>;
-} {
-  const doc = parseXml(opfXml);
-  const title = findElementByName(doc, 'title')?.textContent?.trim() || 'Unknown Title';
-  const author = findElementByName(doc, 'creator')?.textContent?.trim() || undefined;
-  const manifest = new Map<string, string>();
-  const manifestItems = new Map<string, ManifestItem>();
-  const manifestEl = firstElementByName(doc, 'manifest');
-  for (const item of childElementsByName(manifestEl, 'item')) {
-    const id = item.getAttribute('id');
-    const href = item.getAttribute('href');
-    if (id && href) {
-      const resolvedHref = resolveZipPath(opfDir, href);
-      manifest.set(id, resolvedHref);
-      manifestItems.set(resolvedHref, {
-        id,
-        href: resolvedHref,
-        packageHref: href,
-        mediaType: item.getAttribute('media-type') ?? undefined,
-      });
-    }
-  }
-  const spineHrefs: string[] = [];
-  const spineEl = firstElementByName(doc, 'spine');
-  for (const itemref of childElementsByName(spineEl, 'itemref')) {
-    const idref = itemref.getAttribute('idref');
-    const href = idref ? manifest.get(idref) : undefined;
-    if (href) spineHrefs.push(href);
-  }
-  return { title, author, spineHrefs, manifestItems };
-}
-
-interface ManifestItem {
-  id: string;
-  href: string;
-  packageHref: string;
-  mediaType?: string;
 }
 
 function ensureManifestItem(opfXml: string, id: string, href: string, mediaType: string): string {
@@ -1479,33 +1616,6 @@ function childElementsByName(parent: Element | undefined, localName: string): El
   return Array.from(parent.children).filter(
     (el) => el.localName === localName || el.tagName === localName,
   );
-}
-
-function findElementByName(doc: Document, localName: string): Element | undefined {
-  const nsEl = doc.getElementsByTagNameNS('http://purl.org/dc/elements/1.1/', localName)[0];
-  if (nsEl) return nsEl;
-  for (const el of Array.from(doc.getElementsByTagName('*'))) {
-    if (el.localName === localName || el.tagName === `dc:${localName}`) return el;
-  }
-  return undefined;
-}
-
-function resolveZipPath(baseDir: string, href: string): string {
-  const hrefPath = href.split('#', 1)[0].split('?', 1)[0];
-  let decodedHref: string;
-  try {
-    decodedHref = decodeURIComponent(hrefPath);
-  } catch {
-    throw new Error(`Invalid EPUB href: ${href}`);
-  }
-  const parts = `${baseDir}${decodedHref}`.split('/');
-  const normalized: string[] = [];
-  for (const part of parts) {
-    if (!part || part === '.') continue;
-    if (part === '..') normalized.pop();
-    else normalized.push(part);
-  }
-  return normalized.join('/');
 }
 
 function dirname(path: string): string {
@@ -1568,9 +1678,31 @@ interface ChapterSnapshot {
 
 type HistoryEntry = Map<number, ChapterSnapshot>;
 
+/**
+ * Copies every piece of book state that export reads, so later mutations of
+ * the live book cannot be observed part-way through a single export.
+ */
+function snapshotBookForExport(book: EditableEpubBook): EditableEpubBook {
+  return {
+    ...book,
+    chapters: book.chapters.map((chapter) => ({
+      ...chapter,
+      blocks: chapter.blocks.map(cloneEditableBlock),
+      imageAssets: new Map(
+        Array.from(chapter.imageAssets, ([key, asset]) => [key, { ...asset }] as const),
+      ),
+      ...(chapter.originalImageHrefs
+        ? { originalImageHrefs: [...chapter.originalImageHrefs] }
+        : {}),
+      paragraphs: [...chapter.paragraphs],
+    })),
+    packageData: { ...book.packageData, files: new Map(book.packageData.files) },
+  };
+}
+
 function snapshotChapter(chapter: EditableEpubChapter): ChapterSnapshot {
   return {
-    blocks: chapter.blocks.map(cloneBlock),
+    blocks: chapter.blocks.map(cloneEditableBlock),
     imageAssets: new Map(chapter.imageAssets),
     isDirty: chapter.isDirty,
   };
@@ -1578,14 +1710,4 @@ function snapshotChapter(chapter: EditableEpubChapter): ChapterSnapshot {
 
 function markChapterDirty(chapter: EditableEpubChapter): void {
   chapter.isDirty = true;
-}
-
-function cloneBlock(block: EditableBlock): EditableBlock {
-  if (block.kind === 'paragraph') {
-    return {
-      ...block,
-      inlineAnnotations: block.inlineAnnotations.map((ann) => ({ ...ann })),
-    };
-  }
-  return { ...block };
 }

@@ -34,6 +34,7 @@ export type ParagraphKind = 'body' | 'heading' | 'blockquote' | 'sceneBreak' | '
 
 /** Editable paragraph block — text with inline annotations. */
 export interface EditableParagraphBlock {
+  /** Discriminant of the {@link EditableBlock} union. */
   kind: 'paragraph';
   /** Stable identifier for incremental updates. */
   id: string;
@@ -49,6 +50,7 @@ export interface EditableParagraphBlock {
 
 /** Editable image block — a figure embedded in chapter flow. */
 export interface EditableImageBlock {
+  /** Discriminant of the {@link EditableBlock} union. */
   kind: 'image';
   /** Stable identifier for incremental updates. */
   id: string;
@@ -125,7 +127,10 @@ export interface EditableEpubChapter extends EpubChapter {
    * mutation. Editor APIs operate on `blocks`.
    */
   paragraphs: AnnotatedParagraph[];
-  /** @deprecated Replaced by `blocks`; will be removed in v0.6. */
+  /**
+   * @deprecated Replaced by `blocks`. Removal is deferred to a future major
+   * release; no removal version is scheduled.
+   */
   paragraphRefs?: EditableParagraphRef[];
   /** @deprecated Use {@link EditableEpubChapter.imageAssets} via `addImage`. */
   images?: EditableEpubImage[];
@@ -153,10 +158,15 @@ export interface EditableEpubBook extends Omit<EpubBook, 'chapters'> {
 /**
  * @deprecated v0.4 image-insertion shape. The v0.5 path is
  * `EditableEpub.addImage(chapterIndex, { filename, data, ... })`. Both
- * signatures are accepted by `addImage`, but `EditableEpubImage` will be
- * removed in v0.6.
+ * signatures are accepted by `addImage`. Removal of `EditableEpubImage` is
+ * deferred to a future major release; no removal version is scheduled.
  */
 export interface EditableEpubImage {
+  /**
+   * Caller-supplied identifier carried along for bookkeeping. `addImage`
+   * ignores it and derives the asset key from `href` instead, returning the key
+   * it actually used.
+   */
   id?: string;
   /** ZIP path for the image file, relative to EPUB root. */
   href: string;

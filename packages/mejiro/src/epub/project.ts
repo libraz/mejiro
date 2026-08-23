@@ -7,7 +7,11 @@ import {
 } from '../manuscript.js';
 import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
 import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
-import { manuscriptParagraphs, parseInlineImageMarker } from './manuscript-source.js';
+import {
+  insertManuscriptParagraph,
+  manuscriptParagraphs,
+  parseInlineImageMarker,
+} from './manuscript-source.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
 export { parseManuscript, parseManuscriptRuby };
@@ -74,21 +78,54 @@ export interface EpubContributor {
 
 /** EPUB 3 collection (series or set). */
 export interface EpubCollection {
+  /** Collection name, emitted as the `belongs-to-collection` meta value. */
   name: string;
+  /** Collection kind refinement (`collection-type`). @defaultValue 'series' */
   type?: 'series' | 'set';
   /** Position within the collection. */
   index?: number;
 }
 
+/** A chapter authored as manuscript notation, as accepted by {@link EpubProject.addChapter}. */
 export interface ManuscriptChapterInput {
+  /**
+   * Preferred manifest / section id. Sanitized to an XML-safe id and suffixed
+   * when it collides with a reserved or already-used id, so the value stored on
+   * the project may differ from the one passed here. Defaults to
+   * `chapter-<position>`.
+   */
   id?: string;
+  /** Chapter title. Used for the chapter `<h1>`, its `<title>` and its nav entry. */
   title: string;
+  /**
+   * Manuscript notation source. Split into paragraphs on blank lines and parsed
+   * with the project's {@link EpubProject.dialect} at export time, so ruby and
+   * the other inline notations become real EPUB markup rather than literal text.
+   */
   body: string;
 }
 
+/** A binary file packaged alongside the chapters — cover, inline image, extra stylesheet. */
 export interface EpubProjectAsset {
+  /**
+   * Preferred manifest item id. Sanitized and de-duplicated like
+   * {@link ManuscriptChapterInput.id}; defaults to an id derived from `href`.
+   */
   id?: string;
+  /**
+   * Destination path inside the EPUB ZIP, relative to the archive root
+   * (e.g. `'OPS/Images/cover.jpg'`). Must be a clean relative file path:
+   * {@link EpubProject.addAsset} and {@link EpubProject.setCover} throw on an
+   * absolute path, a URI scheme, a `..` segment, a `#`/`?`/`\` character or a
+   * trailing slash. A path that collides with another asset or with a document
+   * `export()` generates is renamed, so read the stored href back from the value
+   * `addAsset()` returns rather than assuming this one was kept.
+   */
   href: string;
+  /**
+   * OPF media type. Inferred from the `href` extension when omitted, falling
+   * back to `application/octet-stream` for unknown extensions.
+   */
   mediaType?: string;
   /**
    * Binary asset data. Either this or {@link EpubProjectAsset.url} must be
@@ -101,15 +138,34 @@ export interface EpubProjectAsset {
    * resolver is supplied).
    */
   url?: string;
+  /**
+   * OPF manifest `properties` attribute. {@link EpubProject.setCover} sets
+   * `'cover-image'`, which also marks the asset as the one the cover `<meta>`
+   * entry points at and exempts it from unreferenced-asset cleanup.
+   */
   properties?: string;
 }
 
+/** Constructor options for {@link EpubProject}. */
 export interface EpubProjectOptions {
+  /** Package metadata. Only `title` is required; the rest is defaulted at export. */
   metadata: EpubProjectMetadata;
+  /**
+   * Initial chapters, appended in order through {@link EpubProject.addChapter}
+   * — so their ids go through the same sanitizing and de-duplication.
+   */
   chapters?: ManuscriptChapterInput[];
   /** Manuscript notation dialect used when serializing chapters. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
+  /**
+   * Cover image, registered through {@link EpubProject.setCover} after
+   * `chapters`. Its href defaults to `'OPS/Images/cover.jpg'` when empty.
+   */
   cover?: EpubProjectAsset;
+  /**
+   * CSS written to `OPS/Styles/style.css` and linked from every generated
+   * document. Defaults to a minimal vertical-writing stylesheet.
+   */
   stylesheet?: string;
   /** Spine page progression direction. @defaultValue 'rtl' for vertical Japanese books. */
   pageProgressionDirection?: 'rtl' | 'ltr' | 'default';
@@ -119,9 +175,21 @@ export interface EpubProjectOptions {
   includeTitleInFirstChapter?: boolean;
 }
 
-interface ProjectChapter {
+/**
+ * A chapter as it is stored on a project — the resolved form of
+ * {@link ManuscriptChapterInput}, with the manifest id already assigned and
+ * de-duplicated. Element type of {@link EpubProject.chapters}.
+ */
+export interface ProjectChapter {
+  /**
+   * Manifest / section id in effect, derived from the input id. Assigned once
+   * at insert time and never rewritten, so reordering chapters does not
+   * renumber them.
+   */
   id: string;
+  /** Chapter title, as given. */
   title: string;
+  /** Manuscript notation source, as given. */
   body: string;
 }
 
@@ -150,15 +218,47 @@ rt {
 
 /** Builds a new EPUB package from manuscript chapters and assets. */
 export class EpubProject {
+  /**
+   * Package metadata with the defaults already applied: `language` falls back to
+   * `'ja'`, a blank or missing `identifier` is replaced by a fresh
+   * `urn:uuid:` value, and `modified` defaults to construction time. The object
+   * itself stays mutable, so metadata can be edited in place after construction.
+   */
   readonly metadata: EpubProjectMetadata;
+  /**
+   * Chapters in spine order, each carrying the manifest id assigned at insert
+   * time. Edit through {@link EpubProject.addChapter},
+   * {@link EpubProject.updateChapter}, {@link EpubProject.removeChapter} and
+   * {@link EpubProject.reorderChapters} so ids stay unique and inline image
+   * assets stay in sync with the bodies that reference them.
+   */
   readonly chapters: ProjectChapter[] = [];
+  /**
+   * Manifest assets in insertion order, with the resolved id, href and media
+   * type rather than the values originally passed in. A cover set through
+   * {@link EpubProject.setCover} is always the last entry.
+   */
   readonly assets: EpubProjectAsset[] = [];
+  /** Whether `export()` writes a generated title page ahead of the chapters. */
   readonly includeTitlePage: boolean;
+  /**
+   * Whether the first chapter opens with the book title as its `<h1>`, keeping
+   * its own title only as a hidden `chapter-title` span.
+   */
   readonly includeTitleInFirstChapter: boolean;
+  /** Value of the spine's `page-progression-direction` attribute. */
   readonly pageProgressionDirection: 'rtl' | 'ltr' | 'default';
+  /** Manuscript notation dialect chapter bodies are parsed with during export. */
   readonly dialect: ManuscriptDialect;
+  /** CSS written to `OPS/Styles/style.css`. Replaceable at any point before export. */
   stylesheet: string;
 
+  /**
+   * Applies the {@link EpubProjectOptions} defaults, then registers `chapters`
+   * and `cover` through {@link EpubProject.addChapter} and
+   * {@link EpubProject.setCover} — so an invalid cover href throws here rather
+   * than at export time.
+   */
   constructor(options: EpubProjectOptions) {
     this.metadata = {
       language: 'ja',
@@ -178,10 +278,20 @@ export class EpubProject {
     if (options.cover) this.setCover(options.cover);
   }
 
+  /**
+   * Reads as a named constructor at call sites that build a book straight from
+   * manuscript chapters. Equivalent to `new EpubProject(options)` in every
+   * respect.
+   */
   static fromManuscript(options: EpubProjectOptions): EpubProject {
     return new EpubProject(options);
   }
 
+  /**
+   * Appends a chapter to the end of the spine. Its id is sanitized to an
+   * XML-safe manifest id and suffixed when it collides with a reserved id or one
+   * already in use, so the stored id may differ from `chapter.id`.
+   */
   addChapter(chapter: ManuscriptChapterInput): void {
     this.chapters.push({
       id: uniqueManifestId(
@@ -198,13 +308,18 @@ export class EpubProject {
 
   /**
    * Updates a chapter's title and/or body. Pass a partial patch — omitted
-   * fields keep their previous value.
+   * fields keep their previous value. Inline image assets the new body no
+   * longer references are dropped from the project, exactly as
+   * {@link EpubProject.removeChapter} drops them.
    */
   updateChapter(index: number, patch: Partial<Omit<ManuscriptChapterInput, 'id'>>): void {
     const chapter = this.chapters[index];
     if (!chapter) throw new Error(`Missing chapter: ${index}`);
     if (patch.title !== undefined) chapter.title = patch.title;
-    if (patch.body !== undefined) chapter.body = patch.body;
+    if (patch.body === undefined) return;
+    const previousAssetHrefs = markerAssetHrefs(chapter);
+    chapter.body = patch.body;
+    this.removeUnreferencedAssets(previousAssetHrefs);
   }
 
   /** Removes a chapter by index. */
@@ -215,9 +330,14 @@ export class EpubProject {
     this.removeUnreferencedAssets(removedAssetHrefs);
   }
 
-  /** Moves a chapter from `from` to `to` (clamped to the chapter list bounds). */
+  /**
+   * Moves a chapter from `from` to `to`. An out-of-range `from` selects no
+   * chapter and leaves the list untouched; `to` is clamped to the chapter list
+   * bounds. Drag-and-drop reorder UIs routinely emit both, so neither is an
+   * error.
+   */
   reorderChapters(from: number, to: number): void {
-    if (from < 0 || from >= this.chapters.length) throw new Error(`Missing chapter: ${from}`);
+    if (from < 0 || from >= this.chapters.length) return;
     const [chapter] = this.chapters.splice(from, 1);
     const target = Math.max(0, Math.min(this.chapters.length, to));
     this.chapters.splice(target, 0, chapter);
@@ -225,8 +345,9 @@ export class EpubProject {
 
   /**
    * Inserts an inline image asset and embeds an internal manuscript reference
-   * in the chapter body at `atParagraphIndex`. The marker is rendered as a
-   * `<figure>` during the chapter XHTML pass.
+   * in the chapter body at `atParagraphIndex`, counted in the same paragraph
+   * space the chapter XHTML pass and `manuscriptToEpubBook()` use. The marker is
+   * rendered as a `<figure>` during the chapter XHTML pass.
    */
   addInlineImage(
     chapterIndex: number,
@@ -237,12 +358,21 @@ export class EpubProject {
     if (!chapter) throw new Error(`Missing chapter: ${chapterIndex}`);
     const storedAsset = this.addAsset(asset);
 
-    const paragraphs = chapter.body.replace(/\r\n?/gu, '\n').split(/\n[ \t　]*\n+/u);
-    const insertAt = Math.max(0, Math.min(paragraphs.length, atParagraphIndex));
-    paragraphs.splice(insertAt, 0, manuscriptImageBlock({ ...asset, href: storedAsset.href }));
-    chapter.body = paragraphs.join('\n\n');
+    chapter.body = insertManuscriptParagraph(
+      chapter.body,
+      atParagraphIndex,
+      manuscriptImageBlock({ ...asset, href: storedAsset.href }),
+    );
   }
 
+  /**
+   * Registers `asset` as the cover image, replacing any previous one. The href
+   * defaults to `'OPS/Images/cover.jpg'` when empty and is validated like every
+   * other asset href, so an absolute path or one escaping the archive throws.
+   * The stored asset is marked `properties: 'cover-image'` and moved to the end
+   * of {@link EpubProject.assets}, which is what makes `export()` emit the cover
+   * `<meta>` entry for it.
+   */
   setCover(asset: EpubProjectAsset): void {
     const href = asset.href || 'OPS/Images/cover.jpg';
     assertProjectAssetHref(href);
@@ -263,6 +393,15 @@ export class EpubProject {
     this.assets.splice(0, this.assets.length, ...nonCoverAssets, stored);
   }
 
+  /**
+   * Adds a manifest asset and returns the stored copy, which carries the
+   * resolved id, href and media type. The href is renamed with a `-2`, `-3`, …
+   * suffix when it collides with an existing asset or with a document
+   * `export()` generates, so link the returned `href` rather than the one passed
+   * in.
+   *
+   * @throws If `asset.href` is not a clean relative path inside the archive.
+   */
   addAsset(asset: EpubProjectAsset): EpubProjectAsset {
     assertProjectAssetHref(asset.href);
     const stored: EpubProjectAsset = {
@@ -299,6 +438,21 @@ export class EpubProject {
     }
   }
 
+  /**
+   * Serializes the project into an EPUB 3 ZIP: `mimetype` first and
+   * uncompressed, then the container, the OPF package, the nav document, the
+   * stylesheet, the optional title page, one XHTML document per chapter, and
+   * finally every asset.
+   *
+   * Asset bytes are taken from {@link EpubProjectAsset.data}, or fetched from
+   * {@link EpubProjectAsset.url} through `options.assetResolver` (the runtime
+   * `fetch` when no resolver is given). `options.signal` is checked between
+   * chapters and assets as well as during compression, and `options.onProgress`
+   * reports the `'serialize'` phase per chapter and the `'zip'` phase from JSZip.
+   *
+   * @throws If the project has no chapters, if an asset cannot be resolved, or
+   *   with an `AbortError` when `options.signal` is triggered.
+   */
   async export(options: EpubExportOptions = {}): Promise<ArrayBuffer> {
     const { onProgress, signal, assetResolver } = options;
     throwIfAborted(signal);
@@ -715,7 +869,9 @@ function manifestIdFromHref(href: string): string {
 
 function uniqueAssetHref(href: string, existing: readonly string[]): string {
   const used = new Set(existing);
-  if (!used.has(href)) return href;
+  const taken = (candidate: string): boolean =>
+    used.has(candidate) || isReservedPackagePath(candidate);
+  if (!taken(href)) return href;
   let index = 2;
   const slashIndex = href.lastIndexOf('/');
   const dir = slashIndex >= 0 ? href.slice(0, slashIndex + 1) : '';
@@ -724,7 +880,7 @@ function uniqueAssetHref(href: string, existing: readonly string[]): string {
   const stem = extIndex > 0 ? filename.slice(0, extIndex) : filename;
   const ext = extIndex > 0 ? filename.slice(extIndex) : '';
   let candidate = `${dir}${stem}-${index}${ext}`;
-  while (used.has(candidate)) {
+  while (taken(candidate)) {
     index++;
     candidate = `${dir}${stem}-${index}${ext}`;
   }
@@ -732,6 +888,28 @@ function uniqueAssetHref(href: string, existing: readonly string[]): string {
 }
 
 const RESERVED_PACKAGE_IDS = ['nav', 'style', 'title-page', 'pub-id', 'title', 'subtitle'];
+
+/** ZIP paths `export()` writes itself, whatever the project contains. */
+const RESERVED_PACKAGE_PATHS = [
+  'mimetype',
+  'META-INF/container.xml',
+  'OPS/package.opf',
+  'OPS/nav.xhtml',
+  'OPS/Styles/style.css',
+  'OPS/Text/titlepage.xhtml',
+];
+
+/** Chapter documents are named from the chapter index, so the whole shape is reserved. */
+const RESERVED_CHAPTER_PATH = /^OPS\/Text\/chapter-\d{3,}\.xhtml$/u;
+
+/**
+ * Reports whether a ZIP path belongs to a file `export()` generates. Assets are
+ * moved off such a path so a generated document is never overwritten and the
+ * OPF manifest never lists the same href twice.
+ */
+function isReservedPackagePath(href: string): boolean {
+  return RESERVED_PACKAGE_PATHS.includes(href) || RESERVED_CHAPTER_PATH.test(href);
+}
 
 function projectManifestIds(
   project: EpubProject,
@@ -783,10 +961,28 @@ function relativeZipPath(fromDir: string, target: string): string {
   return `${'../'.repeat(from.length)}${to.join('/')}`;
 }
 
+/**
+ * Characters XML 1.0 forbids in document content: the C0 controls other than
+ * tab / line feed / carriage return, lone surrogates, and the two BMP
+ * non-characters. They cannot be expressed as character references either, so
+ * the only way to keep a well-formed document is to drop them.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the characters XML forbids is the point
+const XML_ILLEGAL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF\uFFFE\uFFFF]/gu;
+
 function escapeText(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return text
+    .replace(XML_ILLEGAL_CHARS, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function escapeAttribute(text: string): string {
-  return escapeText(text).replace(/"/g, '&quot;');
+  // Attribute-value normalization would otherwise turn these into plain spaces.
+  return escapeText(text)
+    .replace(/"/g, '&quot;')
+    .replace(/\t/g, '&#9;')
+    .replace(/\n/g, '&#10;')
+    .replace(/\r/g, '&#13;');
 }
