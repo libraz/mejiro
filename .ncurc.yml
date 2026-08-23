@@ -1,0 +1,7 @@
+# Dependencies pinned below their latest release.
+#
+# typescript: 7.x is the native compiler port; tsup's use of the TypeScript
+# compiler API fails against it ("Cannot read properties of undefined
+# (reading 'useCaseSensitiveFileNames')"), so the build stays on 6.x.
+reject:
+  - typescript
