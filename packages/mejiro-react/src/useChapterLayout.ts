@@ -78,8 +78,13 @@ export interface UseChapterLayoutReturn {
    * Anchor captured before the most recent reflow re-layout, awaiting
    * restoration into the new {@link layout}. Consume it in a layout effect keyed
    * on `layout` (after any index reset) and clear it back to `null`.
+   *
+   * Declared as a `MutableRefObject` because consumers are expected to write to
+   * it — `@types/react@18` models `RefObject.current` as read-only, so a
+   * `RefObject` here would make the documented recipe fail to compile on the
+   * lower end of the supported peer range.
    */
-  pendingRestore: RefObject<InChapterAnchor | null>;
+  pendingRestore: MutableRefObject<InChapterAnchor | null>;
 }
 
 /**
@@ -246,6 +251,6 @@ export function useChapterLayout(
     contentHeight,
     elapsedMs,
     recompute,
-    pendingRestore: pendingRestore as MutableRefObject<InChapterAnchor | null>,
+    pendingRestore,
   };
 }

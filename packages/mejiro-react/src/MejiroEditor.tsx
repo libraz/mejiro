@@ -1,5 +1,12 @@
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
-import { type AssetResolver, EditableEpub, type EditableEpubBook } from '@libraz/mejiro/epub';
+import {
+  type AssetResolver,
+  cloneEditableEpubBook,
+  EditableEpub,
+  type EditableEpubBook,
+  type EpubParseLimits,
+  exportEditableEpub,
+} from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
@@ -52,6 +59,12 @@ export interface MejiroEditorProps {
    * custom auth headers.
    */
   assetResolver?: AssetResolver;
+  /**
+   * Archive resource limits applied while opening an EPUB. Raise them for
+   * trusted, image-heavy books; tighten them for a public drop zone. Omitted
+   * fields keep their `DEFAULT_EPUB_PARSE_LIMITS` value.
+   */
+  limits?: Partial<EpubParseLimits>;
   /** Called after an EPUB is loaded into the editor. */
   onLoad?: (editor: EditableEpub) => void;
   /** Called after export completes. */
@@ -62,9 +75,9 @@ export interface MejiroEditorProps {
 
 /**
  * Declarative restrictions on the export pipeline. Mejiro applies the
- * transforms in this order: `watermark` (modifies the EPUB in-place) →
- * `encrypt` (replaces the buffer with the result) → `allowDownload` (skips
- * the browser download when `false`).
+ * transforms in this order: `watermark` (applied to an export-only copy of the
+ * book, never to the edited document) → `encrypt` (replaces the buffer with the
+ * result) → `allowDownload` (skips the browser download when `false`).
  */
 export interface MejiroExportPolicy {
   /**
@@ -80,41 +93,18 @@ export interface MejiroExportPolicy {
    */
   encrypt?: (buffer: ArrayBuffer) => ArrayBuffer | Promise<ArrayBuffer>;
   /**
-   * Embeds a visible watermark string into the EPUB. Implemented by writing
-   * the text as XHTML metadata; renderers may surface it differently.
+   * Embeds a visible watermark string into the exported EPUB. Implemented as a
+   * paragraph block prefixed with `[mejiro-watermark]` at the top of every
+   * chapter, so a downstream renderer can theme it by that prefix. The block
+   * only exists in the exported file — the edited document is unchanged.
    */
-  watermark?: { text: string; opacity?: number };
+  watermark?: { text: string };
 }
 
 type Selection = {
   chapter: number;
   paragraph: number;
 };
-
-function cloneBook(book: EditableEpubBook): EditableEpubBook {
-  return {
-    ...book,
-    chapters: book.chapters.map((chapter) => ({
-      ...chapter,
-      blocks: chapter.blocks.map((block) =>
-        block.kind === 'paragraph'
-          ? { ...block, inlineAnnotations: [...block.inlineAnnotations] }
-          : { ...block },
-      ),
-      imageAssets: new Map(chapter.imageAssets),
-      originalImageHrefs: chapter.originalImageHrefs ? [...chapter.originalImageHrefs] : undefined,
-      paragraphs: chapter.paragraphs.map((paragraph) => ({
-        ...paragraph,
-        inlineAnnotations: [...paragraph.inlineAnnotations],
-      })),
-      paragraphRefs: chapter.paragraphRefs ? [...chapter.paragraphRefs] : undefined,
-    })),
-    packageData: {
-      ...book.packageData,
-      files: new Map(book.packageData.files),
-    },
-  };
-}
 
 /** Maps a UTF-16 code-unit offset to a codepoint offset. */
 function utf16ToCodepoint(text: string, utf16Offset: number): number {
@@ -129,20 +119,40 @@ function utf16ToCodepoint(text: string, utf16Offset: number): number {
   return cp;
 }
 
+/** Marker prefix a renderer can key off to style the watermark paragraph. */
+const WATERMARK_PREFIX = '[mejiro-watermark]';
+
+/** Preferred block id of the watermark paragraph. */
+const WATERMARK_BLOCK_ID = 'mejiro-watermark';
+
 /**
- * Inserts a watermark paragraph at the top of every chapter. The marker is a
- * `[mejiro-watermark]` block so a downstream renderer can theme it; opacity
- * is left to the consumer's CSS.
+ * Returns an export-only copy of `book` carrying a watermark paragraph at the
+ * top of every chapter. The editor's own document is left untouched, so the
+ * watermark cannot accumulate across repeated exports.
  */
-function applyWatermark(editor: EditableEpub, watermark: { text: string; opacity?: number }): void {
-  editor.transaction(() => {
-    for (let i = 0; i < editor.chapters.length; i++) {
-      editor.insertParagraph(i, 0, {
-        text: `[mejiro-watermark] ${watermark.text}`,
-        inlineAnnotations: [],
-      });
-    }
-  });
+function watermarkedBook(book: EditableEpubBook, watermark: { text: string }): EditableEpubBook {
+  const copy = cloneEditableEpubBook(book);
+  const text = `${WATERMARK_PREFIX} ${watermark.text}`;
+  for (const chapter of copy.chapters) {
+    chapter.blocks.unshift({
+      kind: 'paragraph',
+      id: watermarkBlockId(chapter),
+      text,
+      inlineAnnotations: [],
+    });
+    chapter.paragraphs.unshift({ text, inlineAnnotations: [] });
+    chapter.isDirty = true;
+  }
+  return copy;
+}
+
+/** Picks a block id for the watermark paragraph that the chapter does not use. */
+function watermarkBlockId(chapter: EditableEpubBook['chapters'][number]): string {
+  const used = new Set(chapter.blocks.map((block) => block.id));
+  let id = WATERMARK_BLOCK_ID;
+  let suffix = 2;
+  while (used.has(id)) id = `${WATERMARK_BLOCK_ID}-${suffix++}`;
+  return id;
 }
 
 /** EPUB editor UI for proofreading, ruby edits, image insertion, and export. */
@@ -156,6 +166,7 @@ export function MejiroEditor({
   onBeforeExport,
   exportPolicy,
   assetResolver,
+  limits,
   onLoad,
   onExport,
   onError,
@@ -175,6 +186,8 @@ export function MejiroEditor({
   const loadRequestIdRef = useRef(0);
   const onLoadRef = useRef(onLoad);
   const onErrorRef = useRef(onError);
+  const limitsRef = useRef(limits);
+  limitsRef.current = limits;
 
   const book = editor?.book ?? null;
   const chapter = book?.chapters[selection.chapter] ?? null;
@@ -182,7 +195,7 @@ export function MejiroEditor({
   const textDirty = paragraph ? text !== paragraph.text : false;
   const previewBook = useMemo(() => {
     void revision;
-    return book ? cloneBook(book) : null;
+    return book ? cloneEditableEpubBook(book) : null;
   }, [book, revision]);
 
   useEffect(() => {
@@ -197,7 +210,7 @@ export function MejiroEditor({
     setLoading(true);
     setError(null);
     try {
-      const next = await EditableEpub.load(buffer);
+      const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
       if (requestId !== loadRequestIdRef.current) return;
       setEditor(next);
       setSelection({ chapter: 0, paragraph: 0 });
@@ -265,7 +278,13 @@ export function MejiroEditor({
     setRubyText('');
   }, [paragraph]);
 
+  /**
+   * Moves the edit target. A pending proofread edit is committed before the
+   * switch, so changing paragraphs never drops unsaved text.
+   */
   function selectParagraph(chapterIndex: number, paragraphIndex: number): void {
+    if (chapterIndex === selection.chapter && paragraphIndex === selection.paragraph) return;
+    if (textDirty) applyText();
     setSelection({ chapter: chapterIndex, paragraph: paragraphIndex });
   }
 
@@ -331,8 +350,9 @@ export function MejiroEditor({
 
   async function exportEpub(): Promise<void> {
     if (!editor) return;
-    if (exportPolicy?.watermark) applyWatermark(editor, exportPolicy.watermark);
-    let buffer = await editor.export(assetResolver ? { assetResolver } : undefined);
+    const watermark = exportPolicy?.watermark;
+    const source = watermark ? watermarkedBook(editor.book, watermark) : editor.book;
+    let buffer = await exportEditableEpub(source, assetResolver ? { assetResolver } : undefined);
     if (exportPolicy?.encrypt) buffer = await exportPolicy.encrypt(buffer);
     const decision = await onBeforeExport?.(buffer);
     onExport?.(buffer);

@@ -2,11 +2,17 @@
 /** @jsxImportSource react */
 
 import type { ChapterLayout, InChapterAnchor, MejiroBook, SpreadResult } from '@libraz/mejiro/book';
+import { MejiroBook as MejiroBookClass } from '@libraz/mejiro/book';
 import type { EditableEpub, EpubBook } from '@libraz/mejiro/epub';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import type { MutableRefObject } from 'react';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
-vi.mock('@libraz/mejiro/epub', () => {
+vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
+  // Only the loaders are faked; the module's pure helpers (the book clone the
+  // preview relies on, the selection clamp) stay real.
+  const actual = await importOriginal<typeof import('@libraz/mejiro/epub')>();
+
   function makeEditable(): unknown {
     return {
       book: {
@@ -49,6 +55,7 @@ vi.mock('@libraz/mejiro/epub', () => {
     };
   }
   return {
+    ...actual,
     // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
     EditableEpub: {
       load: vi.fn(async () => makeEditable()),
@@ -95,6 +102,71 @@ function mockEditableBook(title: string, text: string): unknown {
     addImage: vi.fn(),
     undo: vi.fn(() => false),
     redo: vi.fn(() => false),
+    export: vi.fn(async () => new ArrayBuffer(4)),
+  };
+}
+
+interface HistoryEditorStub {
+  book: {
+    chapters: { paragraphs: { text: string; inlineAnnotations: never[] }[] }[];
+  };
+}
+
+/**
+ * Editable-EPUB stub whose edits, undo and redo replace the paragraph mirror
+ * with a fresh array, the way the core editor re-syncs it after each command.
+ */
+function mockHistoryEditor(initialText: string): unknown {
+  const undoStack: string[] = [];
+  const redoStack: string[] = [];
+  let current = initialText;
+  const book = {
+    title: 'History',
+    chapters: [
+      {
+        href: 'OPS/Text/chapter.xhtml',
+        title: 'C1',
+        paragraphs: [{ text: current, inlineAnnotations: [] }],
+        blocks: [{ kind: 'paragraph', id: 'b-1', text: current, inlineAnnotations: [] }],
+        imageAssets: new Map(),
+      },
+    ],
+    packageData: {
+      rootfilePath: 'OPS/package.opf',
+      opfDir: 'OPS/',
+      opfXml: '',
+      files: new Map(),
+    },
+  };
+  function sync(next: string): void {
+    current = next;
+    book.chapters[0].paragraphs = [{ text: next, inlineAnnotations: [] }];
+    book.chapters[0].blocks = [{ kind: 'paragraph', id: 'b-1', text: next, inlineAnnotations: [] }];
+  }
+  return {
+    book,
+    history: { canUndo: false, canRedo: false, depth: 0, redoDepth: 0 },
+    updateParagraph: vi.fn((_chapter: number, _paragraph: number, patch: { text: string }) => {
+      undoStack.push(current);
+      redoStack.length = 0;
+      sync(patch.text);
+    }),
+    setInlineAnnotations: vi.fn(),
+    addImage: vi.fn(),
+    undo: vi.fn(() => {
+      const previous = undoStack.pop();
+      if (previous === undefined) return false;
+      redoStack.push(current);
+      sync(previous);
+      return true;
+    }),
+    redo: vi.fn(() => {
+      const next = redoStack.pop();
+      if (next === undefined) return false;
+      undoStack.push(current);
+      sync(next);
+      return true;
+    }),
     export: vi.fn(async () => new ArrayBuffer(4)),
   };
 }
@@ -152,6 +224,49 @@ describe('useMejiroBook (React)', () => {
     rerender({ options: { fontFamily: 'serif', fontSize: 20 } });
     expect(result.current.book).toBe(book);
     expect(result.current.options.fontSize).toBe(16);
+  });
+
+  it('coalesces rapid changes into a single book application while updating the snapshot at once', async () => {
+    const spy = vi.spyOn(MejiroBookClass.prototype, 'setOptions');
+    try {
+      const { result } = renderHook(() =>
+        useMejiroBook({ fontFamily: 'serif', fontSize: 16 }, { debounceMs: 20 }),
+      );
+      await act(async () => {
+        const settled = Promise.all([
+          result.current.setOptions({ fontSize: 17 }),
+          result.current.setOptions({ fontSize: 18 }),
+          result.current.setOptions({ lineSpacing: 2 }),
+        ]);
+        await settled;
+      });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith({ fontSize: 18, lineSpacing: 2 });
+      expect(result.current.options.fontSize).toBe(18);
+      expect(result.current.book.getOptions().fontSize).toBe(18);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports a failed application through onError and resolves the promise', async () => {
+    const failure = new Error('font unavailable');
+    const spy = vi.spyOn(MejiroBookClass.prototype, 'setOptions').mockRejectedValue(failure);
+    const onError = vi.fn();
+    try {
+      const { result } = renderHook(() =>
+        useMejiroBook({ fontFamily: 'serif', fontSize: 16 }, { onError }),
+      );
+      let settled: unknown = 'not-settled';
+      await act(async () => {
+        settled = await result.current.setOptions({ fontFamily: 'missing' });
+      });
+      expect(settled).toBeUndefined();
+      expect(onError).toHaveBeenCalledWith(failure);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -284,6 +399,59 @@ describe('useEpub (React)', () => {
   });
 });
 
+describe('useEpub (React) — parse limits', () => {
+  /** Stand-in expanded size of the archive the mocked parser "opens". */
+  const archiveBytes = 5000;
+
+  /** Installs a parser that enforces `maxTotalBytes` and returns a restorer. */
+  async function withLimitAwareParser(): Promise<() => void> {
+    const { parseEpub } = await import('@libraz/mejiro/epub');
+    const parseMock = parseEpub as ReturnType<typeof vi.fn>;
+    const previous = parseMock.getMockImplementation();
+    parseMock.mockImplementation(
+      async (_buffer: ArrayBuffer, options?: { limits?: { maxTotalBytes?: number } }) => {
+        const maxTotalBytes = options?.limits?.maxTotalBytes ?? 1024;
+        if (archiveBytes > maxTotalBytes) throw new Error('EPUB archive is too large');
+        return { title: 'Large', author: 'A', chapters: [] };
+      },
+    );
+    return () => {
+      if (previous) parseMock.mockImplementation(previous);
+    };
+  }
+
+  it('rejects an archive that exceeds the configured limit', async () => {
+    const restore = await withLimitAwareParser();
+    const { result } = renderHook(() => useEpub({ limits: { maxTotalBytes: 2048 } }));
+
+    let book: unknown;
+    await act(async () => {
+      book = await result.current.loadBuffer(new ArrayBuffer(8));
+    });
+
+    expect(book).toBeNull();
+    expect(result.current.error?.message).toBe('EPUB archive is too large');
+    restore();
+  });
+
+  it('accepts the same archive under a looser limit', async () => {
+    const restore = await withLimitAwareParser();
+    const { parseEpub } = await import('@libraz/mejiro/epub');
+    const buffer = new ArrayBuffer(8);
+    const { result } = renderHook(() => useEpub({ limits: { maxTotalBytes: 10_000 } }));
+
+    let book: unknown;
+    await act(async () => {
+      book = await result.current.loadBuffer(buffer);
+    });
+
+    expect((book as { title: string }).title).toBe('Large');
+    expect(result.current.error).toBeNull();
+    expect(parseEpub).toHaveBeenCalledWith(buffer, { limits: { maxTotalBytes: 10_000 } });
+    restore();
+  });
+});
+
 describe('useEditableEpub (React)', () => {
   it('invokes onError when editable parsing fails', async () => {
     const { EditableEpub } = await import('@libraz/mejiro/epub');
@@ -347,6 +515,66 @@ describe('useEditableEpub (React)', () => {
     expect(buffer).toBeInstanceOf(ArrayBuffer);
     expect(onExport).toHaveBeenCalledWith(buffer);
     expect(exportSpy).toHaveBeenCalledWith({ onProgress });
+  });
+
+  it('forwards parse limits to the editable loader', async () => {
+    const { EditableEpub } = await import('@libraz/mejiro/epub');
+    const loadMock = EditableEpub.load as ReturnType<typeof vi.fn>;
+    const previous = loadMock.getMockImplementation();
+    loadMock.mockImplementation(
+      async (_buffer: ArrayBuffer, options?: { limits?: { maxTotalBytes?: number } }) => {
+        const maxTotalBytes = options?.limits?.maxTotalBytes ?? 1024;
+        if (maxTotalBytes < 5000) throw new Error('EPUB archive is too large');
+        return mockEditableBook('Large', 'large');
+      },
+    );
+
+    const strict = renderHook(() => useEditableEpub({ limits: { maxTotalBytes: 2048 } }));
+    await act(async () => {
+      await strict.result.current.loadBuffer(new ArrayBuffer(8));
+    });
+    expect(strict.result.current.error?.message).toBe('EPUB archive is too large');
+
+    const buffer = new ArrayBuffer(8);
+    const loose = renderHook(() => useEditableEpub({ limits: { maxTotalBytes: 10_000 } }));
+    await act(async () => {
+      await loose.result.current.loadBuffer(buffer);
+    });
+    expect(loose.result.current.book?.title).toBe('Large');
+    expect(loadMock).toHaveBeenCalledWith(buffer, { limits: { maxTotalBytes: 10_000 } });
+
+    if (previous) loadMock.mockImplementation(previous);
+  });
+
+  it('tracks the selected paragraph through edits, undo and redo', async () => {
+    const { EditableEpub } = await import('@libraz/mejiro/epub');
+    const stub = mockHistoryEditor('first');
+    (EditableEpub.load as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => stub);
+    const { result } = renderHook(() => useEditableEpub());
+
+    await act(async () => {
+      await result.current.loadBuffer(new ArrayBuffer(8));
+    });
+    const live = () => (stub as HistoryEditorStub).book.chapters[0].paragraphs[0];
+    expect(result.current.selectedParagraph?.text).toBe('first');
+
+    act(() => {
+      result.current.updateParagraph('edited');
+    });
+    expect(result.current.selectedParagraph?.text).toBe('edited');
+    expect(result.current.selectedParagraph).toBe(live());
+
+    act(() => {
+      expect(result.current.undo()).toBe(true);
+    });
+    expect(result.current.selectedParagraph?.text).toBe('first');
+    expect(result.current.selectedParagraph).toBe(live());
+
+    act(() => {
+      expect(result.current.redo()).toBe(true);
+    });
+    expect(result.current.selectedParagraph?.text).toBe('edited');
+    expect(result.current.selectedParagraph).toBe(live());
   });
 
   it('clamps public selection to the loaded editable book', async () => {
@@ -529,6 +757,82 @@ describe('useSpread (React)', () => {
     expect(result.current.spreadIdx).toBe(0);
   });
 
+  it('leaves arrow keys to editable fields, modifiers and handled events', () => {
+    const layout = mockLayout(6);
+    const { result } = renderHook(() => useSpread(layout, { turnDuration: 0 }));
+
+    const input = document.createElement('input');
+    const textarea = document.createElement('textarea');
+    const editable = document.createElement('div');
+    editable.contentEditable = 'true';
+    for (const el of [input, textarea, editable]) document.body.appendChild(el);
+    const preventer = (e: Event) => e.preventDefault();
+
+    try {
+      for (const el of [input, textarea, editable]) {
+        act(() => {
+          el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+        });
+        expect(result.current.spreadIdx).toBe(0);
+      }
+
+      for (const modifier of ['altKey', 'ctrlKey', 'metaKey', 'shiftKey'] as const) {
+        act(() => {
+          window.dispatchEvent(
+            new KeyboardEvent('keydown', { key: 'ArrowLeft', [modifier]: true }),
+          );
+        });
+        expect(result.current.spreadIdx).toBe(0);
+      }
+
+      document.body.addEventListener('keydown', preventer);
+      act(() => {
+        document.body.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }),
+        );
+      });
+      expect(result.current.spreadIdx).toBe(0);
+      document.body.removeEventListener('keydown', preventer);
+
+      // A plain arrow key on the page still turns the spread.
+      act(() => {
+        document.body.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+        );
+      });
+      expect(result.current.spreadIdx).toBe(1);
+    } finally {
+      document.body.removeEventListener('keydown', preventer);
+      for (const el of [input, textarea, editable]) el.remove();
+    }
+  });
+
+  it('follows enableKeyboard when it flips at runtime', () => {
+    const layout = mockLayout(6);
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) =>
+        useSpread(layout, { turnDuration: 0, enableKeyboard: enabled }),
+      { initialProps: { enabled: true } },
+    );
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    });
+    expect(result.current.spreadIdx).toBe(1);
+
+    rerender({ enabled: false });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    });
+    expect(result.current.spreadIdx).toBe(1);
+
+    rerender({ enabled: true });
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    });
+    expect(result.current.spreadIdx).toBe(2);
+  });
+
   it('refresh() re-fetches the spread at the current index', () => {
     const layout = mockLayout(6);
     const { result } = renderHook(() => useSpread(layout, { turnDuration: 0 }));
@@ -670,6 +974,48 @@ describe('useChapterLayout (React)', () => {
       expect(book.computePageSize).toHaveBeenCalledWith(surface.current, geometry),
     );
   });
+
+  it('re-lays out the chapter with the new instance when the book is swapped', async () => {
+    const l0 = mockLayout(6);
+    const l1 = mockLayout(8);
+    const bookA = makeBook([l0]);
+    const bookB = makeBook([l1]);
+    const epub = makeEpub();
+    const surface = { current: document.createElement('div') };
+    const { result, rerender } = renderHook(
+      ({ book }: { book: MejiroBook }) =>
+        useChapterLayout(book, epub, 0, surface, { enableResize: false }),
+      { initialProps: { book: bookA } },
+    );
+    await waitFor(() => expect(result.current.layout).toBe(l0));
+
+    rerender({ book: bookB });
+    await waitFor(() => expect(result.current.layout).toBe(l1));
+    expect(bookB.layoutChapter).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes pendingRestore as a writable ref', async () => {
+    // `@types/react@18` models `RefObject.current` as read-only, so the hook's
+    // own recipe — assign the consumed anchor back to `null` — must be typed
+    // through a mutable ref to compile across the whole supported peer range.
+    expectTypeOf<ReturnType<typeof useChapterLayout>['pendingRestore']>().toEqualTypeOf<
+      MutableRefObject<InChapterAnchor | null>
+    >();
+
+    const book = makeBook([mockLayout(6)]);
+    const epub = makeEpub();
+    const surface = { current: document.createElement('div') };
+    const { result } = renderHook(() =>
+      useChapterLayout(book, epub, 0, surface, { enableResize: false }),
+    );
+    await waitFor(() => expect(result.current.layout).not.toBeNull());
+
+    const anchor: InChapterAnchor = { paragraph: 1, charIndex: 2 };
+    result.current.pendingRestore.current = anchor;
+    expect(result.current.pendingRestore.current).toBe(anchor);
+    result.current.pendingRestore.current = null;
+    expect(result.current.pendingRestore.current).toBeNull();
+  });
 });
 
 describe('useMultiImageOverlay (React)', () => {
@@ -804,6 +1150,44 @@ describe('useImageOverlay (React, single)', () => {
     expect(result.current.hasImage).toBe(false);
     expect(result.current.imageRect).toBeNull();
     expect(layout.syncImages).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-applies the exclusion to the layout that replaces the current one', () => {
+    const first = mockLayout(4);
+    const second = mockLayout(4);
+    const onUpdate = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ layout }: { layout: ChapterLayout }) => useImageOverlay(layout, 0, onUpdate),
+      { initialProps: { layout: first } },
+    );
+    act(() => result.current.toggleImage());
+    expect(first.syncImages).toHaveBeenCalledTimes(1);
+
+    rerender({ layout: second });
+    expect(second.syncImages).toHaveBeenCalledTimes(1);
+    expect(second.syncImages).toHaveBeenCalledWith(0, [
+      expect.objectContaining({ x: 80, y: 100, w: 120, h: 160 }),
+    ]);
+  });
+
+  it('clears the outgoing spread and re-applies to the new one on a spread change', () => {
+    const layout = mockLayout(8);
+    const onUpdate = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ spreadIdx }: { spreadIdx: number }) => useImageOverlay(layout, spreadIdx, onUpdate),
+      { initialProps: { spreadIdx: 0 } },
+    );
+    act(() => result.current.toggleImage());
+    const syncImages = layout.syncImages as ReturnType<typeof vi.fn>;
+    syncImages.mockClear();
+    onUpdate.mockClear();
+
+    rerender({ spreadIdx: 1 });
+    expect(syncImages.mock.calls[0]).toEqual([0, undefined]);
+    expect(syncImages.mock.calls[1][0]).toBe(1);
+    expect(syncImages.mock.calls[1][1]).toEqual([expect.objectContaining({ x: 80, y: 100 })]);
+    // Only the spread now on screen is reported to the consumer.
+    expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('removes active drag listeners when unmounted mid-drag', () => {

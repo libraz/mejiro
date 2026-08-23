@@ -92,7 +92,16 @@ export function MejiroSettingsPanel({
                 type="button"
                 className="mejiro-reader-btn mejiro-reader-btn--icon"
                 aria-label={messages.settingsSizeDown}
-                onClick={() => patch({ fontSize: Math.max(minFontSize, settings.fontSize - 1) })}
+                onClick={() =>
+                  patch({
+                    fontSize: clampNumber(
+                      settings.fontSize - 1,
+                      minFontSize,
+                      maxFontSize,
+                      minFontSize,
+                    ),
+                  })
+                }
               >
                 A−
               </button>
@@ -117,7 +126,16 @@ export function MejiroSettingsPanel({
                 type="button"
                 className="mejiro-reader-btn mejiro-reader-btn--icon"
                 aria-label={messages.settingsSizeUp}
-                onClick={() => patch({ fontSize: Math.min(maxFontSize, settings.fontSize + 1) })}
+                onClick={() =>
+                  patch({
+                    fontSize: clampNumber(
+                      settings.fontSize + 1,
+                      minFontSize,
+                      maxFontSize,
+                      minFontSize,
+                    ),
+                  })
+                }
               >
                 A+
               </button>

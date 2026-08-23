@@ -26,6 +26,8 @@ export interface UseAnnotationsOptions {
   /**
    * Storage backend. Defaults to `window.localStorage` when available.
    * SSR consumers can omit this and the hook will fall back to in-memory.
+   * The latest reference is always used, so an object literal recreated on
+   * every render is safe — only `key` triggers a re-hydration.
    */
   storage?: AnnotationsStorage;
   /** Throttle ms between writes. @defaultValue 250 */
@@ -89,46 +91,79 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       return [];
     }
   });
+  const storageRef = useRef(storage);
+  storageRef.current = storage;
 
-  // Re-hydrate when the key changes (different book).
-  useEffect(() => {
-    if (!storage) {
-      setAnnotations([]);
-      return;
-    }
-    try {
-      setAnnotations(sortAnnotations(parseAnnotations(storage.getItem(key))));
-    } catch {
-      setAnnotations([]);
-    }
-  }, [storage, key]);
+  // Mirrors the latest list so mutations can derive the next one outside the
+  // state updater — updaters must stay pure (they run twice in StrictMode).
+  const annotationsRef = useRef(annotations);
+
+  const applyNext = useCallback((next: readonly Annotation[]) => {
+    annotationsRef.current = next;
+    setAnnotations(next);
+  }, []);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
+  const pendingWriteRef = useRef<(() => void) | null>(null);
+
+  /** Runs the pending throttled write immediately, if any. */
+  const flushPending = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const write = pendingWriteRef.current;
+    pendingWriteRef.current = null;
+    if (!write) return;
+    try {
+      write();
+    } catch {
+      // Quota or disabled storage — in-memory copy stays.
+    }
+  }, []);
+
+  /** Drops the pending throttled write without running it. */
+  const cancelPending = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingWriteRef.current = null;
+  }, []);
+
+  // Re-hydrate when the key changes (different book). Unmounting or switching
+  // book mid-throttle must not lose the last mutation, so the pending write —
+  // which targets the key it was scheduled under — is flushed on cleanup.
+  useEffect(() => {
+    const currentStorage = storageRef.current;
+    if (currentStorage) {
+      try {
+        applyNext(sortAnnotations(parseAnnotations(currentStorage.getItem(key))));
+      } catch {
+        applyNext([]);
+      }
+    } else {
+      applyNext([]);
+    }
+    return flushPending;
+  }, [key, applyNext, flushPending]);
 
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
 
   const commit = useCallback(
     (next: readonly Annotation[]) => {
-      if (storage) {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-          try {
-            storage.setItem(key, serializeAnnotations(next));
-          } catch {
-            // Quota or disabled storage — in-memory copy stays.
-          }
-        }, throttleMs);
+      const currentStorage = storageRef.current;
+      if (currentStorage) {
+        cancelPending();
+        pendingWriteRef.current = () => {
+          currentStorage.setItem(key, serializeAnnotations(next));
+        };
+        timerRef.current = setTimeout(flushPending, throttleMs);
       }
       onChangeRef.current?.(next);
     },
-    [storage, key, throttleMs],
+    [key, throttleMs, cancelPending, flushPending],
   );
 
   const add = useCallback<UseAnnotationsReturn['add']>(
@@ -138,57 +173,54 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
         id: input.id ?? createAnnotationId(),
         createdAt: input.createdAt ?? Date.now(),
       };
-      setAnnotations((current) => {
-        const next = sortAnnotations([...current, annotation]);
-        commit(next);
-        return next;
-      });
+      const next = sortAnnotations([...annotationsRef.current, annotation]);
+      applyNext(next);
+      commit(next);
       return annotation;
     },
-    [commit],
+    [commit, applyNext],
   );
 
   const remove = useCallback(
     (id: string) => {
-      setAnnotations((current) => {
-        const next = current.filter((annotation) => annotation.id !== id);
-        if (next.length !== current.length) commit(next);
-        return next;
-      });
+      const current = annotationsRef.current;
+      const next = current.filter((annotation) => annotation.id !== id);
+      if (next.length === current.length) return;
+      applyNext(next);
+      commit(next);
     },
-    [commit],
+    [commit, applyNext],
   );
 
   const update = useCallback(
     (id: string, patch: Partial<Omit<Annotation, 'id'>>) => {
-      setAnnotations((current) => {
-        let changed = false;
-        const next = current.map((annotation) => {
-          if (annotation.id !== id) return annotation;
-          changed = true;
-          return { ...annotation, ...patch, id };
-        });
-        if (!changed) return current;
-        const sorted = sortAnnotations(next);
-        commit(sorted);
-        return sorted;
+      let changed = false;
+      const next = annotationsRef.current.map((annotation) => {
+        if (annotation.id !== id) return annotation;
+        changed = true;
+        return { ...annotation, ...patch, id };
       });
+      if (!changed) return;
+      const sorted = sortAnnotations(next);
+      applyNext(sorted);
+      commit(sorted);
     },
-    [commit],
+    [commit, applyNext],
   );
 
   const clear = useCallback(() => {
-    setAnnotations([]);
-    if (storage) {
-      if (timerRef.current) clearTimeout(timerRef.current);
+    applyNext([]);
+    const currentStorage = storageRef.current;
+    if (currentStorage) {
+      cancelPending();
       try {
-        storage.removeItem(key);
+        currentStorage.removeItem(key);
       } catch {
         // ignore
       }
     }
     onChangeRef.current?.([]);
-  }, [storage, key]);
+  }, [key, cancelPending, applyNext]);
 
   return { annotations, add, remove, update, clear };
 }

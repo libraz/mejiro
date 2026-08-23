@@ -18,7 +18,9 @@ export interface MejiroDropZoneProps {
 }
 
 /**
- * Drop zone for EPUB files. Combines drag-and-drop with a click-to-open file picker.
+ * Drop zone for EPUB files. Combines drag-and-drop with a click-to-open file
+ * picker. The root is a real button, so it is reachable with Tab, announced as
+ * a control by screen readers, and opens the picker on Enter / Space.
  */
 export function MejiroDropZone({
   accept = '.epub',
@@ -47,6 +49,12 @@ export function MejiroDropZone({
       className={rootClass}
       style={style}
       onClick={() => inputRef.current?.click()}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        // Cancel the browser's own activation so the picker opens exactly once.
+        e.preventDefault();
+        inputRef.current?.click();
+      }}
       onDragOver={(e) => {
         e.preventDefault();
         setDragover(true);

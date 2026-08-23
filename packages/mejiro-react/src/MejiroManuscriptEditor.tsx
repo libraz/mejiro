@@ -1,5 +1,5 @@
 import type { BookOptions } from '@libraz/mejiro/book';
-import { type AssetResolver, EpubProject } from '@libraz/mejiro/epub';
+import { type AssetResolver, EpubProject, type ManuscriptDialect } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
@@ -54,6 +54,7 @@ export interface ManuscriptPreviewProps {
   bare?: boolean;
 }
 
+/** Props for {@link MejiroManuscriptEditor}. */
 export interface MejiroManuscriptEditorProps {
   /** Font choices passed to the preview reader. */
   fonts?: FontChoice[];
@@ -82,6 +83,12 @@ export interface MejiroManuscriptEditorProps {
   /** Initial chapters. */
   chapters?: ManuscriptEditorChapter[];
   /**
+   * Manuscript notation dialect. Drives the notation highlighter, the live
+   * preview, and the exported EPUB alike, so the whole editor interprets one
+   * dialect. @defaultValue `'mejiro'`
+   */
+  dialect?: ManuscriptDialect;
+  /**
    * Called whenever the chapter draft settles (debounced by
    * {@link MejiroManuscriptEditorProps.autosaveDelay}). Use to persist drafts
    * to localStorage, IndexedDB, or upload to a server.
@@ -96,14 +103,27 @@ export interface MejiroManuscriptEditorProps {
    */
   previewProps?: ManuscriptPreviewProps;
   /**
-   * Resolves URL-only project assets (e.g. covers/illustrations registered as
-   * `{ url, ... }`) into bytes at export time. Forwarded to `project.export()`
-   * so authors can register signed-URL references without holding raw bytes
-   * client-side until publish.
+   * Resolver for URL-only assets, forwarded to `project.export()`. This editor
+   * owns a `File` cover and manuscript text only, and embeds the cover bytes
+   * itself, so nothing it registers is URL-only — build the project through
+   * `useEpubProject` (`setCover` / `setAssets`) to author `{ url }` asset
+   * references that must be fetched at export time.
    */
   assetResolver?: AssetResolver;
   /** Called after export completes. */
   onExport?: (buffer: ArrayBuffer) => void;
+  /**
+   * Called when the EPUB export fails (asset resolution, cover reading, or
+   * packaging). The same error is shown in the editor panel, so hosts only
+   * need this to log or report it.
+   */
+  onError?: (error: Error) => void;
+  /**
+   * Which side of the editor the manuscript panel sits on. `'right'` (the
+   * default) puts the preview on the left; `'left'` mirrors the layout.
+   * @defaultValue 'right'
+   */
+  panelSide?: 'left' | 'right';
 }
 
 function downloadEpub(buffer: ArrayBuffer, title: string): void {
@@ -155,11 +175,14 @@ export function MejiroManuscriptEditor({
   cover: coverProp,
   onCoverChange,
   chapters: initialChapters,
+  dialect = 'mejiro',
   onAutosave,
   autosaveDelay,
   previewProps,
   assetResolver,
   onExport,
+  onError,
+  panelSide = 'right',
 }: MejiroManuscriptEditorProps): ReactNode {
   const messages = useI18n();
   const coverInputRef = useRef<HTMLInputElement | null>(null);
@@ -231,6 +254,7 @@ export function MejiroManuscriptEditor({
   } = draft;
   const current = chapters[selected] ?? chapters[0];
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [exportError, setExportError] = useState<Error | null>(null);
 
   /**
    * Wraps the current textarea selection in the given notation. When no
@@ -255,29 +279,49 @@ export function MejiroManuscriptEditor({
     });
   }
 
+  // Every way an export can fail — cover bytes, asset resolution, packaging —
+  // reports through the same channel the panel already uses for autosave.
   const exportEpub = useCallback(async () => {
-    const project = EpubProject.fromManuscript({
-      metadata: { title, author: author || undefined },
-      chapters: chapters.map((chapter) => ({
-        id: chapter.id,
-        title: chapter.title || messages.untitled,
-        body: chapter.body,
-      })),
-    });
-    if (cover) {
-      project.setCover({
-        href: coverAssetHref(cover),
-        mediaType: cover.type || undefined,
-        data: await cover.arrayBuffer(),
+    try {
+      const project = EpubProject.fromManuscript({
+        metadata: { title, author: author || undefined },
+        dialect,
+        chapters: chapters.map((chapter) => ({
+          id: chapter.id,
+          title: chapter.title || messages.untitled,
+          body: chapter.body,
+        })),
       });
+      if (cover) {
+        project.setCover({
+          href: coverAssetHref(cover),
+          mediaType: cover.type || undefined,
+          data: await cover.arrayBuffer(),
+        });
+      }
+      const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
+      setExportError(null);
+      onExport?.(buffer);
+      downloadEpub(buffer, title);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      setExportError(error);
+      onError?.(error);
     }
-    const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
-    onExport?.(buffer);
-    downloadEpub(buffer, title);
-  }, [assetResolver, author, chapters, cover, messages.untitled, onExport, title]);
+  }, [
+    assetResolver,
+    author,
+    chapters,
+    cover,
+    dialect,
+    messages.untitled,
+    onError,
+    onExport,
+    title,
+  ]);
 
   return (
-    <div className="mejiro-editor mejiro-manuscript-editor">
+    <div className="mejiro-editor mejiro-manuscript-editor" data-panel-side={panelSide}>
       <main className="mejiro-editor-preview">
         <MejiroReader
           subtitle={messages.manuscriptPreviewSubtitle}
@@ -289,6 +333,7 @@ export function MejiroManuscriptEditor({
             title: chapter.title || messages.untitled,
             body: chapter.body,
           }))}
+          dialect={dialect}
           fonts={fonts}
           chapter={selected}
           onChapterChange={setSelected}
@@ -304,6 +349,7 @@ export function MejiroManuscriptEditor({
         {draft.autosaveError && (
           <div className="mejiro-editor-error">{draft.autosaveError.message}</div>
         )}
+        {exportError && <div className="mejiro-editor-error">{exportError.message}</div>}
         <div className="mejiro-editor-section">
           <span className="mejiro-editor-label">{messages.manuscriptMetadata}</span>
           <input value={title} onChange={(event) => setTitle(event.target.value)} />
@@ -398,6 +444,7 @@ export function MejiroManuscriptEditor({
             <MejiroNotationHighlighter
               ref={bodyTextareaRef}
               className="mejiro-editor-manuscript"
+              dialect={dialect}
               value={current.body}
               onChange={(body) => patchChapter(selected, { body })}
             />

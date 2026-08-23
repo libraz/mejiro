@@ -92,27 +92,50 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
   const storageRef = useRef(storage);
   storageRef.current = storage;
 
-  // Re-hydrate when the key changes (different book).
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingWriteRef = useRef<(() => void) | null>(null);
+
+  /** Runs the pending throttled write immediately, if any. */
+  const flushPending = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    const write = pendingWriteRef.current;
+    pendingWriteRef.current = null;
+    if (!write) return;
+    try {
+      write();
+    } catch {
+      // Quota, disabled storage, or denied access — keep the in-memory copy.
+    }
+  }, []);
+
+  /** Drops the pending throttled write without running it. */
+  const cancelPending = useCallback(() => {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingWriteRef.current = null;
+  }, []);
+
+  // Re-hydrate when the key changes (different book). Unmounting or switching
+  // book mid-throttle must not lose the last save(), so the pending write —
+  // which targets the key it was scheduled under — is flushed on cleanup.
   useEffect(() => {
     const currentStorage = storageRef.current;
-    if (!currentStorage) {
+    if (currentStorage) {
+      try {
+        setPosition(parseReadingPosition(currentStorage.getItem(key)));
+      } catch {
+        setPosition(null);
+      }
+    } else {
       setPosition(null);
-      return;
     }
-    try {
-      setPosition(parseReadingPosition(currentStorage.getItem(key)));
-    } catch {
-      setPosition(null);
-    }
-  }, [key]);
-
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    },
-    [],
-  );
+    return flushPending;
+  }, [key, flushPending]);
 
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
@@ -122,23 +145,20 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
       setPosition(next);
       const currentStorage = storageRef.current;
       if (currentStorage) {
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => {
-          try {
-            currentStorage.setItem(key, serializeReadingPosition(next));
-          } catch {
-            // Quota, disabled storage, or denied access — keep the in-memory copy.
-          }
-        }, throttleMs);
+        cancelPending();
+        pendingWriteRef.current = () => {
+          currentStorage.setItem(key, serializeReadingPosition(next));
+        };
+        timerRef.current = setTimeout(flushPending, throttleMs);
       }
       onChangeRef.current?.(next);
     },
-    [key, throttleMs],
+    [key, throttleMs, cancelPending, flushPending],
   );
 
   const clear = useCallback(() => {
     setPosition(null);
-    if (timerRef.current) clearTimeout(timerRef.current);
+    cancelPending();
     const currentStorage = storageRef.current;
     if (currentStorage) {
       try {
@@ -148,7 +168,7 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
       }
     }
     onChangeRef.current?.(null);
-  }, [key]);
+  }, [key, cancelPending]);
 
   return { position, save, clear };
 }

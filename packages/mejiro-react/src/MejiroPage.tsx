@@ -1,4 +1,4 @@
-import type { RenderLine, RenderPage } from '@libraz/mejiro/render';
+import { paragraphClassName, type RenderLine, type RenderPage } from '@libraz/mejiro/render';
 import type { CSSProperties, ReactNode } from 'react';
 import { renderSegment } from './renderInlineNode.js';
 
@@ -35,12 +35,10 @@ export function MejiroPage({ page, className, style }: MejiroPageProps): ReactNo
   return (
     <div className={rootClass} style={style}>
       {page.paragraphs.map((paragraph, pi) => {
-        let paraClass = 'mejiro-paragraph';
-        if (paragraph.headingLevel != null) {
-          paraClass += ` mejiro-paragraph--h${paragraph.headingLevel}`;
-        } else if (paragraph.isHeading) {
-          paraClass += ' mejiro-paragraph--heading';
-        }
+        const paraClass = paragraphClassName(
+          paragraph.kind ?? (paragraph.isHeading ? 'heading' : undefined),
+          paragraph.headingLevel,
+        );
 
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs have no stable ID

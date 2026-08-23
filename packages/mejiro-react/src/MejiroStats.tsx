@@ -31,7 +31,12 @@ export function MejiroStats({
   readingTimeLocale = 'ja',
 }: MejiroStatsProps): ReactNode {
   if (!chapter) return <span className="mejiro-reader-stats" />;
-  const totalChars = chapter.paragraphs.reduce((s, p) => s + p.text.length, 0);
+  // Same population as the reading-time estimate shown beside it: codepoints
+  // (so surrogate pairs count once) with headings left out.
+  const totalChars = chapter.paragraphs.reduce(
+    (s, p) => (p.headingLevel != null ? s : s + [...p.text].length),
+    0,
+  );
   const totalRuby = chapter.paragraphs.reduce(
     (s, p) => s + p.inlineAnnotations.filter((a) => a.kind === 'ruby').length,
     0,

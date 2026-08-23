@@ -2,29 +2,48 @@ import {
   type AssetResolver,
   type EpubBook,
   EpubProject,
+  type EpubProjectAsset,
   type EpubProjectMetadata,
   parseEpub,
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+/** One chapter of the manuscript draft the hook keeps in React state. */
 export interface EpubProjectChapterDraft {
   id: string;
   title: string;
   body: string;
 }
 
+/** Options for {@link useEpubProject}. */
 export interface UseEpubProjectOptions {
+  /** Initial package metadata, merged over the hook's Japanese defaults. */
   metadata?: Partial<EpubProjectMetadata>;
+  /** Initial chapter drafts. A single generated chapter is used when empty. */
   chapters?: EpubProjectChapterDraft[];
+  /** Preview rebuild debounce in milliseconds. @defaultValue 250 */
   debounceMs?: number;
   /**
+   * Initial cover asset. Pass `{ href, url }` to keep the bytes remote until
+   * export, or `{ href, data }` to embed them straight away.
+   */
+  cover?: EpubProjectAsset;
+  /**
+   * Initial non-cover assets (illustrations, extra stylesheets). Same
+   * `data` / `url` choice as {@link UseEpubProjectOptions.cover}.
+   */
+  assets?: EpubProjectAsset[];
+  /**
    * Resolves URL-only project assets into bytes when the preview or export
-   * pipeline materializes them. Forwarded to `project.export()`. Useful when
-   * cover / illustration assets are registered as remote URLs and you want
-   * the host (not the client) to provide auth headers.
+   * pipeline materializes them. Forwarded to `project.export()`. Register the
+   * URLs through {@link UseEpubProjectReturn.setCover} /
+   * {@link UseEpubProjectReturn.setAssets} and let the host (not the client)
+   * provide auth headers here.
    */
   assetResolver?: AssetResolver;
+  /** Called with each successfully rebuilt preview book. */
   onPreview?: (book: EpubBook) => void;
+  /** Called with the EPUB bytes produced by {@link UseEpubProjectReturn.exportEpub}. */
   onExport?: (buffer: ArrayBuffer) => void;
   /** Creates the default title for a generated chapter. */
   defaultChapterTitle?: (index: number) => string;
@@ -32,20 +51,40 @@ export interface UseEpubProjectOptions {
   defaultChapterBody?: (index: number) => string;
 }
 
+/** State and actions returned by {@link useEpubProject}. */
 export interface UseEpubProjectReturn {
   metadata: EpubProjectMetadata;
   chapters: EpubProjectChapterDraft[];
   selectedChapter: number;
   currentChapter: EpubProjectChapterDraft | null;
+  /** Current cover asset, or `null` when the project has no cover. */
+  cover: EpubProjectAsset | null;
+  /** Current non-cover assets, in registration order. */
+  assets: EpubProjectAsset[];
   previewBook: EpubBook | null;
   previewError: Error | null;
   previewing: boolean;
   setMetadata: (patch: Partial<EpubProjectMetadata>) => void;
   setChapters: (chapters: EpubProjectChapterDraft[]) => void;
   setSelectedChapter: (index: number) => void;
+  /**
+   * Replaces the cover asset, or drops it when passed `null`. The new cover is
+   * reflected by both the debounced preview and {@link UseEpubProjectReturn.exportEpub}.
+   */
+  setCover: (asset: EpubProjectAsset | null) => void;
+  /**
+   * Replaces the non-cover asset list. Assets are registered on every rebuilt
+   * project, so URL-only entries reach `assetResolver` at export time.
+   */
+  setAssets: (assets: EpubProjectAsset[]) => void;
   patchChapter: (index: number, patch: Partial<EpubProjectChapterDraft>) => void;
   addChapter: (chapter?: Partial<EpubProjectChapterDraft>) => void;
   removeChapter: (index?: number) => void;
+  /**
+   * Moves a chapter from `from` to `to`. An out-of-range `from` selects no
+   * chapter and leaves the list untouched; `to` is clamped to the list bounds —
+   * the same contract as `EpubProject.reorderChapters()`.
+   */
   reorderChapters: (from: number, to: number) => void;
   buildProject: () => EpubProject;
   exportEpub: () => Promise<ArrayBuffer>;
@@ -64,6 +103,8 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
   );
   const [selectedChapter, setSelectedChapterState] = useState(0);
+  const [cover, setCoverState] = useState<EpubProjectAsset | null>(options.cover ?? null);
+  const [assets, setAssetsState] = useState<EpubProjectAsset[]>(options.assets ?? []);
   const [previewBook, setPreviewBook] = useState<EpubBook | null>(null);
   const [previewError, setPreviewError] = useState<Error | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -74,20 +115,21 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   onPreviewRef.current = options.onPreview;
   onExportRef.current = options.onExport;
 
-  const buildProject = useCallback(
-    () =>
-      EpubProject.fromManuscript({
-        metadata,
-        includeTitlePage: false,
-        includeTitleInFirstChapter: true,
-        chapters: chapters.map((chapter) => ({
-          id: chapter.id,
-          title: chapter.title || 'Untitled',
-          body: chapter.body,
-        })),
-      }),
-    [chapters, metadata],
-  );
+  const buildProject = useCallback(() => {
+    const project = EpubProject.fromManuscript({
+      metadata,
+      includeTitlePage: false,
+      includeTitleInFirstChapter: true,
+      chapters: chapters.map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title || 'Untitled',
+        body: chapter.body,
+      })),
+      ...(cover ? { cover } : {}),
+    });
+    for (const asset of assets) project.addAsset(asset);
+    return project;
+  }, [assets, chapters, cover, metadata]);
 
   const assetResolverRef = useRef(options.assetResolver);
   assetResolverRef.current = options.assetResolver;
@@ -143,6 +185,14 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     },
     [chapters, defaultBody, defaultTitle],
   );
+
+  const setCover = useCallback((asset: EpubProjectAsset | null) => {
+    setCoverState(asset);
+  }, []);
+
+  const setAssets = useCallback((next: EpubProjectAsset[]) => {
+    setAssetsState(next);
+  }, []);
 
   const setSelectedChapter = useCallback(
     (index: number) => {
@@ -224,12 +274,16 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       chapters,
       selectedChapter,
       currentChapter,
+      cover,
+      assets,
       previewBook,
       previewError,
       previewing,
       setMetadata,
       setChapters,
       setSelectedChapter,
+      setCover,
+      setAssets,
       patchChapter,
       addChapter,
       removeChapter,
@@ -239,8 +293,10 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     }),
     [
       addChapter,
+      assets,
       buildProject,
       chapters,
+      cover,
       currentChapter,
       exportEpub,
       metadata,
@@ -251,7 +307,9 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       reorderChapters,
       removeChapter,
       selectedChapter,
+      setAssets,
       setChapters,
+      setCover,
       setMetadata,
       setSelectedChapter,
     ],

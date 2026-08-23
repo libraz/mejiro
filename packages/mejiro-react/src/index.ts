@@ -26,6 +26,7 @@ export { MejiroEditor } from './MejiroEditor.js';
 export type { MejiroImageOverlayProps } from './MejiroImageOverlay.js';
 export { MejiroImageOverlay } from './MejiroImageOverlay.js';
 export type {
+  ManuscriptAutosaveDraft,
   ManuscriptEditorChapter,
   ManuscriptPreviewProps,
   MejiroManuscriptEditorProps,
@@ -41,11 +42,13 @@ export type { MejiroPageViewProps } from './MejiroPageView.js';
 export { MejiroPageView } from './MejiroPageView.js';
 export type {
   MejiroChapterNavMode,
+  MejiroReaderCommonProps,
   MejiroReaderControlledProps,
   MejiroReaderEventMap,
   MejiroReaderFileProps,
   MejiroReaderFit,
   MejiroReaderHandle,
+  MejiroReaderManuscriptProps,
   MejiroReaderMode,
   MejiroReaderProps,
   MejiroReaderSettingsSlot,
@@ -84,6 +87,7 @@ export type {
 export { useAnnotations } from './useAnnotations.js';
 export type {
   PageDimensions,
+  RecomputeOptions,
   UseChapterLayoutOptions,
   UseChapterLayoutReturn,
 } from './useChapterLayout.js';
@@ -103,6 +107,7 @@ export type {
 } from './useEpubProject.js';
 export { useEpubProject } from './useEpubProject.js';
 export type {
+  ImageOverlayRect,
   ImageRect,
   UseImageOverlayOptions,
   UseImageOverlayReturn,
@@ -121,11 +126,12 @@ export type {
 export { useManuscriptDraft } from './useManuscriptDraft.js';
 export type {
   ManuscriptPageDimensions,
+  ManuscriptRecomputeOptions,
   UseManuscriptLayoutOptions,
   UseManuscriptLayoutReturn,
 } from './useManuscriptLayout.js';
 export { useManuscriptLayout } from './useManuscriptLayout.js';
-export type { UseMejiroBookReturn } from './useMejiroBook.js';
+export type { UseMejiroBookOptions, UseMejiroBookReturn } from './useMejiroBook.js';
 export { useMejiroBook } from './useMejiroBook.js';
 export type {
   MultiImageItem,

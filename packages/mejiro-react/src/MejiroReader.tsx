@@ -8,7 +8,7 @@ import type {
 } from '@libraz/mejiro/book';
 import { DEFAULT_BOOK_OPTIONS, DEFAULT_PAGE_GEOMETRY } from '@libraz/mejiro/book';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
-import type { EpubBook, ManuscriptDialect } from '@libraz/mejiro/epub';
+import type { EpubBook, EpubParseLimits, ManuscriptDialect } from '@libraz/mejiro/epub';
 import { manuscriptToEpubBook } from '@libraz/mejiro/epub';
 import {
   type CSSProperties,
@@ -45,6 +45,14 @@ import { useMultiImageOverlay } from './useMultiImageOverlay.js';
 import { useSpread } from './useSpread.js';
 
 export type MejiroChapterNavMode = 'select' | 'panel' | 'both' | 'none';
+
+/**
+ * Window (ms) used to coalesce runtime option changes before they reach the
+ * book and trigger a re-flow. Continuous controls (font-size / line-spacing)
+ * emit one change per step; without this every step would cost a font load,
+ * a full re-measurement and a re-layout.
+ */
+const OPTIONS_DEBOUNCE_MS = 60;
 
 /**
  * Reading-flow mode for {@link MejiroReader}.
@@ -154,6 +162,11 @@ export interface MejiroReaderHandle {
   /**
    * Updates book options at runtime. Same shape as {@link MejiroBook.setOptions}
    * — font / size changes re-measure and re-layout asynchronously.
+   *
+   * Successive calls are coalesced into a single application; the returned
+   * promise resolves once that application has settled. A failed application
+   * (typically a font that could not be loaded) is reported through
+   * {@link MejiroReaderProps.onError} rather than rejecting the promise.
    */
   setOptions(partial: Partial<BookOptions>): Promise<void>;
   /**
@@ -185,7 +198,7 @@ export interface MejiroReaderSettingsSlot {
 }
 
 /** Props shared across every {@link MejiroReader} source mode. */
-interface MejiroReaderCommonProps {
+export interface MejiroReaderCommonProps {
   /**
    * Initial book options. Optional — defaults to {@link DEFAULT_BOOK_OPTIONS}
    * (`serif` 16px, line spacing 1.8, strict kinsoku, hanging punctuation on).
@@ -264,6 +277,13 @@ interface MejiroReaderCommonProps {
    * sending bearer tokens or cookies.
    */
   fetchOptions?: RequestInit;
+  /**
+   * Resource limits applied while parsing an EPUB the reader loads itself
+   * (URL mode and the drop zone / file picker). Untrusted files reach this
+   * component directly, so hosts that accept them should tighten the
+   * defaults here.
+   */
+  limits?: EpubParseLimits;
   /**
    * Custom EPUB fetcher used in place of the global `fetch`. Overrides
    * {@link fetchOptions} when set.
@@ -345,9 +365,10 @@ interface MejiroReaderCommonProps {
   /**
    * Reader-side annotations to render as highlights. Each annotation whose
    * `chapter` matches the current chapter is converted to spread-local
-   * rectangles via `ChapterLayout.selectionRects` and drawn on top of the
-   * page content. Pair with {@link useAnnotations} for persistence, or pass
-   * any shape that satisfies `{ chapter, start, end }`.
+   * rectangles via `ChapterLayout.selectionRects`; the rectangles landing on
+   * the spread on screen are drawn on top of the page content. Pair with
+   * {@link useAnnotations} for persistence, or pass any shape that satisfies
+   * `{ chapter, start, end }`.
    */
   annotations?: ReadonlyArray<{
     chapter: number;
@@ -358,7 +379,10 @@ interface MejiroReaderCommonProps {
 
   /** Called after a successful EPUB load. */
   onLoad?: (book: EpubBook) => void;
-  /** Called when loading or parsing an EPUB fails. */
+  /**
+   * Called when loading or parsing an EPUB fails, and when applying an option
+   * change fails (typically a font that could not be loaded).
+   */
   onError?: (error: Error) => void;
   /** Called when the chapter index changes. */
   onChapterChange?: (chapter: number) => void;
@@ -472,6 +496,7 @@ function MejiroReaderInner(
     enableSurfaceTap = true,
     fallback,
     fetchOptions,
+    limits,
     fetchEpub: fetchEpubFn,
     locale,
     messages,
@@ -574,15 +599,37 @@ function MejiroReaderInner(
     () => ({ ...DEFAULT_BOOK_OPTIONS, ...(optionsProp ?? {}) }),
     [optionsProp],
   );
-  const { book, options: bookOptions, setOptions } = useMejiroBook(resolvedOptions);
-  const didSyncOptionsPropRef = useRef(false);
+
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const reportError = useCallback((error: Error) => onErrorRef.current?.(error), []);
+
+  // Option changes are coalesced before they reach the book: the settings panel
+  // emits one per keystroke / slider step, and every metric change costs a font
+  // load plus a full re-measurement. Failures surface through `onError` instead
+  // of an unhandled rejection, since most call sites here are fire-and-forget.
+  const {
+    book,
+    options: bookOptions,
+    setOptions,
+  } = useMejiroBook(resolvedOptions, {
+    debounceMs: OPTIONS_DEBOUNCE_MS,
+    onError: reportError,
+  });
+
+  // Sync the `options` prop only when its *value* changes. The prop supplies the
+  // initial options, so a parent re-render that hands over a new but equal
+  // object (an inline literal, typically) must not roll back runtime changes
+  // made through `setOptions` or the settings panel.
+  const optionsPropKey = JSON.stringify(resolvedOptions);
+  const syncedOptionsPropKeyRef = useRef(optionsPropKey);
+  const resolvedOptionsRef = useRef(resolvedOptions);
+  resolvedOptionsRef.current = resolvedOptions;
   useEffect(() => {
-    if (!didSyncOptionsPropRef.current) {
-      didSyncOptionsPropRef.current = true;
-      return;
-    }
-    void setOptions(resolvedOptions);
-  }, [resolvedOptions, setOptions]);
+    if (syncedOptionsPropKeyRef.current === optionsPropKey) return;
+    syncedOptionsPropKeyRef.current = optionsPropKey;
+    void setOptions(resolvedOptionsRef.current);
+  }, [optionsPropKey, setOptions]);
 
   const synthesizedEpub = useMemo<EpubBook | null>(() => {
     if (manuscriptProp === undefined) return null;
@@ -594,6 +641,7 @@ function MejiroReaderInner(
     // book (or a synthesized manuscript book) is supplied.
     defaultUrl: epubProp !== undefined || manuscriptProp !== undefined ? undefined : epubUrl,
     fetchOptions,
+    limits,
     fetchEpub: fetchEpubFn,
     onLoad: (b) => {
       if (chapterProp == null) setChapterState(0);
@@ -605,8 +653,6 @@ function MejiroReaderInner(
   const isManuscriptSource = manuscriptProp !== undefined;
   const e = isManuscriptSource ? synthesizedEpub : controlled ? (epubProp ?? null) : epubCtx.epub;
 
-  const onErrorRef = useRef(onError);
-  onErrorRef.current = onError;
   useEffect(() => {
     if (epubCtx.error) onErrorRef.current?.(epubCtx.error);
   }, [epubCtx.error]);
@@ -658,7 +704,8 @@ function MejiroReaderInner(
   // layout, so the settings-panel font / line-spacing / kinsoku / hanging
   // controls would only restyle the wrapper while the typeset content stayed
   // frozen. Debounced so dragging a continuous control coalesces into one
-  // re-flow; `setOptions` is awaited first so the re-layout sees current metrics.
+  // re-flow; the pending option change is awaited first so the re-layout sees
+  // the metrics it will be measured with.
   const optionsKey = [
     bookOptions.fontFamily,
     bookOptions.fontSize,
@@ -677,12 +724,16 @@ function MejiroReaderInner(
     optionsKeyRef.current = optionsKey;
     const timer = setTimeout(() => {
       void (async () => {
-        await setOptions({ ...bookOptionsRef.current });
-        await recomputeRef.current({ blank: false });
+        try {
+          await setOptions({ ...bookOptionsRef.current });
+          await recomputeRef.current({ blank: false });
+        } catch (err) {
+          reportError(err instanceof Error ? err : new Error(String(err)));
+        }
       })();
-    }, 60);
+    }, OPTIONS_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [optionsKey, setOptions]);
+  }, [optionsKey, setOptions, reportError]);
 
   // Re-flow when the resolved page geometry changes at runtime (covers both host
   // `pageGeometry` edits and `fit`-driven offset changes). `pageGeometryRef` is
@@ -708,7 +759,9 @@ function MejiroReaderInner(
         start: annotation.start,
         end: annotation.end,
       });
-      for (const rect of rects) result.push(rect);
+      // Carry the annotation's color onto every rectangle it produced — the
+      // selection layer paints each rectangle from its own `color`.
+      for (const rect of rects) result.push({ ...rect, color: annotation.color });
     }
     return result;
   }, [annotations, layoutCtx.layout, chapter]);
@@ -729,12 +782,24 @@ function MejiroReaderInner(
   }, [controlled, e, book, chapterIsUncontrolled]);
 
   // Controlled spreadIdx → host-driven navigation: animate to the prop value.
+  // Every commit is reconciled, not just the ones where the prop value changed:
+  // a host that rejects a change (keeping the prop where it was) must see the
+  // rendered spread return to the prop value, so the drift is snapped back
+  // without a turn animation.
   const spreadGoToRef = useRef(spreadCtx.goTo);
   spreadGoToRef.current = spreadCtx.goTo;
+  const appliedSpreadIdxPropRef = useRef(spreadIdxProp);
   useEffect(() => {
-    if (spreadIdxProp == null) return;
-    spreadGoToRef.current(spreadIdxProp);
-  }, [spreadIdxProp]);
+    if (spreadIdxProp == null) {
+      appliedSpreadIdxPropRef.current = spreadIdxProp;
+      return;
+    }
+    const propChanged = appliedSpreadIdxPropRef.current !== spreadIdxProp;
+    appliedSpreadIdxPropRef.current = spreadIdxProp;
+    if (spreadCtx.spreadIdx === spreadIdxProp) return;
+    if (propChanged) spreadGoToRef.current(spreadIdxProp);
+    else setSpreadRef.current(spreadIdxProp);
+  }, [spreadIdxProp, spreadCtx.spreadIdx]);
 
   // Controlled spreadIdx → reflow restore: a re-layout resets useSpread to
   // spread 0, so snap back to the controlled index immediately (no turn
@@ -1118,6 +1183,7 @@ function MejiroReaderInner(
                 onImagePointerDown={imageCtx.onOverlayPointerDown}
                 onImageResizePointerDown={imageCtx.onResizePointerDown}
                 onImageClose={imageCtx.removeImage}
+                spreadIdx={spreadCtx.spreadIdx}
                 selectionRects={annotationRects.length ? annotationRects : undefined}
               />
             )}

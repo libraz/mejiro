@@ -7,8 +7,12 @@ export interface MejiroSelectionLayerProps {
    * Spread-local rectangles to highlight. Compute these via
    * {@link ChapterLayout.selectionRects} and pass the full array; the layer
    * picks the entries matching {@link MejiroSelectionLayerProps.side}.
+   *
+   * A rectangle may carry its own `color`, which becomes that rectangle's
+   * fill. Entries without one take the fill from the shipped stylesheet
+   * (`.mejiro-selection-rect`, themeable via `--mejiro-selection-bg`).
    */
-  rects: readonly AnchorRect[];
+  rects: readonly (AnchorRect & { color?: string })[];
   /** Which page-side this layer is rendered into. */
   side: 'right' | 'left';
   /** Optional class added to the outer wrapper. */
@@ -17,7 +21,7 @@ export interface MejiroSelectionLayerProps {
   style?: CSSProperties;
   /** Optional class for each rectangle (defaults to `mejiro-selection-rect`). */
   rectClassName?: string;
-  /** Optional inline style for each rectangle. */
+  /** Optional inline style for each rectangle. Takes precedence over `color`. */
   rectStyle?: CSSProperties;
 }
 
@@ -62,6 +66,7 @@ export function MejiroSelectionLayer({
               width: r.width,
               height: r.height,
               ...posStyle,
+              ...(r.color != null ? { backgroundColor: r.color } : null),
               ...rectStyle,
             }}
           />

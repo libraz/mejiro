@@ -1,5 +1,5 @@
-import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import { createOverlayDragSession } from '@libraz/mejiro/browser';
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -206,33 +206,19 @@ export function useMultiImageOverlay(
       e.preventDefault();
       const found = findById(id);
       if (!found) return;
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const start = { ...found.item.rect };
       const target = e.currentTarget as HTMLElement;
-      target.setPointerCapture(e.nativeEvent.pointerId);
-      target.classList.add('is-dragging');
-
-      let rafId = 0;
-      const onMove = (me: PointerEvent) => {
-        const dx = me.clientX - startX;
-        const dy = me.clientY - startY;
-        const r = moveImageOverlayRect(start, dx, dy);
-        cancelAnimationFrame(rafId);
-        rafId = requestAnimationFrame(() => updateImage(id, r));
-      };
-      let cleanup: () => void;
-      const onUp = () => cleanup();
-      cleanup = () => {
-        cancelAnimationFrame(rafId);
-        target.classList.remove('is-dragging');
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        activeDragCleanupsRef.current.delete(cleanup);
-      };
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
-      activeDragCleanupsRef.current.add(cleanup);
+      createOverlayDragSession({
+        mode: 'move',
+        rect: found.item.rect,
+        startX: e.clientX,
+        startY: e.clientY,
+        pointerId: e.nativeEvent.pointerId,
+        captureElement: target,
+        activeElement: target,
+        dragClass: 'is-dragging',
+        registry: activeDragCleanupsRef.current,
+        onChange: (rect) => updateImage(id, rect),
+      });
     },
     [findById, updateImage],
   );
@@ -243,33 +229,19 @@ export function useMultiImageOverlay(
       e.stopPropagation();
       const found = findById(id);
       if (!found) return;
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const start = { ...found.item.rect };
       const target = e.currentTarget as HTMLElement;
-      target.setPointerCapture(e.nativeEvent.pointerId);
-      target.parentElement?.classList.add('is-dragging');
-
-      let rafId = 0;
-      const onMove = (me: PointerEvent) => {
-        const dx = me.clientX - startX;
-        const dy = me.clientY - startY;
-        const r = resizeImageOverlayRect(start, dx, dy);
-        cancelAnimationFrame(rafId);
-        rafId = requestAnimationFrame(() => updateImage(id, r));
-      };
-      let cleanup: () => void;
-      const onUp = () => cleanup();
-      cleanup = () => {
-        cancelAnimationFrame(rafId);
-        target.parentElement?.classList.remove('is-dragging');
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onUp);
-        activeDragCleanupsRef.current.delete(cleanup);
-      };
-      document.addEventListener('pointermove', onMove);
-      document.addEventListener('pointerup', onUp);
-      activeDragCleanupsRef.current.add(cleanup);
+      createOverlayDragSession({
+        mode: 'resize',
+        rect: found.item.rect,
+        startX: e.clientX,
+        startY: e.clientY,
+        pointerId: e.nativeEvent.pointerId,
+        captureElement: target,
+        activeElement: target.parentElement,
+        dragClass: 'is-dragging',
+        registry: activeDragCleanupsRef.current,
+        onChange: (rect) => updateImage(id, rect),
+      });
     },
     [findById, updateImage],
   );

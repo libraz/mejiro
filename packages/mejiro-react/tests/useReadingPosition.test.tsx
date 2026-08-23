@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
+import { parseReadingPosition, serializeReadingPosition } from '@libraz/mejiro';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReadingPositionStorage } from '../src/useReadingPosition.js';
@@ -131,6 +132,42 @@ describe('useReadingPosition (React)', () => {
     warn.mockRestore();
   });
 
+  it('flushes a pending save() when the hook unmounts inside the throttle window', () => {
+    const storage = memoryStorage();
+    const { result, unmount } = renderHook(() =>
+      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+    );
+
+    act(() => {
+      result.current.save({ chapter: 3, paragraph: 2, charIndex: 8 });
+    });
+    expect(storage.data.get('k')).toBeUndefined();
+
+    unmount();
+
+    expect(JSON.parse(storage.data.get('k') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 3,
+      paragraph: 2,
+      charIndex: 8,
+    });
+  });
+
+  it('does not resurrect a cleared position when the hook unmounts', () => {
+    const storage = memoryStorage();
+    const { result, unmount } = renderHook(() =>
+      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+    );
+
+    act(() => {
+      result.current.save({ chapter: 3, paragraph: 2, charIndex: 8 });
+      result.current.clear();
+    });
+    unmount();
+
+    expect(storage.data.get('k')).toBeUndefined();
+  });
+
   it('onChange fires synchronously on save() with the new anchor', () => {
     const onChange = vi.fn();
     const storage = memoryStorage();
@@ -159,5 +196,37 @@ describe('useReadingPosition (React)', () => {
     storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
     renderHook(() => useReadingPosition({ key: 'k', storage, onChange }));
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('round-trips through a server mirror fed by onChange', () => {
+    let server: string | null = null;
+    const first = renderHook(() =>
+      useReadingPosition({
+        key: 'k',
+        storage: memoryStorage(),
+        onChange: (next) => {
+          server = next === null ? null : serializeReadingPosition(next);
+        },
+      }),
+    );
+
+    act(() => {
+      first.result.current.save({ chapter: 4, paragraph: 6, charIndex: 11 });
+    });
+    first.unmount();
+
+    expect(parseReadingPosition(server)).toEqual({ chapter: 4, paragraph: 6, charIndex: 11 });
+
+    const revisit = renderHook(() =>
+      useReadingPosition({
+        key: 'k',
+        storage: {
+          getItem: () => server,
+          setItem: () => {},
+          removeItem: () => {},
+        },
+      }),
+    );
+    expect(revisit.result.current.position).toEqual({ chapter: 4, paragraph: 6, charIndex: 11 });
   });
 });

@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,6 +29,11 @@ vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
 
 import { enMessages, MejiroI18nProvider } from '../src/i18n.js';
 import { MejiroManuscriptEditor } from '../src/MejiroManuscriptEditor.js';
+
+const editorCss = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../../mejiro/src/render/mejiro-editor.css'),
+  'utf8',
+);
 
 describe('MejiroManuscriptEditor (React)', () => {
   beforeEach(() => {
@@ -196,6 +204,37 @@ describe('MejiroManuscriptEditor (React)', () => {
     }
   });
 
+  it('autosaves when only the title changes', () => {
+    vi.useFakeTimers();
+    try {
+      const onAutosave = vi.fn();
+      const { container } = render(
+        <MejiroManuscriptEditor
+          title="Before"
+          author="Author"
+          onAutosave={onAutosave}
+          autosaveDelay={100}
+        />,
+      );
+      const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
+      fireEvent.change(titleInput, { target: { value: 'After' } });
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+
+      expect(onAutosave).toHaveBeenCalledTimes(1);
+      expect(onAutosave.mock.calls[0][0]).toEqual({
+        title: 'After',
+        author: 'Author',
+        cover: null,
+        chapters: expect.any(Array),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('surfaces autosave errors in the editor panel', async () => {
     vi.useFakeTimers();
     try {
@@ -218,6 +257,55 @@ describe('MejiroManuscriptEditor (React)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('mirrors the layout when panelSide is left', () => {
+    const { container: right } = render(<MejiroManuscriptEditor />);
+    expect(right.querySelector('.mejiro-editor')?.getAttribute('data-panel-side')).toBe('right');
+
+    const { container: left } = render(<MejiroManuscriptEditor panelSide="left" />);
+    const root = left.querySelector('.mejiro-editor') as HTMLElement;
+    expect(root.getAttribute('data-panel-side')).toBe('left');
+    // The mirrored layout is the stylesheet's reaction to that attribute.
+    expect(editorCss).toContain('.mejiro-editor[data-panel-side="left"]');
+  });
+
+  it('surfaces a failed export in the editor panel and through onError', async () => {
+    const failure = new Error('packaging failed');
+    epubMocks.exportProject.mockRejectedValueOnce(failure);
+    const onError = vi.fn();
+
+    const { container } = render(<MejiroManuscriptEditor onError={onError} />);
+    fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('packaging failed');
+    });
+    expect(onError).toHaveBeenCalledWith(failure);
+  });
+
+  it('surfaces a cover that cannot be read as bytes at export time', async () => {
+    const failure = new Error('cover unreadable');
+    const onError = vi.fn();
+    const file = new File(['cover'], 'cover.png', { type: 'image/png' });
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: () => Promise.reject(failure),
+      configurable: true,
+    });
+
+    const { container } = render(<MejiroManuscriptEditor onError={onError} />);
+    const fileInput = container.querySelector(
+      '.mejiro-editor-panel input[type="file"]',
+    ) as HTMLInputElement;
+    Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+    fireEvent.change(fileInput);
+    fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('cover unreadable');
+    });
+    expect(onError).toHaveBeenCalledWith(failure);
+    expect(epubMocks.exportProject).not.toHaveBeenCalled();
   });
 
   it('forwards preview options, theme, and settings renderer to the embedded reader', () => {

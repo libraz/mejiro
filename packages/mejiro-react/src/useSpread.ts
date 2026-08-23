@@ -40,6 +40,21 @@ export interface UseSpreadReturn {
 }
 
 /**
+ * True when a global keydown must not be read as reader navigation: the host
+ * already handled it, a modifier turns it into a different gesture, or it was
+ * typed into an editable field (comment boxes, the bundled manuscript editor).
+ */
+function ignoreNavigationKey(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented) return true;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return true;
+  const target = e.target as HTMLElement | null;
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
+/**
  * React hook that tracks the current spread index for a chapter layout
  * and exposes navigation helpers with an optional page-turn animation.
  */
@@ -148,6 +163,7 @@ export function useSpread(
     if (!enableKeyboard) return;
     const onKey = (e: KeyboardEvent) => {
       if (!layoutRef.current) return;
+      if (ignoreNavigationKey(e)) return;
       if (e.key === 'ArrowLeft') next();
       else if (e.key === 'ArrowRight') prev();
     };

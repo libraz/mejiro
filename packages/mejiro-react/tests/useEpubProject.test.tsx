@@ -65,6 +65,27 @@ describe('useEpubProject (React)', () => {
     expect(result.current.selectedChapter).toBe(0);
   });
 
+  it('leaves the chapter list untouched when reorderChapters gets an out-of-range from', () => {
+    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+
+    act(() => result.current.setSelectedChapter(1));
+    act(() => result.current.reorderChapters(5, 0));
+    act(() => result.current.reorderChapters(-1, 2));
+
+    expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c']);
+    expect(result.current.selectedChapter).toBe(1);
+  });
+
+  it('clamps an out-of-range to in reorderChapters', () => {
+    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+
+    act(() => result.current.reorderChapters(0, 99));
+    expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['b', 'c', 'a']);
+
+    act(() => result.current.reorderChapters(2, -5));
+    expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c']);
+  });
+
   it('does not let undefined addChapter fields erase generated chapter data', () => {
     const { result } = renderHook(() => useEpubProject({ debounceMs: 10_000 }));
 

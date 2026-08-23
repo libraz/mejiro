@@ -1,7 +1,17 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
-import type { ChapterLayout, PageResult, SpreadResult } from '@libraz/mejiro/book';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  type AnchorRect,
+  type ChapterLayout,
+  estimateReadingTime,
+  type InChapterAnchor,
+  type PageResult,
+  type SpreadResult,
+} from '@libraz/mejiro/book';
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
 import type { RenderPage } from '@libraz/mejiro/render';
 import { fireEvent, render } from '@testing-library/react';
@@ -13,6 +23,7 @@ import { MejiroImageOverlay } from '../src/MejiroImageOverlay.js';
 import { MejiroPage } from '../src/MejiroPage.js';
 import { MejiroPageIndicator } from '../src/MejiroPageIndicator.js';
 import { MejiroScrollView } from '../src/MejiroScrollView.js';
+import { MejiroSelectionLayer } from '../src/MejiroSelectionLayer.js';
 import { MejiroSettingsPanel } from '../src/MejiroSettingsPanel.js';
 import { MejiroShelf } from '../src/MejiroShelf.js';
 import { MejiroSpread } from '../src/MejiroSpread.js';
@@ -56,6 +67,47 @@ describe('MejiroDropZone (React)', () => {
     fireEvent.drop(root, { dataTransfer: dt });
 
     expect(onFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes a focusable control as its root', () => {
+    const { container } = render(<MejiroDropZone onFile={() => {}} />);
+    const root = container.querySelector('.mejiro-reader-drop-zone') as HTMLButtonElement;
+    expect(root.tagName).toBe('BUTTON');
+    expect(root.getAttribute('type')).toBe('button');
+    expect(root.tabIndex).toBe(0);
+    root.focus();
+    expect(document.activeElement).toBe(root);
+  });
+
+  it('opens a book from the keyboard via Enter and Space', () => {
+    const onFile = vi.fn();
+    const { container } = render(<MejiroDropZone onFile={onFile} />);
+    const root = container.querySelector('.mejiro-reader-drop-zone') as HTMLButtonElement;
+    const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const openPicker = vi.spyOn(picker, 'click').mockImplementation(() => {});
+    root.focus();
+
+    for (const key of ['Enter', ' ']) {
+      // The native activation is cancelled so the picker opens exactly once.
+      expect(fireEvent.keyDown(root, { key })).toBe(false);
+    }
+    expect(openPicker).toHaveBeenCalledTimes(2);
+
+    const file = new File(['x'], 'book.epub', { type: 'application/epub+zip' });
+    Object.defineProperty(picker, 'files', { value: [file], configurable: true });
+    fireEvent.change(picker);
+
+    expect(onFile).toHaveBeenCalledTimes(1);
+    expect(onFile.mock.calls[0][0].name).toBe('book.epub');
+  });
+
+  it('ignores other keys', () => {
+    const { container } = render(<MejiroDropZone onFile={() => {}} />);
+    const root = container.querySelector('.mejiro-reader-drop-zone') as HTMLButtonElement;
+    const picker = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const openPicker = vi.spyOn(picker, 'click').mockImplementation(() => {});
+    fireEvent.keyDown(root, { key: 'a' });
+    expect(openPicker).not.toHaveBeenCalled();
   });
 
   it('toggles is-dragover on dragover/dragleave', () => {
@@ -134,16 +186,25 @@ describe('MejiroChapterNav (React)', () => {
     expect(onChange).toHaveBeenCalledWith(2);
   });
 
-  it('keeps duplicate chapter titles selectable', () => {
+  it('keeps duplicate chapter titles individually selectable', () => {
     const epub = fakeEpub();
     epub.chapters = [
       { title: '同名', paragraphs: [] },
       { title: '同名', paragraphs: [] },
+      { title: '同名', paragraphs: [] },
     ];
+    const onChange = vi.fn();
 
-    const { container } = render(<MejiroChapterNav epub={epub} chapter={0} onChange={() => {}} />);
+    const { container } = render(<MejiroChapterNav epub={epub} chapter={0} onChange={onChange} />);
+    const options = Array.from(container.querySelectorAll<HTMLOptionElement>('select option'));
 
-    expect(container.querySelectorAll('select option')).toHaveLength(2);
+    expect(options).toHaveLength(3);
+    // Titles collide, so only the value distinguishes the chapters.
+    expect(options.map((option) => option.value)).toEqual(['0', '1', '2']);
+
+    const select = container.querySelector('select') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '2' } });
+    expect(onChange).toHaveBeenCalledWith(2);
   });
 
   it("renders a list of chapter cards with the active card marked ('panel' variant)", () => {
@@ -311,7 +372,7 @@ function pageResult(text: string): PageResult {
 }
 
 describe('MejiroSpread (React)', () => {
-  it('uses slot rendering even for image-free pages to avoid native ruby flow reuse', () => {
+  it('leaves image-free pages in normal mode when slotMode is not given', () => {
     const spread: SpreadResult = {
       right: pageResult('右頁'),
       left: pageResult('左頁'),
@@ -324,9 +385,171 @@ describe('MejiroSpread (React)', () => {
       </MejiroI18nProvider>,
     );
 
+    expect(container.querySelectorAll('.mejiro-page-slots')).toHaveLength(0);
+    expect(container.querySelectorAll('.mejiro-reader-page-content.mejiro-page')).toHaveLength(2);
+  });
+
+  it('forces slot rendering on both pages when slotMode is given', () => {
+    const spread: SpreadResult = {
+      right: pageResult('右頁'),
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+
+    const { container } = render(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread
+          spread={spread}
+          pageWidth={320}
+          pageHeight={460}
+          contentHeight={360}
+          slotMode
+        />
+      </MejiroI18nProvider>,
+    );
+
     expect(container.querySelectorAll('.mejiro-page-slots')).toHaveLength(2);
     expect(container.querySelector('.mejiro-reader-page-content.mejiro-page')).toBeNull();
     expect(container.querySelector('br')).toBeNull();
+  });
+
+  it('paints only the selection rectangles that belong to the rendered spread', () => {
+    const spread: SpreadResult = {
+      right: pageResult('右頁'),
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+    const rects = [selectionRect({ spreadIdx: 0 }), selectionRect({ spreadIdx: 3, y: 60 })];
+
+    const { container, rerender } = render(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread
+          spread={spread}
+          pageWidth={320}
+          pageHeight={460}
+          contentHeight={360}
+          spreadIdx={3}
+          selectionRects={rects}
+        />
+      </MejiroI18nProvider>,
+    );
+
+    const onSpread3 = [...container.querySelectorAll<HTMLElement>('.mejiro-selection-rect')];
+    expect(onSpread3).toHaveLength(1);
+    expect(onSpread3[0]?.style.top).toBe('60px');
+
+    rerender(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread
+          spread={spread}
+          pageWidth={320}
+          pageHeight={460}
+          contentHeight={360}
+          spreadIdx={0}
+          selectionRects={rects}
+        />
+      </MejiroI18nProvider>,
+    );
+
+    const onSpread0 = [...container.querySelectorAll<HTMLElement>('.mejiro-selection-rect')];
+    expect(onSpread0).toHaveLength(1);
+    expect(onSpread0[0]?.style.top).toBe('20px');
+  });
+
+  it('still slot-renders a page that carries images without slotMode', () => {
+    const withImages = { ...pageResult('右頁'), hasImages: true };
+    const spread: SpreadResult = {
+      right: withImages,
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+
+    const { container } = render(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread spread={spread} pageWidth={320} pageHeight={460} contentHeight={360} />
+      </MejiroI18nProvider>,
+    );
+
+    expect(
+      container.querySelectorAll('.mejiro-reader-page--right .mejiro-page-slots'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelectorAll(
+        '.mejiro-reader-page--left .mejiro-reader-page-content.mejiro-page',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('keeps native text selection when only anchorAtCoord is given', () => {
+    const spread: SpreadResult = {
+      right: pageResult('右頁'),
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+    const anchorAtCoord = vi.fn(() => ({ paragraph: 0, charIndex: 0 }));
+
+    const { container } = render(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread
+          spread={spread}
+          pageWidth={320}
+          pageHeight={460}
+          contentHeight={360}
+          anchorAtCoord={anchorAtCoord}
+        />
+      </MejiroI18nProvider>,
+    );
+    const spreadEl = container.querySelector('.mejiro-reader-spread') as HTMLElement;
+    const setPointerCapture = vi.fn();
+    spreadEl.setPointerCapture = setPointerCapture;
+    const content = container.querySelector('.mejiro-reader-page-content') as HTMLElement;
+
+    const event = new MouseEvent('pointerdown', { bubbles: true, cancelable: true });
+    content.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(setPointerCapture).not.toHaveBeenCalled();
+  });
+
+  it('drag-selects when anchorAtCoord and onSelectionChange are both given', () => {
+    const spread: SpreadResult = {
+      right: pageResult('右頁'),
+      left: pageResult('左頁'),
+      totalPages: 2,
+    };
+    const anchors: InChapterAnchor[] = [
+      { paragraph: 0, charIndex: 0 },
+      { paragraph: 0, charIndex: 5 },
+    ];
+    let call = 0;
+    const anchorAtCoord = vi.fn(() => anchors[Math.min(call++, anchors.length - 1)] ?? null);
+    const onSelectionChange = vi.fn();
+
+    const { container } = render(
+      <MejiroI18nProvider messages={jaMessages}>
+        <MejiroSpread
+          spread={spread}
+          pageWidth={320}
+          pageHeight={460}
+          contentHeight={360}
+          anchorAtCoord={anchorAtCoord}
+          onSelectionChange={onSelectionChange}
+        />
+      </MejiroI18nProvider>,
+    );
+    const spreadEl = container.querySelector('.mejiro-reader-spread') as HTMLElement;
+    spreadEl.setPointerCapture = vi.fn();
+    spreadEl.hasPointerCapture = vi.fn(() => false);
+    const content = container.querySelector('.mejiro-reader-page-content') as HTMLElement;
+
+    const down = new MouseEvent('pointerdown', { bubbles: true, cancelable: true });
+    content.dispatchEvent(down);
+    content.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, cancelable: true }));
+
+    expect(down.defaultPrevented).toBe(true);
+    expect(spreadEl.setPointerCapture).toHaveBeenCalled();
+    expect(onSelectionChange).toHaveBeenNthCalledWith(1, null);
+    expect(onSelectionChange).toHaveBeenNthCalledWith(2, { start: anchors[0], end: anchors[1] });
   });
 
   it('prints each page number in its own running head and hides it when null', () => {
@@ -358,6 +581,55 @@ describe('MejiroSpread (React)', () => {
     );
     expect(rightNum?.textContent).toBe('7');
     expect(leftNum?.textContent).toBe('');
+  });
+});
+
+const readerCss = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), '../../mejiro/src/render/mejiro-reader.css'),
+  'utf8',
+);
+
+function selectionRect(overrides: Partial<AnchorRect & { color: string }> = {}): AnchorRect & {
+  color?: string;
+} {
+  return {
+    spreadIdx: 0,
+    pageIdx: 0,
+    side: 'right',
+    x: 10,
+    y: 20,
+    width: 24,
+    height: 18,
+    ...overrides,
+  };
+}
+
+describe('MejiroSelectionLayer (React)', () => {
+  it('fills each rectangle with its own colour', () => {
+    const { container } = render(
+      <MejiroSelectionLayer
+        side="right"
+        rects={[
+          selectionRect({ color: 'rgb(255, 255, 0)' }),
+          selectionRect({ y: 60, color: 'rgb(0, 128, 255)' }),
+        ]}
+      />,
+    );
+
+    const rects = [...container.querySelectorAll<HTMLElement>('.mejiro-selection-rect')];
+    expect(rects).toHaveLength(2);
+    expect(getComputedStyle(rects[0] as HTMLElement).backgroundColor).toBe('rgb(255, 255, 0)');
+    expect(getComputedStyle(rects[1] as HTMLElement).backgroundColor).toBe('rgb(0, 128, 255)');
+  });
+
+  it('leaves uncoloured rectangles to the shipped stylesheet rule', () => {
+    const { container } = render(<MejiroSelectionLayer side="right" rects={[selectionRect()]} />);
+
+    const rect = container.querySelector<HTMLElement>('.mejiro-selection-rect');
+    expect(rect?.style.backgroundColor).toBe('');
+    // The auto-imported reader stylesheet is the only fill for such rectangles.
+    expect(readerCss).toMatch(/\.mejiro-selection-rect\s*\{[^}]*background-color:/u);
+    expect(readerCss).toContain('--mejiro-selection-bg');
   });
 });
 
@@ -468,6 +740,18 @@ describe('MejiroSettingsPanel (React)', () => {
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, lineSpacing: 3 });
   });
 
+  it('clamps the size stepper buttons to the declared range', () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <MejiroSettingsPanel open settings={{ ...baseSettings, fontSize: 96 }} onChange={onChange} />,
+    );
+    const buttons = container.querySelectorAll('.mejiro-reader-btn--icon');
+    fireEvent.click(buttons[0]);
+    expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, fontSize: 48 });
+    fireEvent.click(buttons[1]);
+    expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, fontSize: 48 });
+  });
+
   it('reflects min/max font size on the size input', () => {
     const { container } = render(
       <MejiroSettingsPanel
@@ -573,6 +857,25 @@ describe('MejiroStats (React)', () => {
     };
     const { container } = render(<MejiroStats chapter={withRuby} totalPages={1} elapsedMs={0} />);
     expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('1ruby');
+  });
+
+  it('counts characters over the same population as the reading-time estimate', () => {
+    const chapter: EpubChapter = {
+      title: 'C',
+      paragraphs: [
+        { text: '見出し', headingLevel: 1, inlineAnnotations: [] },
+        { text: '𠮷野家', inlineAnnotations: [] },
+      ],
+    };
+    const cpm = 60;
+    const { container } = render(
+      <MejiroStats chapter={chapter} totalPages={1} elapsedMs={0} showReadingTime cpm={cpm} />,
+    );
+
+    const text = container.querySelector('.mejiro-reader-stats')?.textContent ?? '';
+    const charsBehindTheEstimate = (estimateReadingTime(chapter, { cpm }) / 60_000) * cpm;
+    expect(charsBehindTheEstimate).toBe(3);
+    expect(text).toContain(`${charsBehindTheEstimate}ch`);
   });
 
   it('includes the fontLabel when provided', () => {

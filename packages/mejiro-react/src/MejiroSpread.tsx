@@ -39,7 +39,11 @@ export interface MejiroSpreadProps {
   leftHeader?: PageHeaderData;
   /** Image overlays on the current spread. */
   images?: MultiImageItem[];
-  /** Force slot-mode rendering on both pages. */
+  /**
+   * Force slot-mode rendering on both pages. When omitted, each page falls
+   * through to {@link MejiroPageView}'s automatic choice: slot mode for pages
+   * with images, native `writing-mode: vertical-rl` otherwise.
+   */
   slotMode?: boolean;
   /** Custom renderer for per-page headers. */
   renderPageHeader?: (side: 'right' | 'left', header: PageHeaderData) => ReactNode;
@@ -63,11 +67,19 @@ export interface MejiroSpreadProps {
    */
   anchorAtCoord?: (x: number, y: number) => InChapterAnchor | null;
   /**
-   * Selection rectangles to render as a highlight overlay. Compute via
-   * {@link ChapterLayout.selectionRects}. Entries with `spreadIdx` other than
-   * the current spread are ignored.
+   * Zero-based index of the spread being rendered. Rectangles passed through
+   * {@link MejiroSpreadProps.selectionRects} carry spread-local coordinates,
+   * so this is what scopes them to this spread. When omitted, every supplied
+   * rectangle is painted.
    */
-  selectionRects?: readonly AnchorRect[];
+  spreadIdx?: number;
+  /**
+   * Selection rectangles to render as a highlight overlay. Compute via
+   * {@link ChapterLayout.selectionRects}. Entries whose `spreadIdx` differs
+   * from {@link MejiroSpreadProps.spreadIdx} are ignored. An entry may carry
+   * a `color` that becomes that rectangle's fill.
+   */
+  selectionRects?: readonly (AnchorRect & { color?: string })[];
   /**
    * Called when the user drags-selects text on the spread.
    * Called with `null` on a single-click (caret) where start equals end.
@@ -116,6 +128,7 @@ export function MejiroSpread({
   rightHeader = {},
   leftHeader = {},
   images = [],
+  slotMode,
   renderPageHeader,
   indicator,
   onPrev,
@@ -124,6 +137,7 @@ export function MejiroSpread({
   onImageResizePointerDown,
   onImageClose,
   anchorAtCoord,
+  spreadIdx,
   selectionRects,
   onSelectionChange,
   singlePage = false,
@@ -132,7 +146,6 @@ export function MejiroSpread({
 }: MejiroSpreadProps): ReactNode {
   const messages = useI18n();
   const hasImages = images.length > 0;
-  const useSlot = true;
   const selectionStartRef = useRef<InChapterAnchor | null>(null);
   const selectionEnabled = anchorAtCoord != null && onSelectionChange != null;
   const gestureRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -217,6 +230,13 @@ export function MejiroSpread({
   if (fontSize != null) contentStyle.fontSize = fontSize;
   if (lineSpacing != null) contentStyle.lineHeight = String(lineSpacing);
 
+  // Selection rectangles are spread-local, so painting an entry that belongs
+  // to another spread would place it over unrelated text.
+  const visibleRects =
+    selectionRects && spreadIdx != null
+      ? selectionRects.filter((r) => r.spreadIdx === spreadIdx)
+      : selectionRects;
+
   const renderPage = (side: 'right' | 'left'): ReactNode => {
     const isRight = side === 'right';
     const result = isRight ? spread.right : spread.left;
@@ -241,14 +261,14 @@ export function MejiroSpread({
             <MejiroPageView
               key={pageKey}
               result={result}
-              slotMode={useSlot}
+              slotMode={slotMode}
               fontFamily={fontFamily}
               lineSpacing={lineSpacing}
               className="mejiro-reader-page-content"
               style={contentStyle}
             />
-            {selectionRects && selectionRects.length > 0 && (
-              <MejiroSelectionLayer rects={selectionRects} side={side} />
+            {visibleRects && visibleRects.length > 0 && (
+              <MejiroSelectionLayer rects={visibleRects} side={side} />
             )}
           </div>
         </div>

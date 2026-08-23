@@ -56,6 +56,7 @@ export function MejiroScrollView({
   fontFamily,
   fontSize,
   lineSpacing,
+  slotMode,
   onVisiblePageChange,
   scrollToPage,
   pageGap = 24,
@@ -71,8 +72,6 @@ export function MejiroScrollView({
     return Array.from({ length: total }, (_, i) => layout.getPage(i));
   }, [layout]);
   const pageCount = pages.length;
-
-  const useSlot = true;
 
   const contentStyle: CSSProperties = { height: contentHeight };
   if (fontFamily) contentStyle.fontFamily = normalizeFontFamily(fontFamily);
@@ -158,7 +157,7 @@ export function MejiroScrollView({
               <div className="mejiro-reader-page-clip" style={{ height: contentHeight }}>
                 <MejiroPageView
                   result={result}
-                  slotMode={useSlot}
+                  slotMode={slotMode}
                   fontFamily={fontFamily}
                   lineSpacing={lineSpacing}
                   className="mejiro-reader-page-content"

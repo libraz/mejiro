@@ -83,23 +83,44 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   saveRef.current = onAutosave;
   const payloadRef = useRef(autosavePayload);
   payloadRef.current = autosavePayload;
+  // Mutators derive the next chapters / selection from these refs and set both
+  // states with plain values. Computing them inside a state updater would make
+  // the derivation run once per updater evaluation, which React is free to
+  // repeat.
   const chaptersRef = useRef(chapters);
   chaptersRef.current = chapters;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
   const didMountRef = useRef(false);
   const dirtyRef = useRef(false);
   const mountedRef = useRef(true);
+  // Bumped on every change that needs persisting. A save only clears the dirty
+  // flag when no further change landed while it was in flight.
+  const revisionRef = useRef(0);
+  const inFlightRevisionRef = useRef(-1);
 
   const flushAutosave = useCallback(() => {
     const callback = saveRef.current;
-    if (!(callback && dirtyRef.current)) return;
-    dirtyRef.current = false;
+    if (!(callback && dirtyRef.current) || inFlightRevisionRef.current === revisionRef.current) {
+      return;
+    }
+    const revision = revisionRef.current;
+    inFlightRevisionRef.current = revision;
     const payload = payloadRef.current
       ? payloadRef.current(chaptersRef.current)
       : (chaptersRef.current as TAutosave);
-    void Promise.resolve(callback(payload)).catch((err) => {
-      if (!mountedRef.current) return;
-      setAutosaveError(err instanceof Error ? err : new Error(String(err)));
-    });
+    void Promise.resolve(callback(payload))
+      .then(() => {
+        if (revisionRef.current === revision) dirtyRef.current = false;
+      })
+      .catch((err) => {
+        // Keep the draft dirty so a later flush retries the failed save.
+        if (!mountedRef.current) return;
+        setAutosaveError(err instanceof Error ? err : new Error(String(err)));
+      })
+      .finally(() => {
+        if (inFlightRevisionRef.current === revision) inFlightRevisionRef.current = -1;
+      });
   }, []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: chapters/autosaveKey intentionally schedule autosave; latest payload is read from refs.
@@ -110,6 +131,7 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     }
     if (!saveRef.current) return undefined;
     dirtyRef.current = true;
+    revisionRef.current += 1;
     setAutosaveError(null);
     const timer = setTimeout(() => {
       flushAutosave();
@@ -128,38 +150,48 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     };
   }, [flushAutosave]);
 
-  const setSelected = useCallback(
-    (index: number) => {
-      setSelectedState(() => Math.max(0, Math.min(index, chapters.length - 1)));
-    },
-    [chapters.length],
-  );
+  const commit = useCallback((nextChapters: ManuscriptEditorChapter[], nextSelected: number) => {
+    chaptersRef.current = nextChapters;
+    selectedRef.current = nextSelected;
+    setChaptersState(nextChapters);
+    setSelectedState(nextSelected);
+  }, []);
+
+  const setSelected = useCallback((index: number) => {
+    const next = Math.max(0, Math.min(index, chaptersRef.current.length - 1));
+    selectedRef.current = next;
+    setSelectedState(next);
+  }, []);
 
   const setChapters = useCallback(
     (next: ManuscriptEditorChapter[]) => {
       const normalized = next.length
         ? next
         : [defaultChapter(0, titleForRef.current, bodyForRef.current)];
-      setChaptersState(normalized);
-      setSelectedState((current) => {
-        const selectedId = chapters[current]?.id;
-        const nextIndex = selectedId
-          ? normalized.findIndex((chapter) => chapter.id === selectedId)
-          : -1;
-        return nextIndex >= 0 ? nextIndex : Math.max(0, Math.min(current, normalized.length - 1));
-      });
+      const prev = selectedRef.current;
+      const selectedId = chaptersRef.current[prev]?.id;
+      const nextIndex = selectedId
+        ? normalized.findIndex((chapter) => chapter.id === selectedId)
+        : -1;
+      commit(
+        normalized,
+        nextIndex >= 0 ? nextIndex : Math.max(0, Math.min(prev, normalized.length - 1)),
+      );
     },
-    [chapters],
+    [commit],
   );
 
   const patchChapter = useCallback((index: number, patch: Partial<ManuscriptEditorChapter>) => {
-    setChaptersState((current) =>
-      current.map((chapter, i) => (i === index ? { ...chapter, ...patch } : chapter)),
+    const next = chaptersRef.current.map((chapter, i) =>
+      i === index ? { ...chapter, ...patch } : chapter,
     );
+    chaptersRef.current = next;
+    setChaptersState(next);
   }, []);
 
-  const addChapter = useCallback((chapter: Partial<ManuscriptEditorChapter> = {}) => {
-    setChaptersState((current) => {
+  const addChapter = useCallback(
+    (chapter: Partial<ManuscriptEditorChapter> = {}) => {
+      const current = chaptersRef.current;
       const generated = defaultChapter(current.length, titleForRef.current, bodyForRef.current);
       const next = [
         ...current,
@@ -169,40 +201,43 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
           body: chapter.body ?? generated.body,
         },
       ];
-      setSelectedState(next.length - 1);
-      return next;
-    });
-  }, []);
+      commit(next, next.length - 1);
+    },
+    [commit],
+  );
 
-  const removeChapter = useCallback((index: number) => {
-    setChaptersState((current) => {
-      if (current.length <= 1) return current;
+  const removeChapter = useCallback(
+    (index: number) => {
+      const current = chaptersRef.current;
+      if (current.length <= 1) return;
       const next = current.filter((_, i) => i !== index);
-      setSelectedState((prev) => {
-        if (prev === index) return Math.max(0, Math.min(index, next.length - 1));
-        if (index < prev) return prev - 1;
-        return Math.max(0, Math.min(prev, next.length - 1));
-      });
-      return next;
-    });
-  }, []);
+      const prev = selectedRef.current;
+      let nextSelected: number;
+      if (prev === index) nextSelected = Math.max(0, Math.min(index, next.length - 1));
+      else if (index < prev) nextSelected = prev - 1;
+      else nextSelected = Math.max(0, Math.min(prev, next.length - 1));
+      commit(next, nextSelected);
+    },
+    [commit],
+  );
 
-  const reorderChapters = useCallback((from: number, to: number) => {
-    setChaptersState((current) => {
-      if (from < 0 || from >= current.length) return current;
+  const reorderChapters = useCallback(
+    (from: number, to: number) => {
+      const current = chaptersRef.current;
+      if (from < 0 || from >= current.length) return;
       const next = [...current];
       const [moved] = next.splice(from, 1);
       const target = Math.max(0, Math.min(next.length, to));
       next.splice(target, 0, moved);
-      setSelectedState((prev) => {
-        if (prev === from) return target;
-        if (from < prev && target >= prev) return prev - 1;
-        if (from > prev && target <= prev) return prev + 1;
-        return prev;
-      });
-      return next;
-    });
-  }, []);
+      const prev = selectedRef.current;
+      let nextSelected = prev;
+      if (prev === from) nextSelected = target;
+      else if (from < prev && target >= prev) nextSelected = prev - 1;
+      else if (from > prev && target <= prev) nextSelected = prev + 1;
+      commit(next, nextSelected);
+    },
+    [commit],
+  );
 
   return {
     chapters,

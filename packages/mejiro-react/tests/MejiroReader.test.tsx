@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
+import { MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { act, render, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
@@ -24,6 +25,22 @@ function fakeEpub(): EpubBook {
       {
         title: 'Chapter 2',
         paragraphs: [{ text: 'b', inlineAnnotations: [] }],
+      },
+    ],
+  };
+}
+
+function longEpub(): EpubBook {
+  return {
+    title: 'Long Book',
+    author: 'Author',
+    chapters: [
+      {
+        title: 'Long Chapter',
+        paragraphs: Array.from({ length: 80 }, (_, i) => ({
+          text: `段落${i}。`.repeat(80),
+          inlineAnnotations: [],
+        })),
       },
     ],
   };
@@ -140,6 +157,42 @@ describe('MejiroReader (React) — enable* toggles', () => {
   it('enableStats=true (default) renders the stats element', () => {
     const { container } = render(<MejiroReader />);
     expect(container.querySelector('.mejiro-reader-stats')).not.toBeNull();
+  });
+
+  it('keeps runtime option changes when the parent re-renders with an equal options literal', async () => {
+    const setOptionsSpy = vi.spyOn(MejiroBook.prototype, 'setOptions');
+    const ref = createRef<MejiroReaderHandle>();
+    const epub = fakeEpub();
+    const { container, rerender } = render(
+      <MejiroReader
+        ref={ref}
+        epub={epub}
+        options={{ fontFamily: 'serif', fontSize: 16 }}
+        enableStats
+      />,
+    );
+
+    await act(async () => {
+      await ref.current?.setOptions({ fontSize: 20 });
+    });
+    expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 20px');
+    const callsBeforeRerender = setOptionsSpy.mock.calls.length;
+
+    // A new object with the same values — the shape a parent re-render produces.
+    rerender(
+      <MejiroReader
+        ref={ref}
+        epub={epub}
+        options={{ fontFamily: 'serif', fontSize: 16 }}
+        enableStats
+      />,
+    );
+
+    expect(setOptionsSpy.mock.calls.length).toBe(callsBeforeRerender);
+    expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 20px');
+    const book = setOptionsSpy.mock.contexts[0] as MejiroBook;
+    expect(book.getOptions().fontSize).toBe(20);
+    setOptionsSpy.mockRestore();
   });
 
   it('reacts to options prop changes', async () => {
@@ -328,6 +381,55 @@ describe('MejiroReader (React) — source variants', () => {
     fetchSpy.mockRestore();
   });
 
+  it('passes fetchOptions through to the global fetch', () => {
+    const fetchOptions = { headers: { authorization: 'Bearer token' }, credentials: 'include' };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }));
+    render(<MejiroReader epubUrl="/private.epub" fetchOptions={fetchOptions} />);
+
+    expect(fetchSpy).toHaveBeenCalledWith('/private.epub', fetchOptions);
+    fetchSpy.mockRestore();
+  });
+
+  it('uses the latest fetchOptions when epubUrl changes', async () => {
+    const firstOptions = { headers: { authorization: 'Bearer one' } };
+    const secondOptions = { headers: { authorization: 'Bearer two' } };
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }));
+    const { rerender } = render(<MejiroReader epubUrl="/one.epub" fetchOptions={firstOptions} />);
+    expect(fetchSpy).toHaveBeenCalledWith('/one.epub', firstOptions);
+
+    rerender(<MejiroReader epubUrl="/two.epub" fetchOptions={secondOptions} />);
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/two.epub', secondOptions);
+    });
+    fetchSpy.mockRestore();
+  });
+
+  it('takes the EPUB bytes from fetchEpub instead of the global fetch', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(new ArrayBuffer(8), { status: 200 }));
+    const bytes = new ArrayBuffer(8);
+    const fetchEpub = vi.fn().mockResolvedValue(bytes);
+    const onError = vi.fn();
+
+    render(<MejiroReader epubUrl="/private.epub" fetchEpub={fetchEpub} onError={onError} />);
+
+    await waitFor(() => {
+      expect(fetchEpub).toHaveBeenCalledWith('/private.epub');
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The 8 zero bytes are not a ZIP, so the loader must surface the failure
+    // rather than fall back to the global fetch.
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalled();
+    });
+    fetchSpy.mockRestore();
+  });
+
   it('renders dropzone-eligible reader when neither epub nor epubUrl is supplied (file source)', () => {
     const { container } = render(<MejiroReader enableDropZone />);
     expect(container.querySelector('.mejiro-reader-drop-zone')).not.toBeNull();
@@ -353,46 +455,189 @@ describe('MejiroReader (React) — source variants', () => {
     fetchSpy.mockRestore();
   });
 
-  it('honors the dialect prop when synthesizing the manuscript book', () => {
-    const ref = createRef<MejiroReaderHandle>();
-    expect(() =>
-      render(
-        <MejiroReader
-          ref={ref}
-          dialect="narou"
-          manuscript={[{ id: 'c1', title: 'タイトル', body: '｜漢字《かんじ》' }]}
-        />,
-      ),
-    ).not.toThrow();
+  it('honors the dialect prop when synthesizing the manuscript book', async () => {
+    // Both dialects read ｜base《ruby》, but only 'mejiro' reads 《《...》》 as
+    // emphasis — under 'narou' those characters stay literal body text.
+    const body = '｜漢字《かんじ》と《《傍点》》です';
+    const pageOf = async (dialect: 'mejiro' | 'narou'): Promise<HTMLElement> => {
+      const { container } = render(
+        <MejiroReader dialect={dialect} manuscript={[{ id: 'c1', title: 'タイトル', body }]} />,
+      );
+      return waitFor(() => {
+        const page = container.querySelector<HTMLElement>('.mejiro-reader-page-content');
+        if (!page?.textContent) throw new Error('page not laid out yet');
+        return page;
+      });
+    };
+
+    const narou = await pageOf('narou');
+    expect(narou.querySelector('ruby rt')?.textContent).toBe('かんじ');
+    expect(narou.querySelector('.mejiro-emphasis')).toBeNull();
+    expect(narou.textContent).toContain('《《傍点》》');
+
+    const mejiro = await pageOf('mejiro');
+    expect(mejiro.querySelector('ruby rt')?.textContent).toBe('かんじ');
+    expect(mejiro.querySelector('.mejiro-emphasis')?.textContent).toBe('傍点');
+    expect(mejiro.textContent).not.toContain('《《');
   });
 
-  it('accepts an annotations prop without throwing', () => {
-    expect(() =>
-      render(
+  it('lays out the book text when an annotations prop is supplied', async () => {
+    const { container } = render(
+      <MejiroReader
+        epub={fakeEpub()}
+        annotations={[
+          {
+            chapter: 0,
+            start: { paragraph: 0, charIndex: 0 },
+            end: { paragraph: 0, charIndex: 1 },
+            color: 'yellow',
+          },
+        ]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('.mejiro-reader-page-content')?.textContent).toContain('a');
+    });
+  });
+
+  it('paints annotation highlights in the color the annotation asked for', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
         <MejiroReader
-          epub={fakeEpub()}
+          epub={longEpub()}
           annotations={[
             {
               chapter: 0,
               start: { paragraph: 0, charIndex: 0 },
-              end: { paragraph: 0, charIndex: 1 },
-              color: 'yellow',
+              end: { paragraph: 0, charIndex: 8 },
+              color: 'rgb(255, 235, 59)',
             },
           ]}
         />,
-      ),
-    ).not.toThrow();
+      );
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      const rects = Array.from(container.querySelectorAll<HTMLElement>('.mejiro-selection-rect'));
+      expect(rects.length).toBeGreaterThan(0);
+      for (const rect of rects) {
+        expect(rect.style.backgroundColor).toBe('rgb(255, 235, 59)');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('paints annotation highlights only on the spread they belong to', async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      const { container } = render(
+        <MejiroReader
+          ref={ref}
+          epub={longEpub()}
+          annotations={[
+            {
+              chapter: 0,
+              start: { paragraph: 0, charIndex: 0 },
+              end: { paragraph: 0, charIndex: 8 },
+            },
+          ]}
+        />,
+      );
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      expect(ref.current?.getReadingPosition().totalSpreads).toBeGreaterThan(3);
+      expect(container.querySelectorAll('.mejiro-selection-rect').length).toBeGreaterThan(0);
+
+      await act(async () => {
+        ref.current?.goToSpread(3);
+        await vi.runAllTimersAsync();
+      });
+      expect(ref.current?.getReadingPosition().spreadIdx).toBe(3);
+      expect(container.querySelectorAll('.mejiro-selection-rect').length).toBe(0);
+
+      await act(async () => {
+        ref.current?.goToSpread(0);
+        await vi.runAllTimersAsync();
+      });
+      expect(container.querySelectorAll('.mejiro-selection-rect').length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a failed option application through onError instead of rejecting', async () => {
+    const failure = new Error('font unavailable');
+    const spy = vi.spyOn(MejiroBook.prototype, 'setOptions').mockRejectedValue(failure);
+    const onError = vi.fn();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      render(<MejiroReader ref={ref} epub={fakeEpub()} onError={onError} />);
+
+      let settled: unknown = 'not-settled';
+      await act(async () => {
+        settled = await ref.current?.setOptions({ fontFamily: '"Missing Font"' });
+      });
+
+      expect(settled).toBeUndefined();
+      expect(onError).toHaveBeenCalledWith(failure);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
 describe('MejiroReader (React) — controlled spreadIdx', () => {
-  it('accepts spreadIdx + onSpreadIdxChange without throwing', () => {
-    const onSpreadIdxChange = vi.fn();
-    expect(() =>
+  it('applies the initial controlled spreadIdx after the layout is ready', async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      render(<MejiroReader ref={ref} epub={longEpub()} spreadIdx={1} />);
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+
+      expect(ref.current?.getReadingPosition().spreadIdx).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns to the prop value when the host ignores onSpreadIdxChange', async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      // The host records the request but leaves the prop where it was.
+      const onSpreadIdxChange = vi.fn();
       render(
-        <MejiroReader epub={fakeEpub()} spreadIdx={0} onSpreadIdxChange={onSpreadIdxChange} />,
-      ),
-    ).not.toThrow();
+        <MejiroReader
+          ref={ref}
+          epub={longEpub()}
+          spreadIdx={0}
+          onSpreadIdxChange={onSpreadIdxChange}
+        />,
+      );
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(ref.current?.getReadingPosition().totalSpreads).toBeGreaterThan(1);
+
+      await act(async () => {
+        ref.current?.next();
+        await vi.runAllTimersAsync();
+      });
+
+      expect(onSpreadIdxChange).toHaveBeenCalled();
+      expect(ref.current?.getReadingPosition().spreadIdx).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('does not emit a synthetic onSpreadIdxChange on initial mount', async () => {

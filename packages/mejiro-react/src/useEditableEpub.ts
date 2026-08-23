@@ -2,17 +2,18 @@ import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import {
   type AddImageInput,
   type AnnotatedParagraph,
+  clampEditableEpubSelection,
+  cloneEditableEpubBook,
   EditableEpub,
   type EditableEpubBook,
   type EditableEpubImage,
+  type EditableEpubSelection,
   type EpubExportOptions,
+  type EpubParseLimits,
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export interface EditableEpubSelection {
-  chapter: number;
-  paragraph: number;
-}
+export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
 export interface UseEditableEpubOptions {
   /** URL fetched and loaded on mount. */
@@ -23,6 +24,12 @@ export interface UseEditableEpubOptions {
   onError?: (error: Error) => void;
   /** Called after export completes. */
   onExport?: (buffer: ArrayBuffer) => void;
+  /**
+   * Archive resource limits applied while opening an EPUB. Raise them for
+   * trusted, image-heavy books; tighten them for a public drop zone. Omitted
+   * fields keep their `DEFAULT_EPUB_PARSE_LIMITS` value.
+   */
+  limits?: Partial<EpubParseLimits>;
 }
 
 export interface UseEditableEpubReturn {
@@ -64,16 +71,18 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   const onLoadRef = useRef(options.onLoad);
   const onErrorRef = useRef(options.onError);
   const onExportRef = useRef(options.onExport);
+  const limitsRef = useRef(options.limits);
   onLoadRef.current = options.onLoad;
   onErrorRef.current = options.onError;
   onExportRef.current = options.onExport;
+  limitsRef.current = options.limits;
 
   const loadBufferWithRequest = useCallback(
     async (buffer: ArrayBuffer, requestId: number): Promise<EditableEpub | null> => {
       setLoading(true);
       setError(null);
       try {
-        const next = await EditableEpub.load(buffer);
+        const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
         if (requestId !== requestIdRef.current) return null;
         setEditor(next);
         setSelectionState({ chapter: 0, paragraph: 0 });
@@ -153,13 +162,13 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     book?.chapters[selection.chapter]?.paragraphs[selection.paragraph] ?? null;
   const previewBook = useMemo(() => {
     void revision;
-    return book ? cloneBook(book) : null;
+    return book ? cloneEditableEpubBook(book) : null;
   }, [book, revision]);
   const history = editor?.history ?? null;
 
   const setSelection = useCallback(
     (nextSelection: EditableEpubSelection) => {
-      setSelectionState(clampSelection(book, nextSelection));
+      setSelectionState(clampEditableEpubSelection(book, nextSelection));
     },
     [book],
   );
@@ -245,45 +254,4 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     redo,
     exportEpub,
   };
-}
-
-function cloneBook(book: EditableEpubBook): EditableEpubBook {
-  return {
-    ...book,
-    chapters: book.chapters.map((chapter) => ({
-      ...chapter,
-      blocks: chapter.blocks.map((block) =>
-        block.kind === 'paragraph'
-          ? { ...block, inlineAnnotations: [...block.inlineAnnotations] }
-          : { ...block },
-      ),
-      imageAssets: new Map(chapter.imageAssets),
-      originalImageHrefs: chapter.originalImageHrefs ? [...chapter.originalImageHrefs] : undefined,
-      paragraphs: chapter.paragraphs.map((paragraph) => ({
-        ...paragraph,
-        inlineAnnotations: [...paragraph.inlineAnnotations],
-      })),
-      paragraphRefs: chapter.paragraphRefs ? [...chapter.paragraphRefs] : undefined,
-    })),
-    packageData: {
-      ...book.packageData,
-      files: new Map(book.packageData.files),
-    },
-  };
-}
-
-function clampSelection(
-  book: EditableEpubBook | null,
-  selection: EditableEpubSelection,
-): EditableEpubSelection {
-  if (!book?.chapters.length) return { chapter: 0, paragraph: 0 };
-  const chapter = clampInteger(selection.chapter, 0, book.chapters.length - 1);
-  const paragraphCount = book.chapters[chapter]?.paragraphs.length ?? 0;
-  const paragraph = paragraphCount ? clampInteger(selection.paragraph, 0, paragraphCount - 1) : 0;
-  return { chapter, paragraph };
-}
-
-function clampInteger(value: number, min: number, max: number): number {
-  if (!Number.isFinite(value)) return min;
-  return Math.min(max, Math.max(min, Math.trunc(value)));
 }

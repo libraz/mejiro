@@ -1,4 +1,4 @@
-import type { EpubBook } from '@libraz/mejiro/epub';
+import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -21,6 +21,12 @@ export interface UseEpubOptions {
    * for hosts that already own an auth-aware HTTP client.
    */
   fetchEpub?: (url: string) => Promise<ArrayBuffer>;
+  /**
+   * Archive resource limits applied while opening an EPUB. Raise them for
+   * trusted, image-heavy books; tighten them for a public drop zone. Omitted
+   * fields keep their `DEFAULT_EPUB_PARSE_LIMITS` value.
+   */
+  limits?: Partial<EpubParseLimits>;
 }
 
 /** Return value of {@link useEpub}. */
@@ -59,13 +65,15 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   fetchOptionsRef.current = options.fetchOptions;
   const fetchEpubRef = useRef(options.fetchEpub);
   fetchEpubRef.current = options.fetchEpub;
+  const limitsRef = useRef(options.limits);
+  limitsRef.current = options.limits;
 
   const loadBuffer = useCallback(async (buffer: ArrayBuffer): Promise<EpubBook | null> => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
-      const book = await parseEpub(buffer);
+      const book = await parseEpub(buffer, { limits: limitsRef.current });
       if (requestId !== requestIdRef.current) return null;
       setEpub(book);
       onLoadRef.current?.(book);
@@ -87,7 +95,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     setLoading(true);
     setError(null);
     try {
-      const book = await parseEpub(await file.arrayBuffer());
+      const book = await parseEpub(await file.arrayBuffer(), { limits: limitsRef.current });
       if (requestId !== requestIdRef.current) return null;
       setEpub(book);
       onLoadRef.current?.(book);
@@ -118,7 +126,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
         if (!res.ok) return null;
         buffer = await res.arrayBuffer();
       }
-      const book = await parseEpub(buffer);
+      const book = await parseEpub(buffer, { limits: limitsRef.current });
       if (requestId !== requestIdRef.current) return null;
       setEpub(book);
       onLoadRef.current?.(book);

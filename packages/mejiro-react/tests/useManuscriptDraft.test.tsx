@@ -2,6 +2,7 @@
 /** @jsxImportSource react */
 
 import { act, renderHook } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { useManuscriptDraft } from '../src/useManuscriptDraft.js';
 
@@ -85,6 +86,39 @@ describe('useManuscriptDraft (React)', () => {
     expect(result.current.chapters[0]).toMatchObject({ title: 'Episode 1', body: 'Body 1' });
   });
 
+  for (const [mode, wrapper] of [
+    ['plain', undefined],
+    ['strict', StrictMode],
+  ] as const) {
+    it(`tracks the selected chapter through add / remove / reorder (${mode})`, () => {
+      const { result } = renderHook(
+        () =>
+          useManuscriptDraft({
+            initialChapters: [
+              { id: 'a', title: 'A', body: '' },
+              { id: 'b', title: 'B', body: '' },
+              { id: 'c', title: 'C', body: '' },
+              { id: 'd', title: 'D', body: '' },
+            ],
+          }),
+        { wrapper },
+      );
+
+      act(() => result.current.setSelected(3));
+      act(() => result.current.removeChapter(1));
+      expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'c', 'd']);
+      expect(result.current.selected).toBe(2);
+
+      act(() => result.current.reorderChapters(0, 2));
+      expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'd', 'a']);
+      expect(result.current.selected).toBe(1);
+
+      act(() => result.current.addChapter({ id: 'e', title: 'E' }));
+      expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'd', 'a', 'e']);
+      expect(result.current.selected).toBe(3);
+    });
+  }
+
   it('debounces and fires onAutosave', async () => {
     vi.useFakeTimers();
     const save = vi.fn();
@@ -141,6 +175,68 @@ describe('useManuscriptDraft (React)', () => {
       });
 
       expect(result.current.autosaveError?.message).toBe('save failed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the draft dirty after a rejected autosave so the next flush retries', async () => {
+    vi.useFakeTimers();
+    try {
+      let attempt = 0;
+      const save = vi.fn(async () => {
+        attempt += 1;
+        if (attempt === 1) throw new Error('offline');
+      });
+      const { result } = renderHook(() =>
+        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+      );
+
+      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(result.current.autosaveError?.message).toBe('offline');
+
+      await act(async () => {
+        result.current.flushAutosave();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save.mock.calls[1][0][0].body).toBe('changed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops retrying once an autosave succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn(async () => {});
+      const { result } = renderHook(() =>
+        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+      );
+
+      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      await act(async () => {
+        vi.advanceTimersByTime(150);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(save).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        result.current.flushAutosave();
+        await Promise.resolve();
+      });
+      expect(save).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
