@@ -21,6 +21,16 @@ function fontLabelFromCss(css: string): string {
   return first.replace(/^["']|["']$/g, '') || css;
 }
 
+function clampNumber(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, value));
+}
+
+function parseClampedInput(value: string, min: number, max: number, fallback: number): number {
+  if (value.trim() === '') return fallback;
+  return clampNumber(Number(value), min, max, fallback);
+}
+
 /**
  * Reader settings panel: font, size, kinsoku mode, hanging punctuation,
  * and line spacing. Pass `open` to control visibility and use
@@ -100,7 +110,15 @@ export const MejiroSettingsPanel = defineComponent({
                     type: 'button',
                     class: 'mejiro-reader-btn mejiro-reader-btn--icon',
                     'aria-label': m.settingsSizeDown,
-                    onClick: () => patch({ fontSize: Math.max(props.minFontSize, s.fontSize - 1) }),
+                    onClick: () =>
+                      patch({
+                        fontSize: clampNumber(
+                          s.fontSize - 1,
+                          props.minFontSize,
+                          props.maxFontSize,
+                          props.minFontSize,
+                        ),
+                      }),
                   },
                   'A−',
                 ),
@@ -110,7 +128,14 @@ export const MejiroSettingsPanel = defineComponent({
                   min: props.minFontSize,
                   max: props.maxFontSize,
                   onChange: (e: Event) =>
-                    patch({ fontSize: Number((e.target as HTMLInputElement).value) }),
+                    patch({
+                      fontSize: parseClampedInput(
+                        (e.target as HTMLInputElement).value,
+                        props.minFontSize,
+                        props.maxFontSize,
+                        s.fontSize,
+                      ),
+                    }),
                 }),
                 h(
                   'button',
@@ -118,7 +143,15 @@ export const MejiroSettingsPanel = defineComponent({
                     type: 'button',
                     class: 'mejiro-reader-btn mejiro-reader-btn--icon',
                     'aria-label': m.settingsSizeUp,
-                    onClick: () => patch({ fontSize: Math.min(props.maxFontSize, s.fontSize + 1) }),
+                    onClick: () =>
+                      patch({
+                        fontSize: clampNumber(
+                          s.fontSize + 1,
+                          props.minFontSize,
+                          props.maxFontSize,
+                          props.minFontSize,
+                        ),
+                      }),
                   },
                   'A+',
                 ),
@@ -170,7 +203,14 @@ export const MejiroSettingsPanel = defineComponent({
                   max: 3.0,
                   step: 0.1,
                   onChange: (e: Event) =>
-                    patch({ lineSpacing: Number((e.target as HTMLInputElement).value) }),
+                    patch({
+                      lineSpacing: parseClampedInput(
+                        (e.target as HTMLInputElement).value,
+                        1,
+                        3,
+                        s.lineSpacing ?? 1.8,
+                      ),
+                    }),
                 }),
               ]),
             ]),

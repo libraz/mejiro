@@ -28,7 +28,12 @@ export const MejiroStats = defineComponent({
     const text = computed(() => {
       const ch = props.chapter;
       if (!ch) return '';
-      const totalChars = ch.paragraphs.reduce((s, p) => s + p.text.length, 0);
+      // Same population as the reading-time estimate shown beside it:
+      // codepoints (so surrogate pairs count once) with headings left out.
+      const totalChars = ch.paragraphs.reduce(
+        (s, p) => (p.headingLevel != null ? s : s + [...p.text].length),
+        0,
+      );
       const totalRuby = ch.paragraphs.reduce(
         (s, p) => s + p.inlineAnnotations.filter((a) => a.kind === 'ruby').length,
         0,

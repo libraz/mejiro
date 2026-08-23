@@ -1,14 +1,19 @@
-import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
+import type { ImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { computed, onScopeDispose, type Ref, ref } from 'vue';
+import { createOverlayDragSession } from '@libraz/mejiro/browser';
+import { computed, onScopeDispose, type Ref, ref, watch } from 'vue';
 
-/** Rectangle describing an image overlay position and size. */
-export interface ImageRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
+export type { ImageOverlayRect } from '@libraz/mejiro';
+
+/**
+ * Rectangle describing an image overlay position and size.
+ *
+ * @deprecated Alias of {@link ImageOverlayRect}, which is the single name for
+ * this shape across the package family. The core package exports an unrelated
+ * `ImageRect` (an exclusion rectangle, with margin fields), so the two names
+ * collide when both packages are imported into one module.
+ */
+export type ImageRect = ImageOverlayRect;
 
 /** Options for {@link useImageOverlay}. */
 export interface UseImageOverlayOptions {
@@ -27,7 +32,7 @@ export interface UseImageOverlayOptions {
 /** Return value of {@link useImageOverlay}. */
 export interface UseImageOverlayReturn {
   /** Current image rectangle, or `null` if no overlay is active. */
-  imageRect: Ref<ImageRect | null>;
+  imageRect: Ref<ImageOverlayRect | null>;
   /** Whether an image overlay is currently active. */
   hasImage: Ref<boolean>;
   /** Toggle the image overlay on/off. */
@@ -41,6 +46,10 @@ export interface UseImageOverlayReturn {
 /**
  * Vue composable that manages a draggable/resizable image overlay
  * with automatic text reflow via {@link ChapterLayout.syncImages}.
+ *
+ * While an overlay is active the exclusion is re-issued whenever `layout` is
+ * replaced or `spreadIdx` changes, so a re-layout or a page turn never leaves
+ * the overlay drawn without its matching text reflow.
  *
  * @param layout - Ref to the current chapter layout (or `null`).
  * @param spreadIdx - Ref to the current spread index.
@@ -65,7 +74,7 @@ export function useImageOverlay(
   const defY = options?.defaultY ?? 100;
   const margin = options?.margin;
 
-  const imageRect = ref<ImageRect | null>(null);
+  const imageRect = ref<ImageOverlayRect | null>(null);
   const hasImage = computed(() => imageRect.value !== null);
   const activeDragCleanups = new Set<() => void>();
 
@@ -74,7 +83,7 @@ export function useImageOverlay(
     activeDragCleanups.clear();
   });
 
-  function syncToLayout(rect: ImageRect | null): void {
+  function syncToLayout(rect: ImageOverlayRect | null): void {
     const lo = layout.value;
     if (!lo) return;
     const images: BookImage[] | undefined = rect
@@ -83,6 +92,20 @@ export function useImageOverlay(
     const spread = lo.syncImages(spreadIdx.value, images);
     onUpdate(spread);
   }
+
+  // Re-apply the exclusion after the layout instance is replaced (resize, font
+  // or option change) and after the reader moves to another spread, so the text
+  // reflow keeps following the overlay. Moving spreads also drops the exclusion
+  // left behind on the spread we came from — only the displayed one carries it.
+  watch([layout, spreadIdx], ([, nextSpread], [prevLayout, prevSpread]) => {
+    if (!imageRect.value) return;
+    if (prevLayout && prevSpread !== nextSpread) {
+      // Clearing the outgoing spread must not be reported through `onUpdate`:
+      // that spread is no longer the one being displayed.
+      prevLayout.syncImages(prevSpread, undefined);
+    }
+    syncToLayout(imageRect.value);
+  });
 
   function toggleImage(): void {
     if (imageRect.value) {
@@ -95,40 +118,28 @@ export function useImageOverlay(
     }
   }
 
+  function applyRect(rect: ImageOverlayRect): void {
+    imageRect.value = rect;
+    syncToLayout(rect);
+  }
+
   function onOverlayPointerDown(e: PointerEvent): void {
     e.preventDefault();
     const current = imageRect.value;
     if (!current) return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const start = { ...current };
     const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
-    target.classList.add('dragging');
-
-    let rafId = 0;
-    const onMove = (me: PointerEvent) => {
-      const dx = me.clientX - startX;
-      const dy = me.clientY - startY;
-      const r = moveImageOverlayRect(start, dx, dy);
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        imageRect.value = r;
-        syncToLayout(r);
-      });
-    };
-    let cleanup: () => void;
-    const onUp = () => cleanup();
-    cleanup = () => {
-      cancelAnimationFrame(rafId);
-      target.classList.remove('dragging');
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      activeDragCleanups.delete(cleanup);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    activeDragCleanups.add(cleanup);
+    createOverlayDragSession({
+      mode: 'move',
+      rect: current,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      captureElement: target,
+      activeElement: target,
+      dragClass: 'dragging',
+      registry: activeDragCleanups,
+      onChange: applyRect,
+    });
   }
 
   function onResizePointerDown(e: PointerEvent): void {
@@ -136,36 +147,19 @@ export function useImageOverlay(
     e.stopPropagation();
     const current = imageRect.value;
     if (!current) return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const start = { ...current };
     const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
-    target.parentElement?.classList.add('dragging');
-
-    let rafId = 0;
-    const onMove = (me: PointerEvent) => {
-      const dx = me.clientX - startX;
-      const dy = me.clientY - startY;
-      const r = resizeImageOverlayRect(start, dx, dy);
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        imageRect.value = r;
-        syncToLayout(r);
-      });
-    };
-    let cleanup: () => void;
-    const onUp = () => cleanup();
-    cleanup = () => {
-      cancelAnimationFrame(rafId);
-      target.parentElement?.classList.remove('dragging');
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      activeDragCleanups.delete(cleanup);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    activeDragCleanups.add(cleanup);
+    createOverlayDragSession({
+      mode: 'resize',
+      rect: current,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      captureElement: target,
+      activeElement: target.parentElement,
+      dragClass: 'dragging',
+      registry: activeDragCleanups,
+      onChange: applyRect,
+    });
   }
 
   return {

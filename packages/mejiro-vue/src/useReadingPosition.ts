@@ -18,8 +18,12 @@ export type ReadingPositionStorage = MejiroStorage;
 
 /** Options for {@link useReadingPosition}. */
 export interface UseReadingPositionOptions {
-  /** Storage key — usually scoped per-book (e.g. `mejiro:position:${bookId}`). */
-  key: string;
+  /**
+   * Storage key — usually scoped per-book (e.g. `mejiro:position:${bookId}`).
+   * A `Ref` (or a reactive getter property) re-hydrates the position when the
+   * key changes; a plain string is read once.
+   */
+  key: Ref<string> | string;
   /**
    * Storage backend. Defaults to `window.localStorage` when available.
    * SSR consumers can omit this and the composable will fall back to in-memory.
@@ -51,6 +55,10 @@ function resolveDefaultStorage(): ReadingPositionStorage | null {
   return w ?? null;
 }
 
+function unwrapKey(key: Ref<string> | string): string {
+  return typeof key === 'string' ? key : key.value;
+}
+
 /**
  * Persistence helper for reader state. Returns the saved anchor and a
  * throttled saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
@@ -63,7 +71,7 @@ function resolveDefaultStorage(): ReadingPositionStorage | null {
 export function useReadingPosition(options: UseReadingPositionOptions): UseReadingPositionReturn {
   const { throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
-  const keyRef = ref(options.key);
+  const keyRef = ref(unwrapKey(options.key));
 
   const position = ref<ReadingPositionValue | null>(null);
 
@@ -79,35 +87,61 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
     }
   }
   hydrate(keyRef.value);
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let pendingWrite: (() => void) | null = null;
+
+  /** Runs the pending throttled write immediately, if any. */
+  function flushPending(): void {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const write = pendingWrite;
+    pendingWrite = null;
+    if (!write) return;
+    try {
+      write();
+    } catch {
+      // Quota, disabled storage, or denied access — keep the in-memory copy.
+    }
+  }
+
+  /** Drops the pending throttled write without running it. */
+  function cancelPending(): void {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pendingWrite = null;
+  }
+
   watch(
-    () => options.key,
+    () => unwrapKey(options.key),
     (k) => {
+      // A write scheduled under the previous key must land there, not in the new book's slot.
+      flushPending();
       keyRef.value = k;
       hydrate(k);
     },
   );
 
-  let timer: ReturnType<typeof setTimeout> | null = null;
-
   function save(next: ReadingPositionValue): void {
     position.value = next;
     if (storage) {
-      if (timer) clearTimeout(timer);
       const keyAtSave = keyRef.value;
-      timer = setTimeout(() => {
-        try {
-          storage.setItem(keyAtSave, serializeReadingPosition(next));
-        } catch {
-          // Quota, disabled storage, or denied access — keep the in-memory copy.
-        }
-      }, throttleMs);
+      cancelPending();
+      pendingWrite = () => {
+        storage.setItem(keyAtSave, serializeReadingPosition(next));
+      };
+      timer = setTimeout(flushPending, throttleMs);
     }
     options.onChange?.(next);
   }
 
   function clear(): void {
     position.value = null;
-    if (timer) clearTimeout(timer);
+    cancelPending();
     if (storage) {
       try {
         storage.removeItem(keyRef.value);
@@ -118,9 +152,8 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
     options.onChange?.(null);
   }
 
-  onScopeDispose(() => {
-    if (timer) clearTimeout(timer);
-  });
+  // Unmounting mid-throttle must not lose the position the user just reached.
+  onScopeDispose(flushPending);
 
   return { position, save, clear };
 }

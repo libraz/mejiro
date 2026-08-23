@@ -5,6 +5,9 @@ import { useI18n } from './i18n.js';
  * Drop zone for EPUB files. Combines a drag-and-drop target with a
  * click-to-open file picker. Emits `file` once a file is selected.
  *
+ * The root is a real button, so it is reachable with Tab, announced as a
+ * control by screen readers, and opens the picker on Enter / Space.
+ *
  * Renders default placeholder content unless a `default` slot is provided.
  */
 export const MejiroDropZone = defineComponent({
@@ -37,6 +40,12 @@ export const MejiroDropZone = defineComponent({
     function openPicker(): void {
       input.value?.click();
     }
+    function onKeydown(e: KeyboardEvent): void {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      // Cancel the browser's own activation so the picker opens exactly once.
+      e.preventDefault();
+      openPicker();
+    }
     function onChange(e: Event): void {
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file && isValid(file)) emit('file', file);
@@ -57,10 +66,12 @@ export const MejiroDropZone = defineComponent({
 
     return () =>
       h(
-        'div',
+        'button',
         {
+          type: 'button',
           class: ['mejiro-reader-drop-zone', { 'is-dragover': dragover.value }],
           onClick: openPicker,
+          onKeydown,
           onDragover: onDragOver,
           onDragleave: onDragLeave,
           onDrop,

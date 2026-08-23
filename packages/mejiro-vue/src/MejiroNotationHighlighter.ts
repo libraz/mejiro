@@ -26,26 +26,22 @@ export const MejiroNotationHighlighter = defineComponent({
     const overlayRef = ref<HTMLDivElement | null>(null);
     const textareaRef = ref<HTMLTextAreaElement | null>(null);
 
-    const segments = computed(() => {
-      const tokens = tokenizeManuscriptSource(props.modelValue, props.dialect);
-      const out: Array<{ key: string; text: string; kind?: string }> = [];
-      let cursor = 0;
-      for (const [i, token] of tokens.entries()) {
-        if (token.start > cursor) {
-          out.push({ key: `t-${i}-pre`, text: props.modelValue.slice(cursor, token.start) });
-        }
-        out.push({
-          key: `t-${i}`,
-          text: props.modelValue.slice(token.start, token.end),
-          kind: token.kind,
-        });
-        cursor = token.end;
-      }
-      if (cursor < props.modelValue.length) {
-        out.push({ key: 'tail', text: props.modelValue.slice(cursor) });
-      }
-      if (out.length === 0) out.push({ key: 'empty', text: props.modelValue });
-      return out;
+    // IME composition freeze: while an IME session is open the overlay keeps
+    // the segments it had at compositionstart, and the textarea is bound to
+    // the text the browser itself holds so that a host normalizing the model
+    // value cannot overwrite the uncommitted string.
+    const isComposing = ref(false);
+    const composingValue = ref('');
+    const boundValue = computed(() =>
+      isComposing.value ? composingValue.value : props.modelValue,
+    );
+
+    let lastSegments: Segment[] | null = null;
+    const segments = computed<Segment[]>(() => {
+      if (isComposing.value && lastSegments) return lastSegments;
+      const next = buildSegments(props.modelValue, props.dialect);
+      lastSegments = next;
+      return next;
     });
 
     function callAttrHandler(handler: unknown, event: Event): void {
@@ -95,12 +91,26 @@ export const MejiroNotationHighlighter = defineComponent({
             class: ['mejiro-notation-textarea', props.textareaClass, attrs.class]
               .filter(Boolean)
               .join(' '),
-            value: props.modelValue,
+            value: boundValue.value,
             placeholder: props.placeholder,
             spellcheck: false,
             onInput: (event: Event) => {
-              emit('update:modelValue', (event.target as HTMLTextAreaElement).value);
+              const next = (event.target as HTMLTextAreaElement).value;
+              if (isComposing.value) composingValue.value = next;
+              emit('update:modelValue', next);
               callAttrHandler(attrs.onInput, event);
+            },
+            onCompositionstart: (event: CompositionEvent) => {
+              composingValue.value = (event.target as HTMLTextAreaElement).value;
+              isComposing.value = true;
+              callAttrHandler(attrs.onCompositionstart, event);
+            },
+            onCompositionend: (event: CompositionEvent) => {
+              isComposing.value = false;
+              const next = (event.target as HTMLTextAreaElement).value;
+              composingValue.value = next;
+              emit('update:modelValue', next);
+              callAttrHandler(attrs.onCompositionend, event);
             },
             onScroll: (event: Event) => {
               if (overlayRef.value) {
@@ -119,3 +129,33 @@ export const MejiroNotationHighlighter = defineComponent({
 export type MejiroNotationHighlighterProps = InstanceType<
   typeof MejiroNotationHighlighter
 >['$props'];
+
+interface Segment {
+  key: string;
+  text: string;
+  kind?: string;
+}
+
+function buildSegments(text: string, dialect: ManuscriptDialect): Segment[] {
+  const tokens = tokenizeManuscriptSource(text, dialect);
+  const segments: Segment[] = [];
+  let cursor = 0;
+  for (const [i, token] of tokens.entries()) {
+    if (token.start > cursor) {
+      segments.push({ key: `t-${i}-pre`, text: text.slice(cursor, token.start) });
+    }
+    segments.push({
+      key: `t-${i}`,
+      text: text.slice(token.start, token.end),
+      kind: token.kind,
+    });
+    cursor = token.end;
+  }
+  if (cursor < text.length) {
+    segments.push({ key: 'tail', text: text.slice(cursor) });
+  }
+  if (segments.length === 0) {
+    segments.push({ key: 'empty', text });
+  }
+  return segments;
+}

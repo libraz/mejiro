@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { parseReadingPosition, serializeReadingPosition } from '@libraz/mejiro';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type App, createApp, defineComponent, nextTick, ref } from 'vue';
 import type { ReadingPositionStorage } from '../src/useReadingPosition.js';
@@ -141,6 +142,98 @@ describe('useReadingPosition (Vue)', () => {
     unmount();
   });
 
+  it('flushes a pending save() when the composable unmounts inside the throttle window', () => {
+    const storage = memoryStorage();
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+    );
+
+    result.save({ chapter: 3, paragraph: 2, charIndex: 8 });
+    expect(storage.data.get('k')).toBeUndefined();
+
+    unmount();
+
+    expect(JSON.parse(storage.data.get('k') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 3,
+      paragraph: 2,
+      charIndex: 8,
+    });
+  });
+
+  it('does not resurrect a cleared position when the composable unmounts', () => {
+    const storage = memoryStorage();
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+    );
+
+    result.save({ chapter: 3, paragraph: 2, charIndex: 8 });
+    result.clear();
+    unmount();
+
+    expect(storage.data.get('k')).toBeUndefined();
+  });
+
+  it('re-hydrates and saves to the new key when a Ref key changes', async () => {
+    const storage = memoryStorage();
+    storage.setItem('a', JSON.stringify({ version: 2, chapter: 1, paragraph: 1, charIndex: 0 }));
+    storage.setItem('b', JSON.stringify({ version: 2, chapter: 2, paragraph: 2, charIndex: 0 }));
+    const key = ref('a');
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key, storage, throttleMs: 100 }),
+    );
+
+    expect(result.position.value).toEqual({ chapter: 1, paragraph: 1, charIndex: 0 });
+    key.value = 'b';
+    await nextTick();
+    expect(result.position.value).toEqual({ chapter: 2, paragraph: 2, charIndex: 0 });
+
+    result.save({ chapter: 9, paragraph: 0, charIndex: 4 });
+    vi.advanceTimersByTime(100);
+
+    expect(JSON.parse(storage.data.get('b') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 9,
+      paragraph: 0,
+      charIndex: 4,
+    });
+    expect(JSON.parse(storage.data.get('a') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 1,
+      paragraph: 1,
+      charIndex: 0,
+    });
+    unmount();
+  });
+
+  it('does not let a pending write from the previous key overwrite the new key', async () => {
+    const storage = memoryStorage();
+    storage.setItem('b', JSON.stringify({ version: 2, chapter: 2, paragraph: 2, charIndex: 0 }));
+    const key = ref('a');
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key, storage, throttleMs: 100 }),
+    );
+
+    result.save({ chapter: 1, paragraph: 3, charIndex: 5 });
+    key.value = 'b';
+    await nextTick();
+    vi.advanceTimersByTime(100);
+
+    expect(JSON.parse(storage.data.get('a') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 1,
+      paragraph: 3,
+      charIndex: 5,
+    });
+    expect(JSON.parse(storage.data.get('b') ?? '{}')).toEqual({
+      version: 2,
+      chapter: 2,
+      paragraph: 2,
+      charIndex: 0,
+    });
+    unmount();
+  });
+
   it('migrates legacy {chapter, spreadIdx} payloads to chapter start', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const storage = memoryStorage();
@@ -183,5 +276,36 @@ describe('useReadingPosition (Vue)', () => {
     const { unmount } = withSetup(() => useReadingPosition({ key: 'k', storage, onChange }));
     expect(onChange).not.toHaveBeenCalled();
     unmount();
+  });
+
+  it('round-trips through a server mirror fed by onChange', () => {
+    let server: string | null = null;
+    const first = withSetup(() =>
+      useReadingPosition({
+        key: 'k',
+        storage: memoryStorage(),
+        onChange: (next) => {
+          server = next === null ? null : serializeReadingPosition(next);
+        },
+      }),
+    );
+
+    first.result.save({ chapter: 4, paragraph: 6, charIndex: 11 });
+    first.unmount();
+
+    expect(parseReadingPosition(server)).toEqual({ chapter: 4, paragraph: 6, charIndex: 11 });
+
+    const revisit = withSetup(() =>
+      useReadingPosition({
+        key: 'k',
+        storage: {
+          getItem: () => server,
+          setItem: () => {},
+          removeItem: () => {},
+        },
+      }),
+    );
+    expect(revisit.result.position.value).toEqual({ chapter: 4, paragraph: 6, charIndex: 11 });
+    revisit.unmount();
   });
 });

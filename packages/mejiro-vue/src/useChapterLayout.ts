@@ -5,16 +5,20 @@ import type {
   MejiroBook,
 } from '@libraz/mejiro/book';
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
-import { onUnmounted, type Ref, shallowRef, watch } from 'vue';
+import { onUnmounted, type Ref, shallowRef, unref, watch } from 'vue';
 
 /** Options for {@link useChapterLayout}. */
 export interface UseChapterLayoutOptions {
   /**
    * Whether to observe the surface element for size changes and re-flow.
+   * Read once during setup — later changes are not picked up.
    * @defaultValue true
    */
   enableResize?: boolean;
-  /** Debounce window (ms) applied to size-triggered re-flows. @defaultValue 120 */
+  /**
+   * Debounce window (ms) applied to size-triggered re-flows. Read once during
+   * setup — later changes are not picked up. @defaultValue 120
+   */
   resizeDebounce?: number;
   /**
    * Resolver for page-geometry overrides forwarded to
@@ -96,14 +100,16 @@ export interface UseChapterLayoutReturn {
  * reading position is preserved across reflows via the optional
  * {@link UseChapterLayoutOptions.capturePosition} / `restorePosition` hooks.
  *
- * @param book - The book instance to lay out with.
+ * @param book - The book instance to lay out with. Pass a `Ref` to swap the
+ *   book (e.g. a different typography profile) at runtime — the chapter is
+ *   laid out again with the new instance.
  * @param epub - The current parsed EPUB.
  * @param chapterIndex - Zero-based chapter index to lay out.
  * @param surface - DOM ref for the reading surface used for page sizing.
  * @param options - Behavior overrides.
  */
 export function useChapterLayout(
-  book: MejiroBook,
+  book: MejiroBook | Ref<MejiroBook>,
   epub: Ref<EpubBook | null>,
   chapterIndex: Ref<number>,
   surface: Ref<HTMLElement | null>,
@@ -143,20 +149,24 @@ export function useChapterLayout(
 
     if (blank) layout.value = null;
 
-    const dims = book.computePageSize(surface.value, options.pageGeometry?.());
+    const currentBook = unref(book);
+    const dims = currentBook.computePageSize(surface.value, options.pageGeometry?.());
     pageWidth.value = dims.pageWidth;
     pageHeight.value = dims.pageHeight;
     contentHeight.value = dims.contentHeight;
 
     const t0 = performance.now();
-    const nextLayout = await book.layoutChapter(chapter);
+    const nextLayout = await currentBook.layoutChapter(chapter);
     if (requestId !== layoutRequestId) return;
     layout.value = nextLayout;
     elapsedMs.value = performance.now() - t0;
     if (captured) options.restorePosition?.(nextLayout, captured);
   }
 
-  watch([epub, chapterIndex, surface], () => void recompute(), { immediate: true, flush: 'sync' });
+  watch([() => unref(book), epub, chapterIndex, surface], () => void recompute(), {
+    immediate: true,
+    flush: 'sync',
+  });
 
   // --- Size-driven re-flow ---------------------------------------------------
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;

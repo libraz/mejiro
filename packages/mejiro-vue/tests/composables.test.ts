@@ -1,12 +1,18 @@
 // @vitest-environment happy-dom
 
 import type { ChapterLayout, InChapterAnchor, MejiroBook, SpreadResult } from '@libraz/mejiro/book';
+import { MejiroBook as MejiroBookClass } from '@libraz/mejiro/book';
 import type { EditableEpub, EpubBook } from '@libraz/mejiro/epub';
 import { describe, expect, it, vi } from 'vitest';
-import { type App, createApp, defineComponent, nextTick, ref } from 'vue';
+import { type App, createApp, defineComponent, nextTick, ref, shallowRef } from 'vue';
 
-vi.mock('@libraz/mejiro/epub', () => {
+vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
+  // Only the loaders are faked; the module's pure helpers (the book clone the
+  // preview relies on, the selection clamp) stay real.
+  const actual = await importOriginal<typeof import('@libraz/mejiro/epub')>();
+
   return {
+    ...actual,
     // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
     EditableEpub: {
       load: vi.fn(async () => ({
@@ -95,6 +101,71 @@ function mockEditableBook(title: string, text: string): unknown {
   };
 }
 
+interface HistoryEditorStub {
+  book: {
+    chapters: { paragraphs: { text: string; inlineAnnotations: never[] }[] }[];
+  };
+}
+
+/**
+ * Editable-EPUB stub whose edits, undo and redo replace the paragraph mirror
+ * with a fresh array, the way the core editor re-syncs it after each command.
+ */
+function mockHistoryEditor(initialText: string): unknown {
+  const undoStack: string[] = [];
+  const redoStack: string[] = [];
+  let current = initialText;
+  const book = {
+    title: 'History',
+    chapters: [
+      {
+        href: 'OPS/Text/chapter.xhtml',
+        title: 'C1',
+        paragraphs: [{ text: current, inlineAnnotations: [] }],
+        blocks: [{ kind: 'paragraph', id: 'b-1', text: current, inlineAnnotations: [] }],
+        imageAssets: new Map(),
+      },
+    ],
+    packageData: {
+      rootfilePath: 'OPS/package.opf',
+      opfDir: 'OPS/',
+      opfXml: '',
+      files: new Map(),
+    },
+  };
+  function sync(next: string): void {
+    current = next;
+    book.chapters[0].paragraphs = [{ text: next, inlineAnnotations: [] }];
+    book.chapters[0].blocks = [{ kind: 'paragraph', id: 'b-1', text: next, inlineAnnotations: [] }];
+  }
+  return {
+    book,
+    history: { canUndo: false, canRedo: false, depth: 0, redoDepth: 0 },
+    updateParagraph: vi.fn((_chapter: number, _paragraph: number, patch: { text: string }) => {
+      undoStack.push(current);
+      redoStack.length = 0;
+      sync(patch.text);
+    }),
+    setInlineAnnotations: vi.fn(),
+    addImage: vi.fn(),
+    undo: vi.fn(() => {
+      const previous = undoStack.pop();
+      if (previous === undefined) return false;
+      redoStack.push(current);
+      sync(previous);
+      return true;
+    }),
+    redo: vi.fn(() => {
+      const next = redoStack.pop();
+      if (next === undefined) return false;
+      undoStack.push(current);
+      sync(next);
+      return true;
+    }),
+    export: vi.fn(async () => new ArrayBuffer(4)),
+  };
+}
+
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((r) => {
@@ -150,12 +221,15 @@ describe('useMejiroBook (Vue)', () => {
     unmount();
   });
 
-  it('setOptions updates both the reactive snapshot and the underlying book', () => {
+  it('setOptions updates both the reactive snapshot and the underlying book', async () => {
     const { result, unmount } = withSetup(() =>
       useMejiroBook({ fontFamily: 'serif', fontSize: 16 }),
     );
-    result.setOptions({ fontSize: 24 });
+    const settled = result.setOptions({ fontSize: 24 });
+    // The reactive snapshot is the caller's intent, so it updates right away.
     expect(result.options.value.fontSize).toBe(24);
+    // Font-affecting options reach the book once the font preload settles.
+    await settled;
     expect(result.book.getOptions().fontSize).toBe(24);
     unmount();
   });
@@ -169,6 +243,46 @@ describe('useMejiroBook (Vue)', () => {
     await nextTick();
     expect(result.options.value.fontSize).toBe(22);
     unmount();
+  });
+
+  it('coalesces rapid changes into a single book application while updating the snapshot at once', async () => {
+    const spy = vi.spyOn(MejiroBookClass.prototype, 'setOptions');
+    try {
+      const { result, unmount } = withSetup(() =>
+        useMejiroBook({ fontFamily: 'serif', fontSize: 16 }, undefined, { debounceMs: 20 }),
+      );
+      const settled = Promise.all([
+        result.setOptions({ fontSize: 17 }),
+        result.setOptions({ fontSize: 18 }),
+        result.setOptions({ lineSpacing: 2 }),
+      ]);
+      // The snapshot is the caller's intent, so it is never debounced.
+      expect(result.options.value.fontSize).toBe(18);
+      await settled;
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith({ fontSize: 18, lineSpacing: 2 });
+      expect(result.book.getOptions().fontSize).toBe(18);
+      unmount();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports a failed application through onError and resolves the promise', async () => {
+    const failure = new Error('font unavailable');
+    const spy = vi.spyOn(MejiroBookClass.prototype, 'setOptions').mockRejectedValue(failure);
+    const onError = vi.fn();
+    try {
+      const { result, unmount } = withSetup(() =>
+        useMejiroBook({ fontFamily: 'serif', fontSize: 16 }, undefined, { onError }),
+      );
+      await expect(result.setOptions({ fontFamily: 'missing' })).resolves.toBeUndefined();
+      expect(onError).toHaveBeenCalledWith(failure);
+      unmount();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -310,7 +424,83 @@ describe('useEpub (Vue)', () => {
   });
 });
 
+describe('useEpub (Vue) — parse limits', () => {
+  /** Stand-in expanded size of the archive the mocked parser "opens". */
+  const archiveBytes = 5000;
+
+  /** Installs a parser that enforces `maxTotalBytes` and returns a restorer. */
+  async function withLimitAwareParser(): Promise<() => void> {
+    const { parseEpub } = await import('@libraz/mejiro/epub');
+    const parseMock = parseEpub as ReturnType<typeof vi.fn>;
+    const previous = parseMock.getMockImplementation();
+    parseMock.mockImplementation(
+      async (_buffer: ArrayBuffer, options?: { limits?: { maxTotalBytes?: number } }) => {
+        const maxTotalBytes = options?.limits?.maxTotalBytes ?? 1024;
+        if (archiveBytes > maxTotalBytes) throw new Error('EPUB archive is too large');
+        return { title: 'Large', author: 'A', chapters: [] };
+      },
+    );
+    return () => {
+      if (previous) parseMock.mockImplementation(previous);
+    };
+  }
+
+  it('rejects an archive that exceeds the configured limit', async () => {
+    const restore = await withLimitAwareParser();
+    const { result, unmount } = withSetup(() => useEpub({ limits: { maxTotalBytes: 2048 } }));
+
+    const book = await result.loadBuffer(new ArrayBuffer(8));
+
+    expect(book).toBeNull();
+    expect(result.error.value?.message).toBe('EPUB archive is too large');
+    restore();
+    unmount();
+  });
+
+  it('accepts the same archive under a looser limit', async () => {
+    const restore = await withLimitAwareParser();
+    const { parseEpub } = await import('@libraz/mejiro/epub');
+    const buffer = new ArrayBuffer(8);
+    const { result, unmount } = withSetup(() => useEpub({ limits: { maxTotalBytes: 10_000 } }));
+
+    const book = await result.loadBuffer(buffer);
+
+    expect(book?.title).toBe('Large');
+    expect(result.error.value).toBeNull();
+    expect(parseEpub).toHaveBeenCalledWith(buffer, { limits: { maxTotalBytes: 10_000 } });
+    restore();
+    unmount();
+  });
+});
+
 describe('useEditableEpub (Vue)', () => {
+  it('forwards parse limits to the editable loader', async () => {
+    const { EditableEpub } = await import('@libraz/mejiro/epub');
+    const loadMock = EditableEpub.load as ReturnType<typeof vi.fn>;
+    const previous = loadMock.getMockImplementation();
+    loadMock.mockImplementation(
+      async (_buffer: ArrayBuffer, options?: { limits?: { maxTotalBytes?: number } }) => {
+        const maxTotalBytes = options?.limits?.maxTotalBytes ?? 1024;
+        if (maxTotalBytes < 5000) throw new Error('EPUB archive is too large');
+        return mockEditableBook('Large', 'large');
+      },
+    );
+
+    const strict = withSetup(() => useEditableEpub({ limits: { maxTotalBytes: 2048 } }));
+    await strict.result.loadBuffer(new ArrayBuffer(8));
+    expect(strict.result.error.value?.message).toBe('EPUB archive is too large');
+    strict.unmount();
+
+    const buffer = new ArrayBuffer(8);
+    const loose = withSetup(() => useEditableEpub({ limits: { maxTotalBytes: 10_000 } }));
+    await loose.result.loadBuffer(buffer);
+    expect(loose.result.book.value?.title).toBe('Large');
+    expect(loadMock).toHaveBeenCalledWith(buffer, { limits: { maxTotalBytes: 10_000 } });
+    loose.unmount();
+
+    if (previous) loadMock.mockImplementation(previous);
+  });
+
   it('invokes onError when editable parsing fails', async () => {
     const { EditableEpub } = await import('@libraz/mejiro/epub');
     const onError = vi.fn();
@@ -379,6 +569,30 @@ describe('useEditableEpub (Vue)', () => {
     expect(buffer).toBeInstanceOf(ArrayBuffer);
     expect(onExport).toHaveBeenCalledWith(buffer);
     expect(exportSpy).toHaveBeenCalledWith({ onProgress });
+    unmount();
+  });
+
+  it('tracks the selected paragraph through edits, undo and redo', async () => {
+    const { EditableEpub } = await import('@libraz/mejiro/epub');
+    const stub = mockHistoryEditor('first');
+    (EditableEpub.load as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => stub);
+    const { result, unmount } = withSetup(() => useEditableEpub());
+
+    await result.loadBuffer(new ArrayBuffer(8));
+    const live = () => (stub as HistoryEditorStub).book.chapters[0].paragraphs[0];
+    expect(result.selectedParagraph.value?.text).toBe('first');
+
+    result.updateParagraph('edited');
+    expect(result.selectedParagraph.value?.text).toBe('edited');
+    expect(result.selectedParagraph.value).toBe(live());
+
+    expect(result.undo()).toBe(true);
+    expect(result.selectedParagraph.value?.text).toBe('first');
+    expect(result.selectedParagraph.value).toBe(live());
+
+    expect(result.redo()).toBe(true);
+    expect(result.selectedParagraph.value?.text).toBe('edited');
+    expect(result.selectedParagraph.value).toBe(live());
     unmount();
   });
 
@@ -502,6 +716,18 @@ describe('useSpread (Vue)', () => {
     unmount();
   });
 
+  it('exposes the spread immediately when mounted with a non-null layout', () => {
+    const layoutRef = ref<ChapterLayout | null>(mockLayout(6));
+    const { result, unmount } = withSetup(() => useSpread(layoutRef, { turnDuration: 0 }));
+
+    // No tick awaited: the composable must be usable as soon as it returns.
+    const layout = layoutRef.value as ChapterLayout & { getSpread: ReturnType<typeof vi.fn> };
+    expect(result.spread.value).not.toBeNull();
+    expect(result.spread.value).toEqual(layout.getSpread(result.spreadIdx.value));
+    expect(result.totalPages.value).toBe(6);
+    unmount();
+  });
+
   it('next/prev/goTo move the spread index and call onChange', async () => {
     const onChange = vi.fn();
     const layoutRef = ref<ChapterLayout | null>(mockLayout(6));
@@ -548,6 +774,79 @@ describe('useSpread (Vue)', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
     await nextTick();
     expect(result.spreadIdx.value).toBe(0);
+
+    unmount();
+  });
+
+  it('leaves arrow keys to editable fields, modifiers and handled events', async () => {
+    const layoutRef = ref<ChapterLayout | null>(mockLayout(6));
+    const { result, unmount } = withSetup(() => useSpread(layoutRef, { turnDuration: 0 }));
+    await nextTick();
+
+    const input = document.createElement('input');
+    const textarea = document.createElement('textarea');
+    const editable = document.createElement('div');
+    editable.contentEditable = 'true';
+    for (const el of [input, textarea, editable]) document.body.appendChild(el);
+    const preventer = (e: Event) => e.preventDefault();
+
+    try {
+      for (const el of [input, textarea, editable]) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+        await nextTick();
+        expect(result.spreadIdx.value).toBe(0);
+      }
+
+      for (const modifier of ['altKey', 'ctrlKey', 'metaKey', 'shiftKey'] as const) {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', [modifier]: true }));
+        await nextTick();
+        expect(result.spreadIdx.value).toBe(0);
+      }
+
+      document.body.addEventListener('keydown', preventer);
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true }),
+      );
+      await nextTick();
+      expect(result.spreadIdx.value).toBe(0);
+      document.body.removeEventListener('keydown', preventer);
+
+      // A plain arrow key on the page still turns the spread.
+      document.body.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+      );
+      await nextTick();
+      expect(result.spreadIdx.value).toBe(1);
+    } finally {
+      document.body.removeEventListener('keydown', preventer);
+      for (const el of [input, textarea, editable]) el.remove();
+      unmount();
+    }
+  });
+
+  it('follows enableKeyboard when it flips at runtime', async () => {
+    const layoutRef = ref<ChapterLayout | null>(mockLayout(6));
+    const enableKeyboard = ref(true);
+    const { result, unmount } = withSetup(() =>
+      useSpread(layoutRef, { turnDuration: 0, enableKeyboard }),
+    );
+    await nextTick();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    await nextTick();
+    expect(result.spreadIdx.value).toBe(1);
+
+    enableKeyboard.value = false;
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    await nextTick();
+    expect(result.spreadIdx.value).toBe(1);
+
+    enableKeyboard.value = true;
+    await nextTick();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+    await nextTick();
+    expect(result.spreadIdx.value).toBe(2);
 
     unmount();
   });
@@ -731,6 +1030,28 @@ describe('useChapterLayout (Vue)', () => {
     expect(book.computePageSize).toHaveBeenCalledWith(surface.value, geometry);
     unmount();
   });
+
+  it('re-lays out the chapter with the new instance when the book ref is swapped', async () => {
+    const l0 = mockLayout(6);
+    const l1 = mockLayout(8);
+    const bookA = makeBook([l0]);
+    const bookB = makeBook([l1]);
+    const book = shallowRef(bookA);
+    const surface = ref<HTMLElement | null>(document.createElement('div'));
+    const { result, unmount } = withSetup(() =>
+      useChapterLayout(book, ref<EpubBook | null>(makeEpub()), ref(0), surface, {
+        enableResize: false,
+      }),
+    );
+    await flush();
+    expect(result.layout.value).toBe(l0);
+
+    book.value = bookB;
+    await flush();
+    expect(bookB.layoutChapter).toHaveBeenCalledTimes(1);
+    expect(result.layout.value).toBe(l1);
+    unmount();
+  });
 });
 
 describe('useMultiImageOverlay (Vue)', () => {
@@ -871,6 +1192,48 @@ describe('useImageOverlay (Vue, single)', () => {
     expect(result.imageRect.value).toBeNull();
     expect(layout.syncImages).toHaveBeenCalledTimes(2);
 
+    unmount();
+  });
+
+  it('re-applies the exclusion to the layout that replaces the current one', async () => {
+    const first = mockLayout(4);
+    const second = mockLayout(4);
+    const layoutRef = shallowRef<ChapterLayout | null>(first);
+    const spreadIdx = ref(0);
+    const onUpdate = vi.fn();
+    const { result, unmount } = withSetup(() => useImageOverlay(layoutRef, spreadIdx, onUpdate));
+
+    result.toggleImage();
+    expect(first.syncImages).toHaveBeenCalledTimes(1);
+
+    layoutRef.value = second;
+    await nextTick();
+    expect(second.syncImages).toHaveBeenCalledTimes(1);
+    expect(second.syncImages).toHaveBeenCalledWith(0, [
+      expect.objectContaining({ x: 80, y: 100, w: 120, h: 160 }),
+    ]);
+    unmount();
+  });
+
+  it('clears the outgoing spread and re-applies to the new one on a spread change', async () => {
+    const layout = mockLayout(8);
+    const layoutRef = shallowRef<ChapterLayout | null>(layout);
+    const spreadIdx = ref(0);
+    const onUpdate = vi.fn();
+    const { result, unmount } = withSetup(() => useImageOverlay(layoutRef, spreadIdx, onUpdate));
+
+    result.toggleImage();
+    const syncImages = layout.syncImages as ReturnType<typeof vi.fn>;
+    syncImages.mockClear();
+    onUpdate.mockClear();
+
+    spreadIdx.value = 1;
+    await nextTick();
+    expect(syncImages.mock.calls[0]).toEqual([0, undefined]);
+    expect(syncImages.mock.calls[1][0]).toBe(1);
+    expect(syncImages.mock.calls[1][1]).toEqual([expect.objectContaining({ x: 80, y: 100 })]);
+    // Only the spread now on screen is reported to the consumer.
+    expect(onUpdate).toHaveBeenCalledTimes(1);
     unmount();
   });
 

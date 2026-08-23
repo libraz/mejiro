@@ -1,4 +1,4 @@
-import type { EpubBook } from '@libraz/mejiro/epub';
+import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { onBeforeUnmount, onMounted, type Ref, shallowRef, type WatchStopHandle, watch } from 'vue';
 
@@ -20,6 +20,12 @@ export interface UseEpubOptions {
    * raw `ArrayBuffer`. Overrides {@link fetchOptions} when set.
    */
   fetchEpub?: (url: string) => Promise<ArrayBuffer>;
+  /**
+   * Archive resource limits applied while opening an EPUB. Raise them for
+   * trusted, image-heavy books; tighten them for a public drop zone. Omitted
+   * fields keep their `DEFAULT_EPUB_PARSE_LIMITS` value.
+   */
+  limits?: Partial<EpubParseLimits>;
 }
 
 /** Return value of {@link useEpub}. */
@@ -60,7 +66,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     loading.value = true;
     error.value = null;
     try {
-      const book = await parseEpub(buffer);
+      const book = await parseEpub(buffer, { limits: options.limits });
       if (currentRequest !== requestId) return null;
       epub.value = book;
       options.onLoad?.(book);
@@ -81,7 +87,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     loading.value = true;
     error.value = null;
     try {
-      const book = await parseEpub(await file.arrayBuffer());
+      const book = await parseEpub(await file.arrayBuffer(), { limits: options.limits });
       if (currentRequest !== requestId) return null;
       epub.value = book;
       options.onLoad?.(book);
@@ -111,7 +117,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
         if (!res.ok) return null;
         buffer = await res.arrayBuffer();
       }
-      const book = await parseEpub(buffer);
+      const book = await parseEpub(buffer, { limits: options.limits });
       if (currentRequest !== requestId) return null;
       epub.value = book;
       options.onLoad?.(book);

@@ -2,14 +2,18 @@ import { onScopeDispose, type Ref, ref, watch } from 'vue';
 import type { ManuscriptEditorChapter } from './MejiroManuscriptEditor.js';
 
 /** Options for {@link useManuscriptDraft}. */
-export interface UseManuscriptDraftOptions {
+export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]> {
   /** Initial chapters. Defaults to a single empty chapter. */
   initialChapters?: ManuscriptEditorChapter[];
   /**
    * Called when the draft changes (debounced). Use to persist to
    * localStorage, IndexedDB, or upload to a server.
    */
-  onAutosave?: (chapters: ManuscriptEditorChapter[]) => void | Promise<void>;
+  onAutosave?: (draft: TAutosave) => void | Promise<void>;
+  /** Maps chapters to the autosave payload. Defaults to the chapter array. */
+  autosavePayload?: (chapters: ManuscriptEditorChapter[]) => TAutosave;
+  /** Extra key that triggers autosave when non-chapter metadata changes. */
+  autosaveKey?: Ref<string> | string;
   /** Debounce delay in milliseconds. @defaultValue 800 */
   autosaveDelay?: number;
   /** Creates the default title for a generated chapter. */
@@ -28,6 +32,10 @@ export interface UseManuscriptDraftReturn {
   addChapter(chapter?: Partial<ManuscriptEditorChapter>): void;
   removeChapter(index: number): void;
   reorderChapters(from: number, to: number): void;
+  /** Last autosave failure, if any. */
+  autosaveError: Ref<Error | null>;
+  /** Immediately saves the latest dirty draft, if one exists. */
+  flushAutosave(): void;
 }
 
 const DEFAULT_DELAY = 800;
@@ -40,12 +48,17 @@ function defaultChapter(
   return { id: `chapter-${Date.now()}-${index}`, title: titleFor(index), body: bodyFor(index) };
 }
 
+function unwrapKey(key: Ref<string> | string | undefined): string {
+  if (key === undefined) return '';
+  return typeof key === 'string' ? key : key.value;
+}
+
 /**
  * Reactive store for manuscript drafts. Mirrors the React `useManuscriptDraft`
  * hook with Vue refs and a `watch`-based debounced autosave.
  */
-export function useManuscriptDraft(
-  options: UseManuscriptDraftOptions = {},
+export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
+  options: UseManuscriptDraftOptions<TAutosave> = {},
 ): UseManuscriptDraftReturn {
   const autosaveDelay = options.autosaveDelay ?? DEFAULT_DELAY;
   const titleFor = options.defaultChapterTitle;
@@ -56,21 +69,65 @@ export function useManuscriptDraft(
       : [defaultChapter(0, titleFor, bodyFor)],
   );
   const selected = ref(0);
+  const autosaveError = ref<Error | null>(null);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // `dirty` means "the current draft is not yet persisted". It is only cleared
+  // by a save that resolved and that nothing superseded while it was in
+  // flight, so a rejected save stays dirty and the next flush retries it.
+  let dirty = false;
+  let revision = 0;
+  let inFlightRevision = -1;
+
+  function flushAutosave(): void {
+    const callback = options.onAutosave;
+    if (!(callback && dirty) || inFlightRevision === revision) return;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    const savedRevision = revision;
+    inFlightRevision = savedRevision;
+    const payload = options.autosavePayload
+      ? options.autosavePayload([...chapters.value])
+      : ([...chapters.value] as TAutosave);
+    void Promise.resolve(callback(payload))
+      .then(() => {
+        if (revision === savedRevision) dirty = false;
+      })
+      .catch((err) => {
+        autosaveError.value = err instanceof Error ? err : new Error(String(err));
+      })
+      .finally(() => {
+        if (inFlightRevision === savedRevision) inFlightRevision = -1;
+      });
+  }
 
   if (options.onAutosave) {
-    const onAutosave = options.onAutosave;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const autosaveKey = options.autosaveKey;
     watch(
-      chapters,
-      (current) => {
+      () => [chapters.value, unwrapKey(autosaveKey)],
+      () => {
+        dirty = true;
+        revision += 1;
+        autosaveError.value = null;
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
-          void onAutosave([...current]);
+          timer = undefined;
+          flushAutosave();
         }, autosaveDelay);
       },
       { deep: true },
     );
+    const handleBeforeUnload = (): void => flushAutosave();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
     onScopeDispose(() => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+      }
+      flushAutosave();
       if (timer) clearTimeout(timer);
     });
   }
@@ -140,5 +197,7 @@ export function useManuscriptDraft(
     addChapter,
     removeChapter,
     reorderChapters,
+    autosaveError,
+    flushAutosave,
   };
 }

@@ -2,7 +2,7 @@
 
 import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick } from 'vue';
+import { defineComponent, h, nextTick, ref } from 'vue';
 import { useManuscriptDraft } from '../src/useManuscriptDraft.js';
 
 function harness<T>(setup: () => T): { result: { current: T }; app: ReturnType<typeof mount> } {
@@ -115,7 +115,7 @@ describe('useManuscriptDraft (Vue)', () => {
     vi.useRealTimers();
   });
 
-  it('cancels a pending autosave when the scope is disposed', async () => {
+  it('flushes a pending autosave when the scope is disposed', async () => {
     vi.useFakeTimers();
     const save = vi.fn();
     const { result, app } = harness(() =>
@@ -123,9 +123,80 @@ describe('useManuscriptDraft (Vue)', () => {
     );
     result.current.patchChapter(0, { body: 'changed' });
     await nextTick();
-    app.unmount();
-    vi.advanceTimersByTime(150);
     expect(save).not.toHaveBeenCalled();
+
+    app.unmount();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0][0][0].body).toBe('changed');
+    vi.advanceTimersByTime(150);
+    expect(save).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('surfaces autosave errors', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn(async () => {
+      throw new Error('save failed');
+    });
+    const { result } = harness(() => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }));
+    result.current.patchChapter(0, { body: 'changed' });
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(result.current.autosaveError.value?.message).toBe('save failed');
+    vi.useRealTimers();
+  });
+
+  it('keeps the draft dirty after a rejected autosave so the next flush retries', async () => {
+    vi.useFakeTimers();
+    let attempt = 0;
+    const save = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw new Error('offline');
+    });
+    const { result } = harness(() => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }));
+    result.current.patchChapter(0, { body: 'changed' });
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    result.current.flushAutosave();
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1][0][0].body).toBe('changed');
+    vi.useRealTimers();
+  });
+
+  it('autosaves a mapped payload and reacts to autosaveKey changes', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn();
+    const metaKey = ref('Draft');
+    const { result } = harness(() =>
+      useManuscriptDraft<{ title: string; chapters: unknown[] }>({
+        onAutosave: save,
+        autosaveDelay: 100,
+        autosaveKey: metaKey,
+        autosavePayload: (chapters) => ({ title: metaKey.value, chapters }),
+      }),
+    );
+
+    result.current.patchChapter(0, { body: 'changed' });
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0][0]).toMatchObject({ title: 'Draft' });
+
+    metaKey.value = 'Renamed';
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save.mock.calls[1][0]).toMatchObject({ title: 'Renamed' });
     vi.useRealTimers();
   });
 });

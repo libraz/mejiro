@@ -11,15 +11,24 @@ import { type CSSProperties, defineComponent, h, type PropType, type VNode } fro
 export const MejiroSelectionLayer = defineComponent({
   name: 'MejiroSelectionLayer',
   props: {
-    /** Spread-local rectangles from {@link ChapterLayout.selectionRects}. */
-    rects: { type: Array as PropType<readonly AnchorRect[]>, required: true },
+    /**
+     * Spread-local rectangles from {@link ChapterLayout.selectionRects}.
+     *
+     * A rectangle may carry its own `color`, which becomes that rectangle's
+     * fill. Entries without one take the fill from the shipped stylesheet
+     * (`.mejiro-selection-rect`, themeable via `--mejiro-selection-bg`).
+     */
+    rects: {
+      type: Array as PropType<readonly (AnchorRect & { color?: string })[]>,
+      required: true,
+    },
     /** Which page-side this layer is rendered into. */
     side: { type: String as PropType<'right' | 'left'>, required: true },
     /** Optional class added to the outer wrapper. */
     layerClass: { type: String, default: undefined },
     /** Optional class for each rectangle (defaults to `mejiro-selection-rect`). */
     rectClass: { type: String, default: 'mejiro-selection-rect' },
-    /** Optional inline style for each rectangle. */
+    /** Optional inline style for each rectangle. Takes precedence over `color`. */
     rectStyle: { type: Object as PropType<CSSProperties>, default: () => ({}) },
   },
   setup(props) {
@@ -42,6 +51,7 @@ export const MejiroSelectionLayer = defineComponent({
               width: `${r.width}px`,
               height: `${r.height}px`,
               ...posStyle,
+              ...(r.color != null ? { backgroundColor: r.color } : null),
               ...props.rectStyle,
             },
           }),

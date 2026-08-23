@@ -62,6 +62,16 @@ function unwrapKey(key: Ref<string> | string): string {
   return typeof key === 'string' ? key : key.value;
 }
 
+/** Reads and normalizes the stored list, degrading to empty on a throwing backend. */
+function readAnnotations(storage: AnnotationsStorage | null, key: string): readonly Annotation[] {
+  if (!storage) return [];
+  try {
+    return sortAnnotations(parseAnnotations(storage.getItem(key)));
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Persistence helper for reader annotations. Vue equivalent of the React hook
  * of the same name.
@@ -70,31 +80,56 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const { throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const annotations = ref<readonly Annotation[]>(
-    storage ? sortAnnotations(parseAnnotations(storage.getItem(unwrapKey(options.key)))) : [],
-  );
-
-  if (typeof options.key === 'object' && options.key && 'value' in options.key) {
-    watch(options.key, (next) => {
-      annotations.value = storage ? sortAnnotations(parseAnnotations(storage.getItem(next))) : [];
-    });
-  }
+  const annotations = ref<readonly Annotation[]>(readAnnotations(storage, unwrapKey(options.key)));
 
   let timer: ReturnType<typeof setTimeout> | null = null;
-  onUnmounted(() => {
-    if (timer) clearTimeout(timer);
-  });
+  let pendingWrite: (() => void) | null = null;
+
+  /** Runs the pending throttled write immediately, if any. */
+  function flushPending(): void {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const write = pendingWrite;
+    pendingWrite = null;
+    if (!write) return;
+    try {
+      write();
+    } catch {
+      // Quota or disabled storage — in-memory copy stays.
+    }
+  }
+
+  /** Drops the pending throttled write without running it. */
+  function cancelPending(): void {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pendingWrite = null;
+  }
+
+  watch(
+    () => unwrapKey(options.key),
+    (next) => {
+      // A write scheduled under the previous key must land there, not in the new book's slot.
+      flushPending();
+      annotations.value = readAnnotations(storage, next);
+    },
+  );
+
+  // Unmounting mid-throttle must not lose the mutation the user just made.
+  onUnmounted(flushPending);
 
   function commit(next: readonly Annotation[]): void {
     if (storage) {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        try {
-          storage.setItem(unwrapKey(options.key), serializeAnnotations(next));
-        } catch {
-          // ignore
-        }
-      }, throttleMs);
+      const keyAtCommit = unwrapKey(options.key);
+      cancelPending();
+      pendingWrite = () => {
+        storage.setItem(keyAtCommit, serializeAnnotations(next));
+      };
+      timer = setTimeout(flushPending, throttleMs);
     }
     options.onChange?.(next);
   }
@@ -138,7 +173,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   function clear(): void {
     annotations.value = [];
     if (storage) {
-      if (timer) clearTimeout(timer);
+      cancelPending();
       try {
         storage.removeItem(unwrapKey(options.key));
       } catch {

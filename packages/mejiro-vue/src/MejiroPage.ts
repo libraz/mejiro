@@ -1,4 +1,4 @@
-import type { RenderLine, RenderPage } from '@libraz/mejiro/render';
+import { paragraphClassName, type RenderLine, type RenderPage } from '@libraz/mejiro/render';
 import { defineComponent, h, type PropType, type VNode } from 'vue';
 import { renderSegment } from './renderInlineNode.js';
 
@@ -31,12 +31,10 @@ export const MejiroPage = defineComponent({
   setup(props) {
     return () => {
       const children = props.page.paragraphs.map((paragraph, pi) => {
-        let paraClass = 'mejiro-paragraph';
-        if (paragraph.headingLevel != null) {
-          paraClass += ` mejiro-paragraph--h${paragraph.headingLevel}`;
-        } else if (paragraph.isHeading) {
-          paraClass += ' mejiro-paragraph--heading';
-        }
+        const paraClass = paragraphClassName(
+          paragraph.kind ?? (paragraph.isHeading ? 'heading' : undefined),
+          paragraph.headingLevel,
+        );
 
         const lineNodes = paragraph.lines.flatMap((line, li) => renderLine(line, li));
 

@@ -2,18 +2,25 @@ import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import {
   type ComputedRef,
   computed,
+  type MaybeRefOrGetter,
   onMounted,
   onScopeDispose,
   onUnmounted,
   type Ref,
   ref,
+  shallowRef,
+  toValue,
   watch,
 } from 'vue';
 
 /** Options for {@link useSpread}. */
 export interface UseSpreadOptions {
-  /** Enable ArrowLeft/ArrowRight navigation while the layout is loaded. @defaultValue true */
-  enableKeyboard?: boolean;
+  /**
+   * Enable ArrowLeft/ArrowRight navigation while the layout is loaded. Pass a
+   * ref or getter to switch navigation off and on at runtime (for example
+   * while a modal dialog owns the arrow keys). @defaultValue true
+   */
+  enableKeyboard?: MaybeRefOrGetter<boolean>;
   /** Page-turn animation duration in ms. The transition is purely visual — content updates at the midpoint. @defaultValue 180 */
   turnDuration?: number;
   /** Called when the spread index changes (after the turn animation midpoint). */
@@ -49,6 +56,21 @@ export interface UseSpreadReturn {
 }
 
 /**
+ * True when a global keydown must not be read as reader navigation: the host
+ * already handled it, a modifier turns it into a different gesture, or it was
+ * typed into an editable field (comment boxes, the bundled manuscript editor).
+ */
+function ignoreNavigationKey(e: KeyboardEvent): boolean {
+  if (e.defaultPrevented) return true;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return true;
+  const target = e.target as HTMLElement | null;
+  if (!target) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
+/**
  * Vue composable that tracks the current spread index for a chapter layout
  * and provides navigation helpers with an optional page-turn animation.
  *
@@ -60,11 +82,12 @@ export function useSpread(
   layout: Ref<ChapterLayout | null>,
   options: UseSpreadOptions = {},
 ): UseSpreadReturn {
-  const enableKeyboard = options.enableKeyboard ?? true;
   const turnDuration = options.turnDuration ?? 180;
 
   const spreadIdx = ref(0);
-  const spread = ref<SpreadResult | null>(null);
+  // The spread is a read-only render result that is replaced wholesale, so it
+  // is held shallowly: deep reactivity would proxy the whole page tree.
+  const spread = shallowRef<SpreadResult | null>(null);
   const turning = ref(false);
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
   let layoutGeneration = 0;
@@ -80,6 +103,9 @@ export function useSpread(
     spread.value = layout.value.getSpread(spreadIdx.value);
   }
 
+  // `immediate` covers a layout that is already non-null when the composable
+  // runs (a restored or pre-built layout): without it `spread` would stay null
+  // until the ref happened to change.
   watch(
     layout,
     () => {
@@ -92,11 +118,18 @@ export function useSpread(
       spreadIdx.value = 0;
       refresh();
     },
-    { flush: 'sync' },
+    { immediate: true, flush: 'sync' },
   );
 
-  watch(spreadIdx, () => {
+  // The layout is part of the source so a reflow that resets the index to 0 and
+  // has it restored within the same tick still re-reads the replacement layout:
+  // the index alone compares equal at flush time and would be swallowed.
+  // `onChange` stays tied to the index, so such a round trip stays silent.
+  let lastNotifiedIdx = 0;
+  watch([spreadIdx, layout], () => {
     refresh();
+    if (spreadIdx.value === lastNotifiedIdx) return;
+    lastNotifiedIdx = spreadIdx.value;
     options.onChange?.(spreadIdx.value);
   });
 
@@ -141,18 +174,41 @@ export function useSpread(
 
   function onKey(e: KeyboardEvent): void {
     if (!layout.value) return;
+    if (ignoreNavigationKey(e)) return;
     if (e.key === 'ArrowLeft') next();
     else if (e.key === 'ArrowRight') prev();
   }
 
-  if (enableKeyboard) {
-    onMounted(() => window.addEventListener('keydown', onKey));
-    onUnmounted(() => {
-      window.removeEventListener('keydown', onKey);
-    });
+  let keyboardBound = false;
+
+  function bindKeyboard(): void {
+    if (keyboardBound) return;
+    window.addEventListener('keydown', onKey);
+    keyboardBound = true;
   }
 
+  function unbindKeyboard(): void {
+    if (!keyboardBound) return;
+    window.removeEventListener('keydown', onKey);
+    keyboardBound = false;
+  }
+
+  // Bound after mount so server rendering never touches `window`, and kept in
+  // sync afterwards so a reactive `enableKeyboard` releases the arrow keys.
+  onMounted(() => {
+    watch(
+      () => toValue(options.enableKeyboard) ?? true,
+      (enabled) => {
+        if (enabled) bindKeyboard();
+        else unbindKeyboard();
+      },
+      { immediate: true },
+    );
+  });
+  onUnmounted(unbindKeyboard);
+
   onScopeDispose(() => {
+    unbindKeyboard();
     if (turnTimer) clearTimeout(turnTimer);
   });
 

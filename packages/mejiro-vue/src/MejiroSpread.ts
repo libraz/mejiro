@@ -1,7 +1,15 @@
 import type { PageHeaderData } from '@libraz/mejiro';
 import type { AnchorRange, AnchorRect, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
-import { defineComponent, h, type PropType, ref, type VNode } from 'vue';
+import {
+  computed,
+  defineComponent,
+  getCurrentInstance,
+  h,
+  type PropType,
+  ref,
+  type VNode,
+} from 'vue';
 import { useI18n } from './i18n.js';
 import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
@@ -47,8 +55,13 @@ export const MejiroSpread = defineComponent({
     leftHeader: { type: Object as PropType<PageHeaderData>, default: () => ({}) },
     /** Image overlays on the current spread (for the right page coordinate space). */
     images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
-    /** Force slot-mode rendering on both pages even without images. */
-    slotMode: { type: Boolean, default: false },
+    /**
+     * Force slot-mode rendering on both pages even without images. When
+     * omitted, each page falls through to `MejiroPageView`'s automatic choice:
+     * slot mode for pages with images, native `writing-mode: vertical-rl`
+     * otherwise.
+     */
+    slotMode: { type: Boolean, default: undefined },
     /**
      * Resolves a spread-local pixel coordinate to an in-chapter anchor.
      * Typically `(x, y) => layout.anchorAtCoord(spreadIdx, x, y)`. When provided
@@ -59,8 +72,21 @@ export const MejiroSpread = defineComponent({
       type: Function as PropType<(x: number, y: number) => InChapterAnchor | null>,
       default: undefined,
     },
-    /** Selection rectangles to render as a highlight overlay. */
-    selectionRects: { type: Array as PropType<readonly AnchorRect[]>, default: undefined },
+    /**
+     * Zero-based index of the spread being rendered. Rectangles passed through
+     * `selectionRects` carry spread-local coordinates, so this is what scopes
+     * them to this spread. When omitted, every supplied rectangle is painted.
+     */
+    spreadIdx: { type: Number, default: undefined },
+    /**
+     * Selection rectangles to render as a highlight overlay. Entries whose
+     * `spreadIdx` differs from the `spreadIdx` prop are ignored. An entry may
+     * carry a `color` that becomes that rectangle's fill.
+     */
+    selectionRects: {
+      type: Array as PropType<readonly (AnchorRect & { color?: string })[]>,
+      default: undefined,
+    },
     /**
      * Hide the left page and render only the right page. Use this for
      * portrait viewports or when explicit single-page mode is requested.
@@ -79,6 +105,7 @@ export const MejiroSpread = defineComponent({
   },
   setup(props, { emit, slots }) {
     const messages = useI18n();
+    const instance = getCurrentInstance();
     const selectionStart = ref<InChapterAnchor | null>(null);
 
     function resolvePointer(e: PointerEvent): InChapterAnchor | null {
@@ -96,8 +123,30 @@ export const MejiroSpread = defineComponent({
       return props.anchorAtCoord(spreadX, offsetY);
     }
 
+    // A declared emit never reaches `attrs`, so the presence of a
+    // `selection-change` handler is read off the current vnode. Both handler
+    // key spellings Vue itself accepts are checked.
+    const selectionHandlerKeys = [
+      'onSelectionChange',
+      'onSelectionChangeOnce',
+      'onSelection-change',
+      'onSelection-changeOnce',
+    ];
+
+    function hasSelectionHandler(): boolean {
+      const vnodeProps = instance?.vnode.props as Record<string, unknown> | null | undefined;
+      if (!vnodeProps) return false;
+      return selectionHandlerKeys.some((key) => vnodeProps[key] != null);
+    }
+
+    /**
+     * Drag selection takes over pointer events on the page content, so it is
+     * only enabled when the host asked for it: a coordinate resolver *and* a
+     * selection-change handler. With `anchorAtCoord` alone (tap anchoring) the
+     * page keeps native text selection.
+     */
     function selectionEnabled(): boolean {
-      return props.anchorAtCoord != null;
+      return props.anchorAtCoord != null && hasSelectionHandler();
     }
 
     function handlePointerDown(e: PointerEvent): void {
@@ -163,6 +212,15 @@ export const MejiroSpread = defineComponent({
       handleGesturePointerUp(e);
       if (selectionEnabled()) handlePointerUp(e);
     }
+    // Selection rectangles are spread-local, so painting an entry that belongs
+    // to another spread would place it over unrelated text.
+    const visibleRects = computed(() => {
+      const rects = props.selectionRects;
+      if (!rects) return undefined;
+      if (props.spreadIdx == null) return rects;
+      return rects.filter((r) => r.spreadIdx === props.spreadIdx);
+    });
+
     function renderHeader(data: PageHeaderData): VNode {
       return h('div', { class: 'mejiro-reader-page-header' }, [
         h('span', { class: 'mejiro-reader-page-header-title' }, data.title ?? ''),
@@ -180,7 +238,6 @@ export const MejiroSpread = defineComponent({
       const header = isRight ? props.rightHeader : props.leftHeader;
       const pageKey = `${side}-${header.pageNumber ?? 'blank'}`;
       const hasImages = props.images.length > 0;
-      const useSlot = true;
       const contentStyle: Record<string, string | number> = {
         height: `${props.contentHeight}px`,
       };
@@ -226,14 +283,14 @@ export const MejiroSpread = defineComponent({
                 h(MejiroPageView, {
                   key: pageKey,
                   result,
-                  slotMode: useSlot,
+                  slotMode: props.slotMode,
                   fontFamily: props.fontFamily,
                   lineSpacing: props.lineSpacing,
                   class: 'mejiro-reader-page-content',
                   style: contentStyle,
                 }),
-                props.selectionRects && props.selectionRects.length > 0
-                  ? h(MejiroSelectionLayer, { rects: props.selectionRects, side })
+                visibleRects.value && visibleRects.value.length > 0
+                  ? h(MejiroSelectionLayer, { rects: visibleRects.value, side })
                   : null,
               ],
             ),

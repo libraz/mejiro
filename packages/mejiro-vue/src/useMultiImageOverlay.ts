@@ -1,5 +1,5 @@
-import { moveImageOverlayRect, resizeImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import { createOverlayDragSession } from '@libraz/mejiro/browser';
 import {
   type ComputedRef,
   computed,
@@ -179,33 +179,19 @@ export function useMultiImageOverlay(
     e.preventDefault();
     const found = findById(id);
     if (!found) return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const start = { ...found.item.rect };
     const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
-    target.classList.add('is-dragging');
-
-    let rafId = 0;
-    const onMove = (me: PointerEvent) => {
-      const dx = me.clientX - startX;
-      const dy = me.clientY - startY;
-      const r = moveImageOverlayRect(start, dx, dy);
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => updateImage(id, r));
-    };
-    let cleanup: () => void;
-    const onUp = () => cleanup();
-    cleanup = () => {
-      cancelAnimationFrame(rafId);
-      target.classList.remove('is-dragging');
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      activeDragCleanups.delete(cleanup);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    activeDragCleanups.add(cleanup);
+    createOverlayDragSession({
+      mode: 'move',
+      rect: found.item.rect,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      captureElement: target,
+      activeElement: target,
+      dragClass: 'is-dragging',
+      registry: activeDragCleanups,
+      onChange: (rect) => updateImage(id, rect),
+    });
   }
 
   function onResizePointerDown(id: string, e: PointerEvent): void {
@@ -213,33 +199,19 @@ export function useMultiImageOverlay(
     e.stopPropagation();
     const found = findById(id);
     if (!found) return;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const start = { ...found.item.rect };
     const target = e.currentTarget as HTMLElement;
-    target.setPointerCapture(e.pointerId);
-    target.parentElement?.classList.add('is-dragging');
-
-    let rafId = 0;
-    const onMove = (me: PointerEvent) => {
-      const dx = me.clientX - startX;
-      const dy = me.clientY - startY;
-      const r = resizeImageOverlayRect(start, dx, dy);
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => updateImage(id, r));
-    };
-    let cleanup: () => void;
-    const onUp = () => cleanup();
-    cleanup = () => {
-      cancelAnimationFrame(rafId);
-      target.parentElement?.classList.remove('is-dragging');
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      activeDragCleanups.delete(cleanup);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    activeDragCleanups.add(cleanup);
+    createOverlayDragSession({
+      mode: 'resize',
+      rect: found.item.rect,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      captureElement: target,
+      activeElement: target.parentElement,
+      dragClass: 'is-dragging',
+      registry: activeDragCleanups,
+      onChange: (rect) => updateImage(id, rect),
+    });
   }
 
   // Re-sync the affected spread when the underlying layout changes (e.g. after
