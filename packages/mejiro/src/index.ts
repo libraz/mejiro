@@ -52,6 +52,20 @@ export type { TcyAnnotation, TcyPreprocessResult } from './tcy.js';
 export { buildTcyAnnotations, preprocessTcy } from './tcy.js';
 export { formatDialogueLineBreaks, normalizeText, toCodepoints } from './text.js';
 export { tokenLengthsToBoundaries } from './tokenize.js';
-export type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
+export type {
+  AnalyzerIdentity,
+  BreakCostOptions,
+  BreakResult,
+  KinsokuMode,
+  KinsokuRules,
+  LayoutInput,
+  MorphemeLike,
+  TcyCandidate,
+  TextAnalysis,
+  TextAnalyzer,
+  TypographyHintOptions,
+  TypographyHints,
+} from './types.js';
+export { deriveTypographyHints, mergeClusterIds } from './typography-hints.js';
 export type { EditableSettings, FontChoice, PageHeaderData } from './ui-types.js';
 export { sanitizeUrl } from './url.js';

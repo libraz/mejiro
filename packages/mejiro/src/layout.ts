@@ -21,6 +21,10 @@ const LINE_FEED = 10;
  * split by the forced-break rule. That is the only case in which a break falls
  * between two characters sharing a cluster ID.
  *
+ * When `breakPenalties` is given, the backward search picks the lowest-cost
+ * position within a bounded window instead of the nearest valid one, and
+ * supersedes both `tokenBoundaries` and the whitespace/word preference.
+ *
  * @param input - Layout parameters including text, advances, and line width.
  * @returns Break points and optional hanging adjustments.
  */
@@ -45,6 +49,17 @@ export function computeBreaks(input: LayoutInput): BreakResult {
 
   // Build token boundary lookup set for O(1) access
   const tokenBoundarySet = tokenBoundaries?.length ? new Set<number>(tokenBoundaries) : undefined;
+
+  // An empty penalty array carries no preference, so it is treated as absent
+  // and leaves the nearest-valid-position search in charge.
+  const breakPenalties = input.breakPenalties?.length ? input.breakPenalties : undefined;
+  const penaltyWeight = input.breakCost?.penaltyWeight ?? 1;
+  const shortfallWeight = input.breakCost?.shortfallWeight ?? 1;
+  const maxBacktrackChars = input.breakCost?.maxBacktrackChars ?? 8;
+  // One em is a property of the paragraph, not of an individual break, so the
+  // scale the shortfall is expressed in is established once per call.
+  const emSize = breakPenalties ? (input.breakCost?.emSize ?? estimateEmSize(input.advances)) : 1;
+
   const len = text.length;
 
   if (len === 0) {
@@ -135,7 +150,47 @@ export function computeBreaks(input: LayoutInput): BreakResult {
       let whitespacePos = -1;
       let clusterSafePos = -1;
       let foundTokenBoundary = false;
-      if (tokenBoundarySet) {
+      let lowestCostPos = -1;
+
+      if (breakPenalties) {
+        // Cost search. Within a bounded window the cheapest position wins on the
+        // sum of its penalty and the gap it leaves at the end of the line, so a
+        // break the analysis dislikes is taken only when the alternative wastes
+        // more room than the penalty is worth. `accWidth` spans lineStart..i, so
+        // peeling one advance off per step yields each candidate's line width
+        // without a second pass over the line.
+        let candidatePos = i - 1;
+        let candidateWidth = accWidth;
+        let lowestCost = 0;
+        let examined = 0;
+        while (candidatePos > lineStart && examined < maxBacktrackChars) {
+          candidateWidth -= adv[candidatePos + 1];
+          if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, candidatePos, text.length)) {
+            clusterSafePos = candidatePos;
+          }
+          if (canBreakAt(text, candidatePos, clusterIds, mode, kinsokuRules)) {
+            const shortfall = (lineWidth - candidateWidth) / emSize;
+            const cost = penaltyWeight * breakPenalties[candidatePos] + shortfallWeight * shortfall;
+            // The walk runs from the position that fills the line best downwards,
+            // so a strict comparison leaves a tie with the larger index.
+            if (lowestCostPos < 0 || cost < lowestCost) {
+              lowestCost = cost;
+              lowestCostPos = candidatePos;
+            }
+          }
+          examined++;
+          candidatePos--;
+        }
+      }
+
+      // A window holding no valid position says nothing about which position is
+      // best: a long run of characters prohibited at line start legitimately
+      // needs a longer walk back. Falling through to the unbounded search keeps
+      // such a run from being force-broken where the character-class rules on
+      // their own would have found a position further back.
+      if (lowestCostPos >= 0) {
+        breakPos = lowestCostPos;
+      } else if (tokenBoundarySet && !breakPenalties) {
         while (breakPos > lineStart) {
           if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, breakPos, text.length)) {
             clusterSafePos = breakPos;
@@ -293,6 +348,63 @@ function validateLayoutInput(input: LayoutInput): void {
       throw new RangeError(`computeBreaks: advances[${i}] must be a finite non-negative number`);
     }
   }
+  if (input.breakPenalties && input.breakPenalties.length !== len) {
+    throw new RangeError(
+      `computeBreaks: breakPenalties length (${input.breakPenalties.length}) must match text length (${len})`,
+    );
+  }
+  const breakCost = input.breakCost;
+  if (breakCost) {
+    if (
+      breakCost.penaltyWeight !== undefined &&
+      (!Number.isFinite(breakCost.penaltyWeight) || breakCost.penaltyWeight < 0)
+    ) {
+      throw new RangeError(
+        'computeBreaks: breakCost.penaltyWeight must be a finite non-negative number',
+      );
+    }
+    if (
+      breakCost.shortfallWeight !== undefined &&
+      (!Number.isFinite(breakCost.shortfallWeight) || breakCost.shortfallWeight < 0)
+    ) {
+      throw new RangeError(
+        'computeBreaks: breakCost.shortfallWeight must be a finite non-negative number',
+      );
+    }
+    if (
+      breakCost.maxBacktrackChars !== undefined &&
+      (!Number.isInteger(breakCost.maxBacktrackChars) || breakCost.maxBacktrackChars <= 0)
+    ) {
+      throw new RangeError(
+        'computeBreaks: breakCost.maxBacktrackChars must be a positive finite integer',
+      );
+    }
+    if (
+      breakCost.emSize !== undefined &&
+      (!Number.isFinite(breakCost.emSize) || breakCost.emSize <= 0)
+    ) {
+      throw new RangeError('computeBreaks: breakCost.emSize must be a positive finite number');
+    }
+  }
+}
+
+/**
+ * Estimates the pixel size of one em from a paragraph's measured advances.
+ *
+ * The widest advance is one em for any text containing a full-width character,
+ * which Japanese body text always does. The estimate has to read the raw
+ * measured widths rather than the effective ones, because ruby distributes an
+ * annotation's excess width over its base characters and pushes their advances
+ * past one em.
+ */
+function estimateEmSize(advances: Float32Array): number {
+  let widest = 0;
+  for (let i = 0; i < advances.length; i++) {
+    if (advances[i] > widest) widest = advances[i];
+  }
+  // Zero-width text offers no scale to express a shortfall in; one pixel keeps
+  // the cost finite and leaves the penalty term to decide on its own.
+  return widest > 0 ? widest : 1;
 }
 
 /**
