@@ -23,6 +23,7 @@ const BARRELS: Record<string, string> = {
   '@libraz/mejiro/render': 'packages/mejiro/src/render/index.ts',
   '@libraz/mejiro/book': 'packages/mejiro/src/book/index.ts',
   '@libraz/mejiro/image': 'packages/mejiro/src/image/index.ts',
+  '@libraz/mejiro/analysis': 'packages/mejiro/src/analysis/index.ts',
   '@libraz/mejiro-react': 'packages/mejiro-react/src/index.ts',
   '@libraz/mejiro-vue': 'packages/mejiro-vue/src/index.ts',
 };

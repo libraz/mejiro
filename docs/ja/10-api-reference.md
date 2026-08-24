@@ -128,6 +128,20 @@
 
 形態素解析器のトークン長を`LayoutInput.tokenBoundaries`用の境界インデックスに変換します。
 
+### 組版ヒント
+
+| エクスポート | シグネチャ |
+|---|---|
+| `deriveTypographyHints` | `(text: string, analysis: TextAnalysis, options?: TypographyHintOptions) => TypographyHints` |
+
+1 段落分の形態素解析結果から改行ヒントを導出します。既定で出力するのは `clusterIds` だけで、それ以外はすべて明示的な指定が必要です。したがって既定の出力が減らす改行候補は、分割すると組版として誤りになる単位を割ってしまう位置に限られます。規則が発火する条件は形態素の表層の文字種であり、品詞ではありません。そのため辞書のバージョンや解析器が変わっても出力は安定します。解析結果の `text` が適用先の段落と一致しない場合は、エラーではなくヒントなしを返します。発火しなかった規則のフィールドは省略されるので、呼び出し側は「ヒントがなければ前処理もしない」という高速パスをそのまま保てます。規則の内容と 2 段階のオプトインは [改行処理](./03-line-breaking.md) を参照してください。
+
+| エクスポート | シグネチャ |
+|---|---|
+| `mergeClusterIds` | `(length: number, a?: Uint32Array, b?: Uint32Array) => Uint32Array \| undefined` |
+
+同一テキスト上の 2 つのクラスタ ID 配列を推移閉包として統合します。組版ヒントを、ルビや縦中横のクラスタと互いの存在を知らないまま共存させられるのはこの関数のためです。返るのは常に新しい配列で、入力そのものを返すことはありません。`length` と長さが合わない入力は別のテキストを指しているとみなし、拒否せず無視します。ヒントを 1 つ落とす代償は改行位置が最適でなくなることだけですが、例外を投げれば段落全体を失うからです。
+
 ### テキスト補助
 
 | エクスポート | シグネチャ |
@@ -238,6 +252,8 @@
 - `clusterIds?: Uint32Array` -- 不可分文字グループ
 - `rubyAnnotations?: RubyAnnotation[]` -- 改行処理で使用するコアレベルのルビ注釈
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- 優先分割位置
+- `breakPenalties?: Uint8Array` -- コードポイントごとに 1 要素で、そのインデックスの「後ろ」で改行するコスト。`0` は罰則なしで、値が大きいほど避ける。指定すると後方探索は最も近い有効位置ではなく `breakCost.maxBacktrackChars` の範囲内で最小コストの位置を選び、`tokenBoundaries` と空白優先の両方に優先する
+- `breakCost?: BreakCostOptions` -- コスト探索の重み。`breakPenalties` がない場合は無視される
 - `kinsokuRules?: KinsokuRules` -- カスタム禁則ルール
 
 **`BreakResult`** -- `computeBreaks()`の出力:
@@ -246,6 +262,13 @@
 - `hangingAdjustments?: Float32Array` -- 行ごとのぶら下げ突出量（px）
 - `lineWidths?: Float32Array` -- 各行で使用された実際の幅（`lineWidths` 入力が指定された場合に存在）
 - `effectiveAdvances?: Float32Array` -- ルビ分配後の文字ごとの送り幅
+
+**`BreakCostOptions`** -- 罰則のある改行位置と、そこで改行した場合に残る行の空きを天秤にかける重み。位置 `p` の後ろで改行するコストは `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)` で、`shortfall(p)` は行が行長に対してどれだけ短く終わるかを em 単位で表した値です:
+
+- `penaltyWeight?: number` -- 罰則値に掛ける係数（既定: `1`）
+- `shortfallWeight?: number` -- em 単位の空きに掛ける係数（既定: `1`）
+- `maxBacktrackChars?: number` -- コスト探索があふれた文字から遡れる位置数。上限を設けることで改行処理は文字数に対して線形のままになる（既定: `8`）
+- `emSize?: number` -- 1em のピクセル値（既定: その段落で実測した最大の送り幅。全角文字を含むテキストではこれが 1em になる）
 
 **`KinsokuMode`** -- `'strict' | 'loose'`
 
@@ -272,6 +295,42 @@
 - `advance: number` -- 合成ボックスのインライン方向の幅（px）。その範囲を描画するフォントの 1em
 
 **`TcyPreprocessResult`** -- `preprocessTcy()` の出力: `effectiveAdvances: Float32Array` / `clusterIds: Uint32Array`。
+
+**`TypographyHints`** -- `deriveTypographyHints()` の出力。各フィールドは独立しているので、分割不可の単位だけを受け取り罰則は使わない、という選び方ができます:
+
+- `clusterIds?: Uint32Array` -- 分割不可の単位。`LayoutInput.clusterIds` に統合して使う
+- `breakPenalties?: Uint8Array` -- 位置ごとの改行罰則。`LayoutInput.breakPenalties` に渡す
+- `tokenBoundaries?: Uint32Array` -- 形態素の終端位置。`LayoutInput.tokenBoundaries` 用。要求したときだけ出力される。トークン境界だけを渡すと語の切れ目でしか改行しなくなり、日本語の本文組版はそういう組み方をしないため
+- `tcyCandidates?: readonly TcyCandidate[]` -- 縦中横の候補（単独で現れる 2 桁の数字）。実際に適用するかどうかは呼び出し側の判断
+
+**`TypographyHintOptions`** -- `deriveTypographyHints()` が何を出力し、クラスタ規則をどこまで及ばせるか:
+
+- `clusters?: boolean` -- `clusterIds` を出力する（既定: `true`）
+- `penalties?: boolean` -- `breakPenalties` を出力する（既定: `false`）
+- `tokenBoundaries?: boolean` -- `tokenBoundaries` を出力する（既定: `false`）
+- `tcy?: boolean` -- `tcyCandidates` を出力する（既定: `false`）
+- `maxHardClusterChars?: number` -- 1 つのクラスタが覆える最大文字数。これを超える単位は分割可能なままにする。行に収まらないクラスタは禁則を無視する強制改行で割られてしまうため（既定: `6`）
+
+**`TcyCandidate`** -- 縦中横として組める範囲: `startIndex: number`（含む）/ `endIndex: number`（含まない）。
+
+**`MorphemeLike`** -- どの解析器が出力したかによらない、レイアウトエンジンが読む形の形態素。オフセットはレイアウトエンジンに渡すのと同じ NFC テキスト上のコードポイント位置です:
+
+- `surface: string` -- 表層形。範囲の再探索ではなく文字種の確認に使う
+- `start: number` / `end: number` -- 開始（含む）と終了（含まない）。コードポイント単位
+- `pos: string` -- 大分類の品詞コード
+- `extendedPos: string` -- 細分類の品詞コード。ヒント規則が主に見るのはこちら
+
+**`AnalyzerIdentity`** -- `{ name: string; version: string }`。キャッシュキーとスナップショット検証のために解析器を識別します。フィールドがすべて一致する 2 つの identity は、出力が互換な解析器を指します。
+
+**`TextAnalysis`** -- テキストに整列済みの、1 段落分の解析結果: `text: string`（オフセットが指す NFC テキストそのもの）/ `morphemes: readonly MorphemeLike[]`（文書順・重なりなし）/ `analyzer: AnalyzerIdentity` / `warnings: readonly string[]`（問題がなければ空）。
+
+**`TextAnalyzer`** -- 段落から `TextAnalysis` を作るインターフェース:
+
+- `identity: AnalyzerIdentity` -- この解析器の識別子。返すすべての解析結果の `analyzer` と一致するので、出所の分からないヒントを解析なしで判別できる
+- `analyze(text: string): TextAnalysis` -- NFC テキスト 1 段落を解析する
+- `dispose(): void` -- 解析器が保持するネイティブ資源を解放する
+
+実装が同期的なのは設計です。改行処理が同期的に走るため、非同期の初期化は解析器を返すファクトリ側の仕事になります。同梱の実装は後述の `@libraz/mejiro/analysis` にあります。
 
 **`ParagraphMeasure`** -- ページ分割の入力:
 
@@ -855,6 +914,9 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `enableHanging?: boolean` — ぶら下げ組み（デフォルト: `true`）
 - `headingStyles?: Record<number, HeadingStyle>` — レベル別見出しスタイル
 - `headingScale?: number` — デフォルトの見出しスケール（デフォルト: 1.4）
+- `analyzer?: TextAnalyzer` — 改行ヒントの導出に使う形態素解析器。`wordAwareBreaking` がヒントを要求したときだけ、レイアウト時に段落ごとに 1 回呼ばれる。再改行（リサイズ、フォント変更、画像回り込みの再計算）では最初の解析結果をそのまま再利用する。参照されるのは章をレイアウトする時点で、`setOptions()` からは変更できない
+- `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — 解析結果を改行処理にどこまで及ばせるか（デフォルト: `'off'`）。`'clusters'` は、分割すると組版として誤りになる単位を割る位置を除けば、改行位置を文字種規則のままに保つ。`'full'` は位置ごとの罰則を加えるため、改行位置そのものが変わる
+- `breakCost?: BreakCostOptions` — コスト探索の重み。改行処理へそのまま渡され、罰則が働いていない場合は無視される
 
 **`PageSize`**:
 
@@ -869,6 +931,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `inlineAnnotations?: readonly InlineAnnotation[]`
 - `headingLevel?: number`
 - `kind?: ParagraphKind` — `'body'`（デフォルト）/ `'heading'` / `'blockquote'` / `'sceneBreak'` / `'pre'` / `'figure'`
+- `hints?: TypographyHints` — この段落だけの計算済みヒント。指定するとブック側の `analyzer` は使われない。オフセットは `text` の NFC 形上のコードポイント位置
 
 **`BookImage`**:
 
@@ -935,6 +998,50 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `mediaType: string` — `data` の MIME タイプ。要求した形式ではなくエンコーダが実際に出力した形式
 - `width: number` / `height: number` — 縮小後のデコード済みピクセルサイズ
 - `warnings: string[]` — 縮小・品質低下・形式フォールバックの診断メッセージ
+
+---
+
+## `@libraz/mejiro/analysis` — 形態素解析
+
+`deriveTypographyHints()` や `BookOptions.analyzer` に渡す `TextAnalyzer` を提供します。サブパス自体は常に存在しますが、ここで作る解析器が使う `@libraz/suzume` は optional peer dependency です。解析による改行を使う場合だけインストールしてください。
+
+```bash
+npm install @libraz/suzume
+```
+
+パッケージ内の他の場所はこれを import しません。インストールしなければ改行は文字種規則だけで動き、他のサブパスの挙動は一切変わりません。
+
+| エクスポート | シグネチャ |
+|---|---|
+| `createSuzumeAnalyzer` | `(options?: SuzumeAnalyzerOptions) => Promise<TextAnalyzer>` |
+
+suzume の WebAssembly トークナイザを使う解析器を作ります。WebAssembly モジュールと辞書の読み込みはここで 1 回だけ行います。`TextAnalyzer.analyze()` は同期的であり、非同期の処理はすべて解析器が存在する前に済ませておく必要があるからです。`@libraz/suzume` が未インストールの場合やモジュールの読み込みに失敗した場合、返る Promise は reject します。このファクトリを呼ぶこと自体がその解析器を明示的に要求する行為なので、文字種規則だけの改行に落としたい呼び出し側は reject を捕まえて自分でそうします。使い終えたら dispose してください。`instance` で渡した既存インスタンスは、その寿命が渡した側のものなので破棄されません。
+
+**`SuzumeAnalyzerOptions`**:
+
+- `instance?: unknown` — 新規作成の代わりに引き取る、作成済みの Suzume インスタンス
+- `wasmPath?: string` — WebAssembly バイナリの位置の上書き。インスタンス生成にそのまま渡される
+
+| エクスポート | シグネチャ |
+|---|---|
+| `alignMorphemeOffsets` | `(text: string, normalizedText: string, morphemes: readonly MorphemeLike[]) => { morphemes: MorphemeLike[]; warnings: string[] } \| null` |
+
+解析器の正規化済みテキスト上のオフセットを、レイアウトエンジンが実際に改行するテキストへ写します。解析器は自前の正規化器が作った文字列を基準に添字を振りますが、その正規化器は入力を短くすることしかしません。したがって写像は恒等（通常の文章が通る高速パス）か、単調な 1 回の走査のどちらかになります。結果は全体が成功するか、まったく成功しないかのどちらかです。中途半端に写すとヒントが別の文字に付いてしまうため、その場合は `null` を返します。写した範囲がテキストの外に出るもの、自身の表層形を再現できないものは捨てられ、`warnings` に記録されます。独自の解析器を `TextAnalyzer` に適合させるときに使います。
+
+このサブパスは `AnalyzerIdentity` / `MorphemeLike` / `TextAnalysis` / `TextAnalyzer` も再エクスポートします。解析器を実装するためにコアのサブパスを参照せずに済むようにするためです。
+
+```ts
+import { MejiroBook } from '@libraz/mejiro/book';
+import { createSuzumeAnalyzer } from '@libraz/mejiro/analysis';
+
+const analyzer = await createSuzumeAnalyzer();
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  analyzer,
+  wordAwareBreaking: 'clusters',
+});
+```
 
 ---
 

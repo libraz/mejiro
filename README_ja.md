@@ -41,6 +41,7 @@ npx degit libraz/mejiro/examples/react my-reader
 | `@libraz/mejiro/render` | レンダリング: `buildRenderPage()`、`buildParagraphMeasures()`、`segmentToInlineNode()`、`paragraphClassName()`、`renderEpubStatic()`、および `mejiro.css` / `mejiro-reader.css` / `mejiro-editor.css` / `mejiro-fonts.css` / `mejiro-print.css` |
 | `@libraz/mejiro/book` | ブック: `MejiroBook`、`ChapterLayout`、`estimateReadingTime()` — レイアウト、ページ分割、画像回り込み、本文検索、アンカー、スナップショットをまとめた高レベル API |
 | `@libraz/mejiro/image` | `prepareImage(file, opts?)` — 埋め込み前の画像のデコード、縮小、再エンコード |
+| `@libraz/mejiro/analysis` | `createSuzumeAnalyzer()` — 解析を使った改行のための、任意の形態素解析器 |
 | `@libraz/mejiro-react` | React: `<MejiroReader>`、`<MejiroEditor>`、`<MejiroManuscriptEditor>`、`<MejiroShelf>`、`<MejiroToc>`、`<MejiroPage>` と `useEpub` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useAnnotations` などの hooks |
 | `@libraz/mejiro-vue` | Vue: React と同じコンポーネント / composable 一式 |
 
@@ -136,6 +137,8 @@ Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます
 **ぶら下げ組み**では、`。` `、` `，` `．` を次の行へ送らず、行末の外側へはみ出して配置します。
 
 **ルビ**は改行計算の前に解決します。ルビの付いた範囲は本文の幅とルビの幅の広いほうを確保するため、載っている行によってルビが欠けることはありません。**縦中横**は、縦組みの列の中で横に並ぶ範囲を 1 つの正立したボックスにまとめ、改行アルゴリズムからは分割不可の塊として扱います。
+
+**解析を使った改行**は任意の機能で、既定では無効です。optional peer dependency の `@libraz/suzume` を入れると、形態素解析の結果から改行ヒントを導けます。第 1 段階は改行位置を文字種規則のままに保ち、分割すると組版の誤りになる単位を割る位置だけを止めます。第 2 段階では位置ごとの罰則が加わり、改行位置そのものが動きます。「語の切れ目で改行する」機能ではありません。日本語の本文は禁則が許すかぎりどの文字間でも改行して組むもので、語の切れ目だけで折り返すと行が緩みます。解析器の導入コストは、辞書を同梱した WebAssembly でおよそ 567 KB、gzip 後で 230 KB ほどです。入れない場合も、それ以外の動作は変わりません。
 
 独自の禁則ルールを使いたい場合は、コアの `computeBreaks()` に `LayoutInput.kinsokuRules` を渡してください。禁則文字の一覧、規格との対応、実例は [改行処理](docs/ja/03-line-breaking.md) にまとめてあります。
 

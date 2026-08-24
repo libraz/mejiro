@@ -46,6 +46,8 @@ interface LayoutInput {
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
   rubyAnnotations?: RubyAnnotation[];       // Core-level ruby preprocessing (see 04-ruby.md)
   tokenBoundaries?: Uint32Array | readonly number[]; // Preferred break positions
+  breakPenalties?: Uint8Array;            // Per-position break cost (see section 8)
+  breakCost?: BreakCostOptions;           // Weights for the penalty search
   kinsokuRules?: KinsokuRules;            // Custom prohibition rules
 }
 ```
@@ -61,6 +63,8 @@ interface LayoutInput {
 | `clusterIds`       | いいえ | --       | 分割不可の文字グループ用クラスタ ID。第6節を参照。                  |
 | `rubyAnnotations`  | いいえ | --       | コアレベルのルビ注釈。改行処理の前にルビの前処理が実行されます。                 |
 | `tokenBoundaries`  | いいえ | --       | 各トークンの末尾コードポイントのインデックス。アルゴリズムはこれらの位置での改行を優先します。形態素解析器の出力から変換するには `tokenLengthsToBoundaries()` を使用します。 |
+| `breakPenalties`   | いいえ | --       | 各インデックスの後ろで改行するコスト。コードポイントごとに 1 要素。後方探索が範囲を区切ったコスト探索に切り替わり、`tokenBoundaries` に優先します。第8節を参照。 |
+| `breakCost`        | いいえ | --       | そのコスト探索の重み。`breakPenalties` がない場合は無視されます。   |
 | `kinsokuRules`     | いいえ | --       | カスタム禁則ルール。組み込みルールを完全に置き換えます。             |
 
 ### 最小限の使用例
@@ -358,7 +362,152 @@ for (const [start, end] of lines) {
 
 ---
 
+## 8. 解析を使った改行
+
+第7節までの改行位置は、すべて文字種だけで決まっていました。ここに形態素解析の結果を効かせることもできます。既定は無効です。
+
+### 「語の切れ目で改行する」機能ではありません
+
+日本語の本文は、禁則が許すかぎりどの文字間でも改行して組みます。語の切れ目でだけ改行すると、行末の詰まり方が行ごとにばらつき、本の誌面には見えません。第1節の `tokenBoundaries` 単体の優先を、罰則の代わりではなく罰則と併せて使うものと位置づけているのはこのためです。
+
+解析結果が効くのは、もっと狭い範囲です。分割すれば組版の誤りになる並びを示すこと。そして、残った候補に順位を付けること。この 2 つです。
+
+### 2 段階のオプトイン
+
+| 段階 | 加わるもの | 改行位置への影響 |
+|---|---|---|
+| `'off'`（既定） | 何もしない。解析自体が走らない | なし |
+| `'clusters'` | 分割不可の単位（ハードクラスタ）だけ | 分割すると誤りになる単位を割る位置を除き、変わらない |
+| `'full'` | クラスタに加えて位置ごとの改行罰則 | 位置が動く |
+
+まず選ぶなら `'clusters'` です。この段階は改行候補を減らすだけで、しかも減るのは誤った改行を生んでいた位置に限られます。`第1章` を `1` の後ろで切る、英単語を語中で切る、数詞から助数詞を引き離す。そうした位置です。
+
+`'full'` は行の詰め方そのものを変えるので、正しさの問題ではなく組版方針の問題になります。向くのは見出し・キャプション・短い行長です。悪い改行が目立ちやすく、分量でならすこともできないためです。本文に使うかどうかは、意図して決めるハウススタイルの判断になります。
+
+### クラスタ規則が見ているもの
+
+`deriveTypographyHints()` が適用する規則は 4 つです。単位が分割不可になるのは表層の文字種がそれを裏づけたときだけで、品詞だけで決まることはありません。
+
+| 規則 | 例 |
+|---|---|
+| 数詞とその後ろの助数詞 | `3人` |
+| 接頭辞とそれが付く語 | `お名前` |
+| 数字列の内部 | `１２３` |
+| 日本語中の英単語の内部 | `mejiro` |
+
+この設計により、規則は辞書の網羅性から意図的に切り離されています。解析器が品詞を付けられなかった形態素も、確信を持って付けられた形態素とまったく同じ条件で対象になります。未知語も既知語と同じ挙動になり、辞書のバージョンが変わっても出力は安定します。
+
+同時に、仕組みのうえで対象外になるものもあります。`山田太郎` が 1 トークンか 2 トークンかは辞書の性質であって組版の性質ではないため、人名をまとめて保つことはこれらの規則の役目ではありません。またルビの生成もできません。解析器が返すのは表層形と見出し語であり、読みではないからです。
+
+`maxHardClusterChars`（既定 6）を超えるクラスタは、短くするのではなく破棄します。行に収まらないクラスタは禁則を無視する強制改行で割られてしまうためです。第6節を参照してください。
+
+### クラスタの例
+
+クラスタのヒントは既存の `clusterIds` 入力から `computeBreaks()` に入ります。つまり第6節の仕組みそのままで、配列を手書きする代わりに解析から得るだけです。ルビや縦中横のクラスタと併用する場合は `mergeClusterIds()` でまとめてください。
+
+```ts
+import { computeBreaks, toCodepoints } from '@libraz/mejiro';
+
+const text = toCodepoints('あいうえ12人'); // 7文字
+const advances = new Float32Array(7).fill(16);
+
+// 文字種のみ: 最も近い有効位置が選ばれ、12 が割れる。
+const plain = computeBreaks({ text, advances, lineWidth: 80 });
+// plain.breakPoints → [4]
+// 1行目: あいうえ1、2行目: 2人
+
+// 12人 のクラスタを与えると、その位置は候補から消える。
+const hinted = computeBreaks({
+  text,
+  advances,
+  lineWidth: 80,
+  clusterIds: new Uint32Array([0, 1, 2, 3, 4, 4, 4]),
+});
+// hinted.breakPoints → [3]
+// 1行目: あいうえ、2行目: 12人
+```
+
+### 改行罰則
+
+`breakPenalties` はコードポイントごとに 1 つの値を持ちます。`breakPenalties[i]` はインデックス `i` の「後ろ」で改行するコストで、位置の数え方は `breakPoints` と同じです。`0` は罰則なしで、値が大きいほど強く避けます。
+
+| 値 | 位置 |
+|---|---|
+| 0 | 文節の最後の形態素の後ろ。最も優先したい位置 |
+| 1 | 文節を閉じない形態素境界 |
+| 2 | 形態素の内部。文字種規則ならここで切る |
+| 3 | 自立語を、後続の助詞・助動詞から切り離す位置 |
+
+罰則があると、後方探索は最も近い有効位置を取るのをやめ、範囲を区切った窓の中で最も安い位置を取ります。位置 `p` の後ろで改行するコストは次のとおりです。
+
+```
+penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)
+```
+
+`shortfall(p)` は、その行が行長に対してどれだけ短く終わるかを em 単位で表した値です。両方の重みが既定の `1` なら、罰則 2 の位置は「代わりの位置だと行が 2em 空く」ところで諦められます。罰則が行をすかすかにしないのはこの釣り合いのためです。窓の幅は `maxBacktrackChars`（既定 8）で、改行処理が文字数に対して線形であり続けるのはこの上限のおかげです。窓の中に有効な位置が 1 つもない場合は第1節の範囲無制限の探索に落ちるので、行頭禁則文字が長く続く場合もこれまでどおり扱えます。
+
+罰則は `tokenBoundaries` と空白優先の両方に優先します。
+
+### 罰則の例
+
+`今日 / は / 良い / 天気 / です / ね` という分割に対して、規則は次に書き出した罰則を与えます。
+
+```ts
+import { computeBreaks, toCodepoints } from '@libraz/mejiro';
+
+const text = toCodepoints('今日は良い天気ですね'); // 10文字
+const advances = new Float32Array(10).fill(16);
+
+// 文字種のみ: 入るところまで詰めるため、天気 が割れる。
+const plain = computeBreaks({ text, advances, lineWidth: 96 });
+// plain.breakPoints → [5]
+// 1行目: 今日は良い天、2行目: 気ですね
+
+// 今 日  は 良 い  天 気  で す  ね
+const breakPenalties = new Uint8Array([2, 3, 0, 2, 0, 2, 3, 2, 3, 0]);
+
+const hinted = computeBreaks({ text, advances, lineWidth: 96, breakPenalties });
+// インデックス5の後ろは行を埋められるがコスト2、インデックス4の後ろは
+// 1em 空くがコスト0。安いほうが選ばれる。
+// hinted.breakPoints → [4]
+// 1行目: 今日は良い、2行目: 天気ですね
+```
+
+この釣り合いは `breakCost` で調整します。解析結果を厳しく守らせたいなら `penaltyWeight` を、行を詰めたいなら `shortfallWeight` を上げます。
+
+### MejiroBook から使う
+
+`MejiroBook` はこの流れ全体を引き受けます。解析器を渡し、段階を選ぶだけです。
+
+```ts
+import { createSuzumeAnalyzer } from '@libraz/mejiro/analysis';
+import { MejiroBook } from '@libraz/mejiro/book';
+
+const analyzer = await createSuzumeAnalyzer();
+
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  analyzer,
+  wordAwareBreaking: 'clusters',
+});
+```
+
+optional peer dependency の `@libraz/suzume` が未インストールの場合、`createSuzumeAnalyzer()` の Promise は reject します。この関数を呼ぶこと自体が、その解析器を明示的に要求する行為だからです。黙って品質を落とすほうがよい呼び出し側は、reject を捕まえて解析器なしでブックを構築します。
+
+組み込みにあたっては、次の 4 点を押さえておいてください。
+
+- 解析が走るのはレイアウトの前、段落ごとに 1 回だけです。リサイズ、フォント変更、画像回り込みの再計算は、いずれも最初の結果を再生するだけで再解析しません。解析は対話操作の経路には乗りません。
+- 解析器の失敗で落ちるのは品質だけで、可用性は落ちません。解析器がない場合も例外を投げた場合も、その段落は文字種規則だけで、正しくレイアウトされます。コンソールへの通知はブックごとに 1 回であり、段落ごとには出しません。
+- 段落ごとにヒントを持たせられます。`BookParagraph.hints` を指定した段落では、ブック側の解析器は参照されません。解析結果を計算済みで持っているときや、その段落だけ別の規則で組みたいときに使います。
+- スナップショットのヒントが残るのは、解析器が一致したときだけです。`ChapterLayout.snapshot()` は解析器の identity を記録し、`layoutFromSnapshot()` は復元先のブックが同じ名前・同じバージョンの解析器を持つ場合にかぎって、保存されたヒントを使います。復元時に再解析は行いません。
+
+各段階を自分で組み合わせるなら、`TextAnalysis` から `deriveTypographyHints()` でヒントを作り、それを `computeBreaks()` に渡します。上の 2 つの例で書き出した配列が、まさにその出力にあたります。
+
+---
+
 ## 関連ドキュメント
 
 - [01-getting-started.md](./01-getting-started.md) -- インストールと基本的な使い方
 - [04-ruby.md](./04-ruby.md) -- ルビ注釈の前処理
+- [10-api-reference.md](./10-api-reference.md) -- `deriveTypographyHints()`、`TypographyHints`、`@libraz/mejiro/analysis` サブパス

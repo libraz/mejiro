@@ -128,6 +128,20 @@ Converts break points into `[start, end)` character index pairs per line.
 
 Converts morphological analyzer token lengths to boundary indices for `LayoutInput.tokenBoundaries`.
 
+### Typography Hints
+
+| Export | Signature |
+|---|---|
+| `deriveTypographyHints` | `(text: string, analysis: TextAnalysis, options?: TypographyHintOptions) => TypographyHints` |
+
+Turns one paragraph's morphological analysis into line breaking hints. `clusterIds` is emitted by default and everything else is opt-in, so the default output only removes break opportunities that splitting an indivisible unit would have used. A rule fires only when the character class of a morpheme's surface confirms it, which keeps the output stable across dictionary versions and across analyzers. An analysis whose `text` is not the paragraph it is applied to yields no hints at all rather than an error. Fields whose rules never fired are omitted, so a caller keeps its "no hints, no preprocessing" fast path. See [Line breaking](./03-line-breaking.md) for the rules and the two opt-in stages.
+
+| Export | Signature |
+|---|---|
+| `mergeClusterIds` | `(length: number, a?: Uint32Array, b?: Uint32Array) => Uint32Array \| undefined` |
+
+Combines two cluster ID arrays over the same text into their transitive closure, which is what lets typography hints ride alongside ruby or tate-chu-yoko clustering without either side knowing about the other. Returns a fresh array, never one of the inputs. An input whose length does not match `length` describes different text and is ignored rather than rejected: dropping a hint costs a suboptimal break, throwing costs the whole paragraph.
+
 ### Text Helpers
 
 | Export | Signature |
@@ -248,6 +262,8 @@ unsafe links to plain text.
 - `clusterIds?: Uint32Array` -- Indivisible character groups
 - `rubyAnnotations?: RubyAnnotation[]` -- Core-level ruby annotations used by the line breaker
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- Preferred break positions
+- `breakPenalties?: Uint8Array` -- Cost of breaking *after* each index, one entry per code point. `0` is unpenalised, larger values are avoided more strongly. When present, the backward search picks the lowest-cost position within `breakCost.maxBacktrackChars` instead of the nearest valid one, and supersedes both `tokenBoundaries` and the whitespace preference
+- `breakCost?: BreakCostOptions` -- Weights for the penalty search. Ignored unless `breakPenalties` is given
 - `kinsokuRules?: KinsokuRules` -- Custom prohibition rules
 
 **`BreakResult`** -- Output of `computeBreaks()`:
@@ -256,6 +272,13 @@ unsafe links to plain text.
 - `hangingAdjustments?: Float32Array` -- Hanging overhang per line (px)
 - `effectiveAdvances?: Float32Array` -- Per-char advances after ruby distribution
 - `lineWidths?: Float32Array` -- Actual width used per line (present when `lineWidths` input was provided)
+
+**`BreakCostOptions`** -- Weights trading a penalised break position against the line it leaves behind. The cost of breaking after position `p` is `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where `shortfall(p)` is how far short of the line width the line ends, measured in em:
+
+- `penaltyWeight?: number` -- Multiplier on the penalty value (default: `1`)
+- `shortfallWeight?: number` -- Multiplier on the em-measured shortfall (default: `1`)
+- `maxBacktrackChars?: number` -- How many positions the cost search may walk back from the overflowing character; bounding it keeps line breaking linear (default: `8`)
+- `emSize?: number` -- Pixel size of one em (default: the largest measured advance in the paragraph, which is one em for any text containing a full-width character)
 
 **`KinsokuMode`** -- `'strict' | 'loose'`
 
@@ -282,6 +305,42 @@ unsafe links to plain text.
 - `advance: number` -- Inline extent of the combined box (px); one em of the font the span is drawn with
 
 **`TcyPreprocessResult`** -- Output of `preprocessTcy()`: `effectiveAdvances: Float32Array` / `clusterIds: Uint32Array`.
+
+**`TypographyHints`** -- Output of `deriveTypographyHints()`. The fields are independent, so a caller can take the indivisible units and leave the penalties off:
+
+- `clusterIds?: Uint32Array` -- Indivisible units, to be merged into `LayoutInput.clusterIds`
+- `breakPenalties?: Uint8Array` -- Per-position break penalties for `LayoutInput.breakPenalties`
+- `tokenBoundaries?: Uint32Array` -- Morpheme end positions, for `LayoutInput.tokenBoundaries`. Emitted only on request: passing token boundaries alone makes the engine break at word edges, which is not how Japanese body text is set
+- `tcyCandidates?: readonly TcyCandidate[]` -- Automatic tate-chu-yoko candidates (free-standing two-digit numbers). Whether to set them is the caller's call
+
+**`TypographyHintOptions`** -- Which hints `deriveTypographyHints()` emits, and how far its rules reach:
+
+- `clusters?: boolean` -- Emit `clusterIds` (default: `true`)
+- `penalties?: boolean` -- Emit `breakPenalties` (default: `false`)
+- `tokenBoundaries?: boolean` -- Emit `tokenBoundaries` (default: `false`)
+- `tcy?: boolean` -- Emit `tcyCandidates` (default: `false`)
+- `maxHardClusterChars?: number` -- Longest run a single hard cluster may cover; a longer unit is left breakable, because a cluster that cannot fit a line is split by the forced-break rule, which disregards kinsoku (default: `6`)
+
+**`TcyCandidate`** -- A run a renderer may set as tate-chu-yoko: `startIndex: number` (inclusive) / `endIndex: number` (exclusive).
+
+**`MorphemeLike`** -- A morpheme as the layout engine consumes it, independent of which analyzer produced it. Offsets are code point indices into the same NFC text the layout engine is given:
+
+- `surface: string` -- Surface form. Used to verify character classes, not to re-locate the span
+- `start: number` / `end: number` -- Inclusive start and exclusive end, in code points
+- `pos: string` -- Coarse part-of-speech code
+- `extendedPos: string` -- Fine-grained part-of-speech code, the main input to the hint rules
+
+**`AnalyzerIdentity`** -- `{ name: string; version: string }`. Identifies one analyzer for cache keys and snapshot validation; two identities equal field by field stand for analyzers whose findings are interchangeable.
+
+**`TextAnalysis`** -- One paragraph's analysis, already aligned to the text: `text: string` (the exact NFC text the offsets address) / `morphemes: readonly MorphemeLike[]` (document order, non-overlapping) / `analyzer: AnalyzerIdentity` / `warnings: readonly string[]` (empty when clean).
+
+**`TextAnalyzer`** -- Produces a `TextAnalysis` for a paragraph:
+
+- `identity: AnalyzerIdentity` -- Who this analyzer is; equal to the `analyzer` of every analysis it returns, so hints of unknown provenance can be attributed without analysing anything
+- `analyze(text: string): TextAnalysis` -- Analyses one paragraph of NFC text
+- `dispose(): void` -- Releases any native resources held by the analyzer
+
+Implementations are synchronous by design: line breaking runs synchronously, so asynchronous setup belongs in the factory that returns the analyzer. The `@libraz/mejiro/analysis` chapter below has the bundled implementation.
 
 **`ParagraphMeasure`** -- Pagination input:
 
@@ -880,6 +939,9 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `enableHanging?: boolean` — Hanging punctuation (default: `true`)
 - `headingStyles?: Record<number, HeadingStyle>` — Per-level heading overrides
 - `headingScale?: number` — Default heading scale (default: 1.4)
+- `analyzer?: TextAnalyzer` — Morphological analyzer used to derive line breaking hints. Consulted only when `wordAwareBreaking` asks for hints, and once per paragraph at layout time; a re-break (resize, font change, exclusion reflow) replays what the first pass produced. Read when a chapter is laid out, and not changeable through `setOptions()`
+- `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — How far the analyzer's findings reach into line breaking (default: `'off'`). `'clusters'` keeps break positions as the character-class rules would choose them, except where a break would have split a unit it is a typesetting error to split; `'full'` adds per-position penalties, which do move break positions
+- `breakCost?: BreakCostOptions` — Weights for the penalty search. Forwarded to the line breaker, which ignores it unless break penalties are in play
 
 **`PageSize`**:
 
@@ -894,6 +956,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `inlineAnnotations?: readonly InlineAnnotation[]`
 - `headingLevel?: number`
 - `kind?: ParagraphKind` — `'body'` (default) / `'heading'` / `'blockquote'` / `'sceneBreak'` / `'pre'` / `'figure'`
+- `hints?: TypographyHints` — Pre-computed hints for this paragraph, bypassing the book's own `analyzer` entirely. Offsets are code point indices into the NFC form of `text`
 
 **`BookImage`**:
 
@@ -960,6 +1023,50 @@ Decodes a browser image file, optionally downscales it, re-encodes it, and retur
 - `mediaType: string` — MIME type of `data`, taken from the encoder's output rather than from the requested format
 - `width: number` / `height: number` — Decoded pixel size after any downscale
 - `warnings: string[]` — Diagnostic notices: downscaling, quality drops and format fallbacks
+
+---
+
+## `@libraz/mejiro/analysis` — Morphological Analysis
+
+Supplies a `TextAnalyzer` for `deriveTypographyHints()` and `BookOptions.analyzer`. The subpath is always present, but the analyzer it builds is backed by `@libraz/suzume`, an **optional peer dependency**: install it only if you want analysis-driven line breaking.
+
+```bash
+npm install @libraz/suzume
+```
+
+Nothing else in the package imports it. Without it, layout runs on the character-class rules alone and every other subpath behaves exactly as before.
+
+| Export | Signature |
+|---|---|
+| `createSuzumeAnalyzer` | `(options?: SuzumeAnalyzerOptions) => Promise<TextAnalyzer>` |
+
+Creates an analyzer backed by the suzume WebAssembly tokenizer. The module and its dictionaries load here, once, because `TextAnalyzer.analyze()` is synchronous — every asynchronous step has to happen before the analyzer exists. The returned promise **rejects** when `@libraz/suzume` is not installed or its module fails to load: calling this factory is an explicit request for that analyzer, so a caller that would rather fall back to character-class-only breaking catches the rejection and does so itself. Dispose the analyzer when you are done with it; an adopted `instance` is left alone, because its lifetime belongs to whoever created it.
+
+**`SuzumeAnalyzerOptions`**:
+
+- `instance?: unknown` — Pre-created Suzume instance to adopt instead of creating one
+- `wasmPath?: string` — Override for the WebAssembly binary location, forwarded to the instance factory
+
+| Export | Signature |
+|---|---|
+| `alignMorphemeOffsets` | `(text: string, normalizedText: string, morphemes: readonly MorphemeLike[]) => { morphemes: MorphemeLike[]; warnings: string[] } \| null` |
+
+Maps morpheme offsets from an analyzer's normalized text back onto the text the layout engine will break. An analyzer indexes its output against the text its own normalizer produced, and that normalizer can only shorten its input, so the mapping is either the identity — the fast path ordinary prose takes — or a single monotone walk. It succeeds completely or not at all: a partial mapping would move hints onto the wrong characters, so `null` comes back instead. Morphemes whose mapped span falls outside the text or fails to describe its own surface are dropped and reported in `warnings`. Use it when adapting an analyzer of your own to the `TextAnalyzer` interface.
+
+This subpath also re-exports `AnalyzerIdentity`, `MorphemeLike`, `TextAnalysis` and `TextAnalyzer`, so an analyzer implementation does not have to reach into the core subpath for them.
+
+```ts
+import { MejiroBook } from '@libraz/mejiro/book';
+import { createSuzumeAnalyzer } from '@libraz/mejiro/analysis';
+
+const analyzer = await createSuzumeAnalyzer();
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  analyzer,
+  wordAwareBreaking: 'clusters',
+});
+```
 
 ---
 

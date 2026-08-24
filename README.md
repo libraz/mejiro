@@ -51,6 +51,7 @@ README has the one-liner that pins them to the published release.
 | `@libraz/mejiro/render` | Render: `buildRenderPage()`, `buildParagraphMeasures()`, `segmentToInlineNode()`, `paragraphClassName()`, `renderEpubStatic()`, and the `mejiro.css` / `mejiro-reader.css` / `mejiro-editor.css` / `mejiro-fonts.css` / `mejiro-print.css` stylesheets |
 | `@libraz/mejiro/book` | Book: `MejiroBook`, `ChapterLayout`, `estimateReadingTime()` — layout, pagination, image exclusion, text search, anchors and snapshots in one class |
 | `@libraz/mejiro/image` | `prepareImage(file, opts?)` — decode, downscale and re-encode before embedding |
+| `@libraz/mejiro/analysis` | `createSuzumeAnalyzer()` — the optional morphological analyzer behind analysis-driven line breaking |
 | `@libraz/mejiro-react` | React: `<MejiroReader>`, `<MejiroEditor>`, `<MejiroManuscriptEditor>`, `<MejiroShelf>`, `<MejiroToc>`, `<MejiroPage>` and the `useEpub` / `useMejiroBook` / `useChapterLayout` / `useSpread` / `useReadingPosition` / `useAnnotations` hooks |
 | `@libraz/mejiro-vue` | Vue: the same component and composable set as React |
 
@@ -157,6 +158,17 @@ instead of being pushed to the next line.
 of its base text and its reading, so a reading can never be clipped by the line
 it sits on. **Tate-chu-yoko** collapses a horizontal run inside a vertical
 column into one upright box that the breaker treats as indivisible.
+
+**Analysis-driven breaking** is optional and off by default. Install the
+optional peer dependency `@libraz/suzume` and mejiro can derive break hints from
+a morphological analysis: the first stage leaves break positions as the
+character-class rules chose them and only stops the ones that would split a unit
+it is a typesetting error to split, and a second stage adds per-position
+penalties that do move break positions. It is not "break at word boundaries" —
+Japanese body text is set by breaking wherever kinsoku allows, and word-edge
+breaks alone leave loose lines. The analyzer costs roughly 567 KB of WebAssembly
+with its dictionaries embedded, about 230 KB gzipped; without it everything else
+works unchanged.
 
 Custom kinsoku rules go through `LayoutInput.kinsokuRules` on the core
 `computeBreaks()` API. [Line breaking](docs/en/03-line-breaking.md) has the full

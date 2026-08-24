@@ -46,6 +46,8 @@ interface LayoutInput {
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
   rubyAnnotations?: RubyAnnotation[];       // Core-level ruby preprocessing (see 04-ruby.md)
   tokenBoundaries?: Uint32Array | readonly number[]; // Preferred break positions
+  breakPenalties?: Uint8Array;            // Per-position break cost (see section 8)
+  breakCost?: BreakCostOptions;           // Weights for the penalty search
   kinsokuRules?: KinsokuRules;            // Custom prohibition rules
 }
 ```
@@ -61,6 +63,8 @@ interface LayoutInput {
 | `clusterIds`       | No       | --         | Cluster IDs for indivisible character groups. See section 6.       |
 | `rubyAnnotations`  | No       | --         | Core-level ruby annotations. Triggers ruby preprocessing before line breaking. |
 | `tokenBoundaries`  | No       | --         | Indices of the last codepoint in each token. The algorithm prefers breaking at these positions. Use `tokenLengthsToBoundaries()` to convert from morphological analyzer output. |
+| `breakPenalties`   | No       | --         | Cost of breaking after each index, one entry per codepoint. Switches the backward search to a bounded cost search and supersedes `tokenBoundaries`. See section 8. |
+| `breakCost`        | No       | --         | Weights for that cost search. Ignored unless `breakPenalties` is given. |
 | `kinsokuRules`     | No       | --         | Custom kinsoku rules. Overrides the built-in rules entirely.       |
 
 ### Minimal Usage
@@ -362,7 +366,152 @@ for (const [start, end] of lines) {
 
 ---
 
+## 8. Analysis-Driven Breaking
+
+Everything above decides where to break from character classes alone. A morphological analyzer can inform that decision, and the feature is off by default.
+
+### This Is Not "Break at Word Boundaries"
+
+The first thing to be clear about: breaking only at word edges is the wrong goal for Japanese. Body text is set by breaking wherever the kinsoku rules allow, and a line that ends at a word edge every time leaves loose, ragged lines that do not read like a book. That is why `tokenBoundaries` on its own — the preference described in section 1 — is useful next to penalties rather than instead of them.
+
+What an analysis is good for is narrower and more valuable: it says which runs of characters it would be an outright typesetting error to split, and it can rank the positions that remain.
+
+### Two Opt-In Stages
+
+| Stage | What it adds | Effect on break positions |
+|---|---|---|
+| `'off'` (default) | Nothing. No analysis is run at all | None |
+| `'clusters'` | Hard clusters — indivisible units | Unchanged, except where a break would have split one of those units |
+| `'full'` | Clusters plus per-position break penalties | Positions move |
+
+`'clusters'` is the stage to reach for first. It only removes break opportunities, and every one it removes is one that produced a wrong break: `第1章` cut after the `1`, a Latin word cut mid-word, a counter torn off its numeral.
+
+`'full'` changes how lines are filled, which is a typographic decision rather than a correctness one. It suits headings, captions and short measures, where a bad break is conspicuous and there is little text to average out. Using it for body text is a deliberate house-style choice.
+
+### What the Cluster Rules Recognise
+
+`deriveTypographyHints()` applies four rules, and a unit becomes indivisible only when the character class of its surface confirms it — never on the part of speech alone:
+
+| Rule | Example |
+|---|---|
+| A numeral and the counter that follows it | `3人` |
+| A prefix and the word it binds to | `お名前` |
+| The interior of a numeral | `１２３` |
+| The interior of a Latin word inside Japanese text | `mejiro` |
+
+This makes the rules deliberately blind to dictionary coverage. A morpheme the analyzer could not tag qualifies on exactly the same terms as a confidently tagged one, so an unknown word behaves like a known one and the output stays stable across dictionary versions.
+
+It also puts some things out of scope by construction. Whether `山田太郎` is one token or two is a property of the dictionary, not of the typography, so a personal name is not something these rules keep together. And the analyzer cannot generate ruby: it returns surfaces and lemmas, not readings.
+
+A cluster wider than `maxHardClusterChars` (6 by default) is dropped rather than shortened, because a cluster that cannot fit a line is split by the forced-break rule, which disregards kinsoku — see section 6.
+
+### Cluster Example
+
+Cluster hints ride into `computeBreaks()` through the existing `clusterIds` input, so this is section 6's mechanism with the array supplied by an analysis rather than by hand. Use `mergeClusterIds()` to combine them with ruby or tate-chu-yoko clustering.
+
+```ts
+import { computeBreaks, toCodepoints } from '@libraz/mejiro';
+
+const text = toCodepoints('あいうえ12人'); // 7 chars
+const advances = new Float32Array(7).fill(16);
+
+// Character classes alone: the nearest valid position wins, splitting 12.
+const plain = computeBreaks({ text, advances, lineWidth: 80 });
+// plain.breakPoints → [4]
+// Line 1: あいうえ1, Line 2: 2人
+
+// With the hint clusters for 12人, that position is no longer available.
+const hinted = computeBreaks({
+  text,
+  advances,
+  lineWidth: 80,
+  clusterIds: new Uint32Array([0, 1, 2, 3, 4, 4, 4]),
+});
+// hinted.breakPoints → [3]
+// Line 1: あいうえ, Line 2: 12人
+```
+
+### Break Penalties
+
+`breakPenalties` holds one value per code point: `breakPenalties[i]` is the cost of breaking *after* index `i`, the same position convention `breakPoints` uses. `0` is unpenalised and larger values are avoided more strongly.
+
+| Value | Position |
+|---|---|
+| 0 | After the last morpheme of a bunsetsu — the position to prefer |
+| 1 | A morpheme boundary that does not close a bunsetsu |
+| 2 | Inside a morpheme, which is where the character-class rules would cut |
+| 3 | A break that cuts a base off the particle or auxiliary that follows it |
+
+When penalties are present, the backward search stops taking the nearest valid position and takes the cheapest one within a bounded window instead. The cost of breaking after position `p` is:
+
+```
+penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)
+```
+
+`shortfall(p)` is how far short of the line width the line ends, measured in em. With both weights at their defaults of `1`, a penalty of 2 is given up once the alternative would leave the line 2 em short — which is what keeps penalties from hollowing out the lines. The window is `maxBacktrackChars` positions wide (8 by default), which is what keeps line breaking linear in the text length. A window holding no valid position at all falls through to the unbounded search of section 1, so a long run of line-start prohibited characters is still handled.
+
+Penalties supersede both `tokenBoundaries` and the whitespace preference.
+
+### Penalty Example
+
+Given the segmentation `今日 / は / 良い / 天気 / です / ね`, the rules assign the penalties written out below.
+
+```ts
+import { computeBreaks, toCodepoints } from '@libraz/mejiro';
+
+const text = toCodepoints('今日は良い天気ですね'); // 10 chars
+const advances = new Float32Array(10).fill(16);
+
+// Character classes alone: the line is filled as far as it goes, splitting 天気.
+const plain = computeBreaks({ text, advances, lineWidth: 96 });
+// plain.breakPoints → [5]
+// Line 1: 今日は良い天, Line 2: 気ですね
+
+// 今 日  は 良 い  天 気  で す  ね
+const breakPenalties = new Uint8Array([2, 3, 0, 2, 0, 2, 3, 2, 3, 0]);
+
+const hinted = computeBreaks({ text, advances, lineWidth: 96, breakPenalties });
+// Breaking after index 5 costs 2 and fills the line; after index 4 costs 0
+// and leaves it 1 em short. The cheaper position wins.
+// hinted.breakPoints → [4]
+// Line 1: 今日は良い, Line 2: 天気ですね
+```
+
+Tune the trade-off through `breakCost`: raise `penaltyWeight` to respect the analysis more strictly, raise `shortfallWeight` to keep lines full.
+
+### Using It Through MejiroBook
+
+`MejiroBook` runs the whole path for you. Set an analyzer and pick a stage:
+
+```ts
+import { createSuzumeAnalyzer } from '@libraz/mejiro/analysis';
+import { MejiroBook } from '@libraz/mejiro/book';
+
+const analyzer = await createSuzumeAnalyzer();
+
+const book = new MejiroBook({
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
+  analyzer,
+  wordAwareBreaking: 'clusters',
+});
+```
+
+`createSuzumeAnalyzer()` rejects when the optional peer dependency `@libraz/suzume` is not installed, because calling it is an explicit request for that analyzer. A caller that would rather degrade quietly catches the rejection and constructs the book without an analyzer.
+
+Four properties of the integration are worth knowing:
+
+- **Analysis runs once per paragraph, before layout.** Resizing, changing the font, or reflowing around an image replays the first pass; none of them re-analyses. Analysis is not on the interactive path.
+- **A failing analyzer costs quality, never availability.** If the analyzer is missing or throws, the paragraph is laid out on the character-class rules alone, which is a correct layout. One console notice is emitted per book, not per paragraph.
+- **A paragraph can carry its own hints.** `BookParagraph.hints` bypasses the book's analyzer for that paragraph, which is how a caller supplies a pre-computed analysis or a different rule set for one paragraph.
+- **Hints survive a snapshot only when the analyzer matches.** `ChapterLayout.snapshot()` records the analyzer's identity, and `layoutFromSnapshot()` keeps the stored hints only if the book it is restored into is configured with the same analyzer name and version. Nothing is re-analysed during a restore.
+
+To run the pieces yourself, call `deriveTypographyHints()` on a `TextAnalysis` and pass the result to `computeBreaks()` — the two examples above are exactly what that produces.
+
+---
+
 ## Related Documentation
 
 - [01-getting-started.md](./01-getting-started.md) -- Installation and basic usage
 - [04-ruby.md](./04-ruby.md) -- Ruby annotation preprocessing
+- [10-api-reference.md](./10-api-reference.md) -- `deriveTypographyHints()`, `TypographyHints` and the `@libraz/mejiro/analysis` subpath
