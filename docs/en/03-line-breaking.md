@@ -448,7 +448,9 @@ When penalties are present, the backward search stops taking the nearest valid p
 penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)
 ```
 
-`shortfall(p)` is how far short of the line width the line ends, measured in em. With both weights at their defaults of `1`, a penalty of 2 is given up once the alternative would leave the line 2 em short — which is what keeps penalties from hollowing out the lines. The window is `maxBacktrackChars` positions wide (8 by default), which is what keeps line breaking linear in the text length. A window holding no valid position at all falls through to the unbounded search of section 1, so a long run of line-start prohibited characters is still handled.
+`shortfall(p)` is how far short of the line width the line ends, measured in em. At the defaults — `penaltyWeight` `1`, `shortfallWeight` `1.5` — a penalty of 2 is given up only while the alternative leaves the line less than 1.33 em short, and the heaviest penalty of 3 only while it leaves it less than 2 em short. That ceiling is the point of the weight: vertical Japanese is set on a character grid, where standard kinsoku shifts a line by one character and occasionally two, so buying a better break with three empty cells is more than the convention allows. Only the ratio of the two weights decides anything — scaling both scales every cost and cannot reorder them — so move one weight and leave the other where it is.
+
+The window is `maxBacktrackChars` positions wide (6 by default), which is what keeps line breaking linear in the text length. Six is also the point past which a candidate cannot win, so a wider window only costs search time: a position `k` steps further back gives up at least `0.5k` em of line, a half-width character being the narrowest thing that can sit between the two, and with penalties capped at 3 it can win only while `k < 6 * penaltyWeight / shortfallWeight` — `k < 6` at equal weights, `k < 4` at the defaults. A window holding no valid position at all falls through to the unbounded search of section 1, so a long run of line-start prohibited characters is still handled.
 
 Penalties supersede both `tokenBoundaries` and the whitespace preference.
 
@@ -471,13 +473,14 @@ const plain = computeBreaks({ text, advances, lineWidth: 96 });
 const breakPenalties = new Uint8Array([2, 3, 0, 2, 0, 2, 3, 2, 3, 0]);
 
 const hinted = computeBreaks({ text, advances, lineWidth: 96, breakPenalties });
-// Breaking after index 5 costs 2 and fills the line; after index 4 costs 0
-// and leaves it 1 em short. The cheaper position wins.
+// Breaking after index 5 fills the line and costs its penalty of 2. Breaking
+// after index 4 carries no penalty and leaves 1 em, which the shortfall weight
+// prices at 1.5. The cheaper position wins.
 // hinted.breakPoints → [4]
 // Line 1: 今日は良い, Line 2: 天気ですね
 ```
 
-Tune the trade-off through `breakCost`: raise `penaltyWeight` to respect the analysis more strictly, raise `shortfallWeight` to keep lines full.
+Tune the trade-off through `breakCost`: raise `penaltyWeight` to respect the analysis more strictly, raise `shortfallWeight` to keep lines full. Raising both moves nothing, since only their ratio is read.
 
 ### Using It Through MejiroBook
 

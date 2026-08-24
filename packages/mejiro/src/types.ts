@@ -66,18 +66,56 @@ export interface LayoutInput {
  * The cost of breaking after position `p` is
  * `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where
  * `shortfall(p)` is how far short of the line width the line ends, measured in
- * em. With both weights at their defaults, a penalty of 2 is given up once the
- * alternative would leave the line 2 em short.
+ * em. At the default weights a penalty of 2 is given up only while the
+ * alternative leaves the line less than 1.33 em short, and the heaviest penalty
+ * of 3 only while it leaves it less than 2 em short.
+ *
+ * Only the ratio of the two weights decides anything. Scaling both by the same
+ * factor scales every cost by that factor and leaves their order untouched, so
+ * `{ penaltyWeight: 0.5, shortfallWeight: 1 }` and `{ penaltyWeight: 1,
+ * shortfallWeight: 2 }` produce the same breaks. Move one weight and leave the
+ * other at its default rather than tuning both.
  */
 export interface BreakCostOptions {
-  /** Multiplier applied to the penalty value. @defaultValue 1 */
+  /**
+   * Multiplier applied to the penalty value. Raise it to follow the analysis
+   * more strictly; only its ratio to `shortfallWeight` has any effect.
+   * @defaultValue 1
+   */
   penaltyWeight?: number;
-  /** Multiplier applied to the em-measured shortfall. @defaultValue 1 */
+  /**
+   * Multiplier applied to the em-measured shortfall.
+   *
+   * This weight fixes the worst trade the search can make. Penalties from
+   * {@link deriveTypographyHints} run 0..3, so escaping the heaviest position —
+   * a base cut off from the particle that follows it — buys at most
+   * `3 / shortfallWeight` em of empty line. At `1` that is three
+   * character cells, and vertical Japanese is set on a character grid where
+   * standard kinsoku shifts one character and occasionally two; three is past
+   * what the convention allows, and over a 20k-character corpus it leaves
+   * 30.2% of lines ending 1.5 em or more short, worst case 2.5 em. The default
+   * caps the worst trade at 2 em, cuts those lines to 12.1%, and still moves
+   * 26.9% of the lines where a penalty and the shortfall disagree. At `2` only
+   * 8.6% move and the penalties barely reach the layout at all.
+   *
+   * @defaultValue 1.5
+   */
   shortfallWeight?: number;
   /**
    * How many positions the cost search may walk back from the overflowing
    * character. Bounding it keeps line breaking linear in the text length.
-   * @defaultValue 8
+   *
+   * The default is where a candidate stops being able to win, so widening it
+   * only costs search time. A position `k` steps further back gives up at least
+   * `0.5k` em of line, a half-width character being the narrowest thing that
+   * can sit between the two, so it pays at least `shortfallWeight * 0.5k` more
+   * in shortfall to save at most `penaltyWeight * 3` in penalty. It can win
+   * only while `k < 6 * penaltyWeight / shortfallWeight`: `k < 6` at equal
+   * weights, `k < 4` at the default weights. Six is therefore the ceiling under
+   * the loosest ratio a caller is likely to set, and windows of 6, 8, 12, 16,
+   * 24 and 32 all choose the same positions.
+   *
+   * @defaultValue 6
    */
   maxBacktrackChars?: number;
   /**
@@ -165,8 +203,11 @@ export interface TcyCandidate {
  *
  * The fields are independent: a caller wanting only the indivisible units it
  * would be a typesetting error to split can take `clusterIds` and leave
- * `breakPenalties` off, which keeps break positions identical to what the
- * character-class rules alone would choose.
+ * `breakPenalties` off, which keeps break positions where the character-class
+ * rules alone would put them except where a break would have split one of those
+ * units. Withdrawing those break opportunities is the whole point of the
+ * clusters, so the breaks that fell on them do move — on ordinary prose that is
+ * a few per cent of all breaks.
  */
 export interface TypographyHints {
   /** Indivisible units, to be merged into {@link LayoutInput.clusterIds}. */

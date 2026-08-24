@@ -30,8 +30,9 @@ function layout(text: string, lineChars: number, extra: Partial<LayoutInput> = {
   });
 }
 
-// With a uniform 16 px advance and a six-character line, the shortfall term of
-// a break after position p is (5 - p) em, so cost(p) = penalties[p] + 5 - p.
+// With a uniform 16 px advance and a six-character line, a break after position
+// p on the first line leaves (5 - p) em, so at the default weights
+// cost(p) = penalties[p] + 1.5 * (5 - p).
 const SIX_CHAR_LINE = 6;
 const TEN_KANA = 'あいうえおかきくけこ';
 
@@ -40,7 +41,8 @@ describe('cost-based break search', () => {
     const plain = layout(TEN_KANA, SIX_CHAR_LINE);
     expect([...plain.breakPoints]).toEqual([5]);
 
-    // cost(5) = 3, cost(4) = 0 + 1, and everything further back costs more.
+    // cost(5) = 3 + 0 = 3 and cost(4) = 0 + 1.5 = 1.5, and no position further
+    // back comes near that: cost(3) = 3, cost(2) = 4.5, cost(1) = 6.
     const result = layout(TEN_KANA, SIX_CHAR_LINE, {
       breakPenalties: penalties(10, { 5: 3 }),
     });
@@ -48,7 +50,8 @@ describe('cost-based break search', () => {
   });
 
   it('rejects an unpenalised position that leaves the line too short', () => {
-    // cost(5) = 1, cost(1) = 0 + 4: the near penalised position still wins.
+    // cost(5) = 1 + 0 = 1 against cost(1) = 0 + 1.5 * 4 = 6, the cheapest
+    // unpenalised position on the line: the near penalised position still wins.
     const result = layout(TEN_KANA, SIX_CHAR_LINE, {
       breakPenalties: penalties(10, { 2: 5, 3: 5, 4: 5, 5: 1 }),
     });
@@ -56,22 +59,30 @@ describe('cost-based break search', () => {
   });
 
   it('resolves a tie towards the position that fills the line better', () => {
-    // cost(5) = 1 + 0 and cost(4) = 0 + 1 are equal, so the larger index wins.
+    // A penalty of 3 is worth exactly 2 em at the default weights, so
+    // cost(5) = 3 + 0 and cost(3) = 0 + 1.5 * 2 are equal while the positions
+    // between and before them are priced out (cost(4) = 9 + 1.5 = 10.5,
+    // cost(2) = 9 + 4.5 = 13.5, cost(1) = 9 + 6 = 15). The walk runs downwards
+    // from 5 and only replaces its choice on a strictly lower cost, so the tie
+    // falls to the larger index.
     const result = layout(TEN_KANA, SIX_CHAR_LINE, {
-      breakPenalties: penalties(10, { 1: 9, 2: 9, 3: 9, 5: 1 }),
+      breakPenalties: penalties(10, { 1: 9, 2: 9, 4: 9, 5: 3 }),
     });
     expect([...result.breakPoints]).toEqual([5]);
   });
 
   it('bounds the walk back with maxBacktrackChars', () => {
-    const breakPenalties = penalties(10, { 3: 4, 4: 4, 5: 4 });
+    const breakPenalties = penalties(10, { 3: 5, 4: 5, 5: 5 });
 
-    // cost(2) = 0 + 3 is the cheapest position of the five the default window
-    // reaches, all the way back to the start of the line.
+    // cost(2) = 0 + 1.5 * 3 = 4.5 is the cheapest of the five positions the
+    // default window of 6 reaches, all the way back to the start of the line:
+    // cost(5) = 5, cost(4) = 6.5, cost(3) = 8, cost(1) = 6. The second line
+    // starts at 3 and its window sees the unpenalised 8, which fills it.
     const unbounded = layout(TEN_KANA, SIX_CHAR_LINE, { breakPenalties });
     expect([...unbounded.breakPoints]).toEqual([2, 8]);
 
-    // Two positions in, only 5 and 4 are ever costed, and 5 is the cheaper.
+    // Two positions in, only 5 and 4 are ever costed, and cost(5) = 5 beats
+    // cost(4) = 6.5. The remaining four characters need no second break.
     const bounded = layout(TEN_KANA, SIX_CHAR_LINE, {
       breakPenalties,
       breakCost: { maxBacktrackChars: 2 },
@@ -82,16 +93,19 @@ describe('cost-based break search', () => {
   it('applies the configured weights and em size', () => {
     const breakPenalties = penalties(10, { 5: 3 });
 
-    // Halving the penalty weight puts cost(5) at 1.5 against cost(4) at 1, so
-    // a penalty of 3 is no longer worth one em of shortfall.
+    // Against a shortfall weight of 1, halving the penalty weight puts cost(5)
+    // at 0.5 * 3 = 1.5 and cost(4) at 0 + 1 = 1, so a penalty of 3 is no longer
+    // worth one em of shortfall. The shortfall weight is spelled out because
+    // the default of 1.5 would price the two positions equally.
     expect([
       ...layout(TEN_KANA, SIX_CHAR_LINE, {
         breakPenalties,
-        breakCost: { penaltyWeight: 0.5 },
+        breakCost: { penaltyWeight: 0.5, shortfallWeight: 1 },
       }).breakPoints,
     ]).toEqual([4]);
 
-    // Doubling the shortfall weight raises cost(4) to 2 and hands it back.
+    // Doubling the shortfall weight raises cost(4) to 0 + 2 = 2 against
+    // cost(5) = 1.5 and hands the position back.
     expect([
       ...layout(TEN_KANA, SIX_CHAR_LINE, {
         breakPenalties,
@@ -100,7 +114,8 @@ describe('cost-based break search', () => {
     ]).toEqual([5]);
 
     // Declaring a quarter-width em counts the one-character gap before 4 as
-    // four em of shortfall, which outweighs the penalty on 5 on its own.
+    // four em of shortfall, so cost(4) = 0 + 1.5 * 4 = 6 loses to cost(5) = 3
+    // on the em size alone.
     expect([
       ...layout(TEN_KANA, SIX_CHAR_LINE, {
         breakPenalties,
@@ -109,13 +124,35 @@ describe('cost-based break search', () => {
     ]).toEqual([5]);
   });
 
+  it('decides on the ratio of the weights, not on their magnitude', () => {
+    const breakPenalties = penalties(10, { 5: 2 });
+
+    // Scaling both weights scales every cost, which cannot reorder them: at
+    // (0.5, 1) cost(5) = 1 ties with cost(4) = 1, and at (1, 2) the same two
+    // cost 2 apiece. Both take the tie at the larger index.
+    for (const breakCost of [
+      { penaltyWeight: 0.5, shortfallWeight: 1 },
+      { penaltyWeight: 1, shortfallWeight: 2 },
+    ]) {
+      expect(
+        [...layout(TEN_KANA, SIX_CHAR_LINE, { breakPenalties, breakCost }).breakPoints],
+        `weights ${breakCost.penaltyWeight} / ${breakCost.shortfallWeight}`,
+      ).toEqual([5]);
+    }
+
+    // The defaults hold a different ratio and so reach a different position:
+    // cost(5) = 2 + 0 against cost(4) = 0 + 1.5.
+    expect([...layout(TEN_KANA, SIX_CHAR_LINE, { breakPenalties }).breakPoints]).toEqual([4]);
+  });
+
   it('supersedes token boundaries', () => {
     const tokenBoundaries = new Uint32Array([2]);
 
     const tokenised = layout(TEN_KANA, SIX_CHAR_LINE, { tokenBoundaries });
     expect([...tokenised.breakPoints]).toEqual([2, 8]);
 
-    // cost(4) = 1 beats both the token edge at 2 and the penalised 5.
+    // cost(4) = 0 + 1.5 beats both the token edge at 2, which the cost search
+    // prices at 0 + 4.5, and the penalised 5 at 3 + 0.
     const result = layout(TEN_KANA, SIX_CHAR_LINE, {
       tokenBoundaries,
       breakPenalties: penalties(10, { 5: 3 }),
@@ -127,9 +164,9 @@ describe('cost-based break search', () => {
 describe('cost-based search with no candidate in the window', () => {
   // Positions 4 through 11 are all followed by a small kana, which may not open
   // a line, so a twelve-character line overflowing at index 12 finds nothing in
-  // the eight positions the default window reaches. The only valid position on
-  // the line is 3, further back than the window and reachable only by the
-  // unbounded search.
+  // the six positions the default window reaches, 11 down to 6. The only valid
+  // position on the line is 3, further back than the window and reachable only
+  // by the unbounded search.
   const text = 'あいうえおゃゃゃゃゃゃゃゃかきく';
   const twelveCharLine = 12;
 

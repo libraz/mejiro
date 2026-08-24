@@ -53,9 +53,10 @@ export function computeBreaks(input: LayoutInput): BreakResult {
   // An empty penalty array carries no preference, so it is treated as absent
   // and leaves the nearest-valid-position search in charge.
   const breakPenalties = input.breakPenalties?.length ? input.breakPenalties : undefined;
+  // Defaults and the reasoning behind them: see BreakCostOptions.
   const penaltyWeight = input.breakCost?.penaltyWeight ?? 1;
-  const shortfallWeight = input.breakCost?.shortfallWeight ?? 1;
-  const maxBacktrackChars = input.breakCost?.maxBacktrackChars ?? 8;
+  const shortfallWeight = input.breakCost?.shortfallWeight ?? 1.5;
+  const maxBacktrackChars = input.breakCost?.maxBacktrackChars ?? 6;
   // One em is a property of the paragraph, not of an individual break, so the
   // scale the shortfall is expressed in is established once per call.
   const emSize = breakPenalties ? (input.breakCost?.emSize ?? estimateEmSize(input.advances)) : 1;

@@ -263,11 +263,11 @@
 - `lineWidths?: Float32Array` -- 各行で使用された実際の幅（`lineWidths` 入力が指定された場合に存在）
 - `effectiveAdvances?: Float32Array` -- ルビ分配後の文字ごとの送り幅
 
-**`BreakCostOptions`** -- 罰則のある改行位置と、そこで改行した場合に残る行の空きを天秤にかける重み。位置 `p` の後ろで改行するコストは `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)` で、`shortfall(p)` は行が行長に対してどれだけ短く終わるかを em 単位で表した値です:
+**`BreakCostOptions`** -- 罰則のある改行位置と、そこで改行した場合に残る行の空きを天秤にかける重み。位置 `p` の後ろで改行するコストは `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)` で、`shortfall(p)` は行が行長に対してどれだけ短く終わるかを em 単位で表した値です。どの位置が選ばれるかに効くのは 2 つの重みの比だけなので、`{ penaltyWeight: 0.5, shortfallWeight: 1 }` と `{ penaltyWeight: 1, shortfallWeight: 2 }` は同じ改行になります:
 
 - `penaltyWeight?: number` -- 罰則値に掛ける係数（既定: `1`）
-- `shortfallWeight?: number` -- em 単位の空きに掛ける係数（既定: `1`）
-- `maxBacktrackChars?: number` -- コスト探索があふれた文字から遡れる位置数。上限を設けることで改行処理は文字数に対して線形のままになる（既定: `8`）
+- `shortfallWeight?: number` -- em 単位の空きに掛ける係数（既定: `1.5`）。罰則は 0..3 の範囲なので、この係数が探索の最悪の取引を `3 / shortfallWeight` em の空きに制限する。既定では 2em で、これが文字グリッドの許容範囲
+- `maxBacktrackChars?: number` -- コスト探索があふれた文字から遡れる位置数。上限を設けることで改行処理は文字数に対して線形のままになる（既定: `6`）。`k` 個手前の位置は少なくとも `0.5k` em を捨てるため、勝てるのは `k < 6 * penaltyWeight / shortfallWeight` のあいだだけで、窓を広げても結果は変わらず探索時間だけが増える
 - `emSize?: number` -- 1em のピクセル値（既定: その段落で実測した最大の送り幅。全角文字を含むテキストではこれが 1em になる）
 
 **`KinsokuMode`** -- `'strict' | 'loose'`

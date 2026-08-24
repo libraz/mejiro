@@ -273,11 +273,11 @@ unsafe links to plain text.
 - `effectiveAdvances?: Float32Array` -- Per-char advances after ruby distribution
 - `lineWidths?: Float32Array` -- Actual width used per line (present when `lineWidths` input was provided)
 
-**`BreakCostOptions`** -- Weights trading a penalised break position against the line it leaves behind. The cost of breaking after position `p` is `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where `shortfall(p)` is how far short of the line width the line ends, measured in em:
+**`BreakCostOptions`** -- Weights trading a penalised break position against the line it leaves behind. The cost of breaking after position `p` is `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where `shortfall(p)` is how far short of the line width the line ends, measured in em. Only the ratio of the two weights affects which position wins, so `{ penaltyWeight: 0.5, shortfallWeight: 1 }` and `{ penaltyWeight: 1, shortfallWeight: 2 }` break identically:
 
 - `penaltyWeight?: number` -- Multiplier on the penalty value (default: `1`)
-- `shortfallWeight?: number` -- Multiplier on the em-measured shortfall (default: `1`)
-- `maxBacktrackChars?: number` -- How many positions the cost search may walk back from the overflowing character; bounding it keeps line breaking linear (default: `8`)
+- `shortfallWeight?: number` -- Multiplier on the em-measured shortfall (default: `1.5`). Penalties run 0..3, so this caps the worst trade the search can make at `3 / shortfallWeight` em of empty line — 2 em at the default, which is what a character grid tolerates
+- `maxBacktrackChars?: number` -- How many positions the cost search may walk back from the overflowing character; bounding it keeps line breaking linear (default: `6`). A position `k` steps further back gives up at least `0.5k` em, so it can win only while `k < 6 * penaltyWeight / shortfallWeight`, and a wider window costs search time without changing the outcome
 - `emSize?: number` -- Pixel size of one em (default: the largest measured advance in the paragraph, which is one em for any text containing a full-width character)
 
 **`KinsokuMode`** -- `'strict' | 'loose'`
