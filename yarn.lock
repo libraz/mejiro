@@ -624,9 +624,22 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@libraz/mejiro@workspace:packages/mejiro"
   dependencies:
+    "@libraz/suzume": "npm:^0.9.9"
     jszip: "npm:^3.10.1"
+  peerDependencies:
+    "@libraz/suzume": ^0.9.9
+  peerDependenciesMeta:
+    "@libraz/suzume":
+      optional: true
   languageName: unknown
   linkType: soft
+
+"@libraz/suzume@npm:^0.9.9":
+  version: 0.9.9
+  resolution: "@libraz/suzume@npm:0.9.9"
+  checksum: 10c0/b21a8c3ba48c108ccec4212da8c110099b10f9ef0148a26fd55f3402249c778e8f98ef543952602f7378bf624f0657c1ba30f27cc9e76c9631de7462bdb4accc
+  languageName: node
+  linkType: hard
 
 "@mejiro/cli@workspace:packages/mejiro-cli":
   version: 0.0.0-use.local

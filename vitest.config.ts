@@ -20,7 +20,7 @@ export default defineConfig({
         replacement: fileURLToPath(new URL('./packages/mejiro/src/render/$1', import.meta.url)),
       },
       {
-        find: /^@libraz\/mejiro\/(book|browser|epub|image|render)$/u,
+        find: /^@libraz\/mejiro\/(analysis|book|browser|epub|image|render)$/u,
         replacement: fileURLToPath(new URL('./packages/mejiro/src/$1/index.ts', import.meta.url)),
       },
       {

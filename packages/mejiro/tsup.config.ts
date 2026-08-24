@@ -9,6 +9,7 @@ export default defineConfig({
     'src/render/index.ts',
     'src/book/index.ts',
     'src/image/index.ts',
+    'src/analysis/index.ts',
   ],
   format: ['esm'],
   dts: true,

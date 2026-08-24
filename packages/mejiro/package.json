@@ -52,6 +52,10 @@
       "types": "./dist/image/index.d.ts",
       "import": "./dist/image/index.js"
     },
+    "./analysis": {
+      "types": "./dist/analysis/index.d.ts",
+      "import": "./dist/analysis/index.js"
+    },
     "./package.json": "./package.json",
     "./render/mejiro.css": "./dist/render/mejiro.css",
     "./render/mejiro-reader.css": "./dist/render/mejiro-reader.css",
@@ -76,5 +80,16 @@
   },
   "dependencies": {
     "jszip": "^3.10.1"
+  },
+  "peerDependencies": {
+    "@libraz/suzume": "^0.9.9"
+  },
+  "peerDependenciesMeta": {
+    "@libraz/suzume": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@libraz/suzume": "^0.9.9"
   }
 }
