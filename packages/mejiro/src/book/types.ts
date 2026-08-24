@@ -1,6 +1,7 @@
 import type { ColumnSlot } from '../exclusion.js';
 import type { HeadingStyle } from '../render/measures.js';
 import type { RenderPage, RenderSegment } from '../render/types.js';
+import type { BreakCostOptions, TextAnalyzer, TypographyHints } from '../types.js';
 
 export type { RubyInputAnnotation } from '../browser/types.js';
 export type { HeadingStyle } from '../render/measures.js';
@@ -36,6 +37,47 @@ export interface BookOptions {
    * @defaultValue 1.4
    */
   headingScale?: number;
+  /**
+   * Morphological analyzer used to derive line breaking hints.
+   *
+   * Consulted only when {@link BookOptions.wordAwareBreaking} asks for hints,
+   * and once per paragraph at layout time: a re-break (resize, font change,
+   * image exclusion reflow) reuses what the first pass produced, because the
+   * analysis of a paragraph cannot change while its text does not.
+   *
+   * Read when a chapter is laid out. {@link MejiroBook.setOptions} does not
+   * re-analyse the chapters a book has already laid out.
+   */
+  analyzer?: TextAnalyzer;
+  /**
+   * How far the {@link BookOptions.analyzer}'s findings are allowed to reach
+   * into line breaking.
+   *
+   * - `'off'` — no analysis is run at all. Break positions are decided by the
+   *   character-class rules alone.
+   * - `'clusters'` — hard clusters only. Break positions stay exactly what the
+   *   character-class rules would choose, except where splitting would have
+   *   been an outright typesetting error (`第1章` cut after `1`, a Latin word
+   *   cut mid-word). This is the safe stage: it can only remove wrong breaks.
+   * - `'full'` — clusters plus per-position break penalties, which do move
+   *   break positions. Suitable for headings, captions and short measures;
+   *   whether it suits body text is a house-style call, because Japanese body
+   *   text is not set by breaking at word edges — doing so leaves loose lines.
+   *
+   * `'off'` is the default so that adding an analyzer to a book never silently
+   * reflows an existing layout, and so that a book pays for analysis only when
+   * it asked for it.
+   *
+   * @defaultValue 'off'
+   */
+  wordAwareBreaking?: 'off' | 'clusters' | 'full';
+  /**
+   * Weights trading a penalised break position against the line it leaves
+   * behind. Forwarded to the line breaker, which ignores it unless break
+   * penalties are in play — that is, under `'full'`, or for a paragraph
+   * supplying its own {@link BookParagraph.hints} with penalties in them.
+   */
+  breakCost?: BreakCostOptions;
 }
 
 /** Page geometry configuration. */
@@ -111,6 +153,16 @@ export interface BookParagraph {
   inlineAnnotations?: readonly import('../browser/types.js').InlineAnnotation[];
   /** Heading level (1–6), or undefined for body text. */
   headingLevel?: number;
+  /**
+   * Pre-computed line breaking hints for this paragraph, bypassing the book's
+   * own {@link BookOptions.analyzer} entirely — a caller that has already
+   * analysed its text, or that wants a different rule set for one paragraph,
+   * supplies them here and the analyzer is not consulted for it.
+   *
+   * Offsets are code point indices into the NFC form of `text`, which is what
+   * the layout runs on. Use {@link deriveTypographyHints} to produce them.
+   */
+  hints?: TypographyHints;
 }
 
 /** An image rectangle for exclusion layout. Coordinates are relative to the right page's top-left corner. */

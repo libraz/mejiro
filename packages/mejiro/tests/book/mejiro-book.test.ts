@@ -189,7 +189,7 @@ describe('MejiroBook', () => {
       ],
     });
     const snapshot = layout.snapshot();
-    expect(snapshot.version).toBe(1);
+    expect(snapshot.version).toBe(2);
     expect(snapshot.paragraphs).toHaveLength(2);
     expect(snapshot.paragraphs[0].text).toBe('あいうえおかきくけこ');
     expect(snapshot.paragraphs[0].advances.length).toBeGreaterThan(0);

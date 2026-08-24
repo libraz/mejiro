@@ -1,6 +1,7 @@
 import type { InlineAnnotation } from '../browser/types.js';
 import type { HeadingStyle } from '../render/measures.js';
 import type { TcyAnnotation } from '../tcy.js';
+import type { BreakCostOptions } from '../types.js';
 import type { BookImage, PageSize, ParagraphKind } from './types.js';
 
 /**
@@ -20,10 +21,23 @@ import type { BookImage, PageSize, ParagraphKind } from './types.js';
  * / `pageWidth` / `lineWidth` / etc. that were active when it was taken. Calling
  * `layoutFromSnapshot` then `setOptions` re-measures from scratch — see the
  * {@link MejiroBook.layoutFromSnapshot} docs.
+ *
+ * **Typography hints travel with the breaks:** when the layout was produced with
+ * a morphological analysis, each paragraph carries the hints it was broken under
+ * and {@link ChapterLayoutSnapshotConfig.analyzer} records which analyzer
+ * produced them, so a restored layout re-breaks the way the original would have.
  */
 export interface ChapterLayoutSnapshot {
-  /** Snapshot format version. Bump when the shape changes. */
-  version: 1;
+  /**
+   * Snapshot format version. Bump when the shape changes.
+   *
+   * There is no migration path: {@link MejiroBook.layoutFromSnapshot} rejects
+   * any other value, the same way it rejects a malformed snapshot. A snapshot
+   * is a cache of work that can always be redone by laying the chapter out
+   * again, so refusing a stale one costs a re-layout, while replaying one whose
+   * shape has drifted would put wrong break points on screen.
+   */
+  version: 2;
   /** Layout configuration at snapshot time. */
   config: ChapterLayoutSnapshotConfig;
   /** Page geometry at snapshot time. */
@@ -56,6 +70,28 @@ export interface ChapterLayoutSnapshotConfig {
   enableHanging: boolean;
   /** Per-level heading overrides (levels 1–6). Omitted when none were set. */
   headingStyles?: Record<number, HeadingStyle>;
+  /**
+   * Weights the penalty search ran under. Omitted when none were configured,
+   * and inert unless a paragraph carries {@link ParagraphSnapshot.hintBreakPenalties}.
+   */
+  breakCost?: BreakCostOptions;
+  /**
+   * Identity of the analyzer the paragraph hints were derived from. Omitted
+   * when no analyzer was consulted — including a layout whose hints were all
+   * supplied per paragraph by the caller.
+   *
+   * On restore, {@link MejiroBook.layoutFromSnapshot} compares this against the
+   * identity of the analyzer configured on the restoring book and **drops the
+   * hints when the two differ**, rather than re-analysing. Restoring is meant
+   * to be the cheap path — it is synchronous and the restoring book may have no
+   * analyzer at all — and hints from a different analyzer would describe units
+   * this one does not recognise. Dropping them costs a future re-break the
+   * benefit of the analysis, which is a quality loss, not a wrong layout; the
+   * break points the snapshot restores with are unaffected either way. The
+   * comparison treats absence as an identity of its own, so a caller-supplied
+   * set of hints survives a restore into a book that likewise has no analyzer.
+   */
+  analyzer?: { name: string; version: string };
 }
 
 /** Per-paragraph snapshot entry. */
@@ -92,6 +128,17 @@ export interface ParagraphSnapshot {
    * counterpart the way {@link LayoutRubySnapshot} does for its typed arrays.
    */
   layoutTcyAnnotations?: TcyAnnotation[];
+  /**
+   * Cluster IDs the typography hints contributed, one per codepoint. Kept
+   * because they are an input to the break points stored above: a restore that
+   * dropped them would re-break this paragraph differently on the first resize.
+   */
+  hintClusterIds?: number[];
+  /**
+   * Per-position break penalties the typography hints contributed, one per
+   * codepoint. Present only for a layout broken at the `'full'` stage.
+   */
+  hintBreakPenalties?: number[];
 }
 
 /**

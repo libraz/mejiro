@@ -11,6 +11,14 @@ import type { RubyAnnotation } from '../ruby.js';
 import type { TcyAnnotation } from '../tcy.js';
 import { buildTcyAnnotations } from '../tcy.js';
 import { toCodepoints } from '../text.js';
+import type {
+  AnalyzerIdentity,
+  BreakCostOptions,
+  TextAnalysis,
+  TextAnalyzer,
+  TypographyHints,
+} from '../types.js';
+import { deriveTypographyHints } from '../typography-hints.js';
 import type { CachedParagraph, LayoutConfig } from './chapter-layout.js';
 import { ChapterLayout } from './chapter-layout.js';
 import { DEFAULT_PAGE_GEOMETRY, DEFAULT_PAGE_PADDING } from './constants.js';
@@ -136,6 +144,32 @@ function buildLayoutRubyAnnotations(
   });
 }
 
+/** True when two analyzer identities describe the same analyzer, absence included. */
+function sameAnalyzer(a: AnalyzerIdentity | undefined, b: AnalyzerIdentity | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.name === b.name && a.version === b.version;
+}
+
+/**
+ * Reports an analyzer that failed, without making the failure fatal.
+ *
+ * A failing analyzer costs break quality, never availability: the paragraph is
+ * laid out on the character-class rules alone, which is a correct layout. The
+ * notice still has to reach the developer, so it is written to the console the
+ * way {@link parseReadingPosition} writes its migration notice — guarded,
+ * because the layout path also runs on hosts without a console.
+ */
+function warnAnalyzerFailed(error: unknown): void {
+  // biome-ignore lint/suspicious/noConsole: a degraded analyzer must not be silent
+  if (typeof console === 'undefined' || typeof console.warn !== 'function') return;
+  // biome-ignore lint/suspicious/noConsole: a degraded analyzer must not be silent
+  console.warn(
+    '[mejiro] MejiroBook: the configured TextAnalyzer threw; laying out without ' +
+      'typography hints. Further failures from this book are not reported.',
+    error,
+  );
+}
+
 /**
  * High-level API for Japanese vertical text layout.
  *
@@ -180,6 +214,15 @@ export class MejiroBook {
   // superseded while its font was still loading.
   private optionsGeneration = 0;
 
+  // Typography-hint configuration. Held apart from `opts` because `setOptions`
+  // cannot change any of it: re-staging the analysis of every live layout is
+  // not something a font-size patch should do behind the caller's back.
+  private analyzer?: TextAnalyzer;
+  private wordAwareBreaking: 'off' | 'clusters' | 'full';
+  private breakCost?: BreakCostOptions;
+  // One notice per book: a broken analyzer would otherwise log once per paragraph.
+  private analyzerWarned = false;
+
   /**
    * Records the typographic options and creates the browser-side measurer.
    * Nothing is measured or loaded yet: fonts are loaded lazily on the first
@@ -201,6 +244,9 @@ export class MejiroBook {
       headingStyles: options.headingStyles,
       headingScale: options.headingScale ?? 1.4,
     };
+    this.analyzer = options.analyzer;
+    this.wordAwareBreaking = options.wordAwareBreaking ?? 'off';
+    this.breakCost = options.breakCost;
   }
 
   /** Returns a snapshot of the current options. */
@@ -341,7 +387,39 @@ export class MejiroBook {
       headingScale: this.opts.headingScale,
       mode: this.opts.mode,
       enableHanging: this.opts.enableHanging,
+      breakCost: this.breakCost,
+      analyzer: this.analyzer?.identity,
     };
+  }
+
+  /**
+   * Derives the line breaking hints for one already-normalized paragraph.
+   *
+   * Called exactly once per paragraph, from {@link MejiroBook.layoutChapter}.
+   * The result is cached on the paragraph, so every later re-break replays it:
+   * a resize, a font change or an image-exclusion reflow is on the interactive
+   * path, and the analysis of a paragraph cannot change while its text does not.
+   *
+   * @param text - The paragraph in the same NFC form the layout is given. The
+   *   offsets an analysis carries address exactly this string; handing the
+   *   pre-normalization text to either side yields no hints at all, because
+   *   {@link deriveTypographyHints} refuses an analysis of different text.
+   */
+  private deriveHints(text: string): TypographyHints | undefined {
+    if (this.wordAwareBreaking === 'off' || !this.analyzer) return undefined;
+    let analysis: TextAnalysis;
+    try {
+      analysis = this.analyzer.analyze(text);
+    } catch (error) {
+      if (!this.analyzerWarned) {
+        this.analyzerWarned = true;
+        warnAnalyzerFailed(error);
+      }
+      return undefined;
+    }
+    return deriveTypographyHints(text, analysis, {
+      penalties: this.wordAwareBreaking === 'full',
+    });
   }
 
   /**
@@ -442,10 +520,16 @@ export class MejiroBook {
     const normalized = chapter.paragraphs.map((p) => {
       const isHeading = paragraphIsHeading(p);
       const scale = paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, opts);
+      const annotated = normalizeAnnotatedText(p.text, p.inlineAnnotations ?? []);
       return {
-        ...normalizeAnnotatedText(p.text, p.inlineAnnotations ?? []),
+        ...annotated,
         isHeading,
         paragraphFontSize: isHeading ? Math.round(fontSize * scale) : fontSize,
+        // The analysis runs here, once, against the NFC text — the same string
+        // the break, the render entries and every later re-break work from. A
+        // paragraph carrying its own hints is taken at its word and the
+        // analyzer is not consulted for it.
+        hints: p.hints ?? this.deriveHints(annotated.text),
       };
     });
 
@@ -455,12 +539,14 @@ export class MejiroBook {
         text: p.text,
         inlineAnnotations: p.inlineAnnotations.length ? p.inlineAnnotations : undefined,
         fontSize: p.isHeading ? p.paragraphFontSize : undefined,
+        hints: p.hints,
       })),
       fontFamily,
       fontSize,
       lineWidth,
       mode,
       enableHanging,
+      breakCost: this.breakCost,
     });
 
     // Build render entries from initial layout results
@@ -476,7 +562,7 @@ export class MejiroBook {
     // Cache paragraph data for re-layout on resize/exclusion
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
     const cached: CachedParagraph[] = chapter.paragraphs.map((p, i) => {
-      const { text, inlineAnnotations, isHeading, paragraphFontSize } = normalized[i];
+      const { text, inlineAnnotations, isHeading, paragraphFontSize, hints } = normalized[i];
       const spec =
         paragraphFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, paragraphFontSize);
       const rubySpec = deriveRubyFont(fontFamily, paragraphFontSize);
@@ -495,9 +581,14 @@ export class MejiroBook {
         layoutTcyAnnotations: buildTcyAnnotations(inlineAnnotations, paragraphFontSize),
         isHeading,
         headingLevel: p.headingLevel,
+        // Cached so every re-break replays this analysis instead of redoing it.
+        hintClusterIds: hints?.clusterIds,
+        hintBreakPenalties: hints?.breakPenalties,
       };
     });
 
+    // The analyzer identity travels with the config so that a snapshot taken of
+    // this layout records which analyzer the hints above came from.
     const config: LayoutConfig = {
       fontSize,
       lineSpacing,
@@ -505,6 +596,8 @@ export class MejiroBook {
       headingScale: opts.headingScale,
       mode,
       enableHanging,
+      breakCost: this.breakCost,
+      analyzer: this.analyzer?.identity,
     };
 
     const layout = new ChapterLayout(cached, renderEntries, config, size);
@@ -550,13 +643,25 @@ export class MejiroBook {
    * after restore propagates new font / size values which will trigger a
    * full re-measure (the measurer rebuilds advances from the live font).
    *
+   * Typography hints are carried over only when the snapshot was produced by
+   * the same analyzer this book is configured with; otherwise they are dropped
+   * and future re-breaks fall back to the character-class rules. Nothing is
+   * re-analysed here — see {@link ChapterLayoutSnapshotConfig.analyzer}.
+   *
    * @param snapshot - Value previously returned by `layout.snapshot()`.
    * @returns A {@link ChapterLayout} positioned exactly as it was at snapshot time.
+   * @throws If the snapshot is of an unsupported format version.
    */
   layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout {
-    if (snapshot.version !== 1) {
+    if (snapshot.version !== 2) {
       throw new Error(`Unsupported ChapterLayoutSnapshot version: ${snapshot.version}`);
     }
+    // A snapshot carrying no hints has nothing to weigh an identity against, so
+    // the comparison is only worth making once one is found.
+    const hasHints = snapshot.paragraphs.some(
+      (p) => p.hintClusterIds !== undefined || p.hintBreakPenalties !== undefined,
+    );
+    const keepHints = hasHints && sameAnalyzer(snapshot.config.analyzer, this.analyzer?.identity);
     const cached: CachedParagraph[] = snapshot.paragraphs.map((p) => {
       const codepoints = toCodepoints(p.text);
       const chars = [...p.text];
@@ -581,6 +686,12 @@ export class MejiroBook {
         inlineAnnotations: p.inlineAnnotations,
         ...(layoutRubyAnnotations ? { layoutRubyAnnotations } : {}),
         ...(layoutTcyAnnotations ? { layoutTcyAnnotations } : {}),
+        ...(keepHints && p.hintClusterIds
+          ? { hintClusterIds: new Uint32Array(p.hintClusterIds) }
+          : {}),
+        ...(keepHints && p.hintBreakPenalties
+          ? { hintBreakPenalties: new Uint8Array(p.hintBreakPenalties) }
+          : {}),
         ...(p.kind != null ? { kind: p.kind } : {}),
         ...(p.isHeading === true ? { isHeading: true } : {}),
         ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
@@ -601,6 +712,10 @@ export class MejiroBook {
       enableHanging: snapshot.config.enableHanging,
       headingScale: snapshot.config.headingScale,
       ...(snapshot.config.headingStyles ? { headingStyles: snapshot.config.headingStyles } : {}),
+      ...(snapshot.config.breakCost ? { breakCost: snapshot.config.breakCost } : {}),
+      // Only claim the analyzer whose hints survived the restore, so a snapshot
+      // taken of the restored layout records what its breaks really depend on.
+      ...(keepHints && snapshot.config.analyzer ? { analyzer: snapshot.config.analyzer } : {}),
     };
     const layout = new ChapterLayout(cached, entries, config, { ...snapshot.size });
     for (const spread of snapshot.images ?? []) {

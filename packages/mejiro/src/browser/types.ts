@@ -1,3 +1,5 @@
+import type { BreakCostOptions, TypographyHints } from '../types.js';
+
 /**
  * Configuration options for the MejiroBrowser instance.
  */
@@ -166,6 +168,13 @@ export interface ParagraphInput {
    * @see {@link LayoutInput.tokenBoundaries}
    */
   tokenBoundaries?: Uint32Array | readonly number[];
+  /**
+   * Line breaking hints derived from a morphological analysis of this
+   * paragraph. Offsets address the NFC text, the same coordinate system the
+   * returned `chars` and the inline annotations use.
+   * @see {@link deriveTypographyHints}
+   */
+  hints?: TypographyHints;
 }
 
 /**
@@ -184,6 +193,12 @@ export interface ChapterLayoutOptions {
   mode?: 'strict' | 'loose';
   /** Whether to enable hanging punctuation. @defaultValue true */
   enableHanging?: boolean;
+  /**
+   * Weights for the penalty search, applied to every paragraph. Has no effect
+   * unless a paragraph carries {@link ParagraphInput.hints} with break
+   * penalties in them.
+   */
+  breakCost?: BreakCostOptions;
 }
 
 /**
@@ -227,6 +242,17 @@ export interface LayoutOptions {
    * @see {@link LayoutInput.tokenBoundaries}
    */
   tokenBoundaries?: Uint32Array | readonly number[];
+  /**
+   * Line breaking hints derived from a morphological analysis of `text`.
+   * Offsets address the NFC form of `text`, which is what the layout runs on.
+   * @see {@link deriveTypographyHints}
+   */
+  hints?: TypographyHints;
+  /**
+   * Weights for the penalty search. Has no effect unless `hints` carries break
+   * penalties.
+   */
+  breakCost?: BreakCostOptions;
 }
 
 /**

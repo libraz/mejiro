@@ -18,6 +18,7 @@ import { buildRenderPage } from '../render/page.js';
 import type { LineMetric, RenderEntry, RenderLine, RenderParagraph } from '../render/types.js';
 import { preprocessRuby, type RubyAnnotation } from '../ruby.js';
 import { preprocessTcy, type TcyAnnotation } from '../tcy.js';
+import type { BreakCostOptions } from '../types.js';
 import type { AnchorLocation, AnchorRange, AnchorRect, InChapterAnchor } from './anchor.js';
 import type { FindTextOptions, SearchMatch } from './search.js';
 import type { ChapterLayoutSnapshot, LayoutRubySnapshot, ParagraphSnapshot } from './snapshot.js';
@@ -51,6 +52,22 @@ export interface CachedParagraph {
    * (resize, re-measure, image exclusion) can put it back on the render entry.
    */
   kind?: ParagraphKind;
+  /**
+   * Indivisible units the typography hints identified, as base cluster IDs.
+   *
+   * Cached rather than recomputed because morphological analysis is the most
+   * expensive step in the pipeline and its result cannot change while the
+   * paragraph's text does not — a re-break (resize, re-measure, image exclusion
+   * reflow) is on the interactive path and must never re-analyse.
+   */
+  hintClusterIds?: Uint32Array;
+  /**
+   * Per-position break penalties from the same analysis, cached for the same
+   * reason as {@link CachedParagraph.hintClusterIds}. Absent unless the book
+   * asked for the `'full'` stage, in which case break positions depend on it,
+   * so a re-break that dropped it would move text on screen.
+   */
+  hintBreakPenalties?: Uint8Array;
 }
 
 /** @internal Layout configuration snapshot. */
@@ -61,6 +78,13 @@ export interface LayoutConfig {
   headingScale: number;
   mode: 'strict' | 'loose';
   enableHanging: boolean;
+  /** Weights for the penalty search. Inert unless a paragraph carries penalties. */
+  breakCost?: BreakCostOptions;
+  /**
+   * Identity of the analyzer the cached paragraphs' hints came from, carried so
+   * a snapshot can record which analysis its break points depend on.
+   */
+  analyzer?: { name: string; version: string };
 }
 
 // ── Internal cache types ──
@@ -718,6 +742,12 @@ export class ChapterLayout {
       if (para.layoutTcyAnnotations) {
         snap.layoutTcyAnnotations = para.layoutTcyAnnotations.map((t) => ({ ...t }));
       }
+      // Break points depend on the hints, so a snapshot that omitted them would
+      // restore a layout whose first re-break moves text the reader is looking at.
+      if (para.hintClusterIds) snap.hintClusterIds = Array.from(para.hintClusterIds);
+      if (para.hintBreakPenalties) {
+        snap.hintBreakPenalties = Array.from(para.hintBreakPenalties);
+      }
       return snap;
     });
     const images =
@@ -729,7 +759,7 @@ export class ChapterLayout {
         : undefined;
 
     return {
-      version: 1,
+      version: 2,
       config: {
         fontSize: this.config.fontSize,
         lineSpacing: this.config.lineSpacing,
@@ -739,6 +769,8 @@ export class ChapterLayout {
         ...(this.config.headingStyles
           ? { headingStyles: cloneHeadingStyles(this.config.headingStyles) }
           : {}),
+        ...(this.config.breakCost ? { breakCost: { ...this.config.breakCost } } : {}),
+        ...(this.config.analyzer ? { analyzer: { ...this.config.analyzer } } : {}),
       },
       size: { ...this.size },
       paragraphs,
@@ -884,6 +916,13 @@ export class ChapterLayout {
         enableHanging: this.config.enableHanging,
         rubyAnnotations: para.layoutRubyAnnotations,
         tcyAnnotations: para.layoutTcyAnnotations,
+        // The hints are replayed, never re-derived: a re-break happens on the
+        // interactive path and the analysis cannot have changed. Hint clusters
+        // are the base IDs, which ruby and tate-chu-yoko overwrite inside their
+        // own spans.
+        clusterIds: para.hintClusterIds,
+        breakPenalties: para.hintBreakPenalties,
+        breakCost: this.config.breakCost,
       });
       entries.push({
         chars: para.chars,
@@ -1182,6 +1221,11 @@ export class ChapterLayout {
         enableHanging: this.config.enableHanging,
         rubyAnnotations: para.layoutRubyAnnotations,
         tcyAnnotations: para.layoutTcyAnnotations,
+        // Same replayed hints as the uniform-width break, so a column shortened
+        // by an image breaks under the same constraints as an unobstructed one.
+        clusterIds: para.hintClusterIds,
+        breakPenalties: para.hintBreakPenalties,
+        breakCost: this.config.breakCost,
       });
       gi += br.breakPoints.length + 1;
       entries.push({

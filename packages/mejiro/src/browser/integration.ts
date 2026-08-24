@@ -4,7 +4,7 @@ import type { RubyAnnotation } from '../ruby.js';
 import type { TcyAnnotation } from '../tcy.js';
 import { buildTcyAnnotations } from '../tcy.js';
 import { toCodepoints } from '../text.js';
-import type { BreakResult } from '../types.js';
+import type { BreakCostOptions, BreakResult, TypographyHints } from '../types.js';
 import { FontLoader } from './font-loader.js';
 import { CharMeasurer, deriveRubyFont } from './measure.js';
 import type {
@@ -135,6 +135,13 @@ export async function layoutText(options: {
    * @see {@link LayoutOptions.tokenBoundaries}
    */
   tokenBoundaries?: Uint32Array | readonly number[];
+  /**
+   * Line breaking hints derived from a morphological analysis of `text`.
+   * @see {@link LayoutOptions.hints}
+   */
+  hints?: TypographyHints;
+  /** Weights for the penalty search. @see {@link LayoutOptions.breakCost} */
+  breakCost?: BreakCostOptions;
 }): Promise<BreakResult> {
   const fontSpec = toFontSpec(options.fontFamily, options.fontSize);
   const loader = new FontLoader();
@@ -166,6 +173,13 @@ export async function layoutText(options: {
     rubyAnnotations,
     tcyAnnotations,
     tokenBoundaries: options.tokenBoundaries,
+    // Hint clusters go in as the *base* cluster IDs. `computeBreaks` hands them
+    // to the tate-chu-yoko preprocessor and then to the ruby one, each of which
+    // overwrites the IDs inside its own span, so an annotated run wins over a
+    // hint cluster covering the same range.
+    clusterIds: options.hints?.clusterIds,
+    breakPenalties: options.hints?.breakPenalties,
+    breakCost: options.breakCost,
   });
 }
 
@@ -248,6 +262,13 @@ export class MejiroBrowser {
       rubyAnnotations,
       tcyAnnotations,
       tokenBoundaries: options.tokenBoundaries,
+      // Hint clusters go in as the *base* cluster IDs. `computeBreaks` hands
+      // them to the tate-chu-yoko preprocessor and then to the ruby one, each
+      // of which overwrites the IDs inside its own span, so an annotated run
+      // wins over a hint cluster covering the same range.
+      clusterIds: options.hints?.clusterIds,
+      breakPenalties: options.hints?.breakPenalties,
+      breakCost: options.breakCost,
     });
   }
 
@@ -281,7 +302,7 @@ export class MejiroBrowser {
     const fontSize = options.fontSize ?? this.options.fixedFontSize;
     if (!fontFamily) throw new Error('fontFamily must be specified');
     if (!fontSize) throw new Error('fontSize must be specified');
-    const { paragraphs: inputs, lineWidth, mode, enableHanging } = options;
+    const { paragraphs: inputs, lineWidth, mode, enableHanging, breakCost } = options;
 
     const results: ChapterLayoutResult['paragraphs'] = [];
     for (const para of inputs) {
@@ -300,6 +321,8 @@ export class MejiroBrowser {
         enableHanging,
         inlineAnnotations: inlineAnnotations.length ? inlineAnnotations : undefined,
         tokenBoundaries: para.tokenBoundaries,
+        hints: para.hints,
+        breakCost,
       });
       results.push({ breakResult, chars: [...text] });
     }

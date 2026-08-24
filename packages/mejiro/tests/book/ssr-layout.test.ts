@@ -6,7 +6,7 @@ import type { ChapterLayoutSnapshot } from '../../src/book/snapshot.js';
 // access on the construction or replay path fails it.
 
 const SNAPSHOT: ChapterLayoutSnapshot = {
-  version: 1,
+  version: 2,
   config: {
     fontSize: 16,
     lineSpacing: 1.8,
