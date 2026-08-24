@@ -656,6 +656,7 @@ __metadata:
   resolution: "@mejiro/demo@workspace:packages/mejiro-demo"
   dependencies:
     "@libraz/mejiro": "workspace:*"
+    "@libraz/suzume": "npm:^0.9.9"
     vite: "npm:^8.2.2"
   languageName: unknown
   linkType: soft

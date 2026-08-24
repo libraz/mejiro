@@ -77,7 +77,9 @@
     }
     .demo-segments {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      /* Auto columns keep every option the same width whatever its label says. */
+      grid-auto-flow: column;
+      grid-auto-columns: 1fr;
       border: 1px solid #ccc5b8;
     }
     .demo-segments button {
@@ -105,6 +107,19 @@
       background: #c9b9aa;
       color: #fff;
     }
+    .demo-options-section {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(42, 37, 33, 0.18);
+    }
+    .demo-option-note {
+      /* Two lines are always reserved so switching modes never resizes the panel. */
+      min-height: 2.6em;
+      color: #6b6156;
+      font-size: 0.66rem;
+      line-height: 1.3;
+    }
+    .demo-option-note.is-error { color: #8b3a3a; }
     .demo-options pre {
       margin: 14px 0 0;
       padding: 10px;
@@ -308,6 +323,22 @@
         </div>
       </div>
       <pre id="readerOptionsCode"></pre>
+
+      <div class="demo-options-section">
+        <div class="demo-options-head">
+          <span>MejiroBook</span>
+          <strong>Analysis-driven breaking</strong>
+        </div>
+        <div class="demo-option-group">
+          <span class="demo-option-label">wordAwareBreaking</span>
+          <div class="demo-segments" id="wordAwareControls">
+            <button type="button" data-word-aware="off" class="is-active">off</button>
+            <button type="button" data-word-aware="clusters">clusters</button>
+            <button type="button" data-word-aware="full">full</button>
+          </div>
+          <span class="demo-option-note" id="wordAwareNote" role="status"></span>
+        </div>
+      </div>
     </aside>
 
     <input type="file" id="fileInput" accept=".epub" hidden />

@@ -1,9 +1,12 @@
 import '@libraz/mejiro/render/mejiro-reader.css';
-import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
+import type { TextAnalyzer } from '@libraz/mejiro/analysis';
+import { createSuzumeAnalyzer } from '@libraz/mejiro/analysis';
+import type { ChapterLayout, ChapterLayoutSnapshot, PageResult } from '@libraz/mejiro/book';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import type { RenderPage, RenderSegment } from '@libraz/mejiro/render';
+import suzumeWasmUrl from '@libraz/suzume/wasm?url';
 
 // ── Elements ──
 const dropZone = document.getElementById('dropZone') as HTMLDivElement;
@@ -43,22 +46,58 @@ const hangingSelect = document.getElementById('hanging') as HTMLSelectElement;
 const lineSpacingInput = document.getElementById('lineSpacing') as HTMLInputElement;
 const pageNumbersSelect = document.getElementById('pageNumbers') as HTMLSelectElement;
 const imageToggle = document.getElementById('imageToggle') as HTMLButtonElement;
+const wordAwareControls = document.getElementById('wordAwareControls') as HTMLDivElement;
+const wordAwareNote = document.getElementById('wordAwareNote') as HTMLSpanElement;
+
+// ── Analysis stage state ──
+
+/** Stage of analysis-driven line breaking, mirroring `BookOptions.wordAwareBreaking`. */
+type WordAwareBreaking = 'off' | 'clusters' | 'full';
+
+/** One-line explanation of each stage, shown under the stage control. */
+const WORD_AWARE_NOTES: Record<WordAwareBreaking, string> = {
+  off: 'Character-class rules only — no analysis is run.',
+  clusters: 'Hard clusters only: removes wrong breaks, moves none.',
+  full: 'Clusters plus break penalties, which do move break positions.',
+};
+
+let wordAwareBreaking: WordAwareBreaking = 'off';
+let analyzer: TextAnalyzer | null = null;
+let analyzerPromise: Promise<TextAnalyzer> | null = null;
+let wordAwareBusy = false;
+
+/**
+ * Builds a book from the current typography controls and the current analysis
+ * stage.
+ *
+ * The stage cannot be patched onto a live book: `wordAwareBreaking` and
+ * `analyzer` are read when a chapter is laid out and `MejiroBook.setOptions()`
+ * deliberately refuses them, so changing the stage means a new book.
+ */
+function createBook(): MejiroBook {
+  return new MejiroBook({
+    fontFamily: fontFamilySelect.value,
+    fontSize: Number(fontSizeInput.value),
+    lineSpacing: Number(lineSpacingInput.value),
+    mode: modeSelect.value as 'strict' | 'loose',
+    enableHanging: hangingSelect.value === 'true',
+    headingStyles: DEFAULT_HEADING_STYLES,
+    wordAwareBreaking,
+    ...(analyzer ? { analyzer } : {}),
+  });
+}
 
 // ── State ──
-const book = new MejiroBook({
-  fontFamily: fontFamilySelect.value,
-  fontSize: Number(fontSizeInput.value),
-  lineSpacing: Number(lineSpacingInput.value),
-  mode: modeSelect.value as 'strict' | 'loose',
-  enableHanging: hangingSelect.value === 'true',
-  headingStyles: DEFAULT_HEADING_STYLES,
-});
+let book = createBook();
 
 let currentBook: EpubBook | null = null;
 let currentChapter = 0;
 let currentPage = 0;
 let totalPages = 0;
 let layout: ChapterLayout | null = null;
+// Chapter `layout` belongs to, so a re-layout of the same chapter can restore
+// the reading position while a chapter switch starts at the beginning.
+let layoutChapterIndex = -1;
 let updateTimer: ReturnType<typeof setTimeout> | null = null;
 let chapterNavMode: 'select' | 'panel' | 'both' | 'none' = 'panel';
 const readerOptions: Record<string, boolean> = Object.fromEntries(
@@ -276,6 +315,169 @@ chapterNavModeControls.addEventListener('click', (event) => {
   updateReaderOptionsDemo();
 });
 updateReaderOptionsDemo();
+
+// ── Analysis-driven line breaking ──
+
+/** Break positions of an `off` layout, kept to measure a later stage against. */
+interface BreakBaseline {
+  /** Layout inputs the positions were produced from, per {@link layoutKey}. */
+  key: string;
+  /** Ascending break positions, one array per paragraph. */
+  breaks: number[][];
+}
+
+let breakBaseline: BreakBaseline | null = null;
+
+/**
+ * Loads the suzume analyzer once and reuses it for every later stage change.
+ *
+ * Not loaded at start-up on purpose: the analyzer pulls in a ~567 KB
+ * WebAssembly module, which a reader that stays at `off` should never pay for.
+ * The wasm URL is resolved through the bundler so the binary is emitted as a
+ * demo asset instead of being looked for next to the bundled chunk.
+ */
+function loadAnalyzer(): Promise<TextAnalyzer> {
+  analyzerPromise ??= createSuzumeAnalyzer({ wasmPath: suzumeWasmUrl });
+  return analyzerPromise;
+}
+
+/** Reflects the active stage and the busy state on the segmented control. */
+function renderWordAwareControls(): void {
+  for (const button of wordAwareControls.querySelectorAll('button')) {
+    const stage = button.dataset.wordAware as WordAwareBreaking;
+    button.classList.toggle('is-active', stage === wordAwareBreaking);
+    button.disabled = wordAwareBusy;
+  }
+  wordAwareControls.setAttribute('aria-busy', String(wordAwareBusy));
+}
+
+/** Writes the note under the stage control, in its plain or error tone. */
+function setWordAwareNote(text: string, isError = false): void {
+  wordAwareNote.textContent = text;
+  wordAwareNote.classList.toggle('is-error', isError);
+}
+
+/**
+ * Switches the analysis stage and re-lays out the current chapter with it.
+ *
+ * A failing analyzer is not fatal: the stage stays at `off`, the reader keeps
+ * working on the character-class rules, and the note says what happened.
+ */
+async function applyWordAwareBreaking(stage: WordAwareBreaking): Promise<void> {
+  if (stage === wordAwareBreaking || wordAwareBusy) return;
+
+  wordAwareBusy = true;
+  renderWordAwareControls();
+  try {
+    // An analyzer already created stays alive across a return to `off`, so
+    // coming back to a hinted stage costs nothing.
+    if (stage !== 'off' && !analyzer) {
+      setWordAwareNote('Loading analyzer…');
+      analyzer = await loadAnalyzer();
+    }
+  } catch (err) {
+    console.error('Failed to load the suzume analyzer:', err);
+    // Drop the rejected promise so a later attempt retries instead of
+    // replaying the same failure.
+    analyzerPromise = null;
+    wordAwareBusy = false;
+    renderWordAwareControls();
+    setWordAwareNote('Analyzer unavailable — line breaking stays at off.', true);
+    return;
+  }
+
+  captureBreakBaseline();
+  wordAwareBreaking = stage;
+  book = createBook();
+  renderWordAwareControls();
+  setWordAwareNote('Laying out…');
+  try {
+    await render();
+  } finally {
+    wordAwareBusy = false;
+    renderWordAwareControls();
+    setWordAwareNote(WORD_AWARE_NOTES[wordAwareBreaking]);
+  }
+}
+
+/**
+ * Identifies every layout input except the analysis stage, so break positions
+ * are only ever compared across layouts the analysis alone can explain.
+ */
+function layoutKey(snapshot: ChapterLayoutSnapshot, chapter: number): string {
+  const { config, size } = snapshot;
+  return [
+    chapter,
+    // The font family is not part of the snapshot config, but it changes the
+    // advances the breaks were computed from.
+    fontFamilySelect.value,
+    config.fontSize,
+    config.lineSpacing,
+    config.mode,
+    config.enableHanging,
+    size.pageWidth,
+    size.lineWidth,
+  ].join('|');
+}
+
+/**
+ * Records the break positions of the layout on screen while it is still an
+ * `off` one — the only moment the demo holds a baseline to compare against.
+ */
+function captureBreakBaseline(): void {
+  if (!layout || wordAwareBreaking !== 'off' || layoutChapterIndex !== currentChapter) return;
+  const snapshot = layout.snapshot();
+  breakBaseline = {
+    key: layoutKey(snapshot, currentChapter),
+    breaks: snapshot.paragraphs.map((p) => p.breakPoints),
+  };
+}
+
+/**
+ * Counts how many break positions of `current` the `off` baseline does not
+ * contain.
+ *
+ * Returns `null` when no baseline describes the same chapter, typography and
+ * page geometry, because a count taken across different inputs would credit
+ * the analysis with differences a font or a resize caused.
+ */
+function countMovedBreaks(current: ChapterLayout): { moved: number; total: number } | null {
+  if (wordAwareBreaking === 'off' || !breakBaseline) return null;
+  const snapshot = current.snapshot();
+  if (layoutKey(snapshot, currentChapter) !== breakBaseline.key) return null;
+  if (snapshot.paragraphs.length !== breakBaseline.breaks.length) return null;
+
+  let moved = 0;
+  let total = 0;
+  for (let i = 0; i < snapshot.paragraphs.length; i++) {
+    const breaks = snapshot.paragraphs[i].breakPoints;
+    total += breaks.length;
+    moved += countMissing(breaks, breakBaseline.breaks[i]);
+  }
+  return { moved, total };
+}
+
+/** Counts entries of the ascending list `a` that the ascending list `b` lacks. */
+function countMissing(a: readonly number[], b: readonly number[]): number {
+  let missing = 0;
+  let j = 0;
+  for (const value of a) {
+    while (j < b.length && b[j] < value) j++;
+    if (j < b.length && b[j] === value) j++;
+    else missing++;
+  }
+  return missing;
+}
+
+wordAwareControls.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    'button[data-word-aware]',
+  );
+  if (!(button && !button.disabled)) return;
+  void applyWordAwareBreaking(button.dataset.wordAware as WordAwareBreaking);
+});
+renderWordAwareControls();
+setWordAwareNote(WORD_AWARE_NOTES[wordAwareBreaking]);
 
 // ── Image overlay management ──
 function createImageOverlay(x: number, y: number): ImagePlacement {
@@ -711,6 +913,10 @@ async function loadEpubBuffer(buffer: ArrayBuffer): Promise<void> {
     currentBook = await parseEpub(buffer);
     currentChapter = 0;
     currentPage = 0;
+    // Nothing from the previous book describes this one: its anchors and its
+    // break positions are keyed by chapter index, which now means another text.
+    layoutChapterIndex = -1;
+    breakBaseline = null;
 
     chapterSelect.innerHTML = '';
     currentBook.chapters.forEach((ch, i) => {
@@ -759,8 +965,17 @@ async function render(): Promise<void> {
   applyFont(pageContentRight);
   applyFont(pageContentLeft);
 
+  // An anchor is a paragraph plus a code point offset, so it survives a
+  // re-break that moves every page boundary — which is what keeps the reader
+  // on the same passage across a font, geometry or analysis-stage change.
+  const keptAnchor =
+    layout && layoutChapterIndex === currentChapter
+      ? layout.anchorAt(Math.floor(currentPage / 2))
+      : null;
+
   const t0 = performance.now();
   layout = await book.layoutChapter(chapter);
+  layoutChapterIndex = currentChapter;
 
   if (spreadImageMap.size > 0) {
     syncImagesToLayout();
@@ -768,7 +983,10 @@ async function render(): Promise<void> {
 
   const elapsed = performance.now() - t0;
   totalPages = layout.totalPages;
-  currentPage = 0;
+  const restored = keptAnchor ? layout.locateAnchor(keptAnchor) : null;
+  currentPage = restored ? restored.spreadIdx * 2 : 0;
+
+  const movedBreaks = countMovedBreaks(layout);
 
   renderCurrentSpread();
 
@@ -782,6 +1000,8 @@ async function render(): Promise<void> {
     `${totalChars}ch`,
     `${totalPages}pp`,
     totalRuby > 0 ? `${totalRuby}ruby` : null,
+    wordAwareBreaking !== 'off' ? `wordAware ${wordAwareBreaking}` : null,
+    movedBreaks ? `Δ${movedBreaks.moved}/${movedBreaks.total} breaks` : null,
     `${fontName} ${fontSizeInput.value}px`,
     `${elapsed.toFixed(0)}ms`,
   ]
