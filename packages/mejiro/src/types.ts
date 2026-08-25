@@ -66,9 +66,10 @@ export interface LayoutInput {
  * The cost of breaking after position `p` is
  * `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where
  * `shortfall(p)` is how far short of the line width the line ends, measured in
- * em. At the default weights a penalty of 2 is given up only while the
- * alternative leaves the line less than 1.33 em short, and the heaviest penalty
- * of 3 only while it leaves it less than 2 em short.
+ * em. At the default weights a penalty of `P` is given up only while the
+ * alternative leaves the line less than `P / 1.5` em short: 1.33 em for a break
+ * inside a morpheme, 2 em for one that cuts a base off the particle following
+ * it, and 2.67 em for one inside a word the rules keep whole.
  *
  * Only the ratio of the two weights decides anything. Scaling both by the same
  * factor scales every cost by that factor and leaves their order untouched, so
@@ -86,17 +87,19 @@ export interface BreakCostOptions {
   /**
    * Multiplier applied to the em-measured shortfall.
    *
-   * This weight fixes the worst trade the search can make. Penalties from
-   * {@link deriveTypographyHints} run 0..3, so escaping the heaviest position —
-   * a base cut off from the particle that follows it — buys at most
-   * `3 / shortfallWeight` em of empty line. At `1` that is three
-   * character cells, and vertical Japanese is set on a character grid where
-   * standard kinsoku shifts one character and occasionally two; three is past
-   * what the convention allows, and over a 20k-character corpus it leaves
+   * This weight fixes the worst trade the search can make. Escaping a position
+   * carrying penalty `P` buys at most `P / shortfallWeight` em of empty line,
+   * and {@link deriveTypographyHints} emits at most
+   * {@link TypographyHintOptions.keepWholePenalty}, 4 by default.
+   *
+   * Vertical Japanese is set on a character grid where standard kinsoku shifts
+   * one character and occasionally two. At `1` the heaviest penalty buys four
+   * character cells, well past what the convention allows: measured over a 20k
+   * character corpus, weight `1` against the structural penalties alone leaves
    * 30.2% of lines ending 1.5 em or more short, worst case 2.5 em. The default
-   * caps the worst trade at 2 em, cuts those lines to 12.1%, and still moves
-   * 26.9% of the lines where a penalty and the shortfall disagree. At `2` only
-   * 8.6% move and the penalties barely reach the layout at all.
+   * cuts those lines to 12.1% while still moving 26.9% of the lines where a
+   * penalty and the shortfall disagree. At `2` only 8.6% move and the penalties
+   * barely reach the layout at all.
    *
    * @defaultValue 1.5
    */
@@ -105,15 +108,21 @@ export interface BreakCostOptions {
    * How many positions the cost search may walk back from the overflowing
    * character. Bounding it keeps line breaking linear in the text length.
    *
-   * The default is where a candidate stops being able to win, so widening it
-   * only costs search time. A position `k` steps further back gives up at least
-   * `0.5k` em of line, a half-width character being the narrowest thing that
-   * can sit between the two, so it pays at least `shortfallWeight * 0.5k` more
-   * in shortfall to save at most `penaltyWeight * 3` in penalty. It can win
-   * only while `k < 6 * penaltyWeight / shortfallWeight`: `k < 6` at equal
-   * weights, `k < 4` at the default weights. Six is therefore the ceiling under
-   * the loosest ratio a caller is likely to set, and windows of 6, 8, 12, 16,
-   * 24 and 32 all choose the same positions.
+   * The default is set where a candidate stops being able to win, so widening
+   * it only costs search time. A position `k` steps further back gives up at
+   * least `0.5k` em of line, a half-width character being the narrowest thing
+   * that can sit between the two, so it pays at least `shortfallWeight * 0.5k`
+   * more in shortfall to save at most `penaltyWeight * P`, where `P` is the
+   * largest penalty in the array. It can win only while
+   * `k < 2 * penaltyWeight * P / shortfallWeight`.
+   *
+   * At the default weights and the penalties {@link deriveTypographyHints}
+   * emits — `P` of 4 — that is `k < 5.33`, so six covers the search completely
+   * and windows of 6, 8, 12, 16, 24 and 32 all choose the same positions. A
+   * caller that both flattens the weights towards `1` and raises
+   * {@link TypographyHintOptions.keepWholePenalty} pushes the bound past six and
+   * should widen this to match, or the search will not reach the position its
+   * own settings say should win.
    *
    * @defaultValue 6
    */
@@ -242,6 +251,60 @@ export interface TypographyHintOptions {
    * @defaultValue 6
    */
   maxHardClusterChars?: number;
+  /**
+   * Parts of speech whose morphemes a break should avoid landing inside.
+   *
+   * A code matches a morpheme when it equals either its
+   * {@link MorphemeLike.extendedPos} or its {@link MorphemeLike.pos}, so
+   * `'VERB'` selects every verb while `'VERB_連用'` selects one conjugation.
+   *
+   * The default is the closed-class independent words — conjunctions, adverbs,
+   * adnominals, pronouns and interjections. They are short, mostly written in
+   * kana and read as a single unit, so a break inside one is conspicuous in a
+   * way that a break inside a kanji compound is not: `国際|連合` still reads,
+   * `した|がって` does not. Being closed classes, they are also the words an
+   * analyzer's dictionary is most likely to know.
+   *
+   * Pass `[]` to switch the rule off, or spread
+   * {@link DEFAULT_KEEP_WHOLE_POS} to extend the default rather than replace
+   * it. Formal nouns (`NOUN_形式` in suzume's vocabulary) are the usual
+   * addition.
+   *
+   * Unlike the cluster rules this one does consult the part of speech, so what
+   * it does depends on the analyzer's dictionary. That is safe here in a way it
+   * is not for clusters: a word the dictionary does not know keeps the ordinary
+   * inside-a-morpheme penalty, which is what it would have had anyway, so the
+   * worst outcome is no improvement rather than a different layout.
+   *
+   * @defaultValue {@link DEFAULT_KEEP_WHOLE_POS}
+   */
+  keepWholePos?: readonly string[];
+  /**
+   * Penalty given to a break inside a {@link TypographyHintOptions.keepWholePos}
+   * morpheme, in place of the ordinary inside-a-morpheme penalty of 2.
+   *
+   * This is a preference, not a prohibition, and the value sets its price. The
+   * cost search gives up at most `keepWholePenalty / shortfallWeight` em of line
+   * to escape the morpheme, so the default buys 2.67 em at the default weights:
+   * enough to step out of a break one or two characters into a word, not enough
+   * to leave a hole where the only escape is back past the whole of it. Raising
+   * it much further asks for that hole, and needs
+   * {@link BreakCostOptions.maxBacktrackChars} widened to match before the
+   * search can even reach the position that would win.
+   *
+   * There is deliberately no length cap of the kind
+   * {@link TypographyHintOptions.maxHardClusterChars} puts on clusters. A long
+   * morpheme needs no guard because an escape it cannot afford is simply not
+   * taken.
+   *
+   * The value is read literally, so `0` does not switch the rule off — it makes
+   * the inside of these words the *cheapest* place on the line to break, which
+   * is the opposite of the intent. Switch the rule off with
+   * `keepWholePos: []`.
+   *
+   * @defaultValue 4
+   */
+  keepWholePenalty?: number;
 }
 
 /**

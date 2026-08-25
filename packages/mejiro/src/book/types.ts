@@ -72,6 +72,23 @@ export interface BookOptions {
    */
   wordAwareBreaking?: 'off' | 'clusters' | 'full';
   /**
+   * Parts of speech a break should avoid landing inside, forwarded to
+   * {@link deriveTypographyHints} as
+   * {@link TypographyHintOptions.keepWholePos}. Read only under `'full'`, the
+   * only stage that emits penalties.
+   *
+   * @defaultValue {@link DEFAULT_KEEP_WHOLE_POS}
+   */
+  keepWholePos?: readonly string[];
+  /**
+   * Price of a break inside one of {@link BookOptions.keepWholePos}, forwarded
+   * to {@link deriveTypographyHints} as
+   * {@link TypographyHintOptions.keepWholePenalty}.
+   *
+   * @defaultValue 4
+   */
+  keepWholePenalty?: number;
+  /**
    * Weights trading a penalised break position against the line it leaves
    * behind. Forwarded to the line breaker, which ignores it unless break
    * penalties are in play — that is, under `'full'`, or for a paragraph

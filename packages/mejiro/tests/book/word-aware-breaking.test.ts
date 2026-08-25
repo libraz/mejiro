@@ -22,8 +22,13 @@ interface FakeAnalyzer extends TextAnalyzer {
   readonly calls: string[];
 }
 
-/** Matches one morpheme of the fake segmentation, `u`-mode so it is code point safe. */
-const TOKEN = /[0-9０-９]+|[A-Za-z]+|[\s\S]/gu;
+/**
+ * Matches one morpheme of the fake segmentation, `u`-mode so it is code point
+ * safe. The two conjunctions lead the alternation, longer one first, because a
+ * word only has an interior to keep whole once it spans more than one code
+ * point, and the single-character branch would otherwise take them apart.
+ */
+const TOKEN = /しかしながら|しかし|[0-9０-９]+|[A-Za-z]+|[\s\S]/gu;
 
 /**
  * Function words and bound morphemes the fake recognises, by surface. A `Map`
@@ -41,6 +46,8 @@ const EXTENDED_POS = new Map<string, string>([
   ['人', 'SUFFIX'],
   ['。', 'SYMBOL'],
   ['、', 'SYMBOL'],
+  ['しかし', 'CONJ_逆接'],
+  ['しかしながら', 'CONJ_逆接'],
 ]);
 
 function extendedPosOf(surface: string): string {
@@ -365,5 +372,107 @@ describe('word-aware breaking', () => {
     const fresh = new MejiroBook({ ...baseOptions, analyzer, wordAwareBreaking: 'full' });
     expect(fresh.layoutFromSnapshot(snapshot).totalPages).toBeGreaterThan(0);
     expect(analyzer.calls).toEqual([]);
+  });
+});
+
+describe('word-aware breaking — keeping a word whole', () => {
+  // The canvas stub measures every code point at 10 px, so an 80 px column fits
+  // exactly eight of them and the first overflowing character is index 8. The
+  // cost search then walks back from index 7, where breaking after position `p`
+  // costs `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`.
+  // At the default weights of 1 and 1.5, with `emSize` pinned so the shortfall
+  // does not depend on advance estimation, that is `breakPenalties[p] + 1.5 *
+  // (7 - p)`.
+  const lineWidth = 80;
+  const breakCost = { emSize: 10 };
+
+  /** A book at the given stage, sized to the column the arithmetic above assumes. */
+  function keepWholeBook(options: Partial<BookOptions>): MejiroBook {
+    const book = new MejiroBook({
+      ...baseOptions,
+      analyzer: createAnalyzer(),
+      wordAwareBreaking: 'full',
+      breakCost,
+      ...options,
+    });
+    book.setPageSize({ pageWidth: 400, lineWidth });
+    return book;
+  }
+
+  it('moves a break out of a conjunction it would have split', async () => {
+    // あいうえおか | しかし | きくけこさすせそ — the conjunction runs from index 6 to 8, so
+    // the position the character-class rules would take, index 7, is one code
+    // point into it:
+    //
+    //   p=7   4 + 1.5*0 = 4.0   inside しかし
+    //   p=6   4 + 1.5*1 = 5.5   inside しかし
+    //   p=5   0 + 1.5*2 = 3.0   the bunsetsu boundary before it
+    //   p=4   0 + 1.5*3 = 4.5
+    //
+    // so the break steps back to 5 and gives up two em of line to keep the word
+    // whole. Priced at the ordinary interior value of 2 the same escape is not
+    // worth taking — 2.0 against 3.0 — which is what the empty list shows.
+    const paragraphs = [{ text: 'あいうえおかしかしきくけこさすせそ' }];
+    const clustersOnly = keepWholeBook({ wordAwareBreaking: 'clusters' });
+    const kept = keepWholeBook({});
+    const unkept = keepWholeBook({ keepWholePos: [] });
+
+    const clustered = await clustersOnly.layoutChapter({ paragraphs });
+    const keptLayout = await kept.layoutChapter({ paragraphs });
+    const unkeptLayout = await unkept.layoutChapter({ paragraphs });
+
+    // The stage that emits no penalties reads neither option and breaks where
+    // the character-class rules put it.
+    expect(breakPointsOf(clustered)[0][0]).toBe(7);
+    expect(breakPointsOf(keptLayout)[0][0]).toBe(5);
+    expect(breakPointsOf(unkeptLayout)[0][0]).toBe(7);
+    // The list reached the hints as well as the break: both positions inside the
+    // conjunction carry the keep-whole price, the one it ends on does not.
+    expect(
+      [...(keptLayout.getCachedParagraphs()[0].hintBreakPenalties as Uint8Array)].slice(6, 9),
+    ).toEqual([4, 4, 0]);
+  });
+
+  it('leaves the break inside a word too expensive to escape', async () => {
+    // あいうえ | しかしながら | きくけこさすせそ — the six code point conjunction runs
+    // from index 4 to 9, so index 7 sits deep inside it and the boundary before
+    // the word is four positions back:
+    //
+    //   p=7   4 + 1.5*0 = 4.0   inside しかしながら
+    //   p=6   4 + 1.5*1 = 5.5
+    //   p=5   4 + 1.5*2 = 7.0
+    //   p=4   4 + 1.5*3 = 8.5
+    //   p=3   0 + 1.5*4 = 6.0   the bunsetsu boundary before it
+    //
+    // The default penalty buys 4 / 1.5 = 2.67 em of line and this escape costs
+    // four em, so the layout declines the preference and breaks inside the word.
+    // That is the design: a penalty prices a break, it does not forbid one.
+    const paragraphs = [{ text: 'あいうえしかしながらきくけこさすせそ' }];
+    const kept = keepWholeBook({});
+    const clustersOnly = keepWholeBook({ wordAwareBreaking: 'clusters' });
+
+    const keptLayout = await kept.layoutChapter({ paragraphs });
+    const clustered = await clustersOnly.layoutChapter({ paragraphs });
+
+    expect(breakPointsOf(keptLayout)[0][0]).toBe(7);
+    // Same position the rule-free stage chooses: the preference changed nothing
+    // here, rather than being absent.
+    expect(breakPointsOf(clustered)[0][0]).toBe(7);
+    expect(
+      [...(keptLayout.getCachedParagraphs()[0].hintBreakPenalties as Uint8Array)].slice(4, 10),
+    ).toEqual([4, 4, 4, 4, 4, 0]);
+  });
+
+  it('prices the escape at the penalty the caller sets', async () => {
+    // The paragraph the default declines to leave, with the interior priced at
+    // 7: the position inside the word now costs 7.0 against the boundary's 6.0,
+    // so the break moves back to 3. Four positions back is still inside the
+    // window the default `maxBacktrackChars` searches.
+    const paragraphs = [{ text: 'あいうえしかしながらきくけこさすせそ' }];
+    const book = keepWholeBook({ keepWholePenalty: 7 });
+
+    const layout = await book.layoutChapter({ paragraphs });
+
+    expect(breakPointsOf(layout)[0][0]).toBe(3);
   });
 });

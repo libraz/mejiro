@@ -35,6 +35,21 @@ const PENALTY_MORPHEME = 1;
 const PENALTY_INSIDE_MORPHEME = 2;
 /** Break that cuts a base off the particle or auxiliary that follows it. */
 const PENALTY_BEFORE_FUNCTION_WORD = 3;
+/** Break inside a word the caller asked to keep whole. */
+const DEFAULT_KEEP_WHOLE_PENALTY = 4;
+
+/**
+ * Parts of speech {@link deriveTypographyHints} keeps whole by default, as
+ * {@link TypographyHintOptions.keepWholePos}.
+ *
+ * These are the closed-class independent words: conjunctions, adverbs,
+ * adnominals, pronouns and interjections. Spread this array to extend the
+ * default rather than replace it.
+ */
+export const DEFAULT_KEEP_WHOLE_POS: readonly string[] = ['ADV', 'CONJ', 'DET', 'INTJ', 'PRON'];
+
+/** Largest value a penalty may take, `breakPenalties` being a `Uint8Array`. */
+const MAX_PENALTY = 255;
 
 /** Space and tab, the two characters the engine treats as a break opportunity. */
 const SPACE = 0x20;
@@ -51,13 +66,19 @@ interface Span {
 /**
  * Derives line breaking hints from a morphological analysis of one paragraph.
  *
- * The rules are deliberately few. A unit is made indivisible only when splitting
- * it is a clear typesetting error *and* the decision does not depend on whether
- * the analyzer's dictionary happened to know the word — so the character class
- * of a morpheme's surface, not its part of speech, is what ultimately decides.
- * A morpheme the analyzer could not tag qualifies on exactly the same terms as a
- * confidently tagged one, which keeps the output stable across analyzers and
- * across dictionary versions.
+ * The cluster rules are deliberately few. A unit is made indivisible only when
+ * splitting it is a clear typesetting error *and* the decision does not depend
+ * on whether the analyzer's dictionary happened to know the word — so the
+ * character class of a morpheme's surface, not its part of speech, is what
+ * ultimately decides. A morpheme the analyzer could not tag qualifies on exactly
+ * the same terms as a confidently tagged one, which keeps the output stable
+ * across analyzers and across dictionary versions.
+ *
+ * Penalties are held to a weaker standard, because they express a preference the
+ * layout can decline rather than a constraint it must obey. That is what lets
+ * {@link TypographyHintOptions.keepWholePos} select morphemes by part of speech:
+ * an unrecognised conjunction keeps the penalty it would have had regardless, so
+ * a gap in the dictionary costs an improvement, never a different layout.
  *
  * `clusterIds` is emitted by default; everything else is opt-in. `breakPenalties`
  * changes which position the engine picks and so changes existing layouts, and
@@ -92,7 +113,10 @@ export function deriveTypographyHints(
   }
 
   if (options.penalties === true) {
-    hints.breakPenalties = buildBreakPenalties(morphemes, codepoints);
+    hints.breakPenalties = buildBreakPenalties(morphemes, codepoints, {
+      keepWhole: new Set(options.keepWholePos ?? DEFAULT_KEEP_WHOLE_POS),
+      keepWholePenalty: clampPenalty(options.keepWholePenalty ?? DEFAULT_KEEP_WHOLE_PENALTY),
+    });
   }
 
   if (options.tokenBoundaries === true) {
@@ -269,6 +293,14 @@ function mergeSpans(spans: Span[], maxChars: number): Span[] {
   return merged.filter((span) => span.end - span.start <= maxChars);
 }
 
+/** Resolved form of the caller's keep-whole settings. */
+interface KeepWholeRule {
+  /** POS and extended POS codes selecting the morphemes to keep whole. */
+  keepWhole: ReadonlySet<string>;
+  /** Penalty given to positions inside one of them. */
+  keepWholePenalty: number;
+}
+
 /**
  * Builds one break penalty per code point, `breakPenalties[i]` being the cost of
  * breaking after index `i`.
@@ -280,9 +312,12 @@ function mergeSpans(spans: Span[], maxChars: number): Span[] {
 function buildBreakPenalties(
   morphemes: readonly MorphemeLike[],
   codepoints: Uint32Array,
+  rule: KeepWholeRule,
 ): Uint8Array {
   const length = codepoints.length;
-  const applied = new Int8Array(length).fill(-1);
+  // Int16, not Int8: the sentinel needs a negative value and the caller may set
+  // a keep-whole penalty anywhere up to 255, which would wrap in a signed byte.
+  const applied = new Int16Array(length).fill(-1);
   const raise = (index: number, value: number): void => {
     if (index >= 0 && index < length && value > applied[index]) applied[index] = value;
   };
@@ -305,6 +340,13 @@ function buildBreakPenalties(
     raise(morpheme.end - 1, closesRun && runHasContent ? PENALTY_BUNSETSU : PENALTY_MORPHEME);
     if (isFunction) raise(morpheme.start - 1, PENALTY_BEFORE_FUNCTION_WORD);
     if (closesRun) runHasContent = false;
+
+    // Only the interior is raised. The boundaries either side of the morpheme
+    // are where a break escapes to, and pricing them as if they were inside it
+    // would leave the search nowhere cheaper to go.
+    if (keptWhole(morpheme, rule.keepWhole)) {
+      for (let i = morpheme.start; i < morpheme.end - 1; i++) raise(i, rule.keepWholePenalty);
+    }
   }
 
   const penalties = new Uint8Array(length);
@@ -312,6 +354,23 @@ function buildBreakPenalties(
     penalties[i] = applied[i] < 0 ? PENALTY_INSIDE_MORPHEME : applied[i];
   }
   return penalties;
+}
+
+/**
+ * True when a morpheme belongs to one of the parts of speech to keep whole.
+ *
+ * Both codes are consulted so that a caller naming a coarse part of speech
+ * selects every one of its inflections, while naming an extended code selects
+ * just that one.
+ */
+function keptWhole(morpheme: MorphemeLike, keepWhole: ReadonlySet<string>): boolean {
+  return keepWhole.has(morpheme.extendedPos) || keepWhole.has(morpheme.pos);
+}
+
+/** Brings a caller-supplied penalty into the range a `Uint8Array` can hold. */
+function clampPenalty(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_KEEP_WHOLE_PENALTY;
+  return Math.min(MAX_PENALTY, Math.max(0, Math.round(value)));
 }
 
 /** Collects each morpheme's last code point index, dropping the final one. */

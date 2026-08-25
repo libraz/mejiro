@@ -219,6 +219,8 @@ export class MejiroBook {
   // not something a font-size patch should do behind the caller's back.
   private analyzer?: TextAnalyzer;
   private wordAwareBreaking: 'off' | 'clusters' | 'full';
+  private keepWholePos?: readonly string[];
+  private keepWholePenalty?: number;
   private breakCost?: BreakCostOptions;
   // One notice per book: a broken analyzer would otherwise log once per paragraph.
   private analyzerWarned = false;
@@ -246,6 +248,8 @@ export class MejiroBook {
     };
     this.analyzer = options.analyzer;
     this.wordAwareBreaking = options.wordAwareBreaking ?? 'off';
+    this.keepWholePos = options.keepWholePos;
+    this.keepWholePenalty = options.keepWholePenalty;
     this.breakCost = options.breakCost;
   }
 
@@ -419,6 +423,8 @@ export class MejiroBook {
     }
     return deriveTypographyHints(text, analysis, {
       penalties: this.wordAwareBreaking === 'full',
+      ...(this.keepWholePos === undefined ? {} : { keepWholePos: this.keepWholePos }),
+      ...(this.keepWholePenalty === undefined ? {} : { keepWholePenalty: this.keepWholePenalty }),
     });
   }
 

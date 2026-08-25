@@ -66,6 +66,10 @@ export type {
   TypographyHintOptions,
   TypographyHints,
 } from './types.js';
-export { deriveTypographyHints, mergeClusterIds } from './typography-hints.js';
+export {
+  DEFAULT_KEEP_WHOLE_POS,
+  deriveTypographyHints,
+  mergeClusterIds,
+} from './typography-hints.js';
 export type { EditableSettings, FontChoice, PageHeaderData } from './ui-types.js';
 export { sanitizeUrl } from './url.js';
