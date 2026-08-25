@@ -6,8 +6,10 @@
  * cover the constructs the typography hints actually react to, in roughly the
  * proportions of ordinary body text:
  *
- * - narrative prose (12 sentences) — the bulk of any chapter, and the case where
- *   the hints have the least to say;
+ * - narrative prose (40 sentences) — the bulk of any chapter, and the case where
+ *   the hints have the least to say. About one in four opens with a conjunction,
+ *   which is what ordinary narrative does and what puts a closed-class
+ *   independent word at the head of a line;
  * - numerals with counters (10) — `12人`, `18時30分`, `第3章`, `4800円`, the units
  *   the cluster rules bind together;
  * - prefixed words (8) — `お名前`, `ご案内`, `未確認`, `不用意`, which the prefix rule
@@ -35,6 +37,34 @@ const NARRATIVE: readonly string[] = [
   '川沿いの道を選んだのは、遠回りになると知っていたからにほかならない。',
   '記憶というものは、都合のいいところだけを鮮やかに残していくものらしい。',
   '会議が終わったあとの部屋には、冷めた珈琲の匂いだけが残っていた。',
+  'しかし、その夜だけは灯りを落とさず、彼は机の前に座り続けていた。',
+  '駅前の古い時計は少し進んでいて、待ち合わせの相手はいつも先に着いていた。',
+  '雨上がりの舗道に映った看板の色が、通り過ぎる車のたびに揺れて崩れた。',
+  'だから、返事を書かないという選び方も、彼女なりの答えではあったのだろう。',
+  '台所の窓から差す光が、床に細長い線を引いて少しずつ動いていった。',
+  '長い坂を上りきったところで振り返ると、街はもう霞んで見えなかった。',
+  'そして誰もいなくなった廊下に、雨の音だけが規則正しく響いていた。',
+  '本を閉じる音がやけに大きく聞こえて、彼はそっと肩をすくめた。',
+  '夏の終わりの空気には、どこか焦げたような匂いが混じっている。',
+  'けれども、その約束が果たされることは、とうとう一度もなかった。',
+  '古い写真の裏には、色あせた文字で日付だけが書き添えられていた。',
+  '電話を切ったあとも、彼女はしばらく受話器を握ったままでいた。',
+  'ところが、扉を開けた先に広がっていたのは、見覚えのない中庭だった。',
+  '庭の隅に置き忘れられた椅子が、雪を載せたまま冬を越していた。',
+  '人の少ない車両で、彼は膝の上の鞄をずっと抱え直していた。',
+  'つまり、彼が黙っていた理由は、最初から一つしかなかったのだ。',
+  '棚の奥から出てきた鍵は、どの扉にも合わないまま机に残された。',
+  '夕方の教室には、日誌を書く鉛筆の音だけが細く続いていた。',
+  'したがって、残された時間で確かめられることは、ほとんど何もなかった。',
+  '橋の上で立ち止まると、川面を渡る風が思いのほか強かった。',
+  '知らない駅で降りてみたのは、ただ帰りたくなかったからだ。',
+  'あるいは、あの手紙は届かないほうがよかったのかもしれない。',
+  '母の話す昔のことは、聞くたびに少しずつ形を変えていった。',
+  '軒先に吊るされた風鈴が鳴り、その音で目を覚ますことが増えた。',
+  'すなわち、その日を境にして、二人の暮らしは静かに離れていった。',
+  '待合室の椅子は硬く、時計の針が動く音ばかりが耳についた。',
+  '言葉にしてしまえば消えるものがあると、彼はどこかで信じていた。',
+  'たとえば、窓を開ける音ひとつでも、彼女には合図のように聞こえた。',
 ];
 
 /** Numerals bound to counters — the main target of the cluster rules. */
