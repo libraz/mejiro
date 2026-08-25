@@ -164,7 +164,9 @@ optional peer dependency `@libraz/suzume` and mejiro can derive break hints from
 a morphological analysis: the first stage leaves break positions as the
 character-class rules chose them and only stops the ones that would split a unit
 it is a typesetting error to split, and a second stage adds per-position
-penalties that do move break positions. It is not "break at word boundaries" —
+penalties that do move break positions. That second stage also keeps a break
+from landing inside a conjunction or an adverb, and which parts of speech it
+treats that way is configurable. It is not "break at word boundaries" —
 Japanese body text is set by breaking wherever kinsoku allows, and word-edge
 breaks alone leave loose lines. The analyzer costs roughly 567 KB of WebAssembly
 with its dictionaries embedded, about 230 KB gzipped; without it everything else

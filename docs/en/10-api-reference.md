@@ -134,7 +134,13 @@ Converts morphological analyzer token lengths to boundary indices for `LayoutInp
 |---|---|
 | `deriveTypographyHints` | `(text: string, analysis: TextAnalysis, options?: TypographyHintOptions) => TypographyHints` |
 
-Turns one paragraph's morphological analysis into line breaking hints. `clusterIds` is emitted by default and everything else is opt-in, so the default output only removes break opportunities that splitting an indivisible unit would have used. A rule fires only when the character class of a morpheme's surface confirms it, which keeps the output stable across dictionary versions and across analyzers. An analysis whose `text` is not the paragraph it is applied to yields no hints at all rather than an error. Fields whose rules never fired are omitted, so a caller keeps its "no hints, no preprocessing" fast path. See [Line breaking](./03-line-breaking.md) for the rules and the two opt-in stages.
+Turns one paragraph's morphological analysis into line breaking hints. `clusterIds` is emitted by default and everything else is opt-in, so the default output only removes break opportunities that splitting an indivisible unit would have used. A cluster rule fires only when the character class of a morpheme's surface confirms it, which keeps the units it makes indivisible stable across dictionary versions and across analyzers; the penalty rules are free to consult the part of speech, because a penalty the dictionary never earns leaves the position at the value it would have had anyway. An analysis whose `text` is not the paragraph it is applied to yields no hints at all rather than an error. Fields whose rules never fired are omitted, so a caller keeps its "no hints, no preprocessing" fast path. See [Line breaking](./03-line-breaking.md) for the rules and the two opt-in stages.
+
+| Export | Value |
+|---|---|
+| `DEFAULT_KEEP_WHOLE_POS` | `['ADV', 'CONJ', 'DET', 'INTJ', 'PRON']` |
+
+The parts of speech `deriveTypographyHints()` keeps whole by default, as `TypographyHintOptions.keepWholePos`: the closed-class independent words — adverbs, conjunctions, adnominals, interjections and pronouns. Spread it to extend the default rather than replace it.
 
 | Export | Signature |
 |---|---|
@@ -276,8 +282,8 @@ unsafe links to plain text.
 **`BreakCostOptions`** -- Weights trading a penalised break position against the line it leaves behind. The cost of breaking after position `p` is `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where `shortfall(p)` is how far short of the line width the line ends, measured in em. Only the ratio of the two weights affects which position wins, so `{ penaltyWeight: 0.5, shortfallWeight: 1 }` and `{ penaltyWeight: 1, shortfallWeight: 2 }` break identically:
 
 - `penaltyWeight?: number` -- Multiplier on the penalty value (default: `1`)
-- `shortfallWeight?: number` -- Multiplier on the em-measured shortfall (default: `1.5`). Penalties run 0..3, so this caps the worst trade the search can make at `3 / shortfallWeight` em of empty line — 2 em at the default, which is what a character grid tolerates
-- `maxBacktrackChars?: number` -- How many positions the cost search may walk back from the overflowing character; bounding it keeps line breaking linear (default: `6`). A position `k` steps further back gives up at least `0.5k` em, so it can win only while `k < 6 * penaltyWeight / shortfallWeight`, and a wider window costs search time without changing the outcome
+- `shortfallWeight?: number` -- Multiplier on the em-measured shortfall (default: `1.5`). This caps the worst trade the search can make: escaping a position carrying penalty `P` buys at most `P / shortfallWeight` em of empty line, and `deriveTypographyHints()` emits at most `TypographyHintOptions.keepWholePenalty`, 4 by default, so the default weight caps that trade at 2.67 em
+- `maxBacktrackChars?: number` -- How many positions the cost search may walk back from the overflowing character; bounding it keeps line breaking linear (default: `6`). A position `k` steps further back gives up at least `0.5k` em, so it can win only while `k < 2 * penaltyWeight * P / shortfallWeight` for the largest penalty `P` in the array — `k < 5.33` at the default weights and the penalties `deriveTypographyHints()` emits, which is why six covers the search completely and a wider window costs search time without changing the outcome
 - `emSize?: number` -- Pixel size of one em (default: the largest measured advance in the paragraph, which is one em for any text containing a full-width character)
 
 **`KinsokuMode`** -- `'strict' | 'loose'`
@@ -320,6 +326,8 @@ unsafe links to plain text.
 - `tokenBoundaries?: boolean` -- Emit `tokenBoundaries` (default: `false`)
 - `tcy?: boolean` -- Emit `tcyCandidates` (default: `false`)
 - `maxHardClusterChars?: number` -- Longest run a single hard cluster may cover; a longer unit is left breakable, because a cluster that cannot fit a line is split by the forced-break rule, which disregards kinsoku (default: `6`)
+- `keepWholePos?: readonly string[]` -- Parts of speech whose morphemes a break should avoid landing inside (default: `DEFAULT_KEEP_WHOLE_POS`). A code matches a morpheme when it equals either its `extendedPos` or its `pos`, so `'VERB'` selects every verb while `'VERB_連用'` selects one conjugation. Pass `[]` to switch the rule off, or spread `DEFAULT_KEEP_WHOLE_POS` to extend it. Unlike the cluster rules this one does consult the part of speech, which is safe because a word the dictionary does not know keeps the penalty it would have had anyway: a gap costs an improvement, never a different layout
+- `keepWholePenalty?: number` -- Penalty given to a break strictly inside one of those morphemes, in place of the ordinary inside-a-morpheme penalty of 2 (default: `4`). A preference, not a prohibition: the cost search gives up at most `keepWholePenalty / shortfallWeight` em of line to escape the morpheme. In full-width text the scale moves in effective steps of two, since one point buys 0.67 em at the default weight and a full-width character is a whole em, so 4 is the first value that behaves differently from the 2 it replaces. Raising it much further needs `BreakCostOptions.maxBacktrackChars` widened to match, or the search cannot reach the position that would win. There is deliberately no length cap of the kind `maxHardClusterChars` puts on clusters, because an escape the search cannot afford is simply not taken
 
 **`TcyCandidate`** -- A run a renderer may set as tate-chu-yoko: `startIndex: number` (inclusive) / `endIndex: number` (exclusive).
 
@@ -941,6 +949,8 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `headingScale?: number` — Default heading scale (default: 1.4)
 - `analyzer?: TextAnalyzer` — Morphological analyzer used to derive line breaking hints. Consulted only when `wordAwareBreaking` asks for hints, and once per paragraph at layout time; a re-break (resize, font change, exclusion reflow) replays what the first pass produced. Read when a chapter is laid out, and not changeable through `setOptions()`
 - `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — How far the analyzer's findings reach into line breaking (default: `'off'`). `'clusters'` keeps break positions as the character-class rules would choose them, except where a break would have split a unit it is a typesetting error to split; `'full'` adds per-position penalties, which do move break positions
+- `keepWholePos?: readonly string[]` — Parts of speech a break should avoid landing inside, forwarded to `deriveTypographyHints()` as `TypographyHintOptions.keepWholePos` (default: `DEFAULT_KEEP_WHOLE_POS`). Read only under `'full'`, the only stage that emits penalties
+- `keepWholePenalty?: number` — Price of a break inside one of `keepWholePos`, forwarded to `deriveTypographyHints()` as `TypographyHintOptions.keepWholePenalty` (default: `4`)
 - `breakCost?: BreakCostOptions` — Weights for the penalty search. Forwarded to the line breaker, which ignores it unless break penalties are in play
 
 **`PageSize`**:

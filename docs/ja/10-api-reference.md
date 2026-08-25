@@ -134,7 +134,13 @@
 |---|---|
 | `deriveTypographyHints` | `(text: string, analysis: TextAnalysis, options?: TypographyHintOptions) => TypographyHints` |
 
-1 段落分の形態素解析結果から改行ヒントを導出します。既定で出力するのは `clusterIds` だけで、それ以外はすべて明示的な指定が必要です。したがって既定の出力が減らす改行候補は、分割すると組版として誤りになる単位を割ってしまう位置に限られます。規則が発火する条件は形態素の表層の文字種であり、品詞ではありません。そのため辞書のバージョンや解析器が変わっても出力は安定します。解析結果の `text` が適用先の段落と一致しない場合は、エラーではなくヒントなしを返します。発火しなかった規則のフィールドは省略されるので、呼び出し側は「ヒントがなければ前処理もしない」という高速パスをそのまま保てます。規則の内容と 2 段階のオプトインは [改行処理](./03-line-breaking.md) を参照してください。
+1 段落分の形態素解析結果から改行ヒントを導出します。既定で出力するのは `clusterIds` だけで、それ以外はすべて明示的な指定が必要です。したがって既定の出力が減らす改行候補は、分割すると組版として誤りになる単位を割ってしまう位置に限られます。クラスタ規則が発火する条件は形態素の表層の文字種であり、品詞ではありません。そのため、どの単位を不可分にするかは辞書のバージョンや解析器が変わっても安定します。罰則の規則は品詞を参照してかまいません。辞書がその語を知らなければ、その位置は結局もともと与えられるはずだった値のままになるからです。解析結果の `text` が適用先の段落と一致しない場合は、エラーではなくヒントなしを返します。発火しなかった規則のフィールドは省略されるので、呼び出し側は「ヒントがなければ前処理もしない」という高速パスをそのまま保てます。規則の内容と 2 段階のオプトインは [改行処理](./03-line-breaking.md) を参照してください。
+
+| エクスポート | 値 |
+|---|---|
+| `DEFAULT_KEEP_WHOLE_POS` | `['ADV', 'CONJ', 'DET', 'INTJ', 'PRON']` |
+
+`deriveTypographyHints()` が既定でまとまりを保つ品詞、すなわち `TypographyHintOptions.keepWholePos` の既定値です。中身は閉じたクラスの自立語で、副詞・接続詞・連体詞・感動詞・代名詞にあたります。既定を置き換えるのではなく広げたい場合は、この配列を展開して使ってください。
 
 | エクスポート | シグネチャ |
 |---|---|
@@ -266,8 +272,8 @@
 **`BreakCostOptions`** -- 罰則のある改行位置と、そこで改行した場合に残る行の空きを天秤にかける重み。位置 `p` の後ろで改行するコストは `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)` で、`shortfall(p)` は行が行長に対してどれだけ短く終わるかを em 単位で表した値です。どの位置が選ばれるかに効くのは 2 つの重みの比だけなので、`{ penaltyWeight: 0.5, shortfallWeight: 1 }` と `{ penaltyWeight: 1, shortfallWeight: 2 }` は同じ改行になります:
 
 - `penaltyWeight?: number` -- 罰則値に掛ける係数（既定: `1`）
-- `shortfallWeight?: number` -- em 単位の空きに掛ける係数（既定: `1.5`）。罰則は 0..3 の範囲なので、この係数が探索の最悪の取引を `3 / shortfallWeight` em の空きに制限する。既定では 2em で、これが文字グリッドの許容範囲
-- `maxBacktrackChars?: number` -- コスト探索があふれた文字から遡れる位置数。上限を設けることで改行処理は文字数に対して線形のままになる（既定: `6`）。`k` 個手前の位置は少なくとも `0.5k` em を捨てるため、勝てるのは `k < 6 * penaltyWeight / shortfallWeight` のあいだだけで、窓を広げても結果は変わらず探索時間だけが増える
+- `shortfallWeight?: number` -- em 単位の空きに掛ける係数（既定: `1.5`）。この係数が探索の最悪の取引を決める。罰則 `P` の位置を避けて買える空きは最大で `P / shortfallWeight` em であり、`deriveTypographyHints()` が出す罰則の上限は `TypographyHintOptions.keepWholePenalty`（既定 4）なので、既定の係数では最悪の取引が 2.67em に収まる
+- `maxBacktrackChars?: number` -- コスト探索があふれた文字から遡れる位置数。上限を設けることで改行処理は文字数に対して線形のままになる（既定: `6`）。`k` 個手前の位置は少なくとも `0.5k` em を捨てるため、配列中の最大の罰則を `P` として、勝てるのは `k < 2 * penaltyWeight * P / shortfallWeight` のあいだだけになる。既定の重みと `deriveTypographyHints()` が出す罰則では `k < 5.33` で、だからこそ 6 で探索は完全に覆われ、窓を広げても結果は変わらず探索時間だけが増える
 - `emSize?: number` -- 1em のピクセル値（既定: その段落で実測した最大の送り幅。全角文字を含むテキストではこれが 1em になる）
 
 **`KinsokuMode`** -- `'strict' | 'loose'`
@@ -310,6 +316,8 @@
 - `tokenBoundaries?: boolean` -- `tokenBoundaries` を出力する（既定: `false`）
 - `tcy?: boolean` -- `tcyCandidates` を出力する（既定: `false`）
 - `maxHardClusterChars?: number` -- 1 つのクラスタが覆える最大文字数。これを超える単位は分割可能なままにする。行に収まらないクラスタは禁則を無視する強制改行で割られてしまうため（既定: `6`）
+- `keepWholePos?: readonly string[]` -- 内部で改行しないよう避ける品詞（既定: `DEFAULT_KEEP_WHOLE_POS`）。コードは形態素の `extendedPos` または `pos` のどちらかと一致すれば適用されるので、`'VERB'` は動詞全体を、`'VERB_連用'` は 1 つの活用形だけを選ぶ。`[]` を渡すと規則を止められ、`DEFAULT_KEEP_WHOLE_POS` を展開すれば既定を広げられる。クラスタ規則と違いこの規則は品詞を参照するが、辞書にない語は結局同じ罰則のままになるため、辞書の欠けが招くのは改善が起きないことだけで、別のレイアウトにはならない
+- `keepWholePenalty?: number` -- そうした形態素の内部で改行する位置に与える罰則。形態素内部の通常の罰則 2 の代わりに使われる（既定: `4`）。禁止ではなく優先度であり、コスト探索がその形態素から抜けるために諦める行の空きは最大でも `keepWholePenalty / shortfallWeight` em。全角の本文では目盛りが実質 2 刻みで動く。既定の係数では罰則 1 点で買える空きが 0.67em、全角文字 1 つが 1em なので、置き換える対象の 2 と挙動が変わる最初の値が 4 になる。これより大きく上げる場合は `BreakCostOptions.maxBacktrackChars` も併せて広げないと、探索が勝つはずの位置まで届かない。`maxHardClusterChars` がクラスタに課すような長さの上限は意図的に設けていない。払えない回避はそもそも選ばれないため
 
 **`TcyCandidate`** -- 縦中横として組める範囲: `startIndex: number`（含む）/ `endIndex: number`（含まない）。
 
@@ -916,6 +924,8 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `headingScale?: number` — デフォルトの見出しスケール（デフォルト: 1.4）
 - `analyzer?: TextAnalyzer` — 改行ヒントの導出に使う形態素解析器。`wordAwareBreaking` がヒントを要求したときだけ、レイアウト時に段落ごとに 1 回呼ばれる。再改行（リサイズ、フォント変更、画像回り込みの再計算）では最初の解析結果をそのまま再利用する。参照されるのは章をレイアウトする時点で、`setOptions()` からは変更できない
 - `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — 解析結果を改行処理にどこまで及ばせるか（デフォルト: `'off'`）。`'clusters'` は、分割すると組版として誤りになる単位を割る位置を除けば、改行位置を文字種規則のままに保つ。`'full'` は位置ごとの罰則を加えるため、改行位置そのものが変わる
+- `keepWholePos?: readonly string[]` — 内部で改行しないよう避ける品詞。`deriveTypographyHints()` の `TypographyHintOptions.keepWholePos` にそのまま渡される（デフォルト: `DEFAULT_KEEP_WHOLE_POS`）。参照されるのは罰則を出す唯一の段階である `'full'` のときだけ
+- `keepWholePenalty?: number` — `keepWholePos` に該当する形態素の内部で改行する場合の値段。`deriveTypographyHints()` の `TypographyHintOptions.keepWholePenalty` にそのまま渡される（デフォルト: `4`）
 - `breakCost?: BreakCostOptions` — コスト探索の重み。改行処理へそのまま渡され、罰則が働いていない場合は無視される
 
 **`PageSize`**:

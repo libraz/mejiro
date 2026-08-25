@@ -441,6 +441,7 @@ const hinted = computeBreaks({
 | 1 | A morpheme boundary that does not close a bunsetsu |
 | 2 | Inside a morpheme, which is where the character-class rules would cut |
 | 3 | A break that cuts a base off the particle or auxiliary that follows it |
+| 4 | Inside a word the rules keep whole — a conjunction, adverb, adnominal, pronoun or interjection by default. See "Keeping a Word Whole" below |
 
 When penalties are present, the backward search stops taking the nearest valid position and takes the cheapest one within a bounded window instead. The cost of breaking after position `p` is:
 
@@ -448,9 +449,9 @@ When penalties are present, the backward search stops taking the nearest valid p
 penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)
 ```
 
-`shortfall(p)` is how far short of the line width the line ends, measured in em. At the defaults — `penaltyWeight` `1`, `shortfallWeight` `1.5` — a penalty of 2 is given up only while the alternative leaves the line less than 1.33 em short, and the heaviest penalty of 3 only while it leaves it less than 2 em short. That ceiling is the point of the weight: vertical Japanese is set on a character grid, where standard kinsoku shifts a line by one character and occasionally two, so buying a better break with three empty cells is more than the convention allows. Only the ratio of the two weights decides anything — scaling both scales every cost and cannot reorder them — so move one weight and leave the other where it is.
+`shortfall(p)` is how far short of the line width the line ends, measured in em. At the defaults — `penaltyWeight` `1`, `shortfallWeight` `1.5` — a penalty of 2 is given up only while the alternative leaves the line less than 1.33 em short, a penalty of 3 only while it leaves it less than 2 em short, and the heaviest penalty of 4 only while it leaves it less than 2.67 em short. That ceiling is the point of the weight: vertical Japanese is set on a character grid, where standard kinsoku shifts a line by one character and occasionally two, so a weight of `1` — at which the heaviest penalty buys four empty cells — reaches well past what the convention allows. Only the ratio of the two weights decides anything — scaling both scales every cost and cannot reorder them — so move one weight and leave the other where it is.
 
-The window is `maxBacktrackChars` positions wide (6 by default), which is what keeps line breaking linear in the text length. Six is also the point past which a candidate cannot win, so a wider window only costs search time: a position `k` steps further back gives up at least `0.5k` em of line, a half-width character being the narrowest thing that can sit between the two, and with penalties capped at 3 it can win only while `k < 6 * penaltyWeight / shortfallWeight` — `k < 6` at equal weights, `k < 4` at the defaults. A window holding no valid position at all falls through to the unbounded search of section 1, so a long run of line-start prohibited characters is still handled.
+The window is `maxBacktrackChars` positions wide (6 by default), which is what keeps line breaking linear in the text length. Six is also the point past which a candidate cannot win, so a wider window only costs search time: a position `k` steps further back gives up at least `0.5k` em of line, a half-width character being the narrowest thing that can sit between the two, so against the largest penalty `P` in the array it can win only while `k < 2 * penaltyWeight * P / shortfallWeight` — `k < 5.33` at the default weights and the penalties `deriveTypographyHints()` emits, which is why six covers the search completely. A caller that both flattens the weights towards `1` and raises the keep-whole penalty pushes that bound past six and should widen the window to match, or the search will not reach the position its own settings say should win. A window holding no valid position at all falls through to the unbounded search of section 1, so a long run of line-start prohibited characters is still handled.
 
 Penalties supersede both `tokenBoundaries` and the whitespace preference.
 
@@ -482,6 +483,65 @@ const hinted = computeBreaks({ text, advances, lineWidth: 96, breakPenalties });
 
 Tune the trade-off through `breakCost`: raise `penaltyWeight` to respect the analysis more strictly, raise `shortfallWeight` to keep lines full. Raising both moves nothing, since only their ratio is read.
 
+### Keeping a Word Whole
+
+The penalty of 4 is the one value in the table a caller chooses rather than reads off the structure. `keepWholePos` names the parts of speech a break should avoid landing inside, and every position *strictly inside* such a morpheme carries `keepWholePenalty` in place of the ordinary inside-a-morpheme 2. The boundaries on either side keep their own values, because those are where a break escapes to.
+
+The default set is the closed-class independent words, exported as `DEFAULT_KEEP_WHOLE_POS`:
+
+| Code | Part of speech |
+|---|---|
+| `ADV` | Adverb |
+| `CONJ` | Conjunction |
+| `DET` | Adnominal |
+| `INTJ` | Interjection |
+| `PRON` | Pronoun |
+
+These words are short, mostly written in kana, and read as a single unit, so a break inside one is conspicuous in a way a break inside a kanji compound is not: `国際|連合` still reads, `した|がって` does not. Being closed classes, they are also the words an analyzer's dictionary is most likely to know.
+
+A code matches when it equals either the morpheme's `extendedPos` or its `pos`, so `'VERB'` selects every verb while `'VERB_連用'` selects one conjugation. Pass `[]` to switch the rule off, or spread the default to extend rather than replace it — formal nouns are the usual addition:
+
+```ts
+import { DEFAULT_KEEP_WHOLE_POS, deriveTypographyHints } from '@libraz/mejiro';
+
+const hints = deriveTypographyHints(text, analysis, {
+  penalties: true,
+  keepWholePos: [...DEFAULT_KEEP_WHOLE_POS, 'NOUN_形式'],
+});
+```
+
+This is the one rule that consults the part of speech, which the cluster rules refuse to do. The difference is what the two kinds of rule decide. A cluster changes what is *legal*, so a gap in the dictionary would change the layout. A penalty changes only what is *preferred*: a word the dictionary does not know keeps the penalty it would have had anyway, so the worst outcome of a gap is no improvement, never a different layout.
+
+For the same reason there is no length cap of the kind `maxHardClusterChars` puts on clusters. A long cluster needs a guard because a cluster that cannot fit a line is split by the forced-break rule, which disregards kinsoku; a long keep-whole morpheme needs none, because an escape the search cannot afford is simply not taken.
+
+### Choosing the Keep-Whole Penalty
+
+The value is a price, not a switch, and raising it buys fewer breaks inside these words at the cost of emptier line ends. The figures below come from a 20,046-character corpus of Japanese prose (133 paragraphs) with a 16 px em and the default weights. The corpus holds 733 keep-whole morphemes covering 1,777 characters, 8.9% of the text. A paragraph's last line is left out of every count: its shortfall says where the text ran out, not what the search decided.
+
+At a 24 em measure, roughly 750 break positions:
+
+| Setting | Breaks landing inside such a word | Mean shortfall | Lines 1.5 em or more short | Worst line |
+|---|---|---|---|---|
+| No penalties at all (clusters only) | 42 (5.8%) | 0.058 em | 1.4% | 2.00 em |
+| Rule off (`keepWholePos: []`) | 15 (2.0%) | 0.295 em | 3.4% | 2.00 em |
+| `keepWholePenalty: 4` (default) | 10 (1.4%) | 0.317 em | 4.5% | 2.00 em |
+| `keepWholePenalty: 5` and above | 0 (0.0%) | 0.363 em | 5.9% | 3.00 em |
+
+A `keepWholePenalty` of 2 *is* the rule switched off, since 2 is what the position would carry anyway. Three behaves identically to two at every measure, and that is arithmetic rather than coincidence: at `shortfallWeight` `1.5` one point of penalty buys 0.67 em of empty line, and a full-width character is a whole em, so a single point can never carry a break past even one more character. In full-width text the scale therefore moves in effective steps of two — 0 and 1 alike, 2 and 3 alike — and 4 is the first value genuinely different from the inside-a-morpheme default. That is why the default is 4 rather than 3. In a Latin run, where a character is half an em, a single point does pay, so this is a property of the grid rather than a law of the scale.
+
+At a 32 em measure:
+
+| Setting | Breaks landing inside such a word | Mean shortfall | Lines 1.5 em or more short | Worst line |
+|---|---|---|---|---|
+| No penalties at all (clusters only) | 24 (4.7%) | 0.158 em | 2.6% | 2.00 em |
+| Rule off (`keepWholePos: []`) | 15 (2.9%) | 0.326 em | 6.7% | 2.00 em |
+| `keepWholePenalty: 4` (default) | 4 (0.8%) | 0.362 em | 8.8% | 2.50 em |
+| `keepWholePenalty: 5` and above | 0 (0.0%) | 0.369 em | 9.0% | 3.50 em |
+
+The rule reaches every measure rather than only narrow ones. Across 40, 48 and 56 em the rule off leaves 7, 12 and 4 breaks inside these words and the default leaves 3, 5 and 2: 48 em bites harder than 40 em, because break positions fall where the text puts them rather than in proportion to the measure. Only at 56 em does the effect begin to fall off.
+
+The default is cheap rather than free. At 24 em it removes a third of the breaks the structural penalties leave inside these words and holds the worst line where the rule off already had it; at 32 em it removes eleven of fifteen and takes the worst line from 2.00 to 2.50 em. Five clears the last of them at every measure and pays with a hole of 3.00 to 3.50 em, which a character grid does not absorb.
+
 ### Using It Through MejiroBook
 
 `MejiroBook` runs the whole path for you. Set an analyzer and pick a stage:
@@ -499,6 +559,8 @@ const book = new MejiroBook({
   wordAwareBreaking: 'clusters',
 });
 ```
+
+`BookOptions.keepWholePos` and `BookOptions.keepWholePenalty` forward to `deriveTypographyHints()` unchanged. They are read only under `'full'`, the one stage that emits penalties.
 
 `createSuzumeAnalyzer()` rejects when the optional peer dependency `@libraz/suzume` is not installed, because calling it is an explicit request for that analyzer. A caller that would rather degrade quietly catches the rejection and constructs the book without an analyzer.
 
