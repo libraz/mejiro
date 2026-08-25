@@ -1,4 +1,10 @@
-import { computeBreaks, deriveTypographyHints, toCodepoints } from '@libraz/mejiro';
+import {
+  computeBreaks,
+  DEFAULT_KEEP_WHOLE_POS,
+  deriveTypographyHints,
+  type TextAnalysis,
+  toCodepoints,
+} from '@libraz/mejiro';
 import { createSuzumeAnalyzer, type TextAnalyzer } from '@libraz/mejiro/analysis';
 import { parseFlag, parsePositiveNumber } from './args.js';
 import { buildCorpusParagraphs } from './corpus.js';
@@ -22,7 +28,7 @@ const WIDTH_SWEEP_EM: readonly number[] = [24, 32, 40, 48, 56];
 /** Backtrack window sizes the cost search is swept over. */
 const WINDOW_SWEEP: readonly number[] = [1, 2, 4, 6, 8, 12, 16, 24, 32];
 /** The window the weight sweep runs at, which is the engine's default. */
-const DEFAULT_MAX_BACKTRACK_CHARS = 8;
+const DEFAULT_MAX_BACKTRACK_CHARS = 6;
 /** Penalty and shortfall weight pairs the search is swept over. */
 const WEIGHT_SWEEP: readonly (readonly [number, number])[] = [
   [1, 1],
@@ -33,6 +39,11 @@ const WEIGHT_SWEEP: readonly (readonly [number, number])[] = [
   [0.5, 1],
   [2, 1],
 ];
+/**
+ * Keep-whole penalties the whole-corpus pass is swept over. Two is the ordinary
+ * inside-a-morpheme penalty, so that row is the rule switched off.
+ */
+const KEEP_WHOLE_SWEEP: readonly number[] = [2, 3, 4, 5, 6, 8];
 
 /** The text and the measured advances every section of the benchmark shares. */
 interface Corpus {
@@ -50,10 +61,28 @@ interface PreparedHints {
   clusterIds: Uint32Array;
   /** Per-position break penalties, spliced from the per-paragraph hints. */
   breakPenalties: Uint8Array;
+  /**
+   * The analyses the hints came from, one per paragraph and in the same order.
+   *
+   * They are kept because deriving hints again is cheap while analysing again
+   * is not, so a sweep over a hint setting re-derives from these rather than
+   * running the analyzer once per value.
+   */
+  analyses: readonly TextAnalysis[];
   /** Wall-clock time spent inside the analyzer, in ms. */
   analyzeMs: number;
   /** Wall-clock time spent deriving hints from the analyses, in ms. */
   deriveMs: number;
+}
+
+/** Where the keep-whole rule reaches, in whole-corpus coordinates. */
+interface KeepWholeCoverage {
+  /** 1 at every position where a break lands strictly inside such a morpheme. */
+  inside: Uint8Array;
+  /** How many morphemes the rule selected. */
+  morphemes: number;
+  /** How many characters those morphemes cover. */
+  chars: number;
 }
 
 /** The layout arguments that vary between the benchmark's break calls. */
@@ -83,9 +112,10 @@ interface Slice {
 /**
  * Runs the analysis-driven line breaking benchmark and writes its report.
  *
- * The report answers four questions in order: what analysis costs, how that
- * compares to the line breaking it feeds, what the hints add to every later
- * re-break, and how far the layout they produce moves.
+ * The report works outwards from what the analysis costs to what it decides:
+ * how that cost compares to the line breaking it feeds, what the hints add to
+ * every later re-break, how far the layout they produce moves, and what each
+ * setting the caller is offered does to the lines a reader ends up with.
  *
  * @param args - Command arguments, after the command name.
  * @param io - Where the report is written.
@@ -114,6 +144,7 @@ export async function runBenchAnalysis(args: string[], io: BenchIO): Promise<num
     const lines = collectContestedLines(corpus, hints, lineWidth);
     writeWindowSweep(io, corpus, hints, lines, lineWidth, iterations);
     writeWeightSweep(io, corpus, hints, lines, lineWidth);
+    writeKeepWholeSweep(io, corpus, hints);
   } finally {
     analyzer.dispose();
   }
@@ -146,6 +177,7 @@ function prepareHints(corpus: Corpus, analyzer: TextAnalyzer): PreparedHints {
   const clusterIds = new Uint32Array(length);
   for (let i = 0; i < length; i++) clusterIds[i] = i;
   const breakPenalties = new Uint8Array(length);
+  const analyses: TextAnalysis[] = [];
 
   let analyzeMs = 0;
   let deriveMs = 0;
@@ -155,6 +187,7 @@ function prepareHints(corpus: Corpus, analyzer: TextAnalyzer): PreparedHints {
     const analyzeStart = performance.now();
     const analysis = analyzer.analyze(paragraph);
     analyzeMs += performance.now() - analyzeStart;
+    analyses.push(analysis);
 
     const deriveStart = performance.now();
     const hints = deriveTypographyHints(paragraph, analysis, { clusters: true, penalties: true });
@@ -174,7 +207,73 @@ function prepareHints(corpus: Corpus, analyzer: TextAnalyzer): PreparedHints {
     offset += paragraphLength + 1;
   }
 
-  return { clusterIds, breakPenalties, analyzeMs, deriveMs };
+  return { clusterIds, breakPenalties, analyses, analyzeMs, deriveMs };
+}
+
+/**
+ * Re-derives the break penalties at one keep-whole penalty and splices them
+ * into whole-corpus coordinates, the same way {@link prepareHints} does.
+ *
+ * Only the penalty values change between settings, so the analyses are reused
+ * as they are: running the analyzer once per swept value would find the same
+ * morphemes again at many times the cost of deriving from them.
+ */
+function penaltiesAt(corpus: Corpus, hints: PreparedHints, keepWholePenalty: number): Uint8Array {
+  const breakPenalties = new Uint8Array(corpus.codepoints.length);
+  let offset = 0;
+
+  for (let p = 0; p < corpus.paragraphs.length; p++) {
+    const paragraph = corpus.paragraphs[p];
+    const derived = deriveTypographyHints(paragraph, hints.analyses[p], {
+      clusters: false,
+      penalties: true,
+      keepWholePenalty,
+    });
+
+    const paragraphLength = toCodepoints(paragraph).length;
+    if (derived.breakPenalties) {
+      for (let i = 0; i < paragraphLength; i++) {
+        breakPenalties[offset + i] = derived.breakPenalties[i];
+      }
+    }
+    offset += paragraphLength + 1;
+  }
+
+  return breakPenalties;
+}
+
+/**
+ * Marks the positions a break would land strictly inside a keep-whole morpheme,
+ * in whole-corpus coordinates.
+ *
+ * The span marked is the one the penalty covers, not the whole morpheme: the
+ * boundaries either side of it are where a break escapes to, so counting them
+ * as landing inside would make the rule look as if it never worked.
+ */
+function collectKeepWhole(corpus: Corpus, hints: PreparedHints): KeepWholeCoverage {
+  const keepWhole = new Set(DEFAULT_KEEP_WHOLE_POS);
+  const inside = new Uint8Array(corpus.codepoints.length);
+  let morphemes = 0;
+  let chars = 0;
+  let offset = 0;
+
+  for (let p = 0; p < corpus.paragraphs.length; p++) {
+    const paragraph = corpus.paragraphs[p];
+    const analysis = hints.analyses[p];
+    // An analysis addressing different text is what deriveTypographyHints
+    // discards, and its offsets would mark spans the penalties never touched.
+    if (analysis.text === paragraph) {
+      for (const morpheme of analysis.morphemes) {
+        if (!(keepWhole.has(morpheme.extendedPos) || keepWhole.has(morpheme.pos))) continue;
+        morphemes++;
+        chars += morpheme.end - morpheme.start;
+        for (let i = morpheme.start; i < morpheme.end - 1; i++) inside[offset + i] = 1;
+      }
+    }
+    offset += toCodepoints(paragraph).length + 1;
+  }
+
+  return { inside, morphemes, chars };
 }
 
 /** Writes what the numbers below were measured on. */
@@ -454,6 +553,131 @@ function writeWeightSweep(
     );
   }
   io.stdout.write('\n');
+}
+
+/** What one keep-whole setting did, measured over a whole-corpus break pass. */
+interface KeepWholeStats {
+  /** Lines the pass closed with a break of its own, which the shares are of. */
+  lines: number;
+  /** Breaks that landed strictly inside a keep-whole morpheme. */
+  inside: number;
+  /** Mean shortfall of those lines, in em. */
+  shortfall: number;
+  /** Share of them left visibly loose, in percent. */
+  loosePercent: number;
+  /** The largest shortfall any one line was left with, in em. */
+  maxShortfall: number;
+}
+
+/**
+ * Writes what the keep-whole rule catches and what avoiding it costs.
+ *
+ * The measure is swept alongside the penalty because where a break falls is not
+ * a smooth function of the width. A wider measure does not steadily give the
+ * rule less to do — the count moves up and down between the widths below — so
+ * any single width is one sample of a jagged surface, and reading a default off
+ * it would be reading the sample rather than the rule.
+ *
+ * A row is a whole-corpus pass at the default weights and window, so it counts
+ * every line the layout produced rather than the contested ones section 5
+ * selects. The `clusters` row carries no penalties at all and is the floor,
+ * showing where the breaks fall before any penalty asks for anything, and
+ * penalty 2 is the keep-whole rule switched off with the structural penalties
+ * left on, being the ordinary inside-a-morpheme penalty. The two together
+ * separate what the structure already buys from what the rule adds.
+ *
+ * The last column is what settles the default. Clearing the final few breaks
+ * is always available at a high enough penalty — one buys up to
+ * `keepWholePenalty / shortfallWeight` em of empty line — and the worst line is
+ * where that purchase becomes visible.
+ */
+function writeKeepWholeSweep(io: BenchIO, corpus: Corpus, hints: PreparedHints): void {
+  const coverage = collectKeepWhole(corpus, hints);
+  const covered = (coverage.chars / corpus.codepoints.length) * 100;
+  // The penalties depend on the analyses and not on the measure, so each swept
+  // value is derived once rather than once per cell.
+  const penalties = KEEP_WHOLE_SWEEP.map((value) => penaltiesAt(corpus, hints, value));
+
+  io.stdout.write('7. Breaks landing inside a keep-whole word, whole-corpus pass\n');
+  io.stdout.write(
+    `  corpus holds ${coverage.morphemes} keep-whole morphemes over ${coverage.chars} of ` +
+      `${corpus.codepoints.length} chars (${covered.toFixed(1)}%)\n`,
+  );
+  io.stdout.write(
+    `  ${pad('width', 8)}${pad('penalty', 10)}${pad('inside', 9)}${pad('share', 9)}` +
+      `${pad('shortfall', 11)}${pad(`>=${LOOSE_LINE_EM}em`, 10)}max em\n`,
+  );
+
+  for (const widthEm of WIDTH_SWEEP_EM) {
+    const lineWidth = widthEm * EM_SIZE;
+    const width = `${widthEm}em`;
+    const clusters = breaksOf(corpus, { lineWidth, clusterIds: hints.clusterIds });
+    const floor = measureKeepWhole(corpus, coverage, clusters, lineWidth);
+    writeKeepWholeRow(io, width, 'clusters', floor);
+
+    for (let v = 0; v < KEEP_WHOLE_SWEEP.length; v++) {
+      const breaks = breaksOf(corpus, {
+        lineWidth,
+        clusterIds: hints.clusterIds,
+        breakPenalties: penalties[v],
+      });
+      const stats = measureKeepWhole(corpus, coverage, breaks, lineWidth);
+      writeKeepWholeRow(io, width, String(KEEP_WHOLE_SWEEP[v]), stats);
+    }
+  }
+  io.stdout.write('\n');
+}
+
+/** Writes one keep-whole row: how often a break landed inside, and at what cost. */
+function writeKeepWholeRow(io: BenchIO, width: string, label: string, stats: KeepWholeStats): void {
+  const share = stats.lines > 0 ? (stats.inside / stats.lines) * 100 : 0;
+  io.stdout.write(
+    `  ${pad(width, 8)}${pad(label, 10)}${pad(String(stats.inside), 9)}` +
+      `${pad(`${share.toFixed(1)}%`, 9)}${pad(stats.shortfall.toFixed(3), 11)}` +
+      `${pad(`${stats.loosePercent.toFixed(1)}%`, 10)}${stats.maxShortfall.toFixed(2)}\n`,
+  );
+}
+
+/**
+ * Summarises one whole-corpus break pass against the keep-whole coverage.
+ *
+ * Lines closed by a line feed are left out. Such a line ends where its
+ * paragraph does rather than where a break decision put it, so its shortfall
+ * describes the corpus and would swamp both the mean and the maximum.
+ */
+function measureKeepWhole(
+  corpus: Corpus,
+  coverage: KeepWholeCoverage,
+  breaks: Uint32Array,
+  lineWidth: number,
+): KeepWholeStats {
+  let lines = 0;
+  let inside = 0;
+  let shortfallSum = 0;
+  let loose = 0;
+  let maxShortfall = 0;
+  let start = 0;
+
+  for (const bp of breaks) {
+    if (corpus.codepoints[bp] !== LINE_FEED) {
+      const shortfall = (lineWidth - lineWidthOf(corpus, start, bp - start)) / EM_SIZE;
+      lines++;
+      inside += coverage.inside[bp];
+      shortfallSum += shortfall;
+      if (shortfall >= LOOSE_LINE_EM) loose++;
+      if (shortfall > maxShortfall) maxShortfall = shortfall;
+    }
+    start = bp + 1;
+  }
+
+  const count = Math.max(lines, 1);
+  return {
+    lines,
+    inside,
+    shortfall: shortfallSum / count,
+    loosePercent: (loose / count) * 100,
+    maxShortfall,
+  };
 }
 
 /** Runs the cost search on every contested line and returns the chosen positions. */
