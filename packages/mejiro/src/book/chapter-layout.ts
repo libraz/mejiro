@@ -1066,12 +1066,10 @@ export class ChapterLayout {
       preParaLineStarts.push(preTotal);
       preTotal += entry.breakPoints.length + 1;
     }
-    const preSpreadStarts = prePages
-      .filter((_, pageIndex) => pageIndex % 2 === 0)
-      .map((slices) => {
-        const first = slices[0];
-        return first ? preParaLineStarts[first.paragraphIndex] + first.lineStart : preTotal;
-      });
+    const prePageStarts = prePages.map((slices) => {
+      const first = slices[0];
+      return first ? preParaLineStarts[first.paragraphIndex] + first.lineStart : preTotal;
+    });
 
     // Compute exclusion for each spread that has images
     const spreadEngine = new SpreadExclusionEngine({
@@ -1091,7 +1089,13 @@ export class ChapterLayout {
         continue;
       }
       spreadEngine.clearImages();
-      const spreadStartLine = preSpreadStarts[si] ?? si * normalLinesPerSpread;
+      // Column offsets restart on each page, so each page is measured from its own first line.
+      const rightStartLine = prePageStarts[si * 2] ?? si * normalLinesPerSpread;
+      const leftStartLine =
+        prePageStarts[si * 2 + 1] ?? si * normalLinesPerSpread + normalLinesPerPage;
+      // Distance of a spread x from the right content edge of the page that holds it.
+      const rightFromEdge = (x: number): number => this.size.pageWidth - this.size.pagePaddingX - x;
+      const leftFromEdge = (x: number): number => -this.size.pagePaddingX - x;
       for (const img of imgs) {
         const margin = img.margin ?? fontSize;
         const crossesSpine = img.x < 0 && img.x + img.w > 0;
@@ -1102,9 +1106,13 @@ export class ChapterLayout {
           const rightW = img.x + img.w; // portion on right page (x >= 0)
           if (rightW > 0) {
             const rCenter = rightW / 2;
-            const fromRight = this.size.pageWidth - this.size.pagePaddingX - rCenter;
-            const col = findPhysicalColumn(preMetrics.offsets, spreadStartLine, fromRight, lp);
-            const rAdj = getImageXOffset(preMetrics.offsets, spreadStartLine, col);
+            const col = findPhysicalColumn(
+              preMetrics.offsets,
+              rightStartLine,
+              rightFromEdge(rCenter),
+              lp,
+            );
+            const rAdj = getImageXOffset(preMetrics.offsets, rightStartLine, col);
             spreadEngine.addImage({
               x: rAdj,
               y: img.y,
@@ -1116,9 +1124,13 @@ export class ChapterLayout {
           const leftW = -img.x; // portion on left page (x < 0)
           if (leftW > 0) {
             const lCenter = img.x + leftW / 2;
-            const fromRight = -lCenter;
-            const col = findPhysicalColumn(preMetrics.offsets, spreadStartLine, fromRight, lp);
-            const lAdj = getImageXOffset(preMetrics.offsets, spreadStartLine, col);
+            const col = findPhysicalColumn(
+              preMetrics.offsets,
+              leftStartLine,
+              leftFromEdge(lCenter),
+              lp,
+            );
+            const lAdj = getImageXOffset(preMetrics.offsets, leftStartLine, col);
             spreadEngine.addImage({
               x: img.x + lAdj,
               y: img.y,
@@ -1133,13 +1145,21 @@ export class ChapterLayout {
           const onLeft = center < 0;
           let xAdj = 0;
           if (onRight) {
-            const fromRight = this.size.pageWidth - this.size.pagePaddingX - center;
-            const col = findPhysicalColumn(preMetrics.offsets, spreadStartLine, fromRight, lp);
-            xAdj = getImageXOffset(preMetrics.offsets, spreadStartLine, col);
+            const col = findPhysicalColumn(
+              preMetrics.offsets,
+              rightStartLine,
+              rightFromEdge(center),
+              lp,
+            );
+            xAdj = getImageXOffset(preMetrics.offsets, rightStartLine, col);
           } else if (onLeft) {
-            const fromRight = -center;
-            const col = findPhysicalColumn(preMetrics.offsets, spreadStartLine, fromRight, lp);
-            xAdj = getImageXOffset(preMetrics.offsets, spreadStartLine, col);
+            const col = findPhysicalColumn(
+              preMetrics.offsets,
+              leftStartLine,
+              leftFromEdge(center),
+              lp,
+            );
+            xAdj = getImageXOffset(preMetrics.offsets, leftStartLine, col);
           }
           spreadEngine.addImage({
             x: img.x + xAdj,

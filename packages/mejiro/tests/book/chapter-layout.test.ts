@@ -901,6 +901,55 @@ describe('ChapterLayout', () => {
     });
   });
 
+  describe('left-page image exclusion with paragraph gaps', () => {
+    // fontSize 10, lineSpacing 1 → pitch 10; paragraph gap 0.4em → 4px.
+    // pageWidth 120 with 10px padding → 100px content, 10 body columns.
+    const PAD_X = 10;
+    const PITCH = 10;
+
+    /** One gap-free paragraph fills the right page; one-line paragraphs fill the left. */
+    function makeGappedLayout(): ChapterLayout {
+      const texts = ['あ'.repeat(100), ...Array.from({ length: 30 }, () => 'い'.repeat(10))];
+      const cached: CachedParagraph[] = texts.map((text) => ({
+        text: toCodepoints(text),
+        advances: uniformAdvances([...text].length, 10),
+        chars: chars(text),
+        inlineAnnotations: [],
+      }));
+      const entries: RenderEntry[] = texts.map((text) => ({
+        chars: chars(text),
+        breakPoints: computedBreakPoints([...text].length),
+        inlineAnnotations: [],
+      }));
+      return new ChapterLayout(
+        cached,
+        entries,
+        { fontSize: 10, lineSpacing: 1, headingScale: 1.4, mode: 'strict', enableHanging: true },
+        { pageWidth: 120, lineWidth: 100, pagePaddingX: PAD_X, pagePaddingY: 0 },
+      );
+    }
+
+    it('keeps text out of every left-page column the drawn image covers', () => {
+      const layout = makeGappedLayout();
+      // Left-page columns sit at xPos 0, 14, 28, 42, 56, …; the image covers
+      // xPos 44–62 from the left page's right content edge.
+      const image = { x: -PAD_X - 62, y: 20, w: 18, h: 40, margin: 0 };
+      layout.setImages(0, [image]);
+
+      const left = layout.getSpread(0).left;
+      expect(left.hasImages).toBe(true);
+      // A slot's column spans [-PAD_X - xPos - pitch, -PAD_X - xPos] in right-page coordinates.
+      const intruding = left.slots.filter((slot) => {
+        const colLeft = -PAD_X - slot.xPos - PITCH;
+        const colRight = -PAD_X - slot.xPos;
+        const overlapsX = colRight > image.x && colLeft < image.x + image.w;
+        const overlapsY = slot.yStart + slot.height > image.y && slot.yStart < image.y + image.h;
+        return overlapsX && overlapsY;
+      });
+      expect(intruding).toEqual([]);
+    });
+  });
+
   describe('paragraph kind across re-breaks', () => {
     const KINDS: ParagraphKind[] = ['heading', 'body', 'blockquote', 'sceneBreak', 'pre', 'figure'];
 
