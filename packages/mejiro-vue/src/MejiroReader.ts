@@ -762,10 +762,9 @@ export const MejiroReader = defineComponent({
       capture(layout: ChapterLayout): InChapterAnchor | null {
         if (props.spreadIdx != null) return null;
         if (visibleAnchor?.layout === layout) return visibleAnchor.anchor;
-        return layout.anchorAt(
-          spreadCtx.layoutSpreadIdx.value,
-          spreadCtx.singleSide.value ?? 'right',
-        );
+        // Same anchor resolution as `getAnchor`: skips image-blocked pages and
+        // handles single mode.
+        return spreadCtx.anchorAt(spreadCtx.spreadIdx.value);
       },
       restore(layout: ChapterLayout, anchor: InChapterAnchor): void {
         const loc = layout.locateAnchor(anchor);

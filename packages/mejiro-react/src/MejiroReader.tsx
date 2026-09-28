@@ -796,10 +796,10 @@ function MejiroReaderInner(
   // geometry and spread index without re-creating `recompute`.
   const pageGeometryRef = useRef(resolvedGeometry);
   pageGeometryRef.current = resolvedGeometry;
-  const curPositionRef = useRef<{ layoutSpreadIdx: number; side: 'right' | 'left' }>({
-    layoutSpreadIdx: 0,
-    side: 'right',
-  });
+  // Reads the current position through the same anchor resolution `getAnchor`
+  // uses (skips image-blocked pages, handles single mode); set once `spreadCtx`
+  // exists below.
+  const spreadAnchorRef = useRef<() => InChapterAnchor | null>(() => null);
   const spreadIdxPropRef = useRef(spreadIdxProp);
   spreadIdxPropRef.current = spreadIdxProp;
 
@@ -818,8 +818,7 @@ function MejiroReaderInner(
       if (spreadIdxPropRef.current != null) return null;
       const visible = visibleAnchorRef.current;
       if (visible?.layout === layout) return visible.anchor;
-      const pos = curPositionRef.current;
-      return layout.anchorAt(pos.layoutSpreadIdx, pos.side);
+      return spreadAnchorRef.current();
     },
   });
 
@@ -833,10 +832,7 @@ function MejiroReaderInner(
     single: effectiveSingle,
     onChange: (i) => spreadChangedRef.current?.(i),
   });
-  curPositionRef.current = {
-    layoutSpreadIdx: spreadCtx.layoutSpreadIdx,
-    side: spreadCtx.singleSide ?? 'right',
-  };
+  spreadAnchorRef.current = () => spreadCtx.anchorAt(spreadCtx.spreadIdx);
   const indexOfPageRef = useRef(spreadCtx.indexOfPage);
   indexOfPageRef.current = spreadCtx.indexOfPage;
   // A single/double flip keeps the anchor of the page that was on screen: the

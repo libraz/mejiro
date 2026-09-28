@@ -12,7 +12,7 @@ import {
 import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
-import type { MultiImageItem } from './useMultiImageOverlay.js';
+import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js';
 
 // Shared default, so an omitted `images` never re-reads the pages.
 const NO_IMAGES: MultiImageItem[] = [];
@@ -53,10 +53,12 @@ export interface MejiroScrollViewProps {
    * `pageIdx` addresses. An entry may carry a `color` fill.
    */
   selectionRects?: readonly (AnchorRect & { color?: string })[];
-  /** Zero-based spread whose right page carries {@link MejiroScrollViewProps.images}. */
+  /** Zero-based spread whose pages carry {@link MejiroScrollViewProps.images}. */
   spreadIdx?: number;
   /**
-   * Image overlays on the right page of {@link MejiroScrollViewProps.spreadIdx}.
+   * Image overlays on the spread at {@link MejiroScrollViewProps.spreadIdx}.
+   * Each renders on the page whose area contains its centre (see
+   * `overlayPageSide`), matching {@link MejiroSpread}'s single-page routing.
    * The layout reflows in place when its images change, so a new array here is
    * also what re-reads the pages; `useMultiImageOverlay`'s `currentImages`
    * provides one on every change.
@@ -102,7 +104,18 @@ export function MejiroScrollView({
   const programmaticScrollRef = useRef(false);
   // The page a user scroll last settled on; it is already under the viewport.
   const userPageRef = useRef<number | null>(null);
-  const imagesPage = spreadIdx != null && images.length > 0 ? spreadIdx * 2 : -1;
+  const rightPage = spreadIdx != null ? spreadIdx * 2 : -1;
+  const leftPage = spreadIdx != null ? spreadIdx * 2 + 1 : -1;
+  // Each overlay renders on the page whose area contains its centre, matching
+  // MejiroSpread's single-page routing.
+  const rightImages = useMemo(
+    () => images.filter((item) => overlayPageSide(item.rect) === 'right'),
+    [images],
+  );
+  const leftImages = useMemo(
+    () => images.filter((item) => overlayPageSide(item.rect) === 'left'),
+    [images],
+  );
 
   // The layout reflows in place when images change, so `images` keys this too.
   // biome-ignore lint/correctness/useExhaustiveDependencies: images changes whenever the layout's exclusions do.
@@ -201,7 +214,10 @@ export function MejiroScrollView({
               width: pageWidth,
               height: pageHeight,
               flexShrink: 0,
-              ...(i === imagesPage ? { overflow: 'visible' } : null),
+              ...((i === rightPage && rightImages.length > 0) ||
+              (i === leftPage && leftImages.length > 0)
+                ? { overflow: 'visible' }
+                : null),
             }}
           >
             <div className="mejiro-reader-page-rule" />
@@ -227,11 +243,21 @@ export function MejiroScrollView({
                 )}
               </div>
             </div>
-            {i === imagesPage &&
-              images.map((item) => (
+            {i === rightPage &&
+              rightImages.map((item) => (
                 <MejiroImageOverlay
                   key={item.id}
                   rect={item.rect}
+                  onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
+                  onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
+                  onClose={() => onImageClose?.(item.id)}
+                />
+              ))}
+            {i === leftPage &&
+              leftImages.map((item) => (
+                <MejiroImageOverlay
+                  key={item.id}
+                  rect={{ ...item.rect, x: item.rect.x + pageWidth }}
                   onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
                   onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
                   onClose={() => onImageClose?.(item.id)}

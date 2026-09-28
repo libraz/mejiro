@@ -13,7 +13,7 @@ import {
 import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
-import type { MultiImageItem } from './useMultiImageOverlay.js';
+import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js';
 
 /**
  * Continuous-scroll variant of {@link MejiroSpread} for Vue. Stacks every
@@ -56,13 +56,14 @@ export const MejiroScrollView = defineComponent({
       type: Array as PropType<readonly (AnchorRect & { color?: string })[]>,
       default: undefined,
     },
-    /** Zero-based spread whose right page carries `images`. */
+    /** Zero-based spread whose pages carry `images`. */
     spreadIdx: { type: Number, default: undefined },
     /**
-     * Image overlays on the right page of `spreadIdx`. The layout reflows in
-     * place when its images change, so a new array here is also what re-reads
-     * the pages; `useMultiImageOverlay`'s `currentImages` provides one on every
-     * change.
+     * Image overlays on the spread at `spreadIdx`. Each renders on the page
+     * whose area contains its centre (see `overlayPageSide`), matching
+     * `MejiroSpread`'s single-page routing. The layout reflows in place when
+     * its images change, so a new array here is also what re-reads the pages;
+     * `useMultiImageOverlay`'s `currentImages` provides one on every change.
      */
     images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
   },
@@ -104,8 +105,15 @@ export const MejiroScrollView = defineComponent({
       }
       return byPage;
     });
-    const imagesPage = computed(() =>
-      props.spreadIdx != null && props.images.length > 0 ? props.spreadIdx * 2 : -1,
+    const rightPage = computed(() => (props.spreadIdx != null ? props.spreadIdx * 2 : -1));
+    const leftPage = computed(() => (props.spreadIdx != null ? props.spreadIdx * 2 + 1 : -1));
+    // Each overlay renders on the page whose area contains its centre, matching
+    // MejiroSpread's single-page routing.
+    const rightImages = computed(() =>
+      props.images.filter((item) => overlayPageSide(item.rect) === 'right'),
+    );
+    const leftImages = computed(() =>
+      props.images.filter((item) => overlayPageSide(item.rect) === 'left'),
     );
     const contentStyle = computed(() => {
       const style: Record<string, string | number> = { height: `${props.contentHeight}px` };
@@ -233,7 +241,11 @@ export const MejiroScrollView = defineComponent({
                   width: `${props.pageWidth}px`,
                   height: `${props.pageHeight}px`,
                   flexShrink: 0,
-                  overflow: i === imagesPage.value ? 'visible' : undefined,
+                  overflow:
+                    (i === rightPage.value && rightImages.value.length > 0) ||
+                    (i === leftPage.value && leftImages.value.length > 0)
+                      ? 'visible'
+                      : undefined,
                 },
               },
               [
@@ -267,11 +279,24 @@ export const MejiroScrollView = defineComponent({
                     ],
                   ),
                 ]),
-                ...(i === imagesPage.value
-                  ? props.images.map((item) =>
+                ...(i === rightPage.value
+                  ? rightImages.value.map((item) =>
                       h(MejiroImageOverlay, {
                         key: item.id,
                         rect: item.rect,
+                        onOverlayPointerdown: (e: PointerEvent) =>
+                          emit('image-pointerdown', item.id, e),
+                        onResizePointerdown: (e: PointerEvent) =>
+                          emit('image-resize-pointerdown', item.id, e),
+                        onClose: () => emit('image-close', item.id),
+                      }),
+                    )
+                  : []),
+                ...(i === leftPage.value
+                  ? leftImages.value.map((item) =>
+                      h(MejiroImageOverlay, {
+                        key: item.id,
+                        rect: { ...item.rect, x: item.rect.x + props.pageWidth },
                         onOverlayPointerdown: (e: PointerEvent) =>
                           emit('image-pointerdown', item.id, e),
                         onResizePointerdown: (e: PointerEvent) =>

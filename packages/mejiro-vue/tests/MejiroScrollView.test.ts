@@ -231,6 +231,40 @@ describe('MejiroScrollView (Vue) — scrollToPage', () => {
   });
 });
 
+describe('MejiroScrollView (Vue) — image overlay routing', () => {
+  it('routes each overlay to the page whose area contains its centre', () => {
+    installIntersectionObserver();
+    const images = [
+      { id: 'on-right', rect: { x: 80, y: 100, w: 120, h: 160 } },
+      { id: 'on-left', rect: { x: -200, y: 100, w: 120, h: 160 } },
+    ];
+    const { container } = render(MejiroScrollView, {
+      props: {
+        layout: fakeScrollLayout(4),
+        pageWidth: 320,
+        pageHeight: 460,
+        contentHeight: 360,
+        spreadIdx: 1,
+        images,
+      },
+    });
+    const pages = container.querySelectorAll<HTMLElement>('.mejiro-reader-page');
+    const rightPage = pages[2];
+    const leftPage = pages[3];
+
+    const rightOverlays = rightPage.querySelectorAll<HTMLElement>('.mejiro-reader-image-overlay');
+    expect(rightOverlays).toHaveLength(1);
+    expect(rightOverlays[0].style.left).toBe('80px');
+
+    const leftOverlays = leftPage.querySelectorAll<HTMLElement>('.mejiro-reader-image-overlay');
+    expect(leftOverlays).toHaveLength(1);
+    expect(leftOverlays[0].style.left).toBe('120px');
+
+    // No overlay leaks onto an unrelated page, and none is dropped.
+    expect(container.querySelectorAll('.mejiro-reader-image-overlay')).toHaveLength(2);
+  });
+});
+
 function longEpub(): EpubBook {
   return {
     title: 'Long Book',
