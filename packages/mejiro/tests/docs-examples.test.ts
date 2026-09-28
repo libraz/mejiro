@@ -1,13 +1,21 @@
 /**
  * Pins values printed in the documentation that are not covered by a more
  * specific docs test: ruby preprocessing output, the manuscript tate-chu-yoko
- * length limit, the heading-style level range and the pagination walkthrough.
+ * length limit, the heading-style level range, the pagination walkthrough and
+ * the kinsoku extension recipe.
  */
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_HEADING_STYLES } from '../src/book/constants.js';
-import { paginate, preprocessRuby, toCodepoints } from '../src/index.js';
+import {
+  buildKinsokuRules,
+  computeBreaks,
+  getDefaultKinsokuRules,
+  paginate,
+  preprocessRuby,
+  toCodepoints,
+} from '../src/index.js';
 import { parseManuscript } from '../src/manuscript.js';
 import {
   buildParagraphMeasures,
@@ -33,6 +41,39 @@ describe('ruby preprocessing example', () => {
 
     expect([...effectiveAdvances]).toEqual([16, 16, 16, 16, 16]);
     expect([...clusterIds]).toEqual([5, 5, 2, 3, 4]);
+  });
+});
+
+describe('kinsoku extension recipe', () => {
+  it.each(['en', 'ja'])('adds a character outside the defaults in the %s guide', async (locale) => {
+    const doc = await readFile(
+      resolve(import.meta.dirname, `../../../docs/${locale}/09-advanced.md`),
+      'utf8',
+    );
+    const added = /\[\.\.\.defaults\.lineStartProhibited, (0x[0-9a-f]+)\]/u.exec(doc);
+    const sample = /text: toCodepoints\('([^']+)'\),\n\s+advances: new Float32Array\((\d+)\)/u.exec(
+      doc,
+    );
+    const breaks = /result\.breakPoints → \[([\d, ]+)\]/u.exec(doc);
+    expect(added && sample && breaks, 'recipe shape changed').toBeTruthy();
+    if (!(added && sample && breaks)) return;
+
+    const codepoint = Number(added[1]);
+    const defaults = getDefaultKinsokuRules();
+    expect(defaults.lineStartProhibited).not.toContain(codepoint);
+
+    const text = toCodepoints(sample[1]);
+    expect(text.length).toBe(Number(sample[2]));
+    const advances = new Float32Array(text.length).fill(16);
+    const rules = buildKinsokuRules({
+      lineStartProhibited: [...defaults.lineStartProhibited, codepoint],
+      lineEndProhibited: defaults.lineEndProhibited,
+      unbreakablePairs: defaults.unbreakablePairs,
+    });
+    const custom = computeBreaks({ text, advances, lineWidth: 80, kinsokuRules: rules });
+    const builtin = computeBreaks({ text, advances, lineWidth: 80 });
+    expect([...custom.breakPoints]).toEqual(breaks[1].split(', ').map(Number));
+    expect([...custom.breakPoints]).not.toEqual([...builtin.breakPoints]);
   });
 });
 

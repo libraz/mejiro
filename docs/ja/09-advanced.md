@@ -18,16 +18,18 @@ import { buildKinsokuRules, getDefaultKinsokuRules, computeBreaks, toCodepoints 
 // デフォルトを取得してカスタマイズ
 const defaults = getDefaultKinsokuRules();
 const rules = buildKinsokuRules({
-  lineStartProhibited: [...defaults.lineStartProhibited, 0x2026], // … を追加
+  lineStartProhibited: [...defaults.lineStartProhibited, 0xff05], // ％ を追加
   lineEndProhibited: defaults.lineEndProhibited,
+  unbreakablePairs: defaults.unbreakablePairs, // ‥‥ …… —— ―― を分割しない
 });
 
 const result = computeBreaks({
-  text: toCodepoints('あいうえお…かきくけこ'),
+  text: toCodepoints('ただいま５％引きです。'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
   kinsokuRules: rules,
 });
+// result.breakPoints → [3, 8]: ％ が行頭に来ないよう、５ ごと次の行へ送られる
 ```
 
 ### ルールをゼロから作成
@@ -49,8 +51,10 @@ const rules = buildKinsokuRules({
 interface KinsokuRules {
   lineStartProhibited: number[];        // コードポイント配列
   lineEndProhibited: number[];
+  unbreakablePairs: Array<readonly [number, number]>; // 行をまたいで分割しないペア
   lineStartProhibitedSet: Set<number>;  // 事前計算されたルックアップ用 Set
   lineEndProhibitedSet: Set<number>;
+  unbreakablePairSet: Set<string>;
 }
 ```
 
@@ -60,7 +64,7 @@ interface KinsokuRules {
 
 ## 2. トークン境界（形態素解析連携）
 
-`tokenBoundaries` オプションを使うと、形態素解析器（MeCab、kuromoji、Sudachi、[`@libraz/suzume`](https://github.com/libraz/suzume) など）を連携させ、自然な単語境界での改行を優先できます。ブラウザ単体で完結させたい場合は WASM ビルドが約 360KB gzipped に収まる Suzume が手早く、サーバ側で精度重視なら MeCab/Sudachi といった使い分けになります。
+`tokenBoundaries` オプションを使うと、形態素解析器（MeCab、kuromoji、Sudachi、[`@libraz/suzume`](https://github.com/libraz/suzume) など）を連携させ、自然な単語境界での改行を優先できます。ブラウザ単体で完結させたい場合は、辞書同梱の WASM ビルドがおよそ 567 KB（gzip 後で約 230 KB）に収まる Suzume が手早く、サーバ側で精度重視なら MeCab/Sudachi といった使い分けになります。
 
 ### 基本的な使い方
 
@@ -323,7 +327,7 @@ const result = computeBreaks({
 4. ギャップの高さがそのスロットの実効的な `lineWidth` となり、垂直位置（`yStart`）がテキストの描画開始位置を示す。
 5. スロットは読み順で出力される。画像に同じ形で分断された隣接列は 1 つの帯グループを構成し、画像の上側の帯をグループ内の全列ぶん埋めてから、下側の帯へ折り返す。分断の形が異なる列は別グループになるため、ある列がその右隣の列より先に読まれることはない。
 
-1 つの列が複数のスロットを生む場合も 0 個の場合もあるため、`slots.length` は `lineCount` とは対応せず、`slots[columnIndex]` という参照はできない（スロットの添字は行の番号である）。物理的な列は `xPos` から復元する。上記の画像 2 枚の例では、12 列に対して 20 スロットが生成される。
+1 つの列が複数のスロットを生む場合も 0 個の場合もあるため、`slots.length` は `lineCount` とは対応せず、`slots[columnIndex]` という参照はできない（スロットの添字は行の番号である）。物理的な列は `xPos` ではなく `columnIndex` から復元する。上記の画像 2 枚の例では、12 列に対して 20 スロットが生成される。
 
 ### 座標系（縦書き）
 
@@ -438,13 +442,15 @@ mejiro は「縦書きで読む／書く／EPUB で持ち出す」までを担�
 
 ### 7.1 原稿入稿フローの組み立て
 
-`useManuscriptDraft` でローカル草稿状態を、`useEpubProject` で「章ドラフト → EPUB 生成」を担当させます。サーバへの保存は `buildProject()` から得たメタ・章 JSON をそのまま POST するのが最短です。
+`useManuscriptDraft` でローカル草稿状態を、`useEpubProject` で「章ドラフト → EPUB 生成」を担当させます。サーバへの保存は `buildProject()` から得たメタ・章 JSON をそのまま POST するのが最短です。`useEpubProject` が `metadata` と `chapters` オプションを読むのはマウント時の 1 回だけなので、その後の草稿の編集は `setChapters` でプロジェクトへ渡します。`save()` では、常に編集中の最新の章を保持している `draft.chapters` を送ります。
 
 ```tsx
-import { useEpubProject } from '@libraz/mejiro-react';
+import { useEffect } from 'react';
+import { useEpubProject, useManuscriptDraft } from '@libraz/mejiro-react';
 
+const draft = useManuscriptDraft({ initialChapters: saved.chapters });
 const project = useEpubProject({
-  metadata: { title: draft.title, language: 'ja' },
+  metadata: { title: saved.title, language: 'ja' },
   chapters: draft.chapters, // { id, title, body } の配列
   debounceMs: 400,
   onPreview(book) {
@@ -452,13 +458,17 @@ const project = useEpubProject({
   },
 });
 
+// オプションは 1 回しか読まれないので、以降の草稿の編集をプロジェクトへ渡す
+const { setChapters } = project;
+useEffect(() => setChapters(draft.chapters), [draft.chapters, setChapters]);
+
 async function save() {
   const built = project.buildProject();
   await fetch(`/api/works/${id}`, {
     method: 'PUT',
     body: JSON.stringify({
       metadata: built.metadata,
-      chapters: project.chapters, // 入力ドラフトをそのまま保存
+      chapters: draft.chapters, // 編集中の最新の章
     }),
   });
 }

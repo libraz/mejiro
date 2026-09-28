@@ -18,16 +18,18 @@ import { buildKinsokuRules, getDefaultKinsokuRules, computeBreaks, toCodepoints 
 // Get defaults and customize
 const defaults = getDefaultKinsokuRules();
 const rules = buildKinsokuRules({
-  lineStartProhibited: [...defaults.lineStartProhibited, 0x2026], // Add …
+  lineStartProhibited: [...defaults.lineStartProhibited, 0xff05], // Add ％
   lineEndProhibited: defaults.lineEndProhibited,
+  unbreakablePairs: defaults.unbreakablePairs, // Keep ‥‥ …… —— ―― together
 });
 
 const result = computeBreaks({
-  text: toCodepoints('あいうえお…かきくけこ'),
+  text: toCodepoints('ただいま５％引きです。'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
   kinsokuRules: rules,
 });
+// result.breakPoints → [3, 8]: ５ moves down with ％ instead of leaving ％ at a line start
 ```
 
 ### Creating Rules from Scratch
@@ -49,8 +51,10 @@ When `kinsokuRules` is provided to `computeBreaks()`, it **replaces** the built-
 interface KinsokuRules {
   lineStartProhibited: number[];        // Codepoint arrays
   lineEndProhibited: number[];
+  unbreakablePairs: Array<readonly [number, number]>; // Pairs never split across lines
   lineStartProhibitedSet: Set<number>;  // Pre-computed lookup sets
   lineEndProhibitedSet: Set<number>;
+  unbreakablePairSet: Set<string>;
 }
 ```
 
@@ -60,7 +64,7 @@ Always use `buildKinsokuRules()` to create rules -- it generates the lookup sets
 
 ## 2. Token Boundaries (Morphological Analysis Integration)
 
-The `tokenBoundaries` option lets you integrate morphological analyzers (MeCab, kuromoji, Sudachi, or [`@libraz/suzume`](https://github.com/libraz/suzume), among others) to prefer natural word boundaries for line breaks. For browser-only deployments, Suzume's WASM build fits in roughly 360KB gzipped; pick MeCab / Sudachi server-side when dictionary accuracy matters more than footprint.
+The `tokenBoundaries` option lets you integrate morphological analyzers (MeCab, kuromoji, Sudachi, or [`@libraz/suzume`](https://github.com/libraz/suzume), among others) to prefer natural word boundaries for line breaks. For browser-only deployments, Suzume's WASM build is roughly 567 KB with its dictionaries embedded, about 230 KB gzipped; pick MeCab / Sudachi server-side when dictionary accuracy matters more than footprint.
 
 ### Basic Usage
 
@@ -326,7 +330,7 @@ const result = computeBreaks({
 4. The gap's height becomes the effective `lineWidth` for that slot, and its vertical position (`yStart`) indicates where to render the text.
 5. Slots are emitted in reading order. Adjacent columns that an image splits the same way form a band group: the band above the image is filled across every column of the group before the text wraps back to the band below it. Columns split differently start a new group, so a column is never read before a column to its right.
 
-Because a column may yield several slots or none, `slots.length` is unrelated to `lineCount` and `slots[columnIndex]` is not a valid lookup — a slot's index is a line index. Use `xPos` to recover the physical column. The two-image example above produces 20 slots for 12 columns.
+Because a column may yield several slots or none, `slots.length` is unrelated to `lineCount` and `slots[columnIndex]` is not a valid lookup — a slot's index is a line index. Use `columnIndex` to recover the physical column, not `xPos`. The two-image example above produces 20 slots for 12 columns.
 
 ### Coordinate System (Vertical Writing)
 
@@ -441,13 +445,15 @@ A typical wiring looks like:
 
 ### 7.1 Wiring up the submission flow
 
-Use `useManuscriptDraft` for local draft state and `useEpubProject` for "chapter drafts → EPUB". The shortest path to server persistence is to POST the draft chapters and the project metadata that `buildProject()` returns.
+Use `useManuscriptDraft` for local draft state and `useEpubProject` for "chapter drafts → EPUB". The shortest path to server persistence is to POST the draft chapters and the project metadata that `buildProject()` returns. `useEpubProject` reads its `metadata` and `chapters` options only at mount, so later draft edits reach the project through `setChapters`, and `save()` sends `draft.chapters`, which always holds the chapters as currently edited.
 
 ```tsx
-import { useEpubProject } from '@libraz/mejiro-react';
+import { useEffect } from 'react';
+import { useEpubProject, useManuscriptDraft } from '@libraz/mejiro-react';
 
+const draft = useManuscriptDraft({ initialChapters: saved.chapters });
 const project = useEpubProject({
-  metadata: { title: draft.title, language: 'ja' },
+  metadata: { title: saved.title, language: 'ja' },
   chapters: draft.chapters, // [{ id, title, body }]
   debounceMs: 400,
   onPreview(book) {
@@ -455,13 +461,17 @@ const project = useEpubProject({
   },
 });
 
+// Options are read once; forward every later draft edit to the project.
+const { setChapters } = project;
+useEffect(() => setChapters(draft.chapters), [draft.chapters, setChapters]);
+
 async function save() {
   const built = project.buildProject();
   await fetch(`/api/works/${id}`, {
     method: 'PUT',
     body: JSON.stringify({
       metadata: built.metadata,
-      chapters: project.chapters, // Persist the input drafts verbatim
+      chapters: draft.chapters, // The drafts as currently edited
     }),
   });
 }
