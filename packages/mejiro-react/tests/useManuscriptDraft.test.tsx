@@ -257,4 +257,137 @@ describe('useManuscriptDraft (React)', () => {
       vi.useRealTimers();
     }
   });
+
+  it('does not autosave the unchanged initial draft under StrictMode', () => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn();
+      const { unmount } = renderHook(
+        () => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        { wrapper: StrictMode },
+      );
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      unmount();
+      expect(save).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still autosaves a real edit under StrictMode', () => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn();
+      const { result } = renderHook(
+        () => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        { wrapper: StrictMode },
+      );
+      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save.mock.calls[0][0][0].body).toBe('changed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['pagehide', 'beforeunload'])('flushes a pending autosave on %s', (type) => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn();
+      const { result } = renderHook(() =>
+        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+      );
+      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      expect(save).not.toHaveBeenCalled();
+      window.dispatchEvent(new Event(type));
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save.mock.calls[0][0][0].body).toBe('changed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('autosaves a mapped payload and reacts to autosaveKey changes', () => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn();
+      const { result, rerender } = renderHook(
+        ({ title }: { title: string }) =>
+          useManuscriptDraft<{ title: string; chapters: unknown[] }>({
+            onAutosave: save,
+            autosaveDelay: 100,
+            autosaveKey: title,
+            autosavePayload: (chapters) => ({ title, chapters }),
+          }),
+        { initialProps: { title: 'Draft' } },
+      );
+
+      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save.mock.calls[0][0]).toMatchObject({ title: 'Draft' });
+
+      rerender({ title: 'Renamed' });
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(save.mock.calls[1][0]).toMatchObject({ title: 'Renamed' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses the most recently supplied onAutosave, including one added after setup', () => {
+    vi.useFakeTimers();
+    try {
+      const first = vi.fn();
+      const second = vi.fn();
+      const { result, rerender } = renderHook(
+        ({ onAutosave }: { onAutosave?: (draft: unknown) => void }) =>
+          useManuscriptDraft({ onAutosave, autosaveDelay: 100 }),
+        { initialProps: {} as { onAutosave?: (draft: unknown) => void } },
+      );
+
+      rerender({ onAutosave: first });
+      act(() => result.current.patchChapter(0, { body: 'one' }));
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(first).toHaveBeenCalledTimes(1);
+
+      rerender({ onAutosave: second });
+      act(() => result.current.patchChapter(0, { body: 'two' }));
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(first).toHaveBeenCalledTimes(1);
+      expect(second).toHaveBeenCalledTimes(1);
+      expect((second.mock.calls[0][0] as { body: string }[])[0].body).toBe('two');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands onAutosave a structured-cloneable payload', () => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn();
+      const { result } = renderHook(() =>
+        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+      );
+      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.flushAutosave());
+      expect(structuredClone(save.mock.calls[0][0])).toEqual(save.mock.calls[0][0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

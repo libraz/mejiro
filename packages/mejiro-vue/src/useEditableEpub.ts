@@ -11,10 +11,22 @@ import {
   type EpubExportOptions,
   type EpubParseLimits,
 } from '@libraz/mejiro/epub';
-import { type ComputedRef, computed, type Ref, ref, shallowRef, watch } from 'vue';
+import {
+  type ComputedRef,
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  type Ref,
+  ref,
+  shallowRef,
+  type WatchStopHandle,
+  watch,
+} from 'vue';
+import { fetchEpubBuffer, toError } from './errors.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
+/** Options for {@link useEditableEpub}. */
 export interface UseEditableEpubOptions {
   /** URL fetched and loaded on mount. */
   defaultUrl?: string;
@@ -32,31 +44,52 @@ export interface UseEditableEpubOptions {
   limits?: Partial<EpubParseLimits>;
 }
 
+/** Return value of {@link useEditableEpub}. */
 export interface UseEditableEpubReturn {
+  /** Loaded editor, or `null` before any load. */
   editor: Ref<EditableEpub | null>;
+  /** The editor's live document, or `null` before any load. */
   book: ComputedRef<EditableEpubBook | null>;
+  /** Snapshot of `book` re-cloned on every edit, for feeding a preview reader. */
   previewBook: ComputedRef<EditableEpubBook | null>;
+  /** Whether a load is in progress. */
   loading: Ref<boolean>;
+  /** Whether an export is in progress. */
   exporting: Ref<boolean>;
+  /** Last load error, if any. */
   error: Ref<Error | null>;
+  /** Counter bumped on every load, edit, undo and redo. */
   revision: Ref<number>;
+  /** Undo / redo availability, or `null` before any load. */
   history: ComputedRef<{
     canUndo: boolean;
     canRedo: boolean;
     depth: number;
     redoDepth: number;
   } | null>;
+  /** Paragraph targeted by the editing commands. */
   selection: Ref<EditableEpubSelection>;
+  /** The paragraph at `selection`, or `null` when there is none. */
   selectedParagraph: ComputedRef<AnnotatedParagraph | null>;
+  /** Moves the selection, clamped to the loaded book. */
   setSelection: (selection: EditableEpubSelection) => void;
+  /** Loads an EPUB from an in-memory buffer. */
   loadBuffer: (buffer: ArrayBuffer) => Promise<EditableEpub | null>;
+  /** Loads an EPUB from a {@link File}. */
   loadFile: (file: File) => Promise<EditableEpub | null>;
+  /** Fetches and loads an EPUB; a non-2xx response is reported as an error. */
   loadUrl: (url: string) => Promise<EditableEpub | null>;
+  /** Replaces the selected paragraph's text and, optionally, its inline annotations. */
   updateParagraph: (text: string, inlineAnnotations?: readonly InlineAnnotation[]) => void;
+  /** Replaces the selected paragraph's inline annotations. */
   setInlineAnnotations: (inlineAnnotations: readonly InlineAnnotation[]) => void;
+  /** Inserts an image into the selected chapter. */
   addImage: (image: AddImageInput | EditableEpubImage) => void;
+  /** Reverts the last edit. Returns `false` when there is nothing to undo. */
   undo: () => boolean;
+  /** Re-applies the last undone edit. Returns `false` when there is nothing to redo. */
   redo: () => boolean;
+  /** Packages the edited document as an EPUB buffer. */
   exportEpub: (options?: EpubExportOptions) => Promise<ArrayBuffer | null>;
 }
 
@@ -103,7 +136,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       return next;
     } catch (err) {
       if (currentRequest === requestId) {
-        error.value = err instanceof Error ? err : new Error(String(err));
+        error.value = toError(err);
         options.onError?.(error.value);
       }
       return null;
@@ -125,7 +158,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       return await loadBufferWithRequest(await file.arrayBuffer(), currentRequest);
     } catch (err) {
       if (currentRequest === requestId) {
-        error.value = err instanceof Error ? err : new Error(String(err));
+        error.value = toError(err);
         options.onError?.(error.value);
         loading.value = false;
       }
@@ -138,12 +171,10 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     loading.value = true;
     error.value = null;
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Failed to load EPUB: ${res.status}`);
-      return await loadBufferWithRequest(await res.arrayBuffer(), currentRequest);
+      return await loadBufferWithRequest(await fetchEpubBuffer(url), currentRequest);
     } catch (err) {
       if (currentRequest === requestId) {
-        error.value = err instanceof Error ? err : new Error(String(err));
+        error.value = toError(err);
         options.onError?.(error.value);
         loading.value = false;
       }
@@ -151,13 +182,20 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     }
   }
 
-  watch(
-    () => options.defaultUrl,
-    (url) => {
-      if (url) void loadUrl(url);
-    },
-    { immediate: true },
-  );
+  // Deferred to mount so server-side setup never fetches.
+  let stopDefaultUrlWatch: WatchStopHandle | undefined;
+  onMounted(() => {
+    stopDefaultUrlWatch = watch(
+      () => options.defaultUrl,
+      (url) => {
+        if (url) void loadUrl(url);
+      },
+      { immediate: true },
+    );
+  });
+  onBeforeUnmount(() => {
+    stopDefaultUrlWatch?.();
+  });
 
   function setSelection(nextSelection: EditableEpubSelection): void {
     selection.value = clampEditableEpubSelection(book.value, nextSelection);

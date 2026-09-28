@@ -7,6 +7,14 @@ import {
   sortAnnotations,
 } from '@libraz/mejiro';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  createPendingWrite,
+  flushOnPageHide,
+  mergeDefined,
+  readStorage,
+  removeStorage,
+  resolveDefaultStorage,
+} from './persistence.js';
 
 /**
  * A user-authored annotation on a book — a half-open range of in-chapter
@@ -57,10 +65,9 @@ export interface UseAnnotationsReturn {
   clear(): void;
 }
 
-function resolveDefaultStorage(): AnnotationsStorage | null {
-  if (typeof globalThis === 'undefined') return null;
-  const w = (globalThis as { localStorage?: AnnotationsStorage }).localStorage;
-  return w ?? null;
+/** Parses and sorts a stored annotation list. */
+function parseSorted(raw: string | null): readonly Annotation[] {
+  return sortAnnotations(parseAnnotations(raw));
 }
 
 /**
@@ -83,14 +90,9 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const { key, throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const [annotations, setAnnotations] = useState<readonly Annotation[]>(() => {
-    if (!storage) return [];
-    try {
-      return sortAnnotations(parseAnnotations(storage.getItem(key)));
-    } catch {
-      return [];
-    }
-  });
+  const [annotations, setAnnotations] = useState<readonly Annotation[]>(() =>
+    readStorage(storage, key, parseSorted, []),
+  );
   const storageRef = useRef(storage);
   storageRef.current = storage;
 
@@ -103,50 +105,20 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
     setAnnotations(next);
   }, []);
 
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingWriteRef = useRef<(() => void) | null>(null);
+  const pendingRef = useRef<ReturnType<typeof createPendingWrite> | null>(null);
+  if (!pendingRef.current) pendingRef.current = createPendingWrite();
+  const pending = pendingRef.current;
 
-  /** Runs the pending throttled write immediately, if any. */
-  const flushPending = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const write = pendingWriteRef.current;
-    pendingWriteRef.current = null;
-    if (!write) return;
-    try {
-      write();
-    } catch {
-      // Quota or disabled storage — in-memory copy stays.
-    }
-  }, []);
-
-  /** Drops the pending throttled write without running it. */
-  const cancelPending = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    pendingWriteRef.current = null;
-  }, []);
+  // Closing the tab mid-throttle must not lose the last mutation.
+  useEffect(() => flushOnPageHide(pending.flush), [pending]);
 
   // Re-hydrate when the key changes (different book). Unmounting or switching
   // book mid-throttle must not lose the last mutation, so the pending write —
   // which targets the key it was scheduled under — is flushed on cleanup.
   useEffect(() => {
-    const currentStorage = storageRef.current;
-    if (currentStorage) {
-      try {
-        applyNext(sortAnnotations(parseAnnotations(currentStorage.getItem(key))));
-      } catch {
-        applyNext([]);
-      }
-    } else {
-      applyNext([]);
-    }
-    return flushPending;
-  }, [key, applyNext, flushPending]);
+    applyNext(readStorage(storageRef.current, key, parseSorted, []));
+    return pending.flush;
+  }, [key, applyNext, pending]);
 
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
@@ -155,15 +127,13 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
     (next: readonly Annotation[]) => {
       const currentStorage = storageRef.current;
       if (currentStorage) {
-        cancelPending();
-        pendingWriteRef.current = () => {
+        pending.schedule(() => {
           currentStorage.setItem(key, serializeAnnotations(next));
-        };
-        timerRef.current = setTimeout(flushPending, throttleMs);
+        }, throttleMs);
       }
       onChangeRef.current?.(next);
     },
-    [key, throttleMs, cancelPending, flushPending],
+    [key, throttleMs, pending],
   );
 
   const add = useCallback<UseAnnotationsReturn['add']>(
@@ -198,7 +168,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       const next = annotationsRef.current.map((annotation) => {
         if (annotation.id !== id) return annotation;
         changed = true;
-        return { ...annotation, ...patch, id };
+        return { ...mergeDefined(annotation, patch), id };
       });
       if (!changed) return;
       const sorted = sortAnnotations(next);
@@ -210,17 +180,10 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
 
   const clear = useCallback(() => {
     applyNext([]);
-    const currentStorage = storageRef.current;
-    if (currentStorage) {
-      cancelPending();
-      try {
-        currentStorage.removeItem(key);
-      } catch {
-        // ignore
-      }
-    }
+    pending.cancel();
+    removeStorage(storageRef.current, key);
     onChangeRef.current?.([]);
-  }, [key, cancelPending, applyNext]);
+  }, [key, pending, applyNext]);
 
   return { annotations, add, remove, update, clear };
 }

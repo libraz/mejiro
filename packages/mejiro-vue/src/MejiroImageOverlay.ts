@@ -69,4 +69,5 @@ export const MejiroImageOverlay = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroImageOverlay}. */
 export type MejiroImageOverlayProps = InstanceType<typeof MejiroImageOverlay>['$props'];

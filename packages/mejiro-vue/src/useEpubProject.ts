@@ -7,11 +7,15 @@ import {
   parseEpub,
 } from '@libraz/mejiro/epub';
 import { type ComputedRef, computed, type Ref, ref, shallowRef, watch } from 'vue';
+import { toError } from './errors.js';
 
 /** One chapter of the manuscript draft the composable keeps in reactive state. */
 export interface EpubProjectChapterDraft {
+  /** Stable chapter identifier. */
   id: string;
+  /** Chapter title. */
   title: string;
+  /** Chapter body in the manuscript notation. */
   body: string;
 }
 
@@ -53,19 +57,29 @@ export interface UseEpubProjectOptions {
 
 /** State and actions returned by {@link useEpubProject}. */
 export interface UseEpubProjectReturn {
+  /** Current book metadata. */
   metadata: Ref<EpubProjectMetadata>;
+  /** Current chapter drafts, in reading order. */
   chapters: Ref<EpubProjectChapterDraft[]>;
+  /** Index of the chapter being edited. */
   selectedChapter: Ref<number>;
+  /** The chapter at `selectedChapter`, or `null` when there is none. */
   currentChapter: ComputedRef<EpubProjectChapterDraft | null>;
   /** Current cover asset, or `null` when the project has no cover. */
   cover: Ref<EpubProjectAsset | null>;
   /** Current non-cover assets, in registration order. */
   assets: Ref<EpubProjectAsset[]>;
+  /** Parsed EPUB built from the current project, refreshed after each debounced change. */
   previewBook: Ref<EpubBook | null>;
+  /** Last preview build failure, if any. */
   previewError: Ref<Error | null>;
+  /** Whether a preview build is pending or running. */
   previewing: Ref<boolean>;
+  /** Merges `patch` into the metadata. */
   setMetadata: (patch: Partial<EpubProjectMetadata>) => void;
+  /** Replaces every chapter; an empty list becomes one generated chapter. */
   setChapters: (chapters: EpubProjectChapterDraft[]) => void;
+  /** Selects a chapter, clamped to the chapter range. */
   setSelectedChapter: (index: number) => void;
   /**
    * Replaces the cover asset, or drops it when passed `null`. The new cover is
@@ -77,11 +91,20 @@ export interface UseEpubProjectReturn {
    * project, so URL-only entries reach `assetResolver` at export time.
    */
   setAssets: (assets: EpubProjectAsset[]) => void;
+  /** Merges `patch` into the chapter at `index`. */
   patchChapter: (index: number, patch: Partial<EpubProjectChapterDraft>) => void;
+  /** Appends a chapter (generated defaults fill omitted fields) and selects it. */
   addChapter: (chapter?: Partial<EpubProjectChapterDraft>) => void;
+  /**
+   * Removes the chapter at `index` (the selected one by default); the last chapter is never
+   * removed.
+   */
   removeChapter: (index?: number) => void;
+  /** Moves the chapter at `from` to `to`, keeping the same chapter selected. */
   reorderChapters: (from: number, to: number) => void;
+  /** Builds an `EpubProject` from the current state. */
   buildProject: () => EpubProject;
+  /** Packages the current project as an EPUB buffer. */
   exportEpub: () => Promise<ArrayBuffer>;
 }
 
@@ -150,7 +173,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
             options.onPreview?.(book);
           } catch (err) {
             if (requestId === previewRequestId) {
-              previewError.value = err instanceof Error ? err : new Error(String(err));
+              previewError.value = toError(err);
             }
           } finally {
             if (requestId === previewRequestId) previewing.value = false;

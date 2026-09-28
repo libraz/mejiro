@@ -1,5 +1,7 @@
 import { onScopeDispose, type Ref, ref, watch } from 'vue';
+import { toError } from './errors.js';
 import type { ManuscriptEditorChapter } from './MejiroManuscriptEditor.js';
+import { createDraftChangeTracker, flushOnPageHide, snapshotChapters } from './persistence.js';
 
 /** Options for {@link useManuscriptDraft}. */
 export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]> {
@@ -24,13 +26,24 @@ export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]
 
 /** Return value of {@link useManuscriptDraft}. */
 export interface UseManuscriptDraftReturn {
+  /** Current chapters, in reading order. */
   chapters: Ref<ManuscriptEditorChapter[]>;
+  /** Index of the chapter currently being edited. */
   selected: Ref<number>;
+  /** Selects a chapter, clamped to the chapter range. */
   setSelected(index: number): void;
+  /**
+   * Replaces every chapter; an empty list becomes one generated chapter. The
+   * selected chapter is kept by id when it survives.
+   */
   setChapters(chapters: ManuscriptEditorChapter[]): void;
+  /** Merges `patch` into the chapter at `index`. */
   patchChapter(index: number, patch: Partial<ManuscriptEditorChapter>): void;
+  /** Appends a chapter (generated defaults fill omitted fields) and selects it. */
   addChapter(chapter?: Partial<ManuscriptEditorChapter>): void;
+  /** Removes the chapter at `index`; the last remaining chapter is never removed. */
   removeChapter(index: number): void;
+  /** Moves the chapter at `from` to `to`, keeping the same chapter selected. */
   reorderChapters(from: number, to: number): void;
   /** Last autosave failure, if any. */
   autosaveError: Ref<Error | null>;
@@ -60,7 +73,6 @@ function unwrapKey(key: Ref<string> | string | undefined): string {
 export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   options: UseManuscriptDraftOptions<TAutosave> = {},
 ): UseManuscriptDraftReturn {
-  const autosaveDelay = options.autosaveDelay ?? DEFAULT_DELAY;
   const titleFor = options.defaultChapterTitle;
   const bodyFor = options.defaultChapterBody;
   const chapters = ref<ManuscriptEditorChapter[]>(
@@ -88,49 +100,46 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     }
     const savedRevision = revision;
     inFlightRevision = savedRevision;
-    const payload = options.autosavePayload
-      ? options.autosavePayload([...chapters.value])
-      : ([...chapters.value] as TAutosave);
+    // Plain copies: reactive proxies are not structured-cloneable (IndexedDB, postMessage).
+    const plain = snapshotChapters(chapters.value);
+    const payload = options.autosavePayload ? options.autosavePayload(plain) : (plain as TAutosave);
     void Promise.resolve(callback(payload))
       .then(() => {
         if (revision === savedRevision) dirty = false;
       })
       .catch((err) => {
-        autosaveError.value = err instanceof Error ? err : new Error(String(err));
+        autosaveError.value = toError(err);
       })
       .finally(() => {
         if (inFlightRevision === savedRevision) inFlightRevision = -1;
       });
   }
 
-  if (options.onAutosave) {
-    const autosaveKey = options.autosaveKey;
-    watch(
-      () => [chapters.value, unwrapKey(autosaveKey)],
-      () => {
-        dirty = true;
-        revision += 1;
-        autosaveError.value = null;
-        if (timer) clearTimeout(timer);
-        timer = setTimeout(() => {
-          timer = undefined;
-          flushAutosave();
-        }, autosaveDelay);
-      },
-      { deep: true },
-    );
-    const handleBeforeUnload = (): void => flushAutosave();
-    if (typeof window !== 'undefined') {
-      window.addEventListener('beforeunload', handleBeforeUnload);
-    }
-    onScopeDispose(() => {
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('beforeunload', handleBeforeUnload);
-      }
-      flushAutosave();
+  // `onAutosave` is read at flush time, so a callback supplied or replaced
+  // after setup still receives every later save.
+  const tracker = createDraftChangeTracker(chapters.value, unwrapKey(options.autosaveKey));
+  watch(
+    () => [chapters.value, unwrapKey(options.autosaveKey)] as const,
+    ([nextChapters, nextKey]) => {
+      if (!tracker.changed(nextChapters, nextKey)) return;
+      dirty = true;
+      revision += 1;
+      autosaveError.value = null;
       if (timer) clearTimeout(timer);
-    });
-  }
+      if (!options.onAutosave) return;
+      timer = setTimeout(() => {
+        timer = undefined;
+        flushAutosave();
+      }, options.autosaveDelay ?? DEFAULT_DELAY);
+    },
+    { deep: true },
+  );
+  const detachPageHide = flushOnPageHide(flushAutosave);
+  onScopeDispose(() => {
+    detachPageHide();
+    flushAutosave();
+    if (timer) clearTimeout(timer);
+  });
 
   function setChapters(next: ManuscriptEditorChapter[]): void {
     const selectedId = chapters.value[selected.value]?.id;

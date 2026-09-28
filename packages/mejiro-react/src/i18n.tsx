@@ -66,4 +66,5 @@ export function format(template: string, vars: Record<string, string | number>):
   return formatMessage(template, vars);
 }
 
+/** Built-in message catalogs, keyed by locale. */
 export const CATALOGS: Record<MejiroLocale, MejiroMessages> = messageCatalogs;

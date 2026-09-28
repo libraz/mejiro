@@ -127,15 +127,18 @@ export const MejiroSettingsPanel = defineComponent({
                   value: s.fontSize,
                   min: props.minFontSize,
                   max: props.maxFontSize,
-                  onChange: (e: Event) =>
-                    patch({
-                      fontSize: parseClampedInput(
-                        (e.target as HTMLInputElement).value,
-                        props.minFontSize,
-                        props.maxFontSize,
-                        s.fontSize,
-                      ),
-                    }),
+                  onChange: (e: Event) => {
+                    const input = e.target as HTMLInputElement;
+                    const fontSize = parseClampedInput(
+                      input.value,
+                      props.minFontSize,
+                      props.maxFontSize,
+                      s.fontSize,
+                    );
+                    // Show the committed value even when clamping leaves the setting unchanged.
+                    input.value = String(fontSize);
+                    patch({ fontSize });
+                  },
                 }),
                 h(
                   'button',
@@ -202,15 +205,12 @@ export const MejiroSettingsPanel = defineComponent({
                   min: 1.0,
                   max: 3.0,
                   step: 0.1,
-                  onChange: (e: Event) =>
-                    patch({
-                      lineSpacing: parseClampedInput(
-                        (e.target as HTMLInputElement).value,
-                        1,
-                        3,
-                        s.lineSpacing ?? 1.8,
-                      ),
-                    }),
+                  onChange: (e: Event) => {
+                    const input = e.target as HTMLInputElement;
+                    const lineSpacing = parseClampedInput(input.value, 1, 3, s.lineSpacing ?? 1.8);
+                    input.value = String(lineSpacing);
+                    patch({ lineSpacing });
+                  },
                 }),
               ]),
             ]),
@@ -221,4 +221,5 @@ export const MejiroSettingsPanel = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroSettingsPanel}. */
 export type MejiroSettingsPanelProps = InstanceType<typeof MejiroSettingsPanel>['$props'];

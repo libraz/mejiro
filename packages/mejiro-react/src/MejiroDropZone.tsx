@@ -5,7 +5,7 @@ import { useI18n } from './i18n.js';
 export interface MejiroDropZoneProps {
   /** File `accept` filter for the picker. @defaultValue '.epub' */
   accept?: string;
-  /** Validator. Defaults to `name.endsWith('.epub')`. */
+  /** Validator. Defaults to the `accept` filter, with extensions matched case-insensitively. */
   validateFile?: (file: File) => boolean;
   /** Called with the selected/dropped file. */
   onFile: (file: File) => void;
@@ -15,6 +15,25 @@ export interface MejiroDropZoneProps {
   className?: string;
   /** Additional inline styles. */
   style?: CSSProperties;
+}
+
+/**
+ * Applies an `accept` filter the way the file picker does: extensions match
+ * case-insensitively, `type/*` matches a MIME family, anything else an exact type.
+ */
+function matchesAccept(accept: string, file: File): boolean {
+  const tokens = accept
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+  return tokens.some((token) => {
+    if (token.startsWith('.')) return name.endsWith(token);
+    if (token.endsWith('/*')) return type.startsWith(token.slice(0, -1));
+    return type === token;
+  });
 }
 
 /**
@@ -36,7 +55,7 @@ export function MejiroDropZone({
 
   const isValid = (file: File): boolean => {
     if (validateFile) return validateFile(file);
-    return file.name.endsWith('.epub');
+    return matchesAccept(accept, file);
   };
 
   const rootClass = ['mejiro-reader-drop-zone', dragover ? 'is-dragover' : '', className ?? '']

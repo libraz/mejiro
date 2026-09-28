@@ -1,6 +1,7 @@
 import type { BookOptions } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
-import { onScopeDispose, type Ref, readonly, ref, watch } from 'vue';
+import { isRef, onScopeDispose, type Ref, readonly, ref, watch } from 'vue';
+import { toError } from './errors.js';
 
 /** Options for {@link useMejiroBook}. */
 export interface UseMejiroBookOptions {
@@ -51,16 +52,34 @@ interface PendingApply {
  * options as a reactive ref. The book is created once; subsequent
  * `setOptions` calls update both the instance and the ref.
  *
+ * Accepts the React hook's `(initial, options)` form, or
+ * `(initial, source, options)` to follow a reactive options source.
+ *
  * @param initial - Initial book options (passed to the {@link MejiroBook} constructor).
- * @param source - Optional reactive options source. When provided, the book is
- *   re-configured whenever this ref changes.
  * @param options - Behavior overrides (debouncing, error reporting).
  */
 export function useMejiroBook(
   initial: BookOptions,
-  source?: Ref<Partial<BookOptions>>,
-  options: UseMejiroBookOptions = {},
+  options?: UseMejiroBookOptions,
+): UseMejiroBookReturn;
+/**
+ * @param initial - Initial book options (passed to the {@link MejiroBook} constructor).
+ * @param source - Reactive options source; the book is re-configured whenever it changes.
+ * @param options - Behavior overrides (debouncing, error reporting).
+ */
+export function useMejiroBook(
+  initial: BookOptions,
+  source: Ref<Partial<BookOptions>> | undefined,
+  options?: UseMejiroBookOptions,
+): UseMejiroBookReturn;
+export function useMejiroBook(
+  initial: BookOptions,
+  sourceOrOptions?: Ref<Partial<BookOptions>> | UseMejiroBookOptions,
+  maybeOptions?: UseMejiroBookOptions,
 ): UseMejiroBookReturn {
+  const source = isRef(sourceOrOptions) ? sourceOrOptions : undefined;
+  const options: UseMejiroBookOptions =
+    (isRef(sourceOrOptions) ? undefined : sourceOrOptions) ?? maybeOptions ?? {};
   const book = new MejiroBook(initial);
   const opts = ref<BookOptions>({ ...initial });
 
@@ -77,7 +96,7 @@ export function useMejiroBook(
         for (const waiter of waiters) waiter.resolve();
       },
       (err: unknown) => {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         if (options.onError) {
           options.onError(error);
           for (const waiter of waiters) waiter.resolve();

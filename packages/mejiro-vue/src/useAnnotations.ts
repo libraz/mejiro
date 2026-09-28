@@ -6,7 +6,15 @@ import {
   serializeAnnotations,
   sortAnnotations,
 } from '@libraz/mejiro';
-import { onUnmounted, type Ref, ref, watch } from 'vue';
+import { onScopeDispose, type Ref, ref, watch } from 'vue';
+import {
+  createPendingWrite,
+  flushOnPageHide,
+  mergeDefined,
+  readStorage,
+  removeStorage,
+  resolveDefaultStorage,
+} from './persistence.js';
 
 /**
  * A user-authored annotation on a book — a half-open range of in-chapter
@@ -46,30 +54,19 @@ export interface UseAnnotationsReturn {
   ): Annotation;
   /** Remove an annotation by id. */
   remove(id: string): void;
-  /** Patch an annotation by id. */
+  /** Patch an annotation by id. Pass `undefined` on a field to leave it untouched. */
   update(id: string, patch: Partial<Omit<Annotation, 'id'>>): void;
   /** Remove all annotations. */
   clear(): void;
-}
-
-function resolveDefaultStorage(): AnnotationsStorage | null {
-  if (typeof globalThis === 'undefined') return null;
-  const w = (globalThis as { localStorage?: AnnotationsStorage }).localStorage;
-  return w ?? null;
 }
 
 function unwrapKey(key: Ref<string> | string): string {
   return typeof key === 'string' ? key : key.value;
 }
 
-/** Reads and normalizes the stored list, degrading to empty on a throwing backend. */
-function readAnnotations(storage: AnnotationsStorage | null, key: string): readonly Annotation[] {
-  if (!storage) return [];
-  try {
-    return sortAnnotations(parseAnnotations(storage.getItem(key)));
-  } catch {
-    return [];
-  }
+/** Parses and sorts a stored annotation list. */
+function parseSorted(raw: string | null): readonly Annotation[] {
+  return sortAnnotations(parseAnnotations(raw));
 }
 
 /**
@@ -80,56 +77,33 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const { throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const annotations = ref<readonly Annotation[]>(readAnnotations(storage, unwrapKey(options.key)));
-
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let pendingWrite: (() => void) | null = null;
-
-  /** Runs the pending throttled write immediately, if any. */
-  function flushPending(): void {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    const write = pendingWrite;
-    pendingWrite = null;
-    if (!write) return;
-    try {
-      write();
-    } catch {
-      // Quota or disabled storage — in-memory copy stays.
-    }
-  }
-
-  /** Drops the pending throttled write without running it. */
-  function cancelPending(): void {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    pendingWrite = null;
-  }
+  const annotations = ref<readonly Annotation[]>(
+    readStorage(storage, unwrapKey(options.key), parseSorted, []),
+  );
+  const pending = createPendingWrite();
 
   watch(
     () => unwrapKey(options.key),
     (next) => {
       // A write scheduled under the previous key must land there, not in the new book's slot.
-      flushPending();
-      annotations.value = readAnnotations(storage, next);
+      pending.flush();
+      annotations.value = readStorage(storage, next, parseSorted, []);
     },
   );
 
-  // Unmounting mid-throttle must not lose the mutation the user just made.
-  onUnmounted(flushPending);
+  // Closing the tab or disposing the scope mid-throttle must not lose the last mutation.
+  const detachPageHide = flushOnPageHide(pending.flush);
+  onScopeDispose(() => {
+    detachPageHide();
+    pending.flush();
+  });
 
   function commit(next: readonly Annotation[]): void {
     if (storage) {
       const keyAtCommit = unwrapKey(options.key);
-      cancelPending();
-      pendingWrite = () => {
+      pending.schedule(() => {
         storage.setItem(keyAtCommit, serializeAnnotations(next));
-      };
-      timer = setTimeout(flushPending, throttleMs);
+      }, throttleMs);
     }
     options.onChange?.(next);
   }
@@ -161,7 +135,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
     const next = annotations.value.map((annotation) => {
       if (annotation.id !== id) return annotation;
       changed = true;
-      return { ...annotation, ...patch, id };
+      return { ...mergeDefined(annotation, patch), id };
     });
     if (changed) {
       const sorted = sortAnnotations(next);
@@ -172,14 +146,8 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
 
   function clear(): void {
     annotations.value = [];
-    if (storage) {
-      cancelPending();
-      try {
-        storage.removeItem(unwrapKey(options.key));
-      } catch {
-        // ignore
-      }
-    }
+    pending.cancel();
+    removeStorage(storage, unwrapKey(options.key));
     options.onChange?.([]);
   }
 

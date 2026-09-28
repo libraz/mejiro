@@ -2,6 +2,25 @@ import { defineComponent, h, type PropType, ref } from 'vue';
 import { useI18n } from './i18n.js';
 
 /**
+ * Applies an `accept` filter the way the file picker does: extensions match
+ * case-insensitively, `type/*` matches a MIME family, anything else an exact type.
+ */
+function matchesAccept(accept: string, file: File): boolean {
+  const tokens = accept
+    .split(',')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+  const name = file.name.toLowerCase();
+  const type = file.type.toLowerCase();
+  return tokens.some((token) => {
+    if (token.startsWith('.')) return name.endsWith(token);
+    if (token.endsWith('/*')) return type.startsWith(token.slice(0, -1));
+    return type === token;
+  });
+}
+
+/**
  * Drop zone for EPUB files. Combines a drag-and-drop target with a
  * click-to-open file picker. Emits `file` once a file is selected.
  *
@@ -18,7 +37,10 @@ export const MejiroDropZone = defineComponent({
       type: String,
       default: '.epub',
     },
-    /** Predicate used to validate dropped files. Defaults to `.epub` filter. */
+    /**
+     * Predicate used to validate dropped files. Defaults to the `accept`
+     * filter, with extensions matched case-insensitively.
+     */
     validateFile: {
       type: Function as PropType<(file: File) => boolean>,
     },
@@ -34,7 +56,7 @@ export const MejiroDropZone = defineComponent({
 
     const isValid = (file: File): boolean => {
       if (props.validateFile) return props.validateFile(file);
-      return file.name.endsWith('.epub');
+      return matchesAccept(props.accept, file);
     };
 
     function openPicker(): void {
@@ -98,4 +120,5 @@ export const MejiroDropZone = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroDropZone}. */
 export type MejiroDropZoneProps = InstanceType<typeof MejiroDropZone>['$props'];

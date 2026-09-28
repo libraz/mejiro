@@ -5,6 +5,13 @@ import {
   serializeReadingPosition,
 } from '@libraz/mejiro';
 import { onScopeDispose, type Ref, ref, watch } from 'vue';
+import {
+  createPendingWrite,
+  flushOnPageHide,
+  readStorage,
+  removeStorage,
+  resolveDefaultStorage,
+} from './persistence.js';
 
 /**
  * Persisted reading position. Anchor-shaped — pair with
@@ -49,12 +56,6 @@ export interface UseReadingPositionReturn {
   clear(): void;
 }
 
-function resolveDefaultStorage(): ReadingPositionStorage | null {
-  if (typeof globalThis === 'undefined') return null;
-  const w = (globalThis as { localStorage?: ReadingPositionStorage }).localStorage;
-  return w ?? null;
-}
-
 function unwrapKey(key: Ref<string> | string): string {
   return typeof key === 'string' ? key : key.value;
 }
@@ -73,56 +74,18 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
   const storage = options.storage ?? resolveDefaultStorage();
   const keyRef = ref(unwrapKey(options.key));
 
-  const position = ref<ReadingPositionValue | null>(null);
-
-  function hydrate(currentKey: string): void {
-    if (!storage) {
-      position.value = null;
-      return;
-    }
-    try {
-      position.value = parseReadingPosition(storage.getItem(currentKey));
-    } catch {
-      position.value = null;
-    }
-  }
-  hydrate(keyRef.value);
-
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let pendingWrite: (() => void) | null = null;
-
-  /** Runs the pending throttled write immediately, if any. */
-  function flushPending(): void {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    const write = pendingWrite;
-    pendingWrite = null;
-    if (!write) return;
-    try {
-      write();
-    } catch {
-      // Quota, disabled storage, or denied access — keep the in-memory copy.
-    }
-  }
-
-  /** Drops the pending throttled write without running it. */
-  function cancelPending(): void {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    pendingWrite = null;
-  }
+  const position = ref<ReadingPositionValue | null>(
+    readStorage(storage, keyRef.value, parseReadingPosition, null),
+  );
+  const pending = createPendingWrite();
 
   watch(
     () => unwrapKey(options.key),
     (k) => {
       // A write scheduled under the previous key must land there, not in the new book's slot.
-      flushPending();
+      pending.flush();
       keyRef.value = k;
-      hydrate(k);
+      position.value = readStorage(storage, k, parseReadingPosition, null);
     },
   );
 
@@ -130,30 +93,26 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
     position.value = next;
     if (storage) {
       const keyAtSave = keyRef.value;
-      cancelPending();
-      pendingWrite = () => {
+      pending.schedule(() => {
         storage.setItem(keyAtSave, serializeReadingPosition(next));
-      };
-      timer = setTimeout(flushPending, throttleMs);
+      }, throttleMs);
     }
     options.onChange?.(next);
   }
 
   function clear(): void {
     position.value = null;
-    cancelPending();
-    if (storage) {
-      try {
-        storage.removeItem(keyRef.value);
-      } catch {
-        // ignore
-      }
-    }
+    pending.cancel();
+    removeStorage(storage, keyRef.value);
     options.onChange?.(null);
   }
 
-  // Unmounting mid-throttle must not lose the position the user just reached.
-  onScopeDispose(flushPending);
+  // Closing the tab or disposing the scope mid-throttle must not lose the last save().
+  const detachPageHide = flushOnPageHide(pending.flush);
+  onScopeDispose(() => {
+    detachPageHide();
+    pending.flush();
+  });
 
   return { position, save, clear };
 }

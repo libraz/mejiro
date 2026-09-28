@@ -8,11 +8,13 @@ import {
   exportEditableEpub,
 } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { fetchEpubBuffer, toError, withErrorReporting } from './errors.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
-import { MejiroReader } from './MejiroReader.js';
+import { MejiroReader, type MejiroReaderHandle } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
 
+/** Props for {@link MejiroEditor}. */
 export interface MejiroEditorProps {
   /** URL fetched and loaded on mount. */
   epubUrl?: string;
@@ -69,7 +71,10 @@ export interface MejiroEditorProps {
   onLoad?: (editor: EditableEpub) => void;
   /** Called after export completes. */
   onExport?: (buffer: ArrayBuffer) => void;
-  /** Called when loading or parsing an EPUB fails. */
+  /**
+   * Called when loading, image insertion or export fails. The error is also
+   * shown in the editor.
+   */
   onError?: (error: Error) => void;
 }
 
@@ -174,6 +179,7 @@ export function MejiroEditor({
   const messages = useI18n();
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const readerRef = useRef<MejiroReaderHandle | null>(null);
   const [editor, setEditor] = useState<EditableEpub | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -206,26 +212,31 @@ export function MejiroEditor({
     onErrorRef.current = onError;
   }, [onError]);
 
-  const loadBufferForRequest = useCallback(async (buffer: ArrayBuffer, requestId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
-      if (requestId !== loadRequestIdRef.current) return;
-      setEditor(next);
-      setSelection({ chapter: 0, paragraph: 0 });
-      setRevision((value) => value + 1);
-      onLoadRef.current?.(next);
-    } catch (err) {
-      if (requestId === loadRequestIdRef.current) {
-        const nextError = err instanceof Error ? err : new Error(String(err));
-        setError(nextError);
-        onErrorRef.current?.(nextError);
-      }
-    } finally {
-      if (requestId === loadRequestIdRef.current) setLoading(false);
-    }
+  /** Shows `nextError` in the editor and forwards it to `onError`. */
+  const reportError = useCallback((nextError: Error) => {
+    setError(nextError);
+    onErrorRef.current?.(nextError);
   }, []);
+
+  const loadBufferForRequest = useCallback(
+    async (buffer: ArrayBuffer, requestId: number) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
+        if (requestId !== loadRequestIdRef.current) return;
+        setEditor(next);
+        setSelection({ chapter: 0, paragraph: 0 });
+        setRevision((value) => value + 1);
+        onLoadRef.current?.(next);
+      } catch (err) {
+        if (requestId === loadRequestIdRef.current) reportError(toError(err));
+      } finally {
+        if (requestId === loadRequestIdRef.current) setLoading(false);
+      }
+    },
+    [reportError],
+  );
 
   async function loadFile(file: File): Promise<void> {
     const requestId = ++loadRequestIdRef.current;
@@ -235,9 +246,7 @@ export function MejiroEditor({
       await loadBufferForRequest(await file.arrayBuffer(), requestId);
     } catch (err) {
       if (requestId === loadRequestIdRef.current) {
-        const nextError = err instanceof Error ? err : new Error(String(err));
-        setError(nextError);
-        onErrorRef.current?.(nextError);
+        reportError(toError(err));
         setLoading(false);
       }
     }
@@ -251,17 +260,11 @@ export function MejiroEditor({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(epubUrl);
-        if (!res.ok) throw new Error(`Failed to load EPUB: ${res.status}`);
-        const buffer = await res.arrayBuffer();
+        const buffer = await fetchEpubBuffer(epubUrl);
         if (cancelled || requestId !== loadRequestIdRef.current) return;
         await loadBufferForRequest(buffer, requestId);
       } catch (err) {
-        if (!cancelled && requestId === loadRequestIdRef.current) {
-          const nextError = err instanceof Error ? err : new Error(String(err));
-          setError(nextError);
-          onErrorRef.current?.(nextError);
-        }
+        if (!cancelled && requestId === loadRequestIdRef.current) reportError(toError(err));
       } finally {
         if (!cancelled && requestId === loadRequestIdRef.current) setLoading(false);
       }
@@ -269,14 +272,38 @@ export function MejiroEditor({
     return () => {
       cancelled = true;
     };
-  }, [epubUrl, loadBufferForRequest]);
+  }, [epubUrl, loadBufferForRequest, reportError]);
 
+  // The proofread buffer resets only when the edit target moves. A document
+  // regenerated under the same target (image insert, apply) keeps unapplied text.
+  const syncedRef = useRef<{ editor: EditableEpub | null; target: string; text: string } | null>(
+    null,
+  );
   useEffect(() => {
-    setText(paragraph?.text ?? '');
+    const nextText = paragraph?.text ?? '';
+    const target = `${selection.chapter}:${selection.paragraph}`;
+    const prev = syncedRef.current;
+    syncedRef.current = { editor, target, text: nextText };
+    if (prev && prev.editor === editor && prev.target === target) {
+      setText((current) => (current === prev.text ? nextText : current));
+      return;
+    }
+    setText(nextText);
     setRubyStart(0);
-    setRubyEnd(Math.min(1, [...(paragraph?.text ?? '')].length));
+    setRubyEnd(Math.min(1, [...nextText].length));
     setRubyText('');
-  }, [paragraph]);
+  }, [editor, selection.chapter, selection.paragraph, paragraph]);
+
+  // Keep the preview on the selected paragraph, including after each edit
+  // re-clones the preview book.
+  useEffect(() => {
+    if (!previewBook) return;
+    void readerRef.current?.goToAnchor({
+      chapter: selection.chapter,
+      paragraph: selection.paragraph,
+      charIndex: 0,
+    });
+  }, [previewBook, selection.chapter, selection.paragraph]);
 
   /**
    * Moves the edit target. A pending proofread edit is committed before the
@@ -337,33 +364,43 @@ export function MejiroEditor({
   }
 
   async function addImage(file: File): Promise<void> {
-    if (!(editor && chapter)) return;
-    editor.addImage(selection.chapter, {
-      filename: file.name,
-      mediaType: file.type || 'application/octet-stream',
-      data: await file.arrayBuffer(),
-      alt: file.name,
-      afterBlockId: paragraphBlockId(chapter, selection.paragraph),
-    });
-    setRevision((value) => value + 1);
+    await withErrorReporting(async () => {
+      if (!(editor && chapter)) return;
+      const chapterIndex = selection.chapter;
+      const afterBlockId = paragraphBlockId(chapter, selection.paragraph);
+      const data = await file.arrayBuffer();
+      editor.addImage(chapterIndex, {
+        filename: file.name,
+        mediaType: file.type || 'application/octet-stream',
+        data,
+        alt: file.name,
+        afterBlockId,
+      });
+      setRevision((value) => value + 1);
+    }, reportError);
   }
 
   async function exportEpub(): Promise<void> {
-    if (!editor) return;
-    const watermark = exportPolicy?.watermark;
-    const source = watermark ? watermarkedBook(editor.book, watermark) : editor.book;
-    let buffer = await exportEditableEpub(source, assetResolver ? { assetResolver } : undefined);
-    if (exportPolicy?.encrypt) buffer = await exportPolicy.encrypt(buffer);
-    const decision = await onBeforeExport?.(buffer);
-    onExport?.(buffer);
-    if (decision === false) return;
-    if (exportPolicy?.allowDownload === false) return;
-    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${editor.title || 'edited'}.epub`;
-    a.click();
-    URL.revokeObjectURL(url);
+    await withErrorReporting(async () => {
+      if (!editor) return;
+      const watermark = exportPolicy?.watermark;
+      const source = watermark ? watermarkedBook(editor.book, watermark) : editor.book;
+      let buffer = await exportEditableEpub(source, assetResolver ? { assetResolver } : undefined);
+      if (exportPolicy?.encrypt) buffer = await exportPolicy.encrypt(buffer);
+      const decision = await onBeforeExport?.(buffer);
+      onExport?.(buffer);
+      // An export policy supersedes onBeforeExport for download control.
+      const allowDownload = exportPolicy
+        ? exportPolicy.allowDownload !== false
+        : decision !== false;
+      if (!allowDownload) return;
+      const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${editor.title || 'edited'}.epub`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, reportError);
   }
 
   return (
@@ -371,7 +408,10 @@ export function MejiroEditor({
       <main className="mejiro-editor-preview">
         {previewBook ? (
           <MejiroReader
+            ref={readerRef}
             epub={previewBook}
+            chapter={selection.chapter}
+            onChapterChange={(index) => selectParagraph(index, 0)}
             fonts={fonts}
             subtitle={messages.editorPreviewSubtitle}
             chapterNavMode="panel"

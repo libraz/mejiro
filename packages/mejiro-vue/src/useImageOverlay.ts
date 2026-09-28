@@ -136,7 +136,7 @@ export function useImageOverlay(
       pointerId: e.pointerId,
       captureElement: target,
       activeElement: target,
-      dragClass: 'dragging',
+      dragClass: 'is-dragging',
       registry: activeDragCleanups,
       onChange: applyRect,
     });
@@ -156,7 +156,7 @@ export function useImageOverlay(
       pointerId: e.pointerId,
       captureElement: target,
       activeElement: target.parentElement,
-      dragClass: 'dragging',
+      dragClass: 'is-dragging',
       registry: activeDragCleanups,
       onChange: applyRect,
     });

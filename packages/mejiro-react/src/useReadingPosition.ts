@@ -5,6 +5,13 @@ import {
   serializeReadingPosition,
 } from '@libraz/mejiro';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  createPendingWrite,
+  flushOnPageHide,
+  readStorage,
+  removeStorage,
+  resolveDefaultStorage,
+} from './persistence.js';
 
 /**
  * Persisted reading position. Anchor-shaped — pair with
@@ -45,12 +52,6 @@ export interface UseReadingPositionReturn {
   clear(): void;
 }
 
-function resolveDefaultStorage(): ReadingPositionStorage | null {
-  if (typeof globalThis === 'undefined') return null;
-  const w = (globalThis as { localStorage?: ReadingPositionStorage }).localStorage;
-  return w ?? null;
-}
-
 /**
  * Persistence helper for reader state. Returns the saved anchor and a
  * throttled saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
@@ -60,9 +61,10 @@ function resolveDefaultStorage(): ReadingPositionStorage | null {
  * const { position, save } = useReadingPosition({ key: `mejiro:${bookId}` });
  * const reader = useRef<MejiroReaderHandle>(null);
  *
+ * // Restore once per mount: depending on `position` would re-run after every save().
  * useEffect(() => {
  *   if (position) reader.current?.goToAnchor(position);
- * }, [position]);
+ * }, []);
  *
  * useEffect(() => {
  *   const off = reader.current?.subscribe('spreadChanged', () => {
@@ -81,61 +83,26 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
   const { key, throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const [position, setPosition] = useState<ReadingPositionValue | null>(() => {
-    if (!storage) return null;
-    try {
-      return parseReadingPosition(storage.getItem(key));
-    } catch {
-      return null;
-    }
-  });
+  const [position, setPosition] = useState<ReadingPositionValue | null>(() =>
+    readStorage(storage, key, parseReadingPosition, null),
+  );
   const storageRef = useRef(storage);
   storageRef.current = storage;
 
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingWriteRef = useRef<(() => void) | null>(null);
+  const pendingRef = useRef<ReturnType<typeof createPendingWrite> | null>(null);
+  if (!pendingRef.current) pendingRef.current = createPendingWrite();
+  const pending = pendingRef.current;
 
-  /** Runs the pending throttled write immediately, if any. */
-  const flushPending = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    const write = pendingWriteRef.current;
-    pendingWriteRef.current = null;
-    if (!write) return;
-    try {
-      write();
-    } catch {
-      // Quota, disabled storage, or denied access — keep the in-memory copy.
-    }
-  }, []);
-
-  /** Drops the pending throttled write without running it. */
-  const cancelPending = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    pendingWriteRef.current = null;
-  }, []);
+  // Closing the tab mid-throttle must not lose the last save().
+  useEffect(() => flushOnPageHide(pending.flush), [pending]);
 
   // Re-hydrate when the key changes (different book). Unmounting or switching
   // book mid-throttle must not lose the last save(), so the pending write —
   // which targets the key it was scheduled under — is flushed on cleanup.
   useEffect(() => {
-    const currentStorage = storageRef.current;
-    if (currentStorage) {
-      try {
-        setPosition(parseReadingPosition(currentStorage.getItem(key)));
-      } catch {
-        setPosition(null);
-      }
-    } else {
-      setPosition(null);
-    }
-    return flushPending;
-  }, [key, flushPending]);
+    setPosition(readStorage(storageRef.current, key, parseReadingPosition, null));
+    return pending.flush;
+  }, [key, pending]);
 
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
@@ -145,30 +112,21 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
       setPosition(next);
       const currentStorage = storageRef.current;
       if (currentStorage) {
-        cancelPending();
-        pendingWriteRef.current = () => {
+        pending.schedule(() => {
           currentStorage.setItem(key, serializeReadingPosition(next));
-        };
-        timerRef.current = setTimeout(flushPending, throttleMs);
+        }, throttleMs);
       }
       onChangeRef.current?.(next);
     },
-    [key, throttleMs, cancelPending, flushPending],
+    [key, throttleMs, pending],
   );
 
   const clear = useCallback(() => {
     setPosition(null);
-    cancelPending();
-    const currentStorage = storageRef.current;
-    if (currentStorage) {
-      try {
-        currentStorage.removeItem(key);
-      } catch {
-        // ignore
-      }
-    }
+    pending.cancel();
+    removeStorage(storageRef.current, key);
     onChangeRef.current?.(null);
-  }, [key, cancelPending]);
+  }, [key, pending]);
 
   return { position, save, clear };
 }

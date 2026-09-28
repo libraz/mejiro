@@ -1,6 +1,7 @@
 import type { BookOptions } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toError } from './errors.js';
 
 /** Options for {@link useMejiroBook}. */
 export interface UseMejiroBookOptions {
@@ -78,7 +79,7 @@ export function useMejiroBook(
         for (const waiter of waiters) waiter.resolve();
       },
       (err: unknown) => {
-        const error = err instanceof Error ? err : new Error(String(err));
+        const error = toError(err);
         const handler = optionsRef.current.onError;
         if (handler) {
           handler(error);

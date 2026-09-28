@@ -3,6 +3,7 @@
 
 import { EpubProject } from '@libraz/mejiro/epub';
 import { act, renderHook } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@libraz/mejiro/epub', () => ({
@@ -130,5 +131,51 @@ describe('useEpubProject (React)', () => {
         chapters: [expect.objectContaining({ id: 'blank', title: 'Untitled', body: 'Body' })],
       }),
     );
+  });
+});
+
+describe('useEpubProject (React) — StrictMode', () => {
+  const strict = { wrapper: StrictMode };
+
+  it('shifts the selection by exactly one when an earlier chapter is removed', () => {
+    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }), strict);
+    act(() => result.current.setSelectedChapter(2));
+    act(() => result.current.removeChapter(0));
+    expect(result.current.selectedChapter).toBe(1);
+    expect(result.current.currentChapter?.id).toBe('c');
+  });
+
+  it('selects the appended chapter once', () => {
+    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }), strict);
+    act(() => result.current.addChapter({ id: 'd' }));
+    expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c', 'd']);
+    expect(result.current.selectedChapter).toBe(3);
+  });
+
+  it('keeps the selected chapter identity through reorders', () => {
+    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }), strict);
+    act(() => result.current.setSelectedChapter(1));
+    act(() => result.current.reorderChapters(0, 2));
+    expect(result.current.currentChapter?.id).toBe('b');
+    act(() => result.current.reorderChapters(2, 0));
+    expect(result.current.currentChapter?.id).toBe('b');
+  });
+
+  it('composes two removals made in the same tick', () => {
+    const { result } = renderHook(
+      () =>
+        useEpubProject({
+          chapters: [...chapters, { id: 'd', title: 'D', body: '' }],
+          debounceMs: 10_000,
+        }),
+      strict,
+    );
+    act(() => result.current.setSelectedChapter(3));
+    act(() => {
+      result.current.removeChapter(0);
+      result.current.removeChapter(0);
+    });
+    expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'd']);
+    expect(result.current.currentChapter?.id).toBe('d');
   });
 });

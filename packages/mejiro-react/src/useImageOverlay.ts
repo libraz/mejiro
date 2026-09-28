@@ -168,7 +168,7 @@ export function useImageOverlay(
         pointerId: e.nativeEvent.pointerId,
         captureElement: target,
         activeElement: target,
-        dragClass: 'dragging',
+        dragClass: 'is-dragging',
         registry: activeDragCleanupsRef.current,
         onChange: applyRect,
       });
@@ -191,7 +191,7 @@ export function useImageOverlay(
         pointerId: e.nativeEvent.pointerId,
         captureElement: target,
         activeElement: target.parentElement,
-        dragClass: 'dragging',
+        dragClass: 'is-dragging',
         registry: activeDragCleanupsRef.current,
         onChange: applyRect,
       });

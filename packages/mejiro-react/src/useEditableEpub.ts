@@ -12,9 +12,11 @@ import {
   type EpubParseLimits,
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { fetchEpubBuffer, toError } from './errors.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
+/** Options for {@link useEditableEpub}. */
 export interface UseEditableEpubOptions {
   /** URL fetched and loaded on mount. */
   defaultUrl?: string;
@@ -32,26 +34,47 @@ export interface UseEditableEpubOptions {
   limits?: Partial<EpubParseLimits>;
 }
 
+/** Return value of {@link useEditableEpub}. */
 export interface UseEditableEpubReturn {
+  /** Loaded editor, or `null` before any load. */
   editor: EditableEpub | null;
+  /** The editor's live document, or `null` before any load. */
   book: EditableEpubBook | null;
+  /** Snapshot of `book` re-cloned on every edit, for feeding a preview reader. */
   previewBook: EditableEpubBook | null;
+  /** Whether a load is in progress. */
   loading: boolean;
+  /** Whether an export is in progress. */
   exporting: boolean;
+  /** Last load error, if any. */
   error: Error | null;
+  /** Counter bumped on every load, edit, undo and redo. */
   revision: number;
+  /** Undo / redo availability, or `null` before any load. */
   history: { canUndo: boolean; canRedo: boolean; depth: number; redoDepth: number } | null;
+  /** Paragraph targeted by the editing commands. */
   selection: EditableEpubSelection;
+  /** The paragraph at `selection`, or `null` when there is none. */
   selectedParagraph: AnnotatedParagraph | null;
+  /** Moves the selection, clamped to the loaded book. */
   setSelection: (selection: EditableEpubSelection) => void;
+  /** Loads an EPUB from an in-memory buffer. */
   loadBuffer: (buffer: ArrayBuffer) => Promise<EditableEpub | null>;
+  /** Loads an EPUB from a {@link File}. */
   loadFile: (file: File) => Promise<EditableEpub | null>;
+  /** Fetches and loads an EPUB; a non-2xx response is reported as an error. */
   loadUrl: (url: string) => Promise<EditableEpub | null>;
+  /** Replaces the selected paragraph's text and, optionally, its inline annotations. */
   updateParagraph: (text: string, inlineAnnotations?: readonly InlineAnnotation[]) => void;
+  /** Replaces the selected paragraph's inline annotations. */
   setInlineAnnotations: (inlineAnnotations: readonly InlineAnnotation[]) => void;
+  /** Inserts an image into the selected chapter. */
   addImage: (image: AddImageInput | EditableEpubImage) => void;
+  /** Reverts the last edit. Returns `false` when there is nothing to undo. */
   undo: () => boolean;
+  /** Re-applies the last undone edit. Returns `false` when there is nothing to redo. */
   redo: () => boolean;
+  /** Packages the edited document as an EPUB buffer. */
   exportEpub: (options?: EpubExportOptions) => Promise<ArrayBuffer | null>;
 }
 
@@ -91,7 +114,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         return next;
       } catch (err) {
         if (requestId === requestIdRef.current) {
-          const nextError = err instanceof Error ? err : new Error(String(err));
+          const nextError = toError(err);
           setError(nextError);
           onErrorRef.current?.(nextError);
         }
@@ -120,7 +143,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         return await loadBufferWithRequest(await file.arrayBuffer(), requestId);
       } catch (err) {
         if (requestId === requestIdRef.current) {
-          const nextError = err instanceof Error ? err : new Error(String(err));
+          const nextError = toError(err);
           setError(nextError);
           onErrorRef.current?.(nextError);
           setLoading(false);
@@ -137,12 +160,10 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`Failed to load EPUB: ${res.status}`);
-        return await loadBufferWithRequest(await res.arrayBuffer(), requestId);
+        return await loadBufferWithRequest(await fetchEpubBuffer(url), requestId);
       } catch (err) {
         if (requestId === requestIdRef.current) {
-          const nextError = err instanceof Error ? err : new Error(String(err));
+          const nextError = toError(err);
           setError(nextError);
           onErrorRef.current?.(nextError);
           setLoading(false);

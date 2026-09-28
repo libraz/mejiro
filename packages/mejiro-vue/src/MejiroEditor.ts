@@ -7,12 +7,26 @@ import {
   type EpubParseLimits,
   exportEditableEpub,
 } from '@libraz/mejiro/epub';
-import { computed, defineComponent, h, type PropType, ref, shallowRef, watch } from 'vue';
+import {
+  computed,
+  defineComponent,
+  h,
+  onMounted,
+  type PropType,
+  ref,
+  shallowRef,
+  watch,
+} from 'vue';
+import { fetchEpubBuffer, toError, withErrorReporting } from './errors.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
-import { MejiroReader } from './MejiroReader.js';
+import { MejiroReader, type MejiroReaderHandle } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
 
+/**
+ * EPUB editor UI for proofreading, ruby edits, image insertion, and export.
+ * Emits `load`, `export`, and `error` (load, image-insert and export failures).
+ */
 export const MejiroEditor = defineComponent({
   name: 'MejiroEditor',
   props: {
@@ -84,6 +98,7 @@ export const MejiroEditor = defineComponent({
     const messages = useI18n();
     const imageInput = ref<HTMLInputElement | null>(null);
     const textareaEl = ref<HTMLTextAreaElement | null>(null);
+    const readerEl = shallowRef<MejiroReaderHandle | null>(null);
     // The parsed EPUB is held shallowly (as in `useEditableEpub`): edits are
     // published through the `revision` counter below, so deep reactivity over
     // the whole document tree would be pure overhead.
@@ -115,6 +130,12 @@ export const MejiroEditor = defineComponent({
       return book.value ? cloneEditableEpubBook(book.value) : null;
     });
 
+    /** Shows `nextError` in the editor and emits it as `error`. */
+    function reportError(nextError: Error): void {
+      error.value = nextError;
+      emit('error', nextError);
+    }
+
     async function loadBufferForRequest(buffer: ArrayBuffer, requestId: number): Promise<void> {
       loading.value = true;
       error.value = null;
@@ -127,10 +148,7 @@ export const MejiroEditor = defineComponent({
         revision.value++;
         emit('load', next);
       } catch (err) {
-        if (requestId === loadRequestId) {
-          error.value = err instanceof Error ? err : new Error(String(err));
-          emit('error', error.value);
-        }
+        if (requestId === loadRequestId) reportError(toError(err));
       } finally {
         if (requestId === loadRequestId) loading.value = false;
       }
@@ -144,56 +162,79 @@ export const MejiroEditor = defineComponent({
         await loadBufferForRequest(await file.arrayBuffer(), requestId);
       } catch (err) {
         if (requestId === loadRequestId) {
-          error.value = err instanceof Error ? err : new Error(String(err));
-          emit('error', error.value);
+          reportError(toError(err));
           loading.value = false;
         }
       }
     }
 
+    // Deferred to mount so server-side setup never fetches.
+    onMounted(() => {
+      watch(
+        () => props.epubUrl,
+        (url, _previous, onCleanup) => {
+          const requestId = ++loadRequestId;
+          let cancelled = false;
+          onCleanup(() => {
+            cancelled = true;
+          });
+          if (!url) {
+            loading.value = false;
+            return;
+          }
+          void (async () => {
+            loading.value = true;
+            error.value = null;
+            try {
+              const buffer = await fetchEpubBuffer(url);
+              if (cancelled || requestId !== loadRequestId) return;
+              await loadBufferForRequest(buffer, requestId);
+            } catch (err) {
+              if (!cancelled && requestId === loadRequestId) reportError(toError(err));
+            } finally {
+              if (!cancelled && requestId === loadRequestId) loading.value = false;
+            }
+          })();
+        },
+        { immediate: true },
+      );
+    });
+
+    // The proofread buffer resets only when the edit target moves. A document
+    // regenerated under the same target (image insert, apply) keeps unapplied text.
+    let synced: { editor: EditableEpub | null; target: string; text: string } | null = null;
     watch(
-      () => props.epubUrl,
-      (url, _previous, onCleanup) => {
-        const requestId = ++loadRequestId;
-        let cancelled = false;
-        onCleanup(() => {
-          cancelled = true;
-        });
-        if (!url) {
-          loading.value = false;
+      [editor, chapterIndex, paragraphIndex, paragraph],
+      () => {
+        const nextText = paragraph.value?.text ?? '';
+        const target = `${chapterIndex.value}:${paragraphIndex.value}`;
+        const prev = synced;
+        synced = { editor: editor.value, target, text: nextText };
+        if (prev && prev.editor === editor.value && prev.target === target) {
+          if (text.value === prev.text) text.value = nextText;
           return;
         }
-        void (async () => {
-          loading.value = true;
-          error.value = null;
-          try {
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`Failed to load EPUB: ${res.status}`);
-            const buffer = await res.arrayBuffer();
-            if (cancelled || requestId !== loadRequestId) return;
-            await loadBufferForRequest(buffer, requestId);
-          } catch (err) {
-            if (!cancelled && requestId === loadRequestId) {
-              error.value = err instanceof Error ? err : new Error(String(err));
-              emit('error', error.value);
-            }
-          } finally {
-            if (!cancelled && requestId === loadRequestId) loading.value = false;
-          }
-        })();
+        text.value = nextText;
+        rubyStart.value = 0;
+        rubyEnd.value = Math.min(1, [...nextText].length);
+        rubyText.value = '';
       },
       { immediate: true },
     );
 
+    // Keep the preview on the selected paragraph, including after each edit
+    // re-clones the preview book.
     watch(
-      paragraph,
-      (next) => {
-        text.value = next?.text ?? '';
-        rubyStart.value = 0;
-        rubyEnd.value = Math.min(1, [...(next?.text ?? '')].length);
-        rubyText.value = '';
+      [previewBook, chapterIndex, paragraphIndex, readerEl],
+      () => {
+        if (!previewBook.value) return;
+        void readerEl.value?.goToAnchor({
+          chapter: chapterIndex.value,
+          paragraph: paragraphIndex.value,
+          charIndex: 0,
+        });
       },
-      { immediate: true },
+      { flush: 'post' },
     );
 
     /**
@@ -253,38 +294,49 @@ export const MejiroEditor = defineComponent({
     }
 
     async function addImage(file: File): Promise<void> {
-      if (!(editor.value && chapter.value)) return;
-      editor.value.addImage(chapterIndex.value, {
-        filename: file.name,
-        mediaType: file.type || 'application/octet-stream',
-        data: await file.arrayBuffer(),
-        alt: file.name,
-        afterBlockId: paragraphBlockId(chapter.value, paragraphIndex.value),
-      });
-      revision.value++;
+      await withErrorReporting(async () => {
+        const target = editor.value;
+        if (!(target && chapter.value)) return;
+        const ci = chapterIndex.value;
+        const afterBlockId = paragraphBlockId(chapter.value, paragraphIndex.value);
+        const data = await file.arrayBuffer();
+        target.addImage(ci, {
+          filename: file.name,
+          mediaType: file.type || 'application/octet-stream',
+          data,
+          alt: file.name,
+          afterBlockId,
+        });
+        revision.value++;
+      }, reportError);
     }
 
     async function exportEpub(): Promise<void> {
-      if (!editor.value) return;
-      const policy = props.exportPolicy;
-      const book = (editor.value as EditableEpub).book;
-      const source = policy?.watermark ? watermarkedBook(book, policy.watermark) : book;
-      const resolver = props.assetResolver;
-      let buffer = await exportEditableEpub(
-        source,
-        resolver ? { assetResolver: resolver } : undefined,
-      );
-      if (policy?.encrypt) buffer = await policy.encrypt(buffer);
-      const decision = await props.onBeforeExport?.(buffer);
-      emit('export', buffer);
-      if (decision === false) return;
-      if (policy?.allowDownload === false) return;
-      const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${editor.value.title || 'edited'}.epub`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await withErrorReporting(async () => {
+        const target = editor.value;
+        if (!target) return;
+        const policy = props.exportPolicy;
+        const source = policy?.watermark
+          ? watermarkedBook(target.book, policy.watermark)
+          : target.book;
+        const resolver = props.assetResolver;
+        let buffer = await exportEditableEpub(
+          source,
+          resolver ? { assetResolver: resolver } : undefined,
+        );
+        if (policy?.encrypt) buffer = await policy.encrypt(buffer);
+        const decision = await props.onBeforeExport?.(buffer);
+        emit('export', buffer);
+        // An export policy supersedes onBeforeExport for download control.
+        const allowDownload = policy ? policy.allowDownload !== false : decision !== false;
+        if (!allowDownload) return;
+        const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${target.title || 'edited'}.epub`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }, reportError);
     }
 
     return () =>
@@ -292,7 +344,12 @@ export const MejiroEditor = defineComponent({
         h('main', { class: 'mejiro-editor-preview' }, [
           previewBook.value
             ? h(MejiroReader, {
+                ref: (el: unknown) => {
+                  readerEl.value = el as MejiroReaderHandle | null;
+                },
                 epub: previewBook.value,
+                chapter: chapterIndex.value,
+                onChapterChange: (index: number) => selectParagraph(index, 0),
                 fonts: props.fonts ?? undefined,
                 subtitle: messages.value.editorPreviewSubtitle,
                 chapterNavMode: 'panel',
@@ -431,6 +488,7 @@ export const MejiroEditor = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroEditor}. */
 export type MejiroEditorProps = InstanceType<typeof MejiroEditor>['$props'];
 
 /**

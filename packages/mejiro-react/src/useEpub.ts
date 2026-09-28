@@ -1,14 +1,15 @@
 import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { fetchEpubBuffer, toError } from './errors.js';
 
 /** Options for {@link useEpub}. */
 export interface UseEpubOptions {
-  /** URL fetched on mount. A non-OK response is treated as "no default". */
+  /** URL fetched on mount. */
   defaultUrl?: string;
   /** Called after a successful load. */
   onLoad?: (book: EpubBook) => void;
-  /** Called when a load fails. Non-OK URL responses are still treated as "no default". */
+  /** Called when a load fails, including a non-2xx URL response. */
   onError?: (error: Error) => void;
   /**
    * Extra options merged into the `fetch` call when loading by URL. Useful
@@ -68,19 +69,20 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   const limitsRef = useRef(options.limits);
   limitsRef.current = options.limits;
 
-  const loadBuffer = useCallback(async (buffer: ArrayBuffer): Promise<EpubBook | null> => {
+  /** Parses whatever `read` yields; every failure lands in `error` and `onError` once. */
+  const load = useCallback(async (read: () => Promise<ArrayBuffer>): Promise<EpubBook | null> => {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     try {
-      const book = await parseEpub(buffer, { limits: limitsRef.current });
+      const book = await parseEpub(await read(), { limits: limitsRef.current });
       if (requestId !== requestIdRef.current) return null;
       setEpub(book);
       onLoadRef.current?.(book);
       return book;
     } catch (err) {
       if (requestId === requestIdRef.current) {
-        const nextError = err instanceof Error ? err : new Error(String(err));
+        const nextError = toError(err);
         setError(nextError);
         onErrorRef.current?.(nextError);
       }
@@ -90,58 +92,19 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     }
   }, []);
 
-  const loadFile = useCallback(async (file: File) => {
-    const requestId = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const book = await parseEpub(await file.arrayBuffer(), { limits: limitsRef.current });
-      if (requestId !== requestIdRef.current) return null;
-      setEpub(book);
-      onLoadRef.current?.(book);
-      return book;
-    } catch (err) {
-      if (requestId === requestIdRef.current) {
-        const nextError = err instanceof Error ? err : new Error(String(err));
-        setError(nextError);
-        onErrorRef.current?.(nextError);
-      }
-      return null;
-    } finally {
-      if (requestId === requestIdRef.current) setLoading(false);
-    }
-  }, []);
+  const loadBuffer = useCallback((buffer: ArrayBuffer) => load(async () => buffer), [load]);
 
-  const loadUrl = useCallback(async (url: string) => {
-    const requestId = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      let buffer: ArrayBuffer;
-      if (fetchEpubRef.current) {
-        buffer = await fetchEpubRef.current(url);
-      } else {
-        const init = fetchOptionsRef.current;
-        const res = init ? await fetch(url, init) : await fetch(url);
-        if (!res.ok) return null;
-        buffer = await res.arrayBuffer();
-      }
-      const book = await parseEpub(buffer, { limits: limitsRef.current });
-      if (requestId !== requestIdRef.current) return null;
-      setEpub(book);
-      onLoadRef.current?.(book);
-      return book;
-    } catch (err) {
-      if (requestId === requestIdRef.current) {
-        const nextError = err instanceof Error ? err : new Error(String(err));
-        setError(nextError);
-        onErrorRef.current?.(nextError);
-      }
-      return null;
-    } finally {
-      if (requestId === requestIdRef.current) setLoading(false);
-    }
-  }, []);
+  const loadFile = useCallback((file: File) => load(() => file.arrayBuffer()), [load]);
+
+  const loadUrl = useCallback(
+    (url: string) =>
+      load(() =>
+        fetchEpubRef.current
+          ? fetchEpubRef.current(url)
+          : fetchEpubBuffer(url, fetchOptionsRef.current),
+      ),
+    [load],
+  );
 
   const defaultUrl = options.defaultUrl;
   useEffect(() => {

@@ -1,6 +1,6 @@
 import type { EditableSettings, FontChoice } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useI18n } from './i18n.js';
 
 export type { EditableSettings, FontChoice };
@@ -29,6 +29,66 @@ function clampNumber(value: number, min: number, max: number, fallback: number):
 function parseClampedInput(value: string, min: number, max: number, fallback: number): number {
   if (value.trim() === '') return fallback;
   return clampNumber(Number(value), min, max, fallback);
+}
+
+interface CommittedNumberInputProps {
+  id: string;
+  className?: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onCommit: (value: number) => void;
+}
+
+/**
+ * Number field that edits a local draft and clamps / commits it on the native
+ * `change` event (blur, Enter, spinner) — the same moment the Vue panel
+ * commits — so a multi-digit value is never clamped mid-entry.
+ */
+function CommittedNumberInput({
+  id,
+  className,
+  value,
+  min,
+  max,
+  step,
+  onCommit,
+}: CommittedNumberInputProps): ReactNode {
+  const [draft, setDraft] = useState(String(value));
+  const [input, setInput] = useState<HTMLInputElement | null>(null);
+  const latest = useRef({ value, min, max, onCommit });
+  latest.current = { value, min, max, onCommit };
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  useEffect(() => {
+    if (!input) return;
+    const commit = (): void => {
+      const { value: current, min: lo, max: hi, onCommit: emit } = latest.current;
+      const next = parseClampedInput(input.value, lo, hi, current);
+      setDraft(String(next));
+      emit(next);
+    };
+    input.addEventListener('change', commit);
+    return () => input.removeEventListener('change', commit);
+  }, [input]);
+
+  return (
+    <input
+      ref={setInput}
+      id={id}
+      className={className}
+      type="number"
+      value={draft}
+      min={min}
+      max={max}
+      step={step}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  );
 }
 
 /** Props for {@link MejiroSettingsPanel}. */
@@ -105,22 +165,12 @@ export function MejiroSettingsPanel({
               >
                 A−
               </button>
-              <input
+              <CommittedNumberInput
                 id="mejiro-reader-font-size"
-                type="number"
                 value={settings.fontSize}
                 min={minFontSize}
                 max={maxFontSize}
-                onChange={(e) =>
-                  patch({
-                    fontSize: parseClampedInput(
-                      e.target.value,
-                      minFontSize,
-                      maxFontSize,
-                      settings.fontSize,
-                    ),
-                  })
-                }
+                onCommit={(fontSize) => patch({ fontSize })}
               />
               <button
                 type="button"
@@ -173,24 +223,14 @@ export function MejiroSettingsPanel({
               <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-line-spacing">
                 {messages.settingsLineSpacing}
               </label>
-              <input
+              <CommittedNumberInput
                 id="mejiro-reader-line-spacing"
                 className="mejiro-reader-control--wide"
-                type="number"
                 value={settings.lineSpacing ?? 1.8}
                 min={1.0}
                 max={3.0}
                 step={0.1}
-                onChange={(e) =>
-                  patch({
-                    lineSpacing: parseClampedInput(
-                      e.target.value,
-                      1,
-                      3,
-                      settings.lineSpacing ?? 1.8,
-                    ),
-                  })
-                }
+                onCommit={(lineSpacing) => patch({ lineSpacing })}
               />
             </div>
           </div>

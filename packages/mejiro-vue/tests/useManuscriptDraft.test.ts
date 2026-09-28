@@ -3,7 +3,7 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref } from 'vue';
-import { useManuscriptDraft } from '../src/useManuscriptDraft.js';
+import { type UseManuscriptDraftOptions, useManuscriptDraft } from '../src/useManuscriptDraft.js';
 
 function harness<T>(setup: () => T): { result: { current: T }; app: ReturnType<typeof mount> } {
   const result = { current: undefined as unknown as T };
@@ -102,6 +102,33 @@ describe('useManuscriptDraft (Vue)', () => {
     });
   });
 
+  it('tracks the selected chapter through add / remove / reorder', () => {
+    const { result } = harness(() =>
+      useManuscriptDraft({
+        initialChapters: [
+          { id: 'a', title: 'A', body: '' },
+          { id: 'b', title: 'B', body: '' },
+          { id: 'c', title: 'C', body: '' },
+          { id: 'd', title: 'D', body: '' },
+        ],
+      }),
+    );
+    const ids = () => result.current.chapters.value.map((chapter) => chapter.id);
+
+    result.current.setSelected(3);
+    result.current.removeChapter(1);
+    expect(ids()).toEqual(['a', 'c', 'd']);
+    expect(result.current.selected.value).toBe(2);
+
+    result.current.reorderChapters(0, 2);
+    expect(ids()).toEqual(['c', 'd', 'a']);
+    expect(result.current.selected.value).toBe(1);
+
+    result.current.addChapter({ id: 'e', title: 'E' });
+    expect(ids()).toEqual(['c', 'd', 'a', 'e']);
+    expect(result.current.selected.value).toBe(3);
+  });
+
   it('debounces and fires onAutosave', async () => {
     vi.useFakeTimers();
     const save = vi.fn();
@@ -173,6 +200,29 @@ describe('useManuscriptDraft (Vue)', () => {
     vi.useRealTimers();
   });
 
+  it('stops retrying once an autosave succeeds', async () => {
+    vi.useFakeTimers();
+    try {
+      const save = vi.fn(async () => {});
+      const { result } = harness(() =>
+        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+      );
+      result.current.patchChapter(0, { body: 'changed' });
+      await nextTick();
+      vi.advanceTimersByTime(150);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(save).toHaveBeenCalledTimes(1);
+
+      result.current.flushAutosave();
+      await Promise.resolve();
+      expect(save).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('autosaves a mapped payload and reacts to autosaveKey changes', async () => {
     vi.useFakeTimers();
     const save = vi.fn();
@@ -197,6 +247,76 @@ describe('useManuscriptDraft (Vue)', () => {
     vi.advanceTimersByTime(150);
     expect(save).toHaveBeenCalledTimes(2);
     expect(save.mock.calls[1][0]).toMatchObject({ title: 'Renamed' });
+    vi.useRealTimers();
+  });
+
+  it('hands onAutosave a structured-cloneable payload on every flush path', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn();
+    const { result, app } = harness(() =>
+      useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+    );
+    result.current.patchChapter(0, { body: 'debounced' });
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    result.current.patchChapter(0, { body: 'manual' });
+    await nextTick();
+    result.current.flushAutosave();
+    result.current.patchChapter(0, { body: 'unload' });
+    await nextTick();
+    window.dispatchEvent(new Event('pagehide'));
+    app.unmount();
+    expect(save).toHaveBeenCalledTimes(3);
+    for (const [payload] of save.mock.calls) {
+      expect(structuredClone(payload)).toEqual(payload);
+    }
+    vi.useRealTimers();
+  });
+
+  it.each(['pagehide', 'beforeunload'])('flushes a pending autosave on %s', async (type) => {
+    vi.useFakeTimers();
+    const save = vi.fn();
+    const { result } = harness(() => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }));
+    result.current.patchChapter(0, { body: 'changed' });
+    await nextTick();
+    expect(save).not.toHaveBeenCalled();
+    window.dispatchEvent(new Event(type));
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0][0][0].body).toBe('changed');
+    vi.useRealTimers();
+  });
+
+  it('uses the most recently supplied onAutosave, including one added after setup', async () => {
+    vi.useFakeTimers();
+    const first = vi.fn();
+    const second = vi.fn();
+    const options: UseManuscriptDraftOptions = { autosaveDelay: 100 };
+    const { result } = harness(() => useManuscriptDraft(options));
+
+    options.onAutosave = first;
+    result.current.patchChapter(0, { body: 'one' });
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    expect(first).toHaveBeenCalledTimes(1);
+
+    options.onAutosave = second;
+    result.current.patchChapter(0, { body: 'two' });
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second.mock.calls[0][0][0].body).toBe('two');
+    vi.useRealTimers();
+  });
+
+  it('does not autosave the unchanged initial draft', async () => {
+    vi.useFakeTimers();
+    const save = vi.fn();
+    const { app } = harness(() => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }));
+    await nextTick();
+    vi.advanceTimersByTime(150);
+    app.unmount();
+    expect(save).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 });

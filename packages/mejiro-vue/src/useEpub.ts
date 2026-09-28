@@ -1,6 +1,7 @@
 import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { onBeforeUnmount, onMounted, type Ref, shallowRef, type WatchStopHandle, watch } from 'vue';
+import { fetchEpubBuffer, toError } from './errors.js';
 
 /** Options for {@link useEpub}. */
 export interface UseEpubOptions {
@@ -8,7 +9,7 @@ export interface UseEpubOptions {
   defaultUrl?: string;
   /** Called after a successful load. */
   onLoad?: (book: EpubBook) => void;
-  /** Called when a load fails. Non-OK URL responses are still treated as "no default". */
+  /** Called when a load fails, including a non-2xx URL response. */
   onError?: (error: Error) => void;
   /**
    * Extra options merged into the `fetch` call when loading by URL. Useful
@@ -40,7 +41,7 @@ export interface UseEpubReturn {
   loadBuffer: (buffer: ArrayBuffer) => Promise<EpubBook | null>;
   /** Parse an EPUB from a {@link File}. */
   loadFile: (file: File) => Promise<EpubBook | null>;
-  /** Fetch a URL and parse the response. Returns `null` on non-OK status. */
+  /** Fetch a URL and parse the response. A non-2xx response is reported as an error. */
   loadUrl: (url: string) => Promise<EpubBook | null>;
   /** Replace the current EPUB without going through the parser. */
   setEpub: (book: EpubBook | null) => void;
@@ -53,7 +54,6 @@ export interface UseEpubReturn {
  * When `options.defaultUrl` is set, it is fetched and loaded immediately.
  * If `options.defaultUrl` is exposed via a reactive getter, URL changes are
  * loaded as well.
- * A non-OK response is treated as "no default available" (no error is set).
  */
 export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   const epub = shallowRef<EpubBook | null>(null);
@@ -61,19 +61,20 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   const error = shallowRef<Error | null>(null);
   let requestId = 0;
 
-  async function loadBuffer(buffer: ArrayBuffer): Promise<EpubBook | null> {
+  /** Parses whatever `read` yields; every failure lands in `error` and `onError` once. */
+  async function load(read: () => Promise<ArrayBuffer>): Promise<EpubBook | null> {
     const currentRequest = ++requestId;
     loading.value = true;
     error.value = null;
     try {
-      const book = await parseEpub(buffer, { limits: options.limits });
+      const book = await parseEpub(await read(), { limits: options.limits });
       if (currentRequest !== requestId) return null;
       epub.value = book;
       options.onLoad?.(book);
       return book;
     } catch (err) {
       if (currentRequest === requestId) {
-        error.value = err instanceof Error ? err : new Error(String(err));
+        error.value = toError(err);
         options.onError?.(error.value);
       }
       return null;
@@ -82,55 +83,18 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     }
   }
 
-  async function loadFile(file: File): Promise<EpubBook | null> {
-    const currentRequest = ++requestId;
-    loading.value = true;
-    error.value = null;
-    try {
-      const book = await parseEpub(await file.arrayBuffer(), { limits: options.limits });
-      if (currentRequest !== requestId) return null;
-      epub.value = book;
-      options.onLoad?.(book);
-      return book;
-    } catch (err) {
-      if (currentRequest === requestId) {
-        error.value = err instanceof Error ? err : new Error(String(err));
-        options.onError?.(error.value);
-      }
-      return null;
-    } finally {
-      if (currentRequest === requestId) loading.value = false;
-    }
+  function loadBuffer(buffer: ArrayBuffer): Promise<EpubBook | null> {
+    return load(async () => buffer);
   }
 
-  async function loadUrl(url: string): Promise<EpubBook | null> {
-    const currentRequest = ++requestId;
-    loading.value = true;
-    error.value = null;
-    try {
-      let buffer: ArrayBuffer;
-      if (options.fetchEpub) {
-        buffer = await options.fetchEpub(url);
-      } else {
-        const init = options.fetchOptions;
-        const res = init ? await fetch(url, init) : await fetch(url);
-        if (!res.ok) return null;
-        buffer = await res.arrayBuffer();
-      }
-      const book = await parseEpub(buffer, { limits: options.limits });
-      if (currentRequest !== requestId) return null;
-      epub.value = book;
-      options.onLoad?.(book);
-      return book;
-    } catch (err) {
-      if (currentRequest === requestId) {
-        error.value = err instanceof Error ? err : new Error(String(err));
-        options.onError?.(error.value);
-      }
-      return null;
-    } finally {
-      if (currentRequest === requestId) loading.value = false;
-    }
+  function loadFile(file: File): Promise<EpubBook | null> {
+    return load(() => file.arrayBuffer());
+  }
+
+  function loadUrl(url: string): Promise<EpubBook | null> {
+    return load(() =>
+      options.fetchEpub ? options.fetchEpub(url) : fetchEpubBuffer(url, options.fetchOptions),
+    );
   }
 
   let stopDefaultUrlWatch: WatchStopHandle | undefined;

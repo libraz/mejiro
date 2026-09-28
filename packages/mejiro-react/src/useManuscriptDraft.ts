@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toError } from './errors.js';
 import type { ManuscriptEditorChapter } from './MejiroManuscriptEditor.js';
+import { createDraftChangeTracker, flushOnPageHide, snapshotChapters } from './persistence.js';
 
 /** Options for {@link useManuscriptDraft}. */
 export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]> {
@@ -24,14 +26,24 @@ export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]
 
 /** Return value of {@link useManuscriptDraft}. */
 export interface UseManuscriptDraftReturn {
+  /** Current chapters, in reading order. */
   chapters: ManuscriptEditorChapter[];
   /** Index of the chapter currently being edited. */
   selected: number;
+  /** Selects a chapter, clamped to the chapter range. */
   setSelected(index: number): void;
+  /**
+   * Replaces every chapter; an empty list becomes one generated chapter. The
+   * selected chapter is kept by id when it survives.
+   */
   setChapters(chapters: ManuscriptEditorChapter[]): void;
+  /** Merges `patch` into the chapter at `index`. */
   patchChapter(index: number, patch: Partial<ManuscriptEditorChapter>): void;
+  /** Appends a chapter (generated defaults fill omitted fields) and selects it. */
   addChapter(chapter?: Partial<ManuscriptEditorChapter>): void;
+  /** Removes the chapter at `index`; the last remaining chapter is never removed. */
   removeChapter(index: number): void;
+  /** Moves the chapter at `from` to `to`, keeping the same chapter selected. */
   reorderChapters(from: number, to: number): void;
   /** Last autosave failure, if any. */
   autosaveError: Error | null;
@@ -91,7 +103,11 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   chaptersRef.current = chapters;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
-  const didMountRef = useRef(false);
+  // Seeded with the mount-time draft, so a re-run mount effect (StrictMode)
+  // is not mistaken for an edit.
+  const trackerRef = useRef<ReturnType<typeof createDraftChangeTracker> | null>(null);
+  if (!trackerRef.current)
+    trackerRef.current = createDraftChangeTracker(chapters, autosaveKey ?? '');
   const dirtyRef = useRef(false);
   const mountedRef = useRef(true);
   // Bumped on every change that needs persisting. A save only clears the dirty
@@ -106,9 +122,8 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     }
     const revision = revisionRef.current;
     inFlightRevisionRef.current = revision;
-    const payload = payloadRef.current
-      ? payloadRef.current(chaptersRef.current)
-      : (chaptersRef.current as TAutosave);
+    const plain = snapshotChapters(chaptersRef.current);
+    const payload = payloadRef.current ? payloadRef.current(plain) : (plain as TAutosave);
     void Promise.resolve(callback(payload))
       .then(() => {
         if (revisionRef.current === revision) dirtyRef.current = false;
@@ -116,23 +131,20 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
       .catch((err) => {
         // Keep the draft dirty so a later flush retries the failed save.
         if (!mountedRef.current) return;
-        setAutosaveError(err instanceof Error ? err : new Error(String(err)));
+        setAutosaveError(toError(err));
       })
       .finally(() => {
         if (inFlightRevisionRef.current === revision) inFlightRevisionRef.current = -1;
       });
   }, []);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: chapters/autosaveKey intentionally schedule autosave; latest payload is read from refs.
   useEffect(() => {
-    if (!didMountRef.current) {
-      didMountRef.current = true;
-      return undefined;
+    if (trackerRef.current?.changed(chapters, autosaveKey ?? '')) {
+      dirtyRef.current = true;
+      revisionRef.current += 1;
+      setAutosaveError(null);
     }
-    if (!saveRef.current) return undefined;
-    dirtyRef.current = true;
-    revisionRef.current += 1;
-    setAutosaveError(null);
+    if (!(saveRef.current && dirtyRef.current)) return undefined;
     const timer = setTimeout(() => {
       flushAutosave();
     }, autosaveDelay);
@@ -141,12 +153,11 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
 
   useEffect(() => {
     mountedRef.current = true;
-    const handleBeforeUnload = () => flushAutosave();
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    const detachPageHide = flushOnPageHide(flushAutosave);
     return () => {
       flushAutosave();
       mountedRef.current = false;
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      detachPageHide();
     };
   }, [flushAutosave]);
 
