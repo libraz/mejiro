@@ -724,7 +724,8 @@
     }
   }
 
-  /* Single-page mode: render only the right page, centered. */
+  /* Single-page mode: one page of the spread (the side the page index
+   * falls on), centered. */
   .mejiro-reader-spread--single {
     flex-direction: row;
     justify-content: center;
@@ -860,10 +861,15 @@
     width: 100%;
   }
 
+  /* Headings set --mejiro-paragraph-scale and font-size follows it. Every
+   * paragraph margin divides by the same scale, so gaps stay in the page's
+   * base em even on a heading, whose own em is larger. */
   .mejiro-reader-page-content .mejiro-paragraph {
+    --mejiro-paragraph-scale: 1;
     writing-mode: vertical-rl;
     display: inline-block;
-    margin-right: 0.4em;
+    font-size: calc(var(--mejiro-paragraph-scale) * 1em);
+    margin-right: calc(0.4em / var(--mejiro-paragraph-scale));
     white-space: nowrap;
   }
 
@@ -871,74 +877,76 @@
     margin-right: 0;
   }
 
+  /* Heading defaults — applies to all heading levels unless overridden */
   .mejiro-reader-page-content .mejiro-paragraph--heading {
+    --mejiro-paragraph-scale: 1.4;
     font-weight: 700;
-    font-size: 1.4em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--heading + .mejiro-paragraph {
-    margin-right: 1.2em;
+    margin-right: calc(1.2em / var(--mejiro-paragraph-scale));
   }
 
+  /* Per-level heading styles */
   .mejiro-reader-page-content .mejiro-paragraph--h1 {
+    --mejiro-paragraph-scale: 1.6;
     font-weight: 700;
-    font-size: 1.6em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h1 + .mejiro-paragraph {
-    margin-right: 1.4em;
+    margin-right: calc(1.4em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h2 {
+    --mejiro-paragraph-scale: 1.4;
     font-weight: 700;
-    font-size: 1.4em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h2 + .mejiro-paragraph {
-    margin-right: 1.2em;
+    margin-right: calc(1.2em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h3 {
+    --mejiro-paragraph-scale: 1.2;
     font-weight: 700;
-    font-size: 1.2em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h3 + .mejiro-paragraph {
-    margin-right: 1em;
+    margin-right: calc(1em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h4 {
+    --mejiro-paragraph-scale: 1.1;
     font-weight: 700;
-    font-size: 1.1em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h4 + .mejiro-paragraph {
-    margin-right: 0.8em;
+    margin-right: calc(0.8em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h5 {
+    --mejiro-paragraph-scale: 1;
     font-weight: 700;
-    font-size: 1em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h5 + .mejiro-paragraph {
-    margin-right: 0.6em;
+    margin-right: calc(0.6em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h6 {
+    --mejiro-paragraph-scale: 1;
     font-weight: 700;
-    font-size: 1em;
     height: 100%;
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--h6 + .mejiro-paragraph {
-    margin-right: 0.6em;
+    margin-right: calc(0.6em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--blockquote {
@@ -948,7 +956,7 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--blockquote + .mejiro-paragraph {
-    margin-right: 1em;
+    margin-right: calc(1em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--scene-break {

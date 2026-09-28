@@ -42,6 +42,12 @@ export type InlineNode =
  * halves of its base, so a ruby annotation whose base starts before `start`
  * contributes plain text and the reading stays on the slice that owns its start.
  *
+ * Which annotations survive (see {@link partiallyOverlaps}) is decided on the
+ * whole paragraph before any clamping, so the result never depends on where a
+ * caller slices it. That per-paragraph pass is cached per `annotations` array,
+ * which is therefore treated as immutable; a slice then only visits the
+ * annotations intersecting it.
+ *
  * @param chars - Character array of the whole paragraph.
  * @param annotations - Inline annotations addressed in paragraph coordinates.
  * @param start - Start index of the slice (inclusive).
@@ -54,13 +60,25 @@ export function buildInlineNodes(
   start = 0,
   end = chars.length,
 ): InlineNode[] {
-  return buildRange(
-    chars,
-    start,
-    end,
-    serializableAnnotations(annotations, chars.length, start, end),
-    jukugoContinuations(annotations),
-  );
+  const prepared = prepareAnnotations(annotations, chars.length);
+  const slice = sliceAnnotations(prepared, start, end);
+  return buildRange(chars, start, end, slice, 0, slice.length, prepared.continuations);
+}
+
+/**
+ * Returns the content an element node renders inside itself: its `children`
+ * when an annotation is nested in the span, otherwise its flattened text as a
+ * single `text` leaf. Every consumer of the tree resolves element content here,
+ * so no renderer flattens a span another one descends into.
+ *
+ * @param node - Element node of a tree built by {@link buildInlineNodes}.
+ * @returns Nodes covering the element's characters exactly once.
+ */
+export function inlineNodeContent(
+  node: Exclude<InlineNode, { type: 'text' }>,
+): readonly InlineNode[] {
+  if (node.children.length > 0) return node.children;
+  return [{ type: 'text', text: node.type === 'ruby' ? node.base : node.text }];
 }
 
 /**
@@ -106,49 +124,156 @@ export function partiallyOverlaps(a: InlineAnnotation, b: InlineAnnotation): boo
   return overlaps && !aContainsB && !bContainsA;
 }
 
-/**
- * Returns true when `ann` is a jukugo ruby annotation whose ruby text is
- * already rendered by the per-segment ruby annotations it covers. Such an
- * aggregate exists only to carry split points for the line breaker.
- */
-function isCoveredJukugo(
-  ann: InlineAnnotation,
-  inlineAnnotations: readonly InlineAnnotation[],
-): boolean {
-  if (ann.kind !== 'ruby' || ann.type !== 'jukugo') return false;
-  const span = ann.endIndex - ann.startIndex;
-  return inlineAnnotations.some(
-    (other) =>
-      other !== ann &&
-      other.kind === 'ruby' &&
-      other.startIndex >= ann.startIndex &&
-      other.endIndex <= ann.endIndex &&
-      (other.endIndex - other.startIndex < span || other.type !== 'jukugo'),
+/** Paragraph-level annotation state shared by every slice of one paragraph. */
+interface PreparedAnnotations {
+  readonly charCount: number;
+  /** Surviving annotations, sorted by {@link compareAnnotations}; a laminar family. */
+  readonly sorted: readonly InlineAnnotation[];
+  /** Index in `sorted` of each annotation's innermost container, or -1. */
+  readonly parent: Int32Array;
+  /** Per-segment ruby annotations continuing a jukugo word. */
+  readonly continuations: ReadonlySet<InlineAnnotation>;
+}
+
+const preparedCache = new WeakMap<readonly InlineAnnotation[], PreparedAnnotations>();
+
+function compareAnnotations(a: InlineAnnotation, b: InlineAnnotation): number {
+  return (
+    a.startIndex - b.startIndex ||
+    b.endIndex - a.endIndex ||
+    annotationNestingRank(a) - annotationNestingRank(b)
   );
 }
 
+function prepareAnnotations(
+  annotations: readonly InlineAnnotation[],
+  charCount: number,
+): PreparedAnnotations {
+  const cached = preparedCache.get(annotations);
+  if (cached && cached.charCount === charCount) return cached;
+
+  const { covered, continuations } = resolveJukugo(annotations);
+  const valid = annotations
+    .filter(
+      (ann) =>
+        !covered.has(ann) &&
+        ann.startIndex >= 0 &&
+        ann.endIndex <= charCount &&
+        ann.endIndex > ann.startIndex,
+    )
+    .sort(compareAnnotations);
+
+  // Both members of every interleaving pair are dropped. Sorted by start, a
+  // pair can only interleave while the earlier one is still open.
+  const dropped = new Set<InlineAnnotation>();
+  let open: InlineAnnotation[] = [];
+  for (const ann of valid) {
+    open = open.filter((other) => other.endIndex > ann.startIndex);
+    for (const other of open) {
+      if (partiallyOverlaps(ann, other)) {
+        dropped.add(ann);
+        dropped.add(other);
+      }
+    }
+    open.push(ann);
+  }
+  const sorted = dropped.size > 0 ? valid.filter((ann) => !dropped.has(ann)) : valid;
+
+  const parent = new Int32Array(sorted.length);
+  const stack: number[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    while (stack.length > 0 && sorted[stack[stack.length - 1]].endIndex <= sorted[i].startIndex) {
+      stack.pop();
+    }
+    parent[i] = stack.length > 0 ? stack[stack.length - 1] : -1;
+    stack.push(i);
+  }
+
+  const prepared = { charCount, sorted, parent, continuations };
+  preparedCache.set(annotations, prepared);
+  return prepared;
+}
+
 /**
- * Collects the per-segment ruby annotations that continue a covered jukugo
- * aggregate, i.e. every segment inside it except the one at its start.
+ * Finds the jukugo ruby aggregates whose reading is already rendered by the
+ * per-segment rubies inside them (they exist only to carry split points for
+ * the line breaker), and the segments that continue each such word.
  */
-function jukugoContinuations(
-  inlineAnnotations: readonly InlineAnnotation[],
-): ReadonlySet<InlineAnnotation> {
+function resolveJukugo(annotations: readonly InlineAnnotation[]): {
+  covered: ReadonlySet<InlineAnnotation>;
+  continuations: ReadonlySet<InlineAnnotation>;
+} {
+  const covered = new Set<InlineAnnotation>();
   const continuations = new Set<InlineAnnotation>();
-  for (const agg of inlineAnnotations) {
-    if (!isCoveredJukugo(agg, inlineAnnotations)) continue;
-    for (const seg of inlineAnnotations) {
-      if (
-        seg.kind === 'ruby' &&
-        seg.type !== 'jukugo' &&
-        seg.startIndex > agg.startIndex &&
-        seg.endIndex <= agg.endIndex
-      ) {
+  const rubies = annotations
+    .filter((ann) => ann.kind === 'ruby')
+    .sort((a, b) => a.startIndex - b.startIndex);
+  for (const agg of rubies) {
+    if (agg.kind !== 'ruby' || agg.type !== 'jukugo') continue;
+    const span = agg.endIndex - agg.startIndex;
+    const inside: InlineAnnotation[] = [];
+    for (
+      let j = lowerBound(rubies, agg.startIndex);
+      j < rubies.length && rubies[j].startIndex <= agg.endIndex;
+      j++
+    ) {
+      const other = rubies[j];
+      if (other !== agg && other.endIndex <= agg.endIndex) inside.push(other);
+    }
+    const isCovered = inside.some(
+      (other) =>
+        other.kind === 'ruby' &&
+        (other.endIndex - other.startIndex < span || other.type !== 'jukugo'),
+    );
+    if (!isCovered) continue;
+    covered.add(agg);
+    for (const seg of inside) {
+      if (seg.kind === 'ruby' && seg.type !== 'jukugo' && seg.startIndex > agg.startIndex) {
         continuations.add(seg);
       }
     }
   }
-  return continuations;
+  return { covered, continuations };
+}
+
+/** Index of the first annotation in `sorted` whose start is at or after `index`. */
+function lowerBound(sorted: readonly InlineAnnotation[], index: number): number {
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sorted[mid].startIndex < index) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Collects the annotations intersecting `[start, end)`, clamped to it: the
+ * containers still open at `start` (an ancestor chain) plus those starting
+ * inside the slice, so the cost follows the slice rather than the paragraph.
+ */
+function sliceAnnotations(
+  prepared: PreparedAnnotations,
+  start: number,
+  end: number,
+): InlineAnnotation[] {
+  const { sorted, parent } = prepared;
+  const first = lowerBound(sorted, start);
+  const open: InlineAnnotation[] = [];
+  for (let k = first - 1; k >= 0; k = parent[k]) {
+    if (sorted[k].endIndex > start) open.push(sorted[k]);
+  }
+  const result: InlineAnnotation[] = [];
+  for (let k = open.length - 1; k >= 0; k--) {
+    const clamped = clampAnnotation(open[k], start, end);
+    if (clamped) result.push(clamped);
+  }
+  for (let k = first; k < sorted.length && sorted[k].startIndex < end; k++) {
+    const clamped = clampAnnotation(sorted[k], start, end);
+    if (clamped) result.push(clamped);
+  }
+  return result.sort(compareAnnotations);
 }
 
 /**
@@ -169,62 +294,43 @@ function clampAnnotation(
   return { ...ann, startIndex, endIndex };
 }
 
-function serializableAnnotations(
-  inlineAnnotations: readonly InlineAnnotation[],
-  charCount: number,
-  start: number,
-  end: number,
-): InlineAnnotation[] {
-  return inlineAnnotations
-    .filter((ann) => !isCoveredJukugo(ann, inlineAnnotations))
-    .filter(
-      (ann) => ann.startIndex >= 0 && ann.endIndex <= charCount && ann.endIndex > ann.startIndex,
-    )
-    .map((ann) => clampAnnotation(ann, start, end))
-    .filter((ann): ann is InlineAnnotation => ann !== undefined)
-    .sort(
-      (a, b) =>
-        a.startIndex - b.startIndex ||
-        b.endIndex - a.endIndex ||
-        annotationNestingRank(a) - annotationNestingRank(b),
-    );
-}
-
+/**
+ * Builds nodes for `annotations[from..to)`, a sorted laminar run covering
+ * `[start, end)`: an annotation's descendants are the contiguous run after it
+ * that starts before it ends.
+ */
 function buildRange(
   chars: readonly string[],
   start: number,
   end: number,
   annotations: readonly InlineAnnotation[],
+  from: number,
+  to: number,
   continuations: ReadonlySet<InlineAnnotation>,
 ): InlineNode[] {
   const nodes: InlineNode[] = [];
   let pos = start;
-  for (let i = 0; i < annotations.length; i++) {
+  let i = from;
+  while (i < to) {
     const ann = annotations[i];
-    if (ann.startIndex < pos || ann.startIndex < start || ann.endIndex > end) continue;
-    if (annotations.some((other) => partiallyOverlaps(ann, other))) continue;
+    let next = i + 1;
+    while (next < to && annotations[next].startIndex < ann.endIndex) next++;
 
     if (ann.startIndex > pos) {
       pushText(nodes, chars.slice(pos, ann.startIndex).join(''));
     }
-
-    const children = annotations.filter(
-      (child, childIndex) =>
-        childIndex > i && child.startIndex >= ann.startIndex && child.endIndex <= ann.endIndex,
-    );
     const text = chars.slice(ann.startIndex, ann.endIndex).join('');
-    const node = toNode(
-      ann,
-      text,
-      children.length > 0
-        ? buildRange(chars, ann.startIndex, ann.endIndex, children, continuations)
-        : [],
-    );
+    const children =
+      next > i + 1
+        ? buildRange(chars, ann.startIndex, ann.endIndex, annotations, i + 1, next, continuations)
+        : [];
+    const node = toNode(ann, text, children);
     if (node.type === 'ruby' && ann.startIndex > start && continuations.has(ann)) {
       node.continuesJukugo = true;
     }
     nodes.push(node);
     pos = ann.endIndex;
+    i = next;
   }
   if (pos < end) {
     pushText(nodes, chars.slice(pos, end).join(''));

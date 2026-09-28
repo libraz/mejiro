@@ -1,11 +1,33 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_HEADING_STYLES } from '../../src/book/constants.js';
+import { buildParagraphMeasures } from '../../src/render/measures.js';
+import type { RenderEntry } from '../../src/render/types.js';
 
 const root = fileURLToPath(new URL('../../src/render/', import.meta.url));
 
 function readCss(name: string): string {
   return readFileSync(`${root}${name}`, 'utf8');
+}
+
+function entry(extra: Partial<RenderEntry>): RenderEntry {
+  return { chars: ['あ'], breakPoints: new Uint32Array(), inlineAnnotations: [], ...extra };
+}
+
+/** Declarations of every rule under `prefix`, keyed by the selector with the prefix removed. */
+function cssRules(css: string, prefix: string): Map<string, Map<string, string>> {
+  const rules = new Map<string, Map<string, string>>();
+  for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
+    const name = selector.replace(/\/\*[\s\S]*?\*\//gu, '').trim();
+    if (!name.startsWith(prefix)) continue;
+    const declarations = new Map<string, string>();
+    for (const [, property, value] of body.matchAll(/([\w-]+)\s*:\s*([^;]+);/gu)) {
+      declarations.set(property, value.trim());
+    }
+    rules.set(name.slice(prefix.length), declarations);
+  }
+  return rules;
 }
 
 describe('render CSS', () => {
@@ -23,10 +45,10 @@ describe('render CSS', () => {
 
   it('uses right-side vertical paragraph gaps', () => {
     for (const css of [readCss('mejiro.css'), readCss('mejiro-reader.css')]) {
-      expect(css).toContain('margin-right: 0.4em');
-      expect(css).toContain('margin-right: 1.2em');
+      expect(css).toContain('margin-right: calc(0.4em / var(--mejiro-paragraph-scale))');
+      expect(css).toContain('margin-right: calc(1.2em / var(--mejiro-paragraph-scale))');
+      expect(css).not.toContain('margin-left: calc(');
       expect(css).not.toContain('margin-left: 0.4em');
-      expect(css).not.toContain('margin-left: 1.2em');
     }
   });
 
@@ -34,7 +56,64 @@ describe('render CSS', () => {
     const css = readCss('mejiro-reader.css');
     expect(css).toContain('.mejiro-reader-page-content .mejiro-paragraph--h5');
     expect(css).toContain('.mejiro-reader-page-content .mejiro-paragraph--h6');
-    expect(css).toContain('margin-right: 0.6em');
+    expect(css).toContain('margin-right: calc(0.6em / var(--mejiro-paragraph-scale))');
+  });
+
+  it('draws every paragraph gap the measures budget, in base em', () => {
+    const measures = buildParagraphMeasures(
+      [
+        entry({ kind: 'blockquote' }),
+        entry({ headingLevel: 1 }),
+        entry({ headingLevel: 2 }),
+        entry({ kind: 'blockquote' }),
+        entry({ headingLevel: 3 }),
+        entry({ kind: 'sceneBreak' }),
+        entry({ kind: 'figure' }),
+        entry({}),
+      ],
+      { fontSize: 10, headingStyles: DEFAULT_HEADING_STYLES },
+    ).map((m) => m.gapBefore / 10);
+    for (const [name, prefix] of [
+      ['mejiro.css', ''],
+      ['mejiro-reader.css', '.mejiro-reader-page-content '],
+    ] as const) {
+      const rules = cssRules(readCss(name), prefix);
+      // Rendered gap of `cur` after `prev`, following the cascade of the shipped rules.
+      const gap = (prev: string, cur: string): number => {
+        const scale = Number(rules.get(cur)?.get('--mejiro-paragraph-scale') ?? 1);
+        const margin =
+          rules.get(`${prev} + .mejiro-paragraph`)?.get('margin-right') ??
+          rules.get(cur)?.get('margin-right') ??
+          rules.get('.mejiro-paragraph')?.get('margin-right');
+        const em = (margin ?? '').match(/^calc\(([\d.]+)em \/ var\(--mejiro-paragraph-scale\)\)$/u);
+        // A calc() margin is divided by the element's own scale; a plain em margin is not.
+        return em ? Number(em[1]) : Number.parseFloat(margin ?? '') * scale;
+      };
+      const cls = (suffix: string) => `.mejiro-paragraph--${suffix}`;
+      expect([
+        gap(cls('blockquote'), cls('h1')),
+        gap(cls('h1'), cls('h2')),
+        gap(cls('h2'), cls('blockquote')),
+        gap(cls('blockquote'), cls('h3')),
+        gap(cls('h3'), cls('scene-break')),
+        gap(cls('scene-break'), cls('figure')),
+        gap(cls('figure'), '.mejiro-paragraph'),
+      ]).toEqual(measures.slice(1));
+      for (const [level, style] of Object.entries(DEFAULT_HEADING_STYLES)) {
+        expect(rules.get(cls(`h${level}`))?.get('--mejiro-paragraph-scale')).toBe(
+          String(style.scale),
+        );
+      }
+    }
+  });
+
+  it('lets renderEpubStatic paragraphs wrap instead of running as one column', () => {
+    const rules = cssRules(readCss('mejiro.css'), '');
+    expect(rules.get('.mejiro-page--static .mejiro-paragraph')?.get('white-space')).toBe('normal');
+    expect(rules.get('.mejiro-page--static .mejiro-paragraph')?.get('display')).toBe('block');
+    expect(rules.get('.mejiro-page--static .mejiro-paragraph--pre')?.get('white-space')).toBe(
+      'pre',
+    );
   });
 
   it('consumes every custom property the editor CSS declares', () => {

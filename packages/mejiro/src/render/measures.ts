@@ -1,3 +1,4 @@
+import type { ParagraphKind } from '../book/types.js';
 import type { ColumnSlot } from '../exclusion.js';
 import type { ParagraphMeasure } from '../paginate.js';
 import type { LineMetric, LineMetricsResult, RenderEntry } from './types.js';
@@ -48,10 +49,67 @@ function isHeadingEntry(entry: RenderEntry): boolean {
 }
 
 /**
+ * Block-start gaps, in base-font em, the bundled stylesheets give structural
+ * paragraph kinds in place of `paragraphGapEm`, and the gap a blockquote leaves
+ * before whatever follows it. Headings take precedence over both.
+ */
+const KIND_GAP_BEFORE_EM: Partial<Record<ParagraphKind, number>> = {
+  blockquote: 0.8,
+  sceneBreak: 1.2,
+  figure: 1,
+};
+const BLOCKQUOTE_GAP_AFTER_EM = 1;
+
+/** Per-paragraph pitch and gap resolution shared by the measure builders. */
+interface ParagraphMetrics {
+  basePitch: number;
+  pitch(entry: RenderEntry): number;
+  gapBefore(entry: RenderEntry, prev: RenderEntry | undefined): number;
+}
+
+function paragraphMetrics(options: MeasureOptions): ParagraphMetrics {
+  const {
+    fontSize,
+    headingScale = 1.4,
+    paragraphGapEm = 0.4,
+    headingGapEm = 1.2,
+    headingStyles,
+  } = options;
+  const lineSpacing = resolveLineSpacing(options);
+  const basePitch = fontSize * lineSpacing;
+
+  // Legacy `isHeading` without a level uses the generic heading settings.
+  const scaleOf = (entry: RenderEntry): number =>
+    entry.headingLevel != null
+      ? (headingStyles?.[entry.headingLevel]?.scale ?? headingScale)
+      : headingScale;
+  const gapAfterOf = (entry: RenderEntry): number =>
+    entry.headingLevel != null
+      ? (headingStyles?.[entry.headingLevel]?.gapAfterEm ?? headingGapEm)
+      : headingGapEm;
+
+  return {
+    basePitch,
+    pitch: (entry) =>
+      isHeadingEntry(entry) ? Math.round(fontSize * scaleOf(entry)) * lineSpacing : basePitch,
+    gapBefore: (entry, prev) => {
+      if (prev == null) return fontSize * paragraphGapEm;
+      if (isHeadingEntry(prev)) return fontSize * gapAfterOf(prev);
+      if (prev.kind === 'blockquote') return fontSize * BLOCKQUOTE_GAP_AFTER_EM;
+      const kindGap = isHeadingEntry(entry) ? undefined : KIND_GAP_BEFORE_EM[entry.kind ?? 'body'];
+      return fontSize * (kindGap ?? paragraphGapEm);
+    },
+  };
+}
+
+/**
  * Builds paragraph measures from render entries for use with `paginate()`.
  *
- * Computes line pitch (font size x line spacing) and inter-paragraph gaps
- * based on whether each paragraph is a heading or body text.
+ * Computes line pitch (font size x line spacing) and the gap before each
+ * paragraph. The gap follows the bundled stylesheets: the previous paragraph's
+ * heading gap after a heading, `1em` after a blockquote, otherwise the
+ * paragraph's own kind gap (`0.8em` blockquote, `1.2em` scene break, `1em`
+ * figure) or `paragraphGapEm`.
  *
  * @param entries - Render entries for each paragraph.
  * @param options - Font size, line spacing, and paragraph gap configuration.
@@ -61,57 +119,12 @@ export function buildParagraphMeasures(
   entries: RenderEntry[],
   options: MeasureOptions,
 ): ParagraphMeasure[] {
-  const {
-    fontSize,
-    headingScale = 1.4,
-    paragraphGapEm = 0.4,
-    headingGapEm = 1.2,
-    headingStyles,
-  } = options;
-  const lineSpacing = resolveLineSpacing(options);
-
-  const basePitch = fontSize * lineSpacing;
-  const paragraphGap = fontSize * paragraphGapEm;
-
-  /** Resolve scale for a heading entry. Legacy `isHeading` uses generic heading settings. */
-  function resolveScale(entry: RenderEntry): number {
-    return entry.headingLevel != null
-      ? (headingStyles?.[entry.headingLevel]?.scale ?? headingScale)
-      : headingScale;
-  }
-
-  /** Resolve gapAfterEm for a heading entry. Legacy `isHeading` uses generic heading settings. */
-  function resolveGapAfter(entry: RenderEntry): number {
-    return entry.headingLevel != null
-      ? (headingStyles?.[entry.headingLevel]?.gapAfterEm ?? headingGapEm)
-      : headingGapEm;
-  }
-
-  return entries.map((entry, i) => {
-    const lineCount = entry.breakPoints.length + 1;
-    const isHeading = isHeadingEntry(entry);
-
-    // Line pitch for this paragraph
-    let linePitch: number;
-    if (isHeading) {
-      const scale = resolveScale(entry);
-      const headingFontSize = Math.round(fontSize * scale);
-      linePitch = headingFontSize * lineSpacing;
-    } else {
-      linePitch = basePitch;
-    }
-
-    // Gap before this paragraph
-    let gapBefore: number;
-    if (i > 0) {
-      const prev = entries[i - 1];
-      gapBefore = isHeadingEntry(prev) ? fontSize * resolveGapAfter(prev) : paragraphGap;
-    } else {
-      gapBefore = paragraphGap;
-    }
-
-    return { lineCount, linePitch, gapBefore };
-  });
+  const metrics = paragraphMetrics(options);
+  return entries.map((entry, i) => ({
+    lineCount: entry.breakPoints.length + 1,
+    linePitch: metrics.pitch(entry),
+    gapBefore: metrics.gapBefore(entry, entries[i - 1]),
+  }));
 }
 
 // ── Exclusion layout helpers ──
@@ -122,6 +135,7 @@ export function buildParagraphMeasures(
  * Used for exclusion-mode rendering where column positions must account for
  * heading pitch differences and paragraph gaps. The cumulative offsets enable
  * adjusting image coordinates before passing them to the exclusion engine.
+ * Pitches and gaps resolve exactly as in {@link buildParagraphMeasures}.
  *
  * @param entries - Render entries for each paragraph.
  * @param options - Font size, line spacing, and paragraph gap configuration.
@@ -131,28 +145,8 @@ export function buildLineMetrics(
   entries: RenderEntry[],
   options: MeasureOptions,
 ): LineMetricsResult {
-  const {
-    fontSize,
-    headingScale = 1.4,
-    paragraphGapEm = 0.4,
-    headingGapEm = 1.2,
-    headingStyles,
-  } = options;
-  const lineSpacing = resolveLineSpacing(options);
-
-  const basePitch = fontSize * lineSpacing;
-  const paragraphGap = fontSize * paragraphGapEm;
-
-  function resolveScale(entry: RenderEntry): number {
-    return entry.headingLevel != null
-      ? (headingStyles?.[entry.headingLevel]?.scale ?? headingScale)
-      : headingScale;
-  }
-  function resolveGapAfter(entry: RenderEntry): number {
-    return entry.headingLevel != null
-      ? (headingStyles?.[entry.headingLevel]?.gapAfterEm ?? headingGapEm)
-      : headingGapEm;
-  }
+  const paragraph = paragraphMetrics(options);
+  const { basePitch } = paragraph;
 
   const metrics: LineMetric[] = [];
   const offsetList: number[] = [];
@@ -161,15 +155,10 @@ export function buildLineMetrics(
   for (let pi = 0; pi < entries.length; pi++) {
     const entry = entries[pi];
     const lineCount = entry.breakPoints.length + 1;
-    const isHeading = isHeadingEntry(entry);
-    const pitch = isHeading ? Math.round(fontSize * resolveScale(entry)) * lineSpacing : basePitch;
+    const pitch = paragraph.pitch(entry);
 
     for (let li = 0; li < lineCount; li++) {
-      let gapBefore = 0;
-      if (li === 0 && pi > 0) {
-        const prev = entries[pi - 1];
-        gapBefore = isHeadingEntry(prev) ? fontSize * resolveGapAfter(prev) : paragraphGap;
-      }
+      const gapBefore = li === 0 && pi > 0 ? paragraph.gapBefore(entry, entries[pi - 1]) : 0;
 
       if (metrics.length === 0) {
         offsetList.push(0);

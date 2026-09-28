@@ -72,7 +72,7 @@ const measures = buildParagraphMeasures(entries, {
 |-------|------|-------------|
 | `lineCount` | `number` | 行数（`breakPoints.length + 1`）。 |
 | `linePitch` | `number` | ブロック方向における各行のサイズ（px）。本文は`fontSize * lineSpacing`、見出しは`headingFontSize * lineSpacing`。 |
-| `gapBefore` | `number` | この段落の前の間隔（px）。*前の*段落から導出されます。前の段落が見出しの場合は`headingGap`、それ以外は`paragraphGap`。ページ先頭の段落では無視されます。 |
+| `gapBefore` | `number` | この段落の前の間隔（px）。同梱スタイルシートが描くマージンと一致します。前の段落が見出しならその見出しの後間隔、引用なら `1em`、それ以外は段落自身の種別の間隔（引用 `0.8em`、場面転換 `1.2em`、図 `1em`）か `paragraphGap`。どれも基準フォントサイズの em 単位です。ページ先頭の段落では無視されます。 |
 
 ## 3. paginate()
 
@@ -168,10 +168,11 @@ import '@libraz/mejiro/render/mejiro.css';
 | クラス | 用途 |
 |-------|---------|
 | `.mejiro-page` | ルートコンテナ。`writing-mode: vertical-rl; width: 100%`を設定。 |
-| `.mejiro-paragraph` | 段落カラム。`writing-mode: vertical-rl; display: inline-block; white-space: nowrap; margin-right: 0.4em`。 |
+| `.mejiro-paragraph` | 段落カラム。`writing-mode: vertical-rl; display: inline-block; white-space: nowrap; font-size: calc(var(--mejiro-paragraph-scale) * 1em); margin-right: calc(0.4em / var(--mejiro-paragraph-scale))`。本文ではスケールは `1`。段落のマージンはすべてこのスケールで割るので、見出しでも間隔はページの基準 em のままになる。 |
 | `.mejiro-paragraph:first-child` | 最初の段落のブロック開始側マージンを除去（`margin-right: 0`）。 |
-| `.mejiro-paragraph--heading` | 見出しスタイル。`font-weight: 700; font-size: 1.4em; height: 100%`。 |
-| `.mejiro-paragraph--heading + .mejiro-paragraph` | 見出し後の間隔（`margin-right: 1.2em`）。 |
+| `.mejiro-paragraph--heading` | 見出しスタイル。`--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`。`--h1`〜`--h6` はスケールをそれぞれ 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1 にする。 |
+| `.mejiro-paragraph--heading + .mejiro-paragraph` | 見出し後の間隔（`margin-right: calc(1.2em / var(--mejiro-paragraph-scale))`、基準 em で 1.2）。 |
+| `.mejiro-page--static .mejiro-paragraph` | 行ごとの改行を持たない `renderEpubStatic()` の出力に付く。`display: block; white-space: normal` で、段落はページ内で折り返す。`pre` 段落は `white-space: pre` のまま。 |
 | `.mejiro-page ruby` | `ruby-align: center`。 |
 | `.mejiro-page rt` | `font-size: 0.5em; font-weight: 400`。 |
 
@@ -204,7 +205,7 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
 }
 ```
 
-`segmentToInlineNode()`（`@libraz/mejiro/render` から export）は、`RenderSegment` の全バリアントを、入れ子の `children` や安全でないリンク URL（プレーンテキストに落とします）まで含めて解決し、フレームワーク非依存の小さな要素記述に変換します。
+`segmentToInlineNode()`（`@libraz/mejiro/render` から export）は、`RenderSegment` の全バリアントを、入れ子の `children` や安全でないリンク URL（アンカーだけを外します）まで含めて解決し、フレームワーク非依存の小さな要素記述に変換します。
 
 ```ts
 import { segmentToInlineNode } from '@libraz/mejiro/render';
@@ -234,7 +235,7 @@ function appendInlineNode(parent: Node, node: InlineRenderNode): void {
 | `tcy` | `<span class="mejiro-tcy">` |
 | `em` | `<em>` |
 | `strong` | `<strong>` |
-| `link` | `<a href>`（`title` は任意）。サニタイザに弾かれた URL はテキストノードになります |
+| `link` | `<a href>`（`title` は任意）。サニタイザに弾かれた URL は `<a>` だけを外し、中身は残します（1 ノードならそのまま、複数なら素の `<span>` でまとめます） |
 | `footnote-ref` | `<a class="mejiro-footnote-ref" href="#noteId">` |
 
 `segment.type` で自前に分岐しても構いませんが、その分岐は全バリアントを網羅する必要があります。`text` と `ruby` の 2 分岐だけにすると、傍点・縦中横・リンク・脚注参照が `<ruby>undefined<rt>undefined</rt></ruby>` として出力されます。

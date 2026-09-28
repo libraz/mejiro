@@ -2,7 +2,7 @@ import type { InlineAnnotation } from '../browser/types.js';
 import type { PageSlice } from '../paginate.js';
 import { getLineRanges } from '../paginate.js';
 import { sanitizeUrl } from '../url.js';
-import { buildInlineNodes, type InlineNode } from './inline-tree.js';
+import { buildInlineNodes, type InlineNode, inlineNodeContent } from './inline-tree.js';
 import type { RenderEntry, RenderLine, RenderPage, RenderSegment } from './types.js';
 
 /**
@@ -26,42 +26,53 @@ function buildLineSegments(
   lineStart: number,
   lineEnd: number,
 ): RenderSegment[] {
-  return buildInlineNodes(chars, annotations, lineStart, lineEnd).map(nodeToSegment);
+  return buildInlineNodes(chars, annotations, lineStart, lineEnd).flatMap(nodeToSegments);
 }
 
-function nodeToSegment(node: InlineNode): RenderSegment {
+/**
+ * Converts one inline node into segments. An element becomes one segment,
+ * except a link whose href fails sanitization: only its anchor is dropped, so
+ * it yields its content — nested annotations included.
+ */
+function nodeToSegments(node: InlineNode): RenderSegment[] {
   switch (node.type) {
     case 'text':
-      return { type: 'text', text: node.text.replaceAll('\n', '') };
+      return [{ type: 'text', text: node.text.replaceAll('\n', '') }];
     case 'ruby':
-      return { type: 'ruby', base: node.base, rubyText: node.rubyText, children: children(node) };
+      return [{ type: 'ruby', base: node.base, rubyText: node.rubyText, children: children(node) }];
     case 'emphasis':
-      return { type: 'emphasis', text: node.text, style: node.style, children: children(node) };
+      return [{ type: 'emphasis', text: node.text, style: node.style, children: children(node) }];
     case 'tcy':
-      return { type: 'tcy', text: node.text, children: children(node) };
+      return [{ type: 'tcy', text: node.text, children: children(node) }];
     case 'em':
-      return { type: 'em', text: node.text, children: children(node) };
+      return [{ type: 'em', text: node.text, children: children(node) }];
     case 'strong':
-      return { type: 'strong', text: node.text, children: children(node) };
+      return [{ type: 'strong', text: node.text, children: children(node) }];
     case 'link': {
       const href = sanitizeUrl(node.href);
-      if (!href) return { type: 'text', text: node.text };
-      return node.title != null
-        ? { type: 'link', text: node.text, href, title: node.title, children: children(node) }
-        : { type: 'link', text: node.text, href, children: children(node) };
+      if (!href) return inlineNodeContent(node).flatMap(nodeToSegments);
+      return [
+        node.title != null
+          ? { type: 'link', text: node.text, href, title: node.title, children: children(node) }
+          : { type: 'link', text: node.text, href, children: children(node) },
+      ];
     }
     case 'footnote-ref':
-      return {
-        type: 'footnote-ref',
-        text: node.text,
-        noteId: node.noteId,
-        children: children(node),
-      };
+      return [
+        {
+          type: 'footnote-ref',
+          text: node.text,
+          noteId: node.noteId,
+          children: children(node),
+        },
+      ];
   }
 }
 
+/** Nested segments of an element, or `undefined` when nothing is nested in it. */
 function children(node: Exclude<InlineNode, { type: 'text' }>): RenderSegment[] | undefined {
-  return node.children.length > 0 ? node.children.map(nodeToSegment) : undefined;
+  const segments = node.children.flatMap(nodeToSegments);
+  return segments.length > 0 ? segments : undefined;
 }
 
 /**

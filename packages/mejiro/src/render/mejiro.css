@@ -12,10 +12,15 @@
     width: 100%;
   }
 
+  /* Headings set --mejiro-paragraph-scale and font-size follows it. Every
+   * paragraph margin divides by the same scale, so gaps stay in the page's
+   * base em even on a heading, whose own em is larger. */
   .mejiro-paragraph {
+    --mejiro-paragraph-scale: 1;
     writing-mode: vertical-rl;
     display: inline-block;
-    margin-right: 0.4em;
+    font-size: calc(var(--mejiro-paragraph-scale) * 1em);
+    margin-right: calc(0.4em / var(--mejiro-paragraph-scale));
     white-space: nowrap;
   }
 
@@ -25,74 +30,74 @@
 
   /* Heading defaults — applies to all heading levels unless overridden */
   .mejiro-paragraph--heading {
+    --mejiro-paragraph-scale: 1.4;
     font-weight: 700;
-    font-size: 1.4em;
     height: 100%;
   }
 
   .mejiro-paragraph--heading + .mejiro-paragraph {
-    margin-right: 1.2em;
+    margin-right: calc(1.2em / var(--mejiro-paragraph-scale));
   }
 
   /* Per-level heading styles */
   .mejiro-paragraph--h1 {
+    --mejiro-paragraph-scale: 1.6;
     font-weight: 700;
-    font-size: 1.6em;
     height: 100%;
   }
 
   .mejiro-paragraph--h1 + .mejiro-paragraph {
-    margin-right: 1.4em;
+    margin-right: calc(1.4em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--h2 {
+    --mejiro-paragraph-scale: 1.4;
     font-weight: 700;
-    font-size: 1.4em;
     height: 100%;
   }
 
   .mejiro-paragraph--h2 + .mejiro-paragraph {
-    margin-right: 1.2em;
+    margin-right: calc(1.2em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--h3 {
+    --mejiro-paragraph-scale: 1.2;
     font-weight: 700;
-    font-size: 1.2em;
     height: 100%;
   }
 
   .mejiro-paragraph--h3 + .mejiro-paragraph {
-    margin-right: 1em;
+    margin-right: calc(1em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--h4 {
+    --mejiro-paragraph-scale: 1.1;
     font-weight: 700;
-    font-size: 1.1em;
     height: 100%;
   }
 
   .mejiro-paragraph--h4 + .mejiro-paragraph {
-    margin-right: 0.8em;
+    margin-right: calc(0.8em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--h5 {
+    --mejiro-paragraph-scale: 1;
     font-weight: 700;
-    font-size: 1em;
     height: 100%;
   }
 
   .mejiro-paragraph--h5 + .mejiro-paragraph {
-    margin-right: 0.6em;
+    margin-right: calc(0.6em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--h6 {
+    --mejiro-paragraph-scale: 1;
     font-weight: 700;
-    font-size: 1em;
     height: 100%;
   }
 
   .mejiro-paragraph--h6 + .mejiro-paragraph {
-    margin-right: 0.6em;
+    margin-right: calc(0.6em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--blockquote {
@@ -102,7 +107,7 @@
   }
 
   .mejiro-paragraph--blockquote + .mejiro-paragraph {
-    margin-right: 1em;
+    margin-right: calc(1em / var(--mejiro-paragraph-scale));
   }
 
   .mejiro-paragraph--scene-break {
@@ -119,6 +124,17 @@
   .mejiro-paragraph--figure {
     text-align: center;
     margin-right: 1em;
+  }
+
+  /* renderEpubStatic output carries no per-line breaks, so its paragraphs
+   * wrap within the page instead of running as one unbroken column. */
+  .mejiro-page--static .mejiro-paragraph {
+    display: block;
+    white-space: normal;
+  }
+
+  .mejiro-page--static .mejiro-paragraph--pre {
+    white-space: pre;
   }
 
   .mejiro-emphasis {

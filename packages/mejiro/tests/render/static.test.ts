@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { BookParagraph } from '../../src/book/types.js';
+import type { InlineAnnotation } from '../../src/browser/types.js';
+import { normalizeAnnotatedText } from '../../src/normalize.js';
 import { renderEpubStatic } from '../../src/render/static.js';
-import { toCodepoints } from '../../src/text.js';
 
 function paragraph(text: string, extra: Partial<BookParagraph> = {}): BookParagraph {
   return { text, ...extra };
@@ -12,7 +13,7 @@ describe('renderEpubStatic', () => {
     const html = renderEpubStatic({
       paragraphs: [paragraph('hello'), paragraph('world')],
     });
-    expect(html).toMatch(/^<div class="mejiro-page">/);
+    expect(html).toMatch(/^<div class="mejiro-page mejiro-page--static">/);
     expect(html).toContain('<div class="mejiro-paragraph">hello</div>');
     expect(html).toContain('<div class="mejiro-paragraph">world</div>');
     expect(html).toMatch(/<\/div>$/);
@@ -145,18 +146,17 @@ describe('renderEpubStatic', () => {
     expect(html).toContain('<a href="https://example.test"><ruby>漢字<rt>かんじ</rt></ruby></a>');
   });
 
-  it('splits decomposed text on NFC boundaries like the measured layout does', () => {
-    // Decomposed `がぎ` followed by `漢字`.
+  it('moves annotation offsets to NFC together with decomposed text, as MejiroBook does', () => {
+    // Decomposed `がぎ` followed by `漢字`; the ruby offsets index the text as given.
     const text = `${String.fromCodePoint(0x304b, 0x3099, 0x304d, 0x3099)}漢字`;
-    const html = renderEpubStatic({
-      paragraphs: [
-        paragraph(text, {
-          inlineAnnotations: [{ kind: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'かん' }],
-        }),
-      ],
-    });
+    const inlineAnnotations = [
+      { kind: 'ruby', startIndex: 4, endIndex: 5, rubyText: 'かん' },
+    ] as const satisfies readonly InlineAnnotation[];
+    const html = renderEpubStatic({ paragraphs: [paragraph(text, { inlineAnnotations })] });
 
-    expect(toCodepoints(text)).toHaveLength(4);
+    const client = normalizeAnnotatedText(text, inlineAnnotations);
+    const [ruby] = client.inlineAnnotations;
+    expect([...client.text].slice(ruby.startIndex, ruby.endIndex)).toEqual(['漢']);
     expect(html).toContain('がぎ<ruby>漢<rt>かん</rt></ruby>字');
   });
 

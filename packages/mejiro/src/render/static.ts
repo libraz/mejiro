@@ -1,8 +1,8 @@
 import type { BookParagraph, ParagraphKind } from '../book/types.js';
 import type { InlineAnnotation } from '../browser/types.js';
-import { normalizeText } from '../text.js';
+import { normalizeAnnotatedText } from '../normalize.js';
 import { sanitizeUrl } from '../url.js';
-import { buildInlineNodes, type InlineNode } from './inline-tree.js';
+import { buildInlineNodes, type InlineNode, inlineNodeContent } from './inline-tree.js';
 
 /** Options for {@link renderEpubStatic}. */
 export interface RenderEpubStaticOptions {
@@ -36,7 +36,9 @@ export interface StaticChapter {
  * Render a chapter as a static, framework-agnostic HTML string suitable for
  * SSR / RSC output. No font measurement, no pagination — the browser's
  * native `writing-mode: vertical-rl` flow drives the layout, with the
- * bundled `mejiro.css` providing per-heading sizing.
+ * bundled `mejiro.css` providing per-heading sizing. The wrapper carries
+ * `mejiro-page--static`, under which paragraphs wrap within the container
+ * instead of relying on the per-line breaks the paginated components insert.
  *
  * Useful as a hydration placeholder for {@link MejiroReader} so search engines
  * and slow connections see real text immediately. Once the client-side
@@ -45,7 +47,7 @@ export interface StaticChapter {
  * @example
  * ```ts
  * const html = renderEpubStatic(book.chapters[0]);
- * // → "<div class=\"mejiro-page\">…</div>"
+ * // → "<div class=\"mejiro-page mejiro-page--static\">…</div>"
  * ```
  */
 export function renderEpubStatic(
@@ -53,7 +55,7 @@ export function renderEpubStatic(
   options: RenderEpubStaticOptions = {},
 ): string {
   const tag = SAFE_WRAPPER_TAGS.has(options.tag ?? 'div') ? (options.tag ?? 'div') : 'div';
-  const cls = ['mejiro-page', options.className].filter(Boolean).join(' ');
+  const cls = ['mejiro-page', 'mejiro-page--static', options.className].filter(Boolean).join(' ');
   const attrs = [`class="${escapeAttr(cls)}"`];
   if (options.ariaLabel) attrs.push(`aria-label="${escapeAttr(options.ariaLabel)}"`);
   const inner = chapter.paragraphs.map(renderParagraph).join('');
@@ -96,10 +98,12 @@ function paragraphKindClass(kind: Exclude<ParagraphKind, 'body' | 'heading'>): s
 }
 
 function renderInline(text: string, annotations: readonly InlineAnnotation[]): string {
-  // Annotation indices are NFC code point offsets, so the static renderer has
-  // to split the text exactly like the measuring client renderer does.
-  const chars = [...normalizeText(text)];
-  return buildInlineNodes(chars, annotations).map(renderInlineNode).join('');
+  // Offsets index the text as given; they move to NFC together with it, exactly
+  // as the measuring client path does.
+  const normalized = normalizeAnnotatedText(text, annotations);
+  return buildInlineNodes([...normalized.text], normalized.inlineAnnotations)
+    .map(renderInlineNode)
+    .join('');
 }
 
 function renderInlineNode(node: InlineNode): string {
@@ -136,8 +140,7 @@ function renderInlineNode(node: InlineNode): string {
 }
 
 function renderChildren(node: Exclude<InlineNode, { type: 'text' }>): string {
-  if (node.children.length > 0) return node.children.map(renderInlineNode).join('');
-  return escapeText(node.type === 'ruby' ? node.base : node.text);
+  return inlineNodeContent(node).map(renderInlineNode).join('');
 }
 
 function escapeText(s: string): string {

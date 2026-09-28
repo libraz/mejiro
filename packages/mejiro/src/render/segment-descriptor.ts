@@ -42,9 +42,10 @@ export type InlineRenderNode =
  * the returned tree always covers the segment's characters exactly once.
  *
  * Link hrefs are sanitized: a segment whose URL uses a scheme other than
- * `http`, `https` or `mailto` degrades to a plain text node rather than
- * producing an `<a>`, which keeps untrusted EPUB content from emitting
- * executable URLs.
+ * `http`, `https` or `mailto` loses only its `<a>`, which keeps untrusted EPUB
+ * content from emitting executable URLs. Its content survives, nested
+ * annotations included — as-is when it is a single node, grouped in a plain
+ * `<span>` otherwise.
  */
 export function segmentToInlineNode(segment: RenderSegment): InlineRenderNode {
   switch (segment.type) {
@@ -69,15 +70,9 @@ export function segmentToInlineNode(segment: RenderSegment): InlineRenderNode {
       return element('strong', renderChildren(segment.children, segment.text));
     case 'link': {
       const href = sanitizeUrl(segment.href);
-      return href
-        ? element(
-            'a',
-            renderChildren(segment.children, segment.text),
-            undefined,
-            href,
-            segment.title,
-          )
-        : text(segment.text);
+      const content = renderChildren(segment.children, segment.text);
+      if (href) return element('a', content, undefined, href, segment.title);
+      return content.length === 1 ? content[0] : element('span', content);
     }
     case 'footnote-ref':
       return element(

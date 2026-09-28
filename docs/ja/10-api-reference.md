@@ -243,7 +243,7 @@
 | `normalizeText` | `(str: string) => string` |
 | `sanitizeUrl` | `(raw: string) => string \| null` |
 
-`normalizeText` はレイアウトパイプラインが前提とする NFC 正規化を適用します。`sanitizeUrl` は `href` にしてはいけない URL に対して `null` を返し、描画層はこれを使って安全でないリンクをプレーンテキストに落とします。
+`normalizeText` はレイアウトパイプラインが前提とする NFC 正規化を適用します。`sanitizeUrl` は `href` にしてはいけない URL に対して `null` を返し、描画層はこれを使って安全でないリンクのアンカーだけを外し、入れ子のルビや傍点を含む中身は残します。
 
 ### 型定義
 
@@ -749,7 +749,7 @@ XHTMLドキュメント文字列から段落とルビ注釈を抽出します。
 
 ページスライスとエントリをレンダリング可能なページ構造に変換します。`renderEpubStatic`
 は単一 chapter の HTML 文字列を返し、クライアント reader が hydrate する前の
-SSR fallback markup として使えます。
+SSR fallback markup として使えます。ラッパーには `mejiro-page--static` が付き、同梱の `mejiro.css` はその中の段落をブラウザの折り返しに任せます。注釈のオフセットは各段落のテキストをそのまま数えたもので、`MejiroBook` と同じくテキストと一緒に NFC へ正規化されます。
 metric / slot helpers は、スロットベース表示と画像回り込みレイアウト向けの低レベルユーティリティです。
 `adjustExclusionSlots` は 5 番目の引数にコンテンツ幅を取ります。渡さないと、見出しによって広がった列のスロットがページ端をはみ出すことがあります。
 `paragraphClassName` は段落の `kind` と `headingLevel` から、同梱スタイルシートが前提とする `mejiro-paragraph …` のクラス文字列を組み立てます。修飾子名を手で組み立てず、この関数を使ってください。
@@ -784,7 +784,7 @@ function appendInlineNode(parent: Node, node: InlineRenderNode): void {
 }
 ```
 
-`buildInlineNodes` はその 1 段下の層で、文字範囲と注釈から `buildRenderPage()` がセグメントへ変換する `InlineNode` ツリーを組み立てます。
+`buildInlineNodes` はその 1 段下の層で、文字範囲と注釈から `buildRenderPage()` がセグメントへ変換する `InlineNode` ツリーを組み立てます。どの注釈を残すかは段落全体で決めるので、部分的に重なる注釈の組は、段落がどこで改行されても同じように捨てられます。
 
 ### CSS
 

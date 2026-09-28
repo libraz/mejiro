@@ -252,8 +252,8 @@ props, so a host rarely calls these directly.
 | `sanitizeUrl` | `(raw: string) => string \| null` |
 
 `normalizeText` applies the NFC normalization the layout pipeline expects. `sanitizeUrl`
-returns `null` for URLs that must not become an `href`; the render layer uses it to degrade
-unsafe links to plain text.
+returns `null` for URLs that must not become an `href`; the render layer uses it to drop the
+anchor of an unsafe link while keeping its content, nested ruby and emphasis included.
 
 ### Types
 
@@ -764,7 +764,10 @@ Computes paragraph measures for pagination.
 
 Converts page slices + entries into a renderable page structure. `renderEpubStatic`
 returns framework-agnostic HTML for a single chapter, suitable for SSR fallback
-markup before the client reader hydrates.
+markup before the client reader hydrates. Its wrapper carries `mejiro-page--static`, under
+which the bundled `mejiro.css` lets paragraphs wrap natively, and annotation offsets index
+each paragraph's text as given, normalized to NFC together with it exactly as `MejiroBook`
+does.
 The metric/slot helpers are low-level utilities for slot-based rendering and image-exclusion layout.
 `adjustExclusionSlots` takes the content width as its fifth argument; without it a slot
 whose column is widened by a heading can overflow the page edge.
@@ -806,7 +809,9 @@ function appendInlineNode(parent: Node, node: InlineRenderNode): void {
 ```
 
 `buildInlineNodes` is the layer below: it turns a character range plus its annotations
-into the nested `InlineNode` tree that `buildRenderPage()` converts into segments.
+into the nested `InlineNode` tree that `buildRenderPage()` converts into segments. Which
+annotations survive is decided on the whole paragraph, so a partially overlapping pair is
+dropped identically however the paragraph is split into lines.
 
 ### CSS
 

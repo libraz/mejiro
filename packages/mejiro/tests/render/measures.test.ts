@@ -180,6 +180,40 @@ describe('buildParagraphMeasures', () => {
   });
 });
 
+describe('buildParagraphMeasures paragraph kinds', () => {
+  const kind = (k: RenderEntry['kind']): RenderEntry => ({ ...makeEntry(5, 0), kind: k });
+
+  it('budgets the block-start gap each structural kind draws', () => {
+    const measures = buildParagraphMeasures(
+      [
+        kind('body'),
+        kind('blockquote'),
+        kind('body'),
+        kind('sceneBreak'),
+        kind('figure'),
+        kind('pre'),
+      ],
+      { fontSize: 10 },
+    );
+    expect(measures.map((m) => m.gapBefore).slice(1)).toEqual([8, 10, 12, 10, 4]);
+  });
+
+  it('lets a preceding heading decide the gap over the kind gap', () => {
+    const measures = buildParagraphMeasures([makeEntry(5, 0, 2), kind('sceneBreak')], {
+      fontSize: 10,
+      headingStyles: { 2: { gapAfterEm: 1.5 } },
+    });
+    expect(measures[1].gapBefore).toBe(15);
+  });
+
+  it('keeps the gap after a blockquote even before a heading', () => {
+    const measures = buildParagraphMeasures([kind('blockquote'), makeEntry(5, 0, 1)], {
+      fontSize: 10,
+    });
+    expect(measures[1].gapBefore).toBe(10);
+  });
+});
+
 // ── Exclusion layout helpers ──
 
 const baseOpts = { fontSize: 16, lineHeight: 1.8 };
@@ -222,6 +256,16 @@ describe('buildLineMetrics', () => {
     expect(offsets[1]).toBeCloseTo(h1Pitch - basePitch + headingGap);
     // Offset at line 2 = same (no additional excess for body lines)
     expect(offsets[2]).toBeCloseTo(offsets[1]);
+  });
+
+  it('gives each paragraph the same gap as buildParagraphMeasures', () => {
+    const kinds: RenderEntry['kind'][] = ['blockquote', 'sceneBreak', 'body', 'figure', 'pre'];
+    const entries = [makeEntry(5, 0, 2), ...kinds.map((kind) => ({ ...makeEntry(5, 1), kind }))];
+    const { metrics } = buildLineMetrics(entries, baseOpts);
+    const firstLineGaps = metrics.filter((_, i) => i === 0 || i % 2 === 1).map((m) => m.gapBefore);
+    const measures = buildParagraphMeasures(entries, baseOpts);
+    expect(firstLineGaps.slice(1)).toEqual(measures.slice(1).map((m) => m.gapBefore));
+    expect(firstLineGaps.slice(1)).toEqual([16 * 1.2, 16, 16 * 0.4, 16, 16 * 0.4]);
   });
 
   it('returns empty for empty input', () => {

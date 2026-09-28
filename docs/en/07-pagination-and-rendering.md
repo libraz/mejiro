@@ -72,7 +72,7 @@ Each returned `ParagraphMeasure` contains:
 |-------|------|-------------|
 | `lineCount` | `number` | Number of lines (`breakPoints.length + 1`). |
 | `linePitch` | `number` | Size of each line in the block direction (px). `fontSize * lineSpacing` for body, `headingFontSize * lineSpacing` for headings. |
-| `gapBefore` | `number` | Gap before this paragraph (px). Derived from the *previous* paragraph: `headingGap` if the previous paragraph was a heading, otherwise `paragraphGap`. Ignored when the paragraph starts a page. |
+| `gapBefore` | `number` | Gap before this paragraph (px), matching the margins the bundled stylesheets draw: the previous paragraph's heading gap after a heading, `1em` after a blockquote, otherwise the paragraph's own kind gap (`0.8em` blockquote, `1.2em` scene break, `1em` figure) or `paragraphGap`. All gaps are in base-font em. Ignored when the paragraph starts a page. |
 
 ## 3. paginate()
 
@@ -168,10 +168,11 @@ import '@libraz/mejiro/render/mejiro.css';
 | Class | Purpose |
 |-------|---------|
 | `.mejiro-page` | Root container. Sets `writing-mode: vertical-rl; width: 100%`. |
-| `.mejiro-paragraph` | Paragraph column. `writing-mode: vertical-rl; display: inline-block; white-space: nowrap; margin-right: 0.4em`. |
+| `.mejiro-paragraph` | Paragraph column. `writing-mode: vertical-rl; display: inline-block; white-space: nowrap; font-size: calc(var(--mejiro-paragraph-scale) * 1em); margin-right: calc(0.4em / var(--mejiro-paragraph-scale))`. The scale is `1` on body paragraphs; every paragraph margin divides by it, so gaps stay in the page's base em on headings too. |
 | `.mejiro-paragraph:first-child` | Removes the block-start margin (`margin-right: 0`) on the first paragraph. |
-| `.mejiro-paragraph--heading` | Heading style. `font-weight: 700; font-size: 1.4em; height: 100%`. |
-| `.mejiro-paragraph--heading + .mejiro-paragraph` | Gap after a heading (`margin-right: 1.2em`). |
+| `.mejiro-paragraph--heading` | Heading style. `--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`. `--h1` to `--h6` set the scale to 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1. |
+| `.mejiro-paragraph--heading + .mejiro-paragraph` | Gap after a heading (`margin-right: calc(1.2em / var(--mejiro-paragraph-scale))`, 1.2 base em). |
+| `.mejiro-page--static .mejiro-paragraph` | Set on `renderEpubStatic()` output, which has no per-line breaks: `display: block; white-space: normal`, so paragraphs wrap within the page. `pre` paragraphs keep `white-space: pre`. |
 | `.mejiro-page ruby` | `ruby-align: center`. |
 | `.mejiro-page rt` | `font-size: 0.5em; font-weight: 400`. |
 
@@ -210,8 +211,8 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
 ```
 
 `segmentToInlineNode()` (exported from `@libraz/mejiro/render`) resolves every
-`RenderSegment` variant — including nested `children` and unsafe link URLs, which it
-degrades to plain text — into a small, framework-agnostic element description:
+`RenderSegment` variant — including nested `children` and unsafe link URLs, which lose
+only their anchor — into a small, framework-agnostic element description:
 
 ```ts
 import { segmentToInlineNode } from '@libraz/mejiro/render';
@@ -241,7 +242,7 @@ The resulting markup per segment type:
 | `tcy` | `<span class="mejiro-tcy">` |
 | `em` | `<em>` |
 | `strong` | `<strong>` |
-| `link` | `<a href>` with an optional `title`; a URL rejected by the sanitizer becomes a text node |
+| `link` | `<a href>` with an optional `title`; a URL rejected by the sanitizer drops the `<a>` and keeps its content (a lone node as-is, several grouped in a plain `<span>`) |
 | `footnote-ref` | `<a class="mejiro-footnote-ref" href="#noteId">` |
 
 Branching on `segment.type` by hand is still fine, but the branch must be exhaustive:

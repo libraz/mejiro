@@ -20,6 +20,21 @@ function makeEntry(
 }
 
 describe('buildRenderPage', () => {
+  it('drops only the anchor of a link whose URL is rejected, keeping nested ruby', () => {
+    const entries = [
+      makeEntry('漢字です', [], false, [
+        { kind: 'link', startIndex: 0, endIndex: 4, href: 'javascript:alert(1)' },
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
+      ]),
+    ];
+    const page = buildRenderPage([{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }], entries);
+
+    expect(page.paragraphs[0].lines[0].segments).toEqual([
+      { type: 'ruby', base: '漢字', rubyText: 'かんじ', children: undefined },
+      { type: 'text', text: 'です' },
+    ]);
+  });
+
   it('builds a simple page with one paragraph', () => {
     const entries = [makeEntry('あいうえお', [2])]; // break after index 2 → lines: [0,3), [3,5)
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 2 }];
