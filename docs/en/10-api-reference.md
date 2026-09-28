@@ -59,7 +59,7 @@ Returns a copy of the default strict kinsoku rule set with pre-computed lookup s
 |---|---|
 | `isHangingTarget` | `(cp: number) => boolean` |
 
-Tests if a codepoint is eligible for hanging (U+3002, U+3001, U+FF0C, U+FF0E).
+Tests if a codepoint is eligible for hanging (U+3002, U+3001, U+FF0C, U+FF0E, U+FF61, U+FF64).
 
 | Export | Signature |
 |---|---|
@@ -267,6 +267,7 @@ anchor of an unsafe link while keeping its content, nested ruby and emphasis inc
 - `enableHanging?: boolean` -- Enable hanging punctuation (default: `true`)
 - `clusterIds?: Uint32Array` -- Indivisible character groups
 - `rubyAnnotations?: RubyAnnotation[]` -- Core-level ruby annotations used by the line breaker
+- `tcyAnnotations?: readonly TcyAnnotation[]` -- Tate-chu-yoko spans, each collapsed to one indivisible box of its own width before breaking
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- Preferred break positions
 - `breakPenalties?: Uint8Array` -- Cost of breaking *after* each index, one entry per code point. `0` is unpenalised, larger values are avoided more strongly. When present, the backward search picks the lowest-cost position within `breakCost.maxBacktrackChars` instead of the nearest valid one, and supersedes both `tokenBoundaries` and the whitespace preference
 - `breakCost?: BreakCostOptions` -- Weights for the penalty search. Ignored unless `breakPenalties` is given
@@ -276,7 +277,7 @@ anchor of an unsafe link while keeping its content, nested ruby and emphasis inc
 
 - `breakPoints: Uint32Array` -- Index of last character before each break
 - `hangingAdjustments?: Float32Array` -- Hanging overhang per line (px)
-- `effectiveAdvances?: Float32Array` -- Per-char advances after ruby distribution
+- `effectiveAdvances?: Float32Array` -- Per-char advances after tate-chu-yoko collapsing and ruby width distribution, the widths the breaks were computed from. Present when `tcyAnnotations` or `rubyAnnotations` is non-empty
 - `lineWidths?: Float32Array` -- Actual width used per line (present when `lineWidths` input was provided)
 
 **`BreakCostOptions`** -- Weights trading a penalised break position against the line it leaves behind. The cost of breaking after position `p` is `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)`, where `shortfall(p)` is how far short of the line width the line ends, measured in em. Only the ratio of the two weights affects which position wins, so `{ penaltyWeight: 0.5, shortfallWeight: 1 }` and `{ penaltyWeight: 1, shortfallWeight: 2 }` break identically:
@@ -449,6 +450,8 @@ Slots come out in reading order, and a column may contribute several slots or no
 - `preloadFont(fontFamily?: string, fontSize?: number): Promise<void>` -- Preload font
 - `verticalLineWidth(containerHeight: number, fontSize?: number): number` -- Compute effective line width
 - `clearCache(fontKey?: string): void` -- Clear width cache
+- `cacheStats(): { fonts: number; codepoints: number }` -- Current width cache size
+- `dispose(): void` -- Release the `document.fonts` subscription so an unused instance can be collected with its width cache. The instance stays usable and subscribes again on its next layout. Idempotent
 
 | Export | Signature |
 |---|---|
@@ -464,12 +467,20 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 
 ### Font and Measurement
 
-- `FontLoader` -- Font loading via FontFace API
+- `FontLoader` -- Font loading via FontFace API; see below
 - `CharMeasurer` -- Character measurement via Canvas.measureText with codepoint caching
 - `WidthCache` -- `Map<fontKey, Map<codepoint, width>>`
 - `deriveRubyFont(fontFamily: string, fontSize: number): string` -- Ruby font spec (half-size)
 - `normalizeFontFamily(fontFamily: FontFamily): string` -- Normalize a string or family-name array to a CSS font-family string
 - `toFontSpec(fontFamily: string, fontSize: number): string` -- CSS font spec
+
+**`FontLoader`** -- Waits for web fonts before measurement:
+
+- `constructor(options?: { onFontsLoaded?: () => void })` -- Subscribes to the document's `loadingdone` event; `onFontsLoaded` fires after each one
+- `ensureLoaded(fontSpec: string, text?: string): Promise<void>` -- Loads the font for the ranges `text` covers. Concurrent calls for the same spec share one request. Rejects when the font does not become usable; `MejiroBrowser` catches that and rejects only under `strictFontCheck`
+- `isLoaded(fontSpec: string, text?: string): boolean` -- Whether `ensureLoaded` has confirmed the font for those ranges
+- `isAvailable(fontSpec: string, text?: string): boolean` -- Whether the host can render the font for those ranges
+- `dispose(): void` -- Removes the `loadingdone` subscription and forgets every readiness answer. The loader stays usable and subscribes again on its next `ensureLoaded`. Idempotent
 
 ### Overlay Drag Sessions
 
@@ -511,6 +522,7 @@ It lives in the browser layer rather than in core because it owns pointer captur
 - `fixedFontFamily?: FontFamily`
 - `fixedFontSize?: number`
 - `strictFontCheck?: boolean`
+- `onFontsLoaded?: () => void` -- Called after the host reports newly loaded fonts and the width cache has been cleared; lay out earlier results again here
 
 **`LayoutOptions`**:
 
@@ -522,6 +534,8 @@ It lives in the browser layer rather than in core because it owns pointer captur
 - `enableHanging?: boolean`
 - `inlineAnnotations?: readonly InlineAnnotation[]`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
+- `hints?: TypographyHints`
+- `breakCost?: BreakCostOptions`
 
 **`ChapterLayoutOptions`**:
 
@@ -531,6 +545,7 @@ It lives in the browser layer rather than in core because it owns pointer captur
 - `lineWidth: number`
 - `mode?: KinsokuMode`
 - `enableHanging?: boolean`
+- `breakCost?: BreakCostOptions`
 
 **`ChapterLayoutResult`**:
 
@@ -548,6 +563,7 @@ It lives in the browser layer rather than in core because it owns pointer captur
 - `fontFamily?: FontFamily`
 - `fontSize?: number`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
+- `hints?: TypographyHints`
 
 **`InlineAnnotation`** — Discriminated union of the seven inline annotation kinds. Every member carries `startIndex` (inclusive) and `endIndex` (exclusive) in NFC code point offsets, plus the fields below:
 
@@ -664,6 +680,7 @@ Extracts paragraphs and ruby annotations from an XHTML document string.
 - `title: string`
 - `author?: string`
 - `chapters: EpubChapter[]`
+- `pageProgressionDirection?: 'rtl' | 'ltr' | 'default'`
 
 **`EpubChapter`**:
 
@@ -683,6 +700,7 @@ Extracts paragraphs and ruby annotations from an XHTML document string.
 
 **`EditableEpubChapter`** — Chapter with enough source metadata to be written back:
 
+- `title?: string` — Chapter title, inherited from `EpubChapter`
 - `href: string` — ZIP path of the source chapter document
 - `originalXhtml: string` — Source markup, reused for chapters that were never edited
 - `isDirty?: boolean` — Whether the chapter has been edited since parsing
@@ -908,7 +926,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 - `constructor(options: BookOptions)` — Create with font, spacing, and heading configuration
 - `getOptions(): BookOptions` — Currently committed options
-- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. `lineSpacing` / `mode` / `enableHanging` apply synchronously and the returned promise is already resolved. `fontFamily` / `fontSize` / `headingStyles` / `headingScale` need re-measurement: the values are staged and become visible to `getOptions()` only after the font has loaded, so every live layout always holds advances measured with the font recorded in its own config. Overlapping calls converge on the last one; a rejection (font load failure) leaves the previous options in place
+- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. `lineSpacing` / `mode` / `enableHanging` apply synchronously and the returned promise is already resolved. `fontFamily` / `fontSize` / `headingStyles` / `headingScale` need re-measurement: the values are staged and become visible to `getOptions()` only after the font has loaded, so every live layout always holds advances measured with the font recorded in its own config. Overlapping calls converge on the last one. A live layout re-breaks on its next read, so one replaced before it is read never re-breaks. With `strictFontCheck`, a staged font that measures as a fallback rejects and leaves the previous options in place; without it, a font that fails to load is committed and measured as the host resolves it
 - `setPageSize(size: PageSize): void` — Set page geometry (must be called before `layoutChapter`)
 - `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — Compute page dimensions from a container element and apply them via `setPageSize`. Uses a 1.45 aspect ratio with min 280×400, max height 780, default padding, and overridable header/gutter reservations.
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — Lay out a chapter (compatible with `EpubChapter`)
@@ -916,6 +934,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — Restore a layout snapshot without measuring again
 - `clearCache(fontKey?: string): void` — Clear the character width measurement cache
 - `cacheStats(): { fonts: number; codepoints: number }` — Current measurement cache size, for capacity monitoring across long reader sessions
+- `dispose(): void` — Release the book's `document.fonts` subscription so the book, its width cache and its layouts can be collected once the host drops them. The book stays usable and subscribes again on its next layout or font change. Idempotent; `useMejiroBook` calls it on unmount
 
 ### ChapterLayout
 

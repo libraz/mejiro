@@ -19,7 +19,7 @@ console.log(book.chapters.length);
 
 `parseEpub()` は、おおまかに次の流れで EPUB を段落データへ変換します。
 
-![parseEpub の処理フロー: EPUB の ArrayBuffer を上限チェックのうえ JSZip で展開して META-INF/container.xml を読み、ルートファイルパスから OPF パッケージ（メタデータ・マニフェスト・spine）へ進む。spine 順に XHTML コンテンツ文書をたどり、extractRubyContent で AnnotatedParagraph を取り出し、章としてまとめて EpubBook を返す。OPF からは破線の側枝がナビゲーション文書へ伸び、目次の章タイトルを EpubBook に供給する](../assets/epub-parse-flow-ja.svg)
+![parseEpub の処理フロー: EPUB の ArrayBuffer を上限チェックのうえ JSZip で展開して META-INF/container.xml を読み、ルートファイルパスから OPF パッケージ（メタデータ・マニフェスト・spine）へ進む。spine 順に XHTML コンテンツ文書をたどり、extractRubyContent で AnnotatedParagraph を取り出し、章としてまとめて EpubBook を返す。OPF からは破線の側枝が目次文書へ伸び、ナビゲーション文書と、そこに載っていない章については EPUB 2 の NCX が章タイトルを EpubBook に供給する](../assets/epub-parse-flow-ja.svg)
 
 処理手順は次のとおりです。
 

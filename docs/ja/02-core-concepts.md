@@ -6,7 +6,7 @@
 
 mejiro はいくつかのレイヤーに分かれています。上位レイヤーは下位レイヤーを利用しますが、下位レイヤーは上位レイヤーに依存しません。必要な深さの API だけを選んで使えるようにするためです。`book` と `epub` は同じ段にある兄弟で、どちらも `render` の上に乗ります。アプリケーションはどちらからでも入れます。`image` と `analysis` は他のレイヤーから独立しています。
 
-![レイヤー構成: アプリケーションは @libraz/mejiro/book と @libraz/mejiro/epub、および独立した @libraz/mejiro/image を使い、book と epub は @libraz/mejiro/render の上に、render は @libraz/mejiro/browser の上に、browser は @libraz/mejiro コアエンジンの上に乗る](../assets/architecture-layers-ja.svg)
+![レイヤー構成: アプリケーションは @libraz/mejiro/book と @libraz/mejiro/epub、独立した @libraz/mejiro/image、および suzume を使う任意の @libraz/mejiro/analysis を使い、book と epub は @libraz/mejiro/render の上に、render は @libraz/mejiro/browser の上に、browser は @libraz/mejiro コアエンジンの上に乗る](../assets/architecture-layers-ja.svg)
 
 ### ブック (`@libraz/mejiro/book`)
 

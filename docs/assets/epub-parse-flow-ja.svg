@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 540" width="640" role="img">
-  <title>parseEpub の処理フロー: ZIP の ArrayBuffer を展開して container.xml を読み、OPF パッケージの spine から XHTML 文書をたどり、AnnotatedParagraph を経て EpubBook を組み立てる。章タイトルはナビゲーション文書からも補われる</title>
+  <title>parseEpub の処理フロー: ZIP の ArrayBuffer を展開して container.xml を読み、OPF パッケージの spine から XHTML 文書をたどり、AnnotatedParagraph を経て EpubBook を組み立てる。章タイトルはナビゲーション文書、次いで EPUB 2 の NCX からも補われる</title>
   <style>
     text { font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
     .panel { fill: #ffffff; }
@@ -54,7 +54,7 @@
   <text class="note" x="164" y="503" text-anchor="middle">書名・著者・章</text>
 
   <rect class="box" x="400" y="200" width="216" height="52" rx="6" />
-  <text class="name" x="508" y="222" text-anchor="middle">ナビゲーション文書</text>
+  <text class="name" x="508" y="222" text-anchor="middle">ナビゲーション文書・NCX</text>
   <text class="note" x="508" y="239" text-anchor="middle">目次の章タイトル</text>
 
   <line class="edge" x1="164" y1="76" x2="164" y2="112" marker-end="url(#arrow)" />

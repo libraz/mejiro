@@ -6,7 +6,7 @@ This document covers the fundamental architecture and design decisions behind me
 
 mejiro is organized into layers, each with a clear responsibility. Higher layers depend on lower layers but never the reverse. `book` and `epub` are siblings -- both sit on `render`, and an application can enter at either one. `image` and `analysis` are independent of the rest.
 
-![Layer stack: the application uses @libraz/mejiro/book, @libraz/mejiro/epub and the independent @libraz/mejiro/image; book and epub sit on @libraz/mejiro/render, which sits on @libraz/mejiro/browser, which sits on the @libraz/mejiro core engine](../assets/architecture-layers-en.svg)
+![Layer stack: the application uses @libraz/mejiro/book, @libraz/mejiro/epub, the independent @libraz/mejiro/image and the optional suzume-backed @libraz/mejiro/analysis; book and epub sit on @libraz/mejiro/render, which sits on @libraz/mejiro/browser, which sits on the @libraz/mejiro core engine](../assets/architecture-layers-en.svg)
 
 ### Book (`@libraz/mejiro/book`)
 

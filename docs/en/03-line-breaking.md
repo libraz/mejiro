@@ -258,6 +258,8 @@ Hanging punctuation allows certain punctuation marks to protrude past the line e
 | 、        | U+3001  | Ideographic comma     |
 | ．        | U+FF0E  | Fullwidth full stop   |
 | ，        | U+FF0C  | Fullwidth comma       |
+| ｡        | U+FF61  | Halfwidth ideographic full stop |
+| ､        | U+FF64  | Halfwidth ideographic comma     |
 
 ### How It Works
 

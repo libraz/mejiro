@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 688 416" width="688" role="img">
-  <title>mejiro のレイヤー構成: アプリケーションは book / epub / image を使い、book と epub は render、render は browser、browser はコアエンジンに依存する</title>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 908 416" width="908" role="img">
+  <title>mejiro のレイヤー構成: アプリケーションは book / epub / image と任意の analysis を使い、book と epub は render、render は browser、browser はコアエンジンに依存する</title>
   <style>
     text { font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
     .panel { fill: #ffffff; }
@@ -27,10 +27,10 @@
     </marker>
   </defs>
 
-  <rect class="panel" x="0" y="0" width="688" height="416" rx="8" />
+  <rect class="panel" x="0" y="0" width="908" height="416" rx="8" />
 
-  <rect class="box-app" x="24" y="24" width="640" height="48" rx="6" />
-  <text class="name" x="344" y="53" text-anchor="middle">アプリケーション (React / Vue / vanilla DOM)</text>
+  <rect class="box-app" x="24" y="24" width="860" height="48" rx="6" />
+  <text class="name" x="454" y="53" text-anchor="middle">アプリケーション (React / Vue / vanilla DOM)</text>
 
   <rect class="box" x="24" y="96" width="200" height="56" rx="6" />
   <text class="name" x="124" y="120" text-anchor="middle">@libraz/mejiro/book</text>
@@ -43,6 +43,10 @@
   <rect class="box" x="464" y="96" width="200" height="56" rx="6" />
   <text class="name" x="564" y="120" text-anchor="middle">@libraz/mejiro/image</text>
   <text class="note" x="564" y="137" text-anchor="middle">画像の前処理（独立）</text>
+
+  <rect class="box" x="684" y="96" width="200" height="56" rx="6" />
+  <text class="name" x="784" y="120" text-anchor="middle">@libraz/mejiro/analysis</text>
+  <text class="note" x="784" y="137" text-anchor="middle">suzume による解析（任意）</text>
 
   <rect class="box" x="24" y="176" width="420" height="56" rx="6" />
   <text class="name" x="234" y="200" text-anchor="middle">@libraz/mejiro/render</text>
@@ -59,6 +63,7 @@
   <line class="edge" x1="124" y1="72" x2="124" y2="96" marker-end="url(#arrow)" />
   <line class="edge" x1="344" y1="72" x2="344" y2="96" marker-end="url(#arrow)" />
   <line class="edge" x1="564" y1="72" x2="564" y2="96" marker-end="url(#arrow)" />
+  <line class="edge" x1="784" y1="72" x2="784" y2="96" marker-end="url(#arrow)" />
   <line class="edge" x1="124" y1="152" x2="124" y2="176" marker-end="url(#arrow)" />
   <line class="edge" x1="344" y1="152" x2="344" y2="176" marker-end="url(#arrow)" />
   <line class="edge" x1="234" y1="232" x2="234" y2="256" marker-end="url(#arrow)" />

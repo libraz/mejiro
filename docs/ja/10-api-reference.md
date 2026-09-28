@@ -59,7 +59,7 @@
 |---|---|
 | `isHangingTarget` | `(cp: number) => boolean` |
 
-コードポイントがぶら下げ対象かどうかを判定します（U+3002, U+3001, U+FF0C, U+FF0E）。
+コードポイントがぶら下げ対象かどうかを判定します（U+3002, U+3001, U+FF0C, U+FF0E, U+FF61, U+FF64）。
 
 | エクスポート | シグネチャ |
 |---|---|
@@ -257,6 +257,7 @@
 - `enableHanging?: boolean` -- ぶら下げ組みを有効にする（デフォルト: `true`）
 - `clusterIds?: Uint32Array` -- 不可分文字グループ
 - `rubyAnnotations?: RubyAnnotation[]` -- 改行処理で使用するコアレベルのルビ注釈
+- `tcyAnnotations?: readonly TcyAnnotation[]` -- 縦中横の範囲。改行前にそれぞれを自身の幅を持つ 1 つの分割不能な箱にまとめる
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- 優先分割位置
 - `breakPenalties?: Uint8Array` -- コードポイントごとに 1 要素で、そのインデックスの「後ろ」で改行するコスト。`0` は罰則なしで、値が大きいほど避ける。指定すると後方探索は最も近い有効位置ではなく `breakCost.maxBacktrackChars` の範囲内で最小コストの位置を選び、`tokenBoundaries` と空白優先の両方に優先する
 - `breakCost?: BreakCostOptions` -- コスト探索の重み。`breakPenalties` がない場合は無視される
@@ -266,8 +267,8 @@
 
 - `breakPoints: Uint32Array` -- 各分割前の最後の文字のインデックス
 - `hangingAdjustments?: Float32Array` -- 行ごとのぶら下げ突出量（px）
+- `effectiveAdvances?: Float32Array` -- 縦中横による幅の圧縮とルビの幅分配を反映した文字ごとの送り幅で、改行位置はこの幅から計算される。`tcyAnnotations` か `rubyAnnotations` が空でない場合に存在
 - `lineWidths?: Float32Array` -- 各行で使用された実際の幅（`lineWidths` 入力が指定された場合に存在）
-- `effectiveAdvances?: Float32Array` -- ルビ分配後の文字ごとの送り幅
 
 **`BreakCostOptions`** -- 罰則のある改行位置と、そこで改行した場合に残る行の空きを天秤にかける重み。位置 `p` の後ろで改行するコストは `penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)` で、`shortfall(p)` は行が行長に対してどれだけ短く終わるかを em 単位で表した値です。どの位置が選ばれるかに効くのは 2 つの重みの比だけなので、`{ penaltyWeight: 0.5, shortfallWeight: 1 }` と `{ penaltyWeight: 1, shortfallWeight: 2 }` は同じ改行になります:
 
@@ -439,6 +440,8 @@
 - `preloadFont(fontFamily?: string, fontSize?: number): Promise<void>` -- フォントの先読み
 - `verticalLineWidth(containerHeight: number, fontSize?: number): number` -- 有効な行幅を計算
 - `clearCache(fontKey?: string): void` -- 幅キャッシュをクリア
+- `cacheStats(): { fonts: number; codepoints: number }` -- 現在の幅キャッシュの大きさ
+- `dispose(): void` -- `document.fonts` の購読を解除し、使わなくなったインスタンスを幅キャッシュごと回収できるようにする。解除後も使え、次のレイアウトで再び購読する。何度呼んでもよい
 
 | エクスポート | シグネチャ |
 |---|---|
@@ -454,12 +457,20 @@
 
 ### フォントと計測
 
-- `FontLoader` -- FontFace APIによるフォント読み込み
+- `FontLoader` -- FontFace APIによるフォント読み込み。下記を参照
 - `CharMeasurer` -- Canvas.measureTextによる文字計測（コードポイントキャッシュ付き）
 - `WidthCache` -- `Map<fontKey, Map<codepoint, width>>`
 - `deriveRubyFont(fontFamily: string, fontSize: number): string` -- ルビフォント仕様（半分サイズ）
 - `normalizeFontFamily(fontFamily: FontFamily): string` -- 文字列またはフォントファミリー配列を CSS font-family 文字列へ正規化
 - `toFontSpec(fontFamily: string, fontSize: number): string` -- CSSフォント仕様
+
+**`FontLoader`** -- 計測の前に Web フォントの読み込みを待つ:
+
+- `constructor(options?: { onFontsLoaded?: () => void })` -- document の `loadingdone` イベントを購読する。`onFontsLoaded` はそのたびに呼ばれる
+- `ensureLoaded(fontSpec: string, text?: string): Promise<void>` -- `text` が含む文字範囲についてフォントを読み込む。同じ指定の同時呼び出しは 1 つのリクエストを共有する。フォントが使える状態にならなければ reject するが、`MejiroBrowser` はこれを捕まえ、`strictFontCheck` のときだけ reject する
+- `isLoaded(fontSpec: string, text?: string): boolean` -- その文字範囲について `ensureLoaded` が読み込みを確認済みかどうか
+- `isAvailable(fontSpec: string, text?: string): boolean` -- その文字範囲をホストがそのフォントで描画できるかどうか
+- `dispose(): void` -- `loadingdone` の購読を解除し、読み込み状態の記録をすべて破棄する。解除後も使え、次の `ensureLoaded` で再び購読する。何度呼んでもよい
 
 ### オーバーレイのドラッグセッション
 
@@ -501,6 +512,7 @@
 - `fixedFontFamily?: FontFamily`
 - `fixedFontSize?: number`
 - `strictFontCheck?: boolean`
+- `onFontsLoaded?: () => void` -- ホストが新しいフォントの読み込みを通知し、幅キャッシュを消去した後に呼ばれる。それ以前の結果はここでレイアウトし直す
 
 **`LayoutOptions`**:
 
@@ -512,6 +524,8 @@
 - `enableHanging?: boolean`
 - `inlineAnnotations?: readonly InlineAnnotation[]`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
+- `hints?: TypographyHints`
+- `breakCost?: BreakCostOptions`
 
 **`ChapterLayoutOptions`**:
 
@@ -521,6 +535,7 @@
 - `lineWidth: number`
 - `mode?: KinsokuMode`
 - `enableHanging?: boolean`
+- `breakCost?: BreakCostOptions`
 
 **`ChapterLayoutResult`**:
 
@@ -538,6 +553,7 @@
 - `fontFamily?: FontFamily`
 - `fontSize?: number`
 - `tokenBoundaries?: Uint32Array | readonly number[]`
+- `hints?: TypographyHints`
 
 **`InlineAnnotation`** — 7 種類のインライン注釈の判別可能な共用体です。どのメンバも NFC コードポイント単位の `startIndex`（含む）と `endIndex`（含まない）を持ち、加えて次のフィールドを持ちます。
 
@@ -649,6 +665,7 @@ XHTMLドキュメント文字列から段落とルビ注釈を抽出します。
 - `title: string`
 - `author?: string`
 - `chapters: EpubChapter[]`
+- `pageProgressionDirection?: 'rtl' | 'ltr' | 'default'`
 
 **`EpubChapter`**:
 
@@ -668,6 +685,7 @@ XHTMLドキュメント文字列から段落とルビ注釈を抽出します。
 
 **`EditableEpubChapter`** — 書き戻しに必要なソース情報を持つ章:
 
+- `title?: string` — 章タイトル。`EpubChapter` から継承
 - `href: string` — 元の章文書の ZIP パス
 - `originalXhtml: string` — 元のマークアップ。未編集の章ではそのまま再利用される
 - `isDirty?: boolean` — 解析後に編集されたかどうか
@@ -878,7 +896,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 
 - `constructor(options: BookOptions)` — フォント、行間、見出し設定で作成
 - `getOptions(): BookOptions` — 現在確定しているオプション
-- `setOptions(options: Partial<BookOptions>): Promise<void>` — オプションを更新し、保持中のレイアウトへ反映。`lineSpacing` / `mode` / `enableHanging` は同期的に適用され、返る Promise は解決済み。`fontFamily` / `fontSize` / `headingStyles` / `headingScale` は再計測が必要なため、値はいったん保留され、フォントの読み込みが完了してから `getOptions()` に反映される（各レイアウトは常に自身の config が示すフォントで計測した送り幅を保持する）。呼び出しが重なった場合は最後の 1 つに収束し、フォント読み込み失敗による reject では直前のオプションが維持される
+- `setOptions(options: Partial<BookOptions>): Promise<void>` — オプションを更新し、保持中のレイアウトへ反映。`lineSpacing` / `mode` / `enableHanging` は同期的に適用され、返る Promise は解決済み。`fontFamily` / `fontSize` / `headingStyles` / `headingScale` は再計測が必要なため、値はいったん保留され、フォントの読み込みが完了してから `getOptions()` に反映される（各レイアウトは常に自身の config が示すフォントで計測した送り幅を保持する）。呼び出しが重なった場合は最後の 1 つに収束する。保持中のレイアウトは次に読まれた時点で改行し直すため、読まれる前に差し替えられたレイアウトは改行し直さない。`strictFontCheck` が有効なら、保留中のフォントが代替フォントとして計測された場合に reject し、直前のオプションが維持される。無効なら、読み込みに失敗したフォントもそのまま確定し、ホストが解決したフォントで計測される
 - `setPageSize(size: PageSize): void` — ページジオメトリを設定（`layoutChapter`の前に呼び出す必要あり）
 - `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — コンテナ要素からページサイズを自動計算し`setPageSize`を内部で呼び出す。アスペクト比1.45、最小280×400、最大高さ780、デフォルトpadding、上書き可能なヘッダー/ガター予約を使用。
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — 章をレイアウト（`EpubChapter`と互換）
@@ -886,6 +904,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — 計測なしでレイアウトスナップショットを復元
 - `clearCache(fontKey?: string): void` — 文字幅計測キャッシュをクリア
 - `cacheStats(): { fonts: number; codepoints: number }` — 現在の計測キャッシュ量。長時間の読書セッションでの使用量監視に使う
+- `dispose(): void` — ブックの `document.fonts` 購読を解除し、ホストが手放したブック・幅キャッシュ・レイアウトを回収できるようにする。解除後も使え、次のレイアウトやフォント変更で再び購読する。何度呼んでもよい。`useMejiroBook` はアンマウント時にこれを呼ぶ
 
 ### ChapterLayout
 

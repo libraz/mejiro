@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 540" width="640" role="img">
-  <title>parseEpub flow: the ZIP ArrayBuffer is unzipped to container.xml, which points at the OPF package, whose spine names the XHTML documents; those yield AnnotatedParagraph entries and finally an EpubBook, with the navigation document supplying chapter titles</title>
+  <title>parseEpub flow: the ZIP ArrayBuffer is unzipped to container.xml, which points at the OPF package, whose spine names the XHTML documents; those yield AnnotatedParagraph entries and finally an EpubBook, with the navigation document, then the EPUB 2 NCX, supplying chapter titles</title>
   <style>
     text { font-family: system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
     .panel { fill: #ffffff; }
@@ -54,7 +54,7 @@
   <text class="note" x="164" y="503" text-anchor="middle">title, author, chapters</text>
 
   <rect class="box" x="400" y="200" width="216" height="52" rx="6" />
-  <text class="name" x="508" y="222" text-anchor="middle">nav document</text>
+  <text class="name" x="508" y="222" text-anchor="middle">nav document, then NCX</text>
   <text class="note" x="508" y="239" text-anchor="middle">TOC chapter titles</text>
 
   <line class="edge" x1="164" y1="76" x2="164" y2="112" marker-end="url(#arrow)" />

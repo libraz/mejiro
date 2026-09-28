@@ -142,6 +142,23 @@ describe('documentation diagrams', () => {
     }
   });
 
+  it.each(['en', 'ja'])('names every exported subpath in the %s architecture figure', (locale) => {
+    const manifest = JSON.parse(
+      readFileSync(resolve(DOCS_DIR, '../packages/mejiro/package.json'), 'utf8'),
+    ) as { exports: Record<string, unknown> };
+    const labels = Array.from(
+      parseSvg(join(ASSETS_DIR, `architecture-layers-${locale}.svg`)).getElementsByTagName('text'),
+      (text) => text.textContent ?? '',
+    );
+    const missing = Object.keys(manifest.exports)
+      // Module entry points only; stylesheet and manifest exports carry an extension.
+      .filter((key) => !/\.[a-z]+$/u.test(key))
+      .map((key) => (key === '.' ? '@libraz/mejiro' : `@libraz/mejiro/${key.slice(2)}`))
+      .filter((name) => !labels.some((label) => label === name || label.startsWith(`${name} (`)));
+
+    expect(missing).toEqual([]);
+  });
+
   it('styles every figure from the same stylesheet', () => {
     const stylesheets = svgFiles.map((path) => {
       const style = parseSvg(path).documentElement?.getElementsByTagName('style')[0];
