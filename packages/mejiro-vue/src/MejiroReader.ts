@@ -279,8 +279,8 @@ export interface MejiroReaderHandle {
    *
    * Successive calls are coalesced into a single application; the returned
    * promise resolves once that application has settled. A failed application
-   * (typically a font that could not be loaded) is emitted as `error` rather
-   * than rejecting the promise.
+   * (such as a font that measures as a fallback under `strictFontCheck`) is
+   * emitted as `error` rather than rejecting the promise.
    */
   setOptions(partial: Partial<BookOptions>): Promise<void>;
   /**
@@ -760,7 +760,6 @@ export const MejiroReader = defineComponent({
     const layoutCtx = useChapterLayout(book, epub.epub, activeChapter, surfaceEl, {
       pageGeometry: () => resolvedGeometry.value,
       capturePosition: (layout) => positionBridge.capture(layout),
-      restorePosition: (layout, anchor) => positionBridge.restore(layout, anchor),
     });
 
     // Re-flow when the resolved page geometry changes at runtime (covers both
@@ -807,6 +806,19 @@ export const MejiroReader = defineComponent({
         emit('spread-idx-change', i);
       },
     });
+
+    // Restore the reading position after a reflow re-layout. Registered after
+    // useSpread so this sync watcher runs after its reset of the index to 0.
+    watch(
+      layoutCtx.layout,
+      (layout) => {
+        const anchor = layoutCtx.pendingRestore.current;
+        if (!(anchor && layout)) return;
+        layoutCtx.pendingRestore.current = null;
+        positionBridge.restore(layout, anchor);
+      },
+      { flush: 'sync' },
+    );
 
     // Anchor at the start of the spread on screen, taken when that spread
     // settled: an option change re-paginates the live layout in place before
@@ -1197,7 +1209,7 @@ export const MejiroReader = defineComponent({
         effEnableStats.value
           ? h(MejiroStats, {
               chapter: epub.epub.value?.chapters[activeChapter.value] ?? null,
-              totalPages: layoutCtx.layout.value?.totalPages ?? 0,
+              totalPages: spreadCtx.totalPages.value,
               elapsedMs: layoutCtx.elapsedMs.value,
               fontLabel: fontLabel.value,
             })

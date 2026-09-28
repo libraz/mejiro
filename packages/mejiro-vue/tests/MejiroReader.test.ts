@@ -31,6 +31,20 @@ function fakeEpub(): EpubBook {
   };
 }
 
+const breakCalls = vi.hoisted(() => ({ count: 0 }));
+
+// Counts line-breaking passes; the layout engine itself is unchanged.
+vi.mock('../../mejiro/src/layout.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../mejiro/src/layout.js')>();
+  return {
+    ...actual,
+    computeBreaks: (input: Parameters<typeof actual.computeBreaks>[0]) => {
+      breakCalls.count++;
+      return actual.computeBreaks(input);
+    },
+  };
+});
+
 function longEpub(): EpubBook {
   return {
     title: 'Long Book',
@@ -1018,6 +1032,22 @@ describe('MejiroReader (Vue) — reading position', () => {
       expect(
         inRange(anchor as NonNullable<typeof anchor>, range as NonNullable<typeof range>),
       ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('breaks each paragraph once across an option-driven re-layout', async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = renderReader({ epub: longEpub() });
+      await settle();
+      breakCalls.count = 0;
+
+      await settle(() => void handle().setOptions({ mode: 'loose' }));
+
+      expect(handle().getReadingPosition().totalSpreads).toBeGreaterThan(0);
+      expect(breakCalls.count).toBe(longEpub().chapters[0].paragraphs.length);
     } finally {
       vi.useRealTimers();
     }

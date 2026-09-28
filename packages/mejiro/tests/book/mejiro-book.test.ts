@@ -6,6 +6,19 @@ import { DEFAULT_HEADING_STYLES } from '../../src/book/constants.js';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookOptions } from '../../src/book/types.js';
 
+const breakCalls = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock('../../src/layout.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/layout.js')>();
+  return {
+    ...actual,
+    computeBreaks: (input: Parameters<typeof actual.computeBreaks>[0]) => {
+      breakCalls.count++;
+      return actual.computeBreaks(input);
+    },
+  };
+});
+
 const baseOptions: BookOptions = {
   fontFamily: 'serif',
   fontSize: 16,
@@ -156,15 +169,34 @@ describe('MejiroBook', () => {
     expect(layout.getSpread(0)).toBeDefined();
   });
 
-  it('setOptions re-breaks live layouts only once after fontSize remeasurement', async () => {
+  it('setOptions re-breaks a live layout once, on its next read', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
     // biome-ignore lint/suspicious/noExplicitAny: private method spy verifies an internal regression.
-    const recompute = vi.spyOn(layout as any, 'recomputeBreaks');
+    const rebreak = vi.spyOn(layout as any, 'breakEntries');
 
     await book.setOptions({ fontSize: 32 });
+    expect(rebreak).not.toHaveBeenCalled();
 
-    expect(recompute).toHaveBeenCalledTimes(1);
+    layout.getSpread(0);
+    layout.getSpread(0);
+    expect(rebreak).toHaveBeenCalledTimes(1);
+  });
+
+  it('breaks each paragraph once when an option change is followed by a fresh layout', async () => {
+    const paragraphs = [{ text: 'あいうえおかきくけこ' }, { text: '夏目漱石は東京で生まれた。' }];
+    book.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    const outgoing = await book.layoutChapter({ paragraphs });
+    outgoing.getSpread(0);
+
+    // The reflow the framework hooks run: change options, then lay the chapter
+    // out again and render only the replacement.
+    breakCalls.count = 0;
+    await book.setOptions({ fontSize: 32, mode: 'loose' });
+    const replacement = await book.layoutChapter({ paragraphs });
+    replacement.getSpread(0);
+
+    expect(breakCalls.count).toBe(paragraphs.length);
   });
 
   it('setOptions re-measures live heading paragraphs when headingScale changes', async () => {

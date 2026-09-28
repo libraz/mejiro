@@ -109,8 +109,8 @@ export interface InlineLinkAnnotation {
   endIndex: number;
   /**
    * Destination URL, stored as authored. Renderers sanitize it on the way out:
-   * a scheme other than `http`, `https` or `mailto` degrades to plain text
-   * instead of producing a link.
+   * a scheme other than `http`, `https` or `mailto` drops only the anchor, and
+   * the linked content, nested ruby and emphasis included, is still rendered.
    */
   href: string;
   /** Advisory text for the link's `title` attribute. */

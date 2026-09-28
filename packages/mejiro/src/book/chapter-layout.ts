@@ -395,6 +395,9 @@ export class ChapterLayout {
    * entries; see {@link ChapterLayout.layoutAdvancesOf}.
    */
   private layoutAdvances: (Float32Array | undefined)[] = [];
+  // Set by an option or font change; the re-break runs on the next read, so a
+  // layout replaced before anyone reads it never pays for one.
+  private breaksStale = false;
   private config: LayoutConfig;
   private size: Required<PageSize>;
   private images = new Map<number, BookImage[]>();
@@ -453,17 +456,17 @@ export class ChapterLayout {
   /**
    * @internal Applies a fresh layout config snapshot from {@link MejiroBook.setOptions}.
    *
-   * Updates the fields in place, recomputes line breaks when `mode` /
-   * `enableHanging` change, and invalidates the rendered caches so the next
-   * `getSpread` / `getPage` call reflects the new options.
+   * Updates the fields in place, marks the line breaks stale when `mode` /
+   * `enableHanging` / `fontSize` change, and invalidates the rendered caches so
+   * the next read re-breaks and reflects the new options.
    */
-  applyConfig(config: LayoutConfig, options: { rebreak?: boolean } = {}): void {
+  applyConfig(config: LayoutConfig): void {
     const breakSensitiveChanged =
       config.mode !== this.config.mode ||
       config.enableHanging !== this.config.enableHanging ||
       config.fontSize !== this.config.fontSize;
     this.config = { ...config };
-    if (breakSensitiveChanged && options.rebreak !== false) this.recomputeBreaks();
+    if (breakSensitiveChanged) this.breaksStale = true;
     this.invalidate();
   }
 
@@ -473,12 +476,12 @@ export class ChapterLayout {
   }
 
   /**
-   * @internal Recomputes line breaks after {@link MejiroBook} has refreshed
-   * each cached paragraph's `advances` / `layoutRubyAnnotations`. Distinct
-   * from {@link applyConfig} so a font change re-breaks once, not twice.
+   * @internal Marks the line breaks stale after {@link MejiroBook} has
+   * refreshed each cached paragraph's `advances` / `layoutRubyAnnotations`, so
+   * the next read re-breaks against them.
    */
   recomputeAfterMeasurement(): void {
-    this.recomputeBreaks();
+    this.breaksStale = true;
     this.invalidate();
   }
 
@@ -705,6 +708,7 @@ export class ChapterLayout {
    * calling `setOptions` afterwards (which re-measures from scratch).
    */
   snapshot(): ChapterLayoutSnapshot {
+    this.ensureBreaks();
     const paragraphs: ParagraphSnapshot[] = this.cached.map((para, i) => {
       const entry = this.entries[i];
       const snap: ParagraphSnapshot = {
@@ -903,8 +907,8 @@ export class ChapterLayout {
     if (!images) this.normal = null;
   }
 
-  private recomputeBreaks(): void {
-    this.commitBreaks(this.breakEntries(this.size.lineWidth));
+  private ensureBreaks(): void {
+    if (this.breaksStale) this.commitBreaks(this.breakEntries(this.size.lineWidth));
   }
 
   /**
@@ -947,6 +951,7 @@ export class ChapterLayout {
   private commitBreaks(broken: BrokenChapter): void {
     this.entries = broken.entries;
     this.layoutAdvances = broken.layoutAdvances;
+    this.breaksStale = false;
   }
 
   /**
@@ -977,6 +982,7 @@ export class ChapterLayout {
 
   private ensureNormal(): void {
     if (this.normal) return;
+    this.ensureBreaks();
     const opts = this.measureOpts();
     const measures = buildParagraphMeasures(this.entries, opts);
     const pages = paginate(this.contentWidth(), measures);
@@ -1026,6 +1032,7 @@ export class ChapterLayout {
 
   private ensureExclusion(): void {
     if (this.excl) return;
+    this.ensureBreaks();
     this.computeExclusion();
   }
 

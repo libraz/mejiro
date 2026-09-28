@@ -52,8 +52,11 @@ export interface ManuscriptRecomputeOptions {
 
 /** Page dimensions returned by {@link MejiroBook.computePageSize}. */
 export interface ManuscriptPageDimensions {
+  /** Width of one page, in CSS pixels. */
   pageWidth: number;
+  /** Height of one page, in CSS pixels. */
   pageHeight: number;
+  /** Height of the text area inside a page, in CSS pixels. */
   contentHeight: number;
 }
 

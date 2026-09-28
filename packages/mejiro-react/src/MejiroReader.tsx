@@ -265,8 +265,9 @@ export interface MejiroReaderHandle {
    *
    * Successive calls are coalesced into a single application; the returned
    * promise resolves once that application has settled. A failed application
-   * (typically a font that could not be loaded) is reported through
-   * {@link MejiroReaderProps.onError} rather than rejecting the promise.
+   * (such as a font that measures as a fallback under `strictFontCheck`) is
+   * reported through {@link MejiroReaderProps.onError} rather than rejecting
+   * the promise.
    */
   setOptions(partial: Partial<BookOptions>): Promise<void>;
   /**
@@ -485,7 +486,8 @@ export interface MejiroReaderCommonProps {
   onLoad?: (book: EpubBook) => void;
   /**
    * Called when loading or parsing an EPUB fails, and when applying an option
-   * change fails (typically a font that could not be loaded).
+   * change fails (such as a font that measures as a fallback under
+   * `strictFontCheck`; without it, a font that fails to load is not an error).
    */
   onError?: (error: Error) => void;
   /** Called when the chapter index changes. */
@@ -1199,7 +1201,7 @@ function MejiroReaderInner(
         {enableStats && (
           <MejiroStats
             chapter={e?.chapters[chapter] ?? null}
-            totalPages={layoutCtx.layout?.totalPages ?? 0}
+            totalPages={spreadCtx.totalPages}
             elapsedMs={layoutCtx.elapsedMs}
             fontLabel={fontLabel}
           />

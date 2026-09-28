@@ -29,7 +29,7 @@ export interface UseSpreadReturn {
   layoutSpreadIdx: number;
   /** Side of {@link UseSpreadReturn.spread} shown in single mode; `null` in double mode. */
   singleSide: 'right' | 'left' | null;
-  /** Total number of pages. */
+  /** Total number of pages, as of {@link UseSpreadReturn.spread}. */
   totalPages: number;
   /** Number of navigation positions: pages in single mode, two-page spreads otherwise. */
   totalSpreads: number;
@@ -120,7 +120,10 @@ export function useSpread(
   const layoutGenerationRef = useRef(0);
   const lastEmittedRef = useRef<{ layout: ChapterLayout; spreadIdx: number } | null>(null);
 
-  const totalPages = layout?.totalPages ?? 0;
+  // Read from the spread on screen, not the layout: an option change re-breaks
+  // the layout lazily, and a render before the replacement layout arrives must
+  // not pay for that pass.
+  const totalPages = spread?.totalPages ?? 0;
   const totalSpreads = navigationCount(totalPages, single);
   const firstPage = firstPageOf(spreadIdx, single);
   const layoutSpreadIdx = Math.floor(firstPage / 2);

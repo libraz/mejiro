@@ -50,6 +50,26 @@ describe('computeHangingAdjustment', () => {
   });
 });
 
+describe('half-width punctuation', () => {
+  it('hangs ｡ and ､ at line end exactly as 。 and 、 do', () => {
+    const pairs: Array<[string, string]> = [
+      ['あいうえお。かきくけこ', 'あいうえお｡かきくけこ'],
+      ['あいうえお、かきくけこ', 'あいうえお､かきくけこ'],
+    ];
+    for (const [full, half] of pairs) {
+      const run = (s: string) => {
+        const text = toCodepoints(s);
+        return computeBreaks({ text, advances: uniformAdvances(text.length, 16), lineWidth: 80 });
+      };
+      const a = run(full);
+      const b = run(half);
+      expect([...b.breakPoints], half).toEqual([...a.breakPoints]);
+      expect([...(b.hangingAdjustments ?? [])], half).toEqual([...(a.hangingAdjustments ?? [])]);
+      expect([...(b.hangingAdjustments ?? [])][0], half).toBe(16);
+    }
+  });
+});
+
 describe('BreakResult optional fields', () => {
   it('reports one entry per line, including a hang on the last line', () => {
     const cases: Array<[string, number, number[]]> = [

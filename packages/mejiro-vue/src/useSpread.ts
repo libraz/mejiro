@@ -44,7 +44,7 @@ export interface UseSpreadReturn {
   layoutSpreadIdx: ComputedRef<number>;
   /** Side of {@link UseSpreadReturn.spread} shown in single mode; `null` in double mode. */
   singleSide: ComputedRef<'right' | 'left' | null>;
-  /** Total number of pages. */
+  /** Total number of pages, as of {@link UseSpreadReturn.spread}. */
   totalPages: ComputedRef<number>;
   /** Number of navigation positions: pages in single mode, two-page spreads otherwise. */
   totalSpreads: ComputedRef<number>;
@@ -123,7 +123,10 @@ export function useSpread(
   let layoutGeneration = 0;
 
   const single = computed(() => toValue(options.single) ?? false);
-  const totalPages = computed(() => layout.value?.totalPages ?? 0);
+  // Read from the spread on screen, not the layout: an option change re-breaks
+  // the layout lazily, and a render before the replacement layout arrives must
+  // not pay for that pass.
+  const totalPages = computed(() => spread.value?.totalPages ?? 0);
   const totalSpreads = computed(() => navigationCount(totalPages.value, single.value));
   const firstPage = computed(() => firstPageOf(spreadIdx.value, single.value));
   const layoutSpreadIdx = computed(() => Math.floor(firstPage.value / 2));

@@ -386,7 +386,7 @@ export class MejiroBook {
         // be rebuilt whenever that size changes.
         para.layoutTcyAnnotations = buildTcyAnnotations(para.inlineAnnotations, pFontSize);
       }
-      layout.applyConfig(cfg, { rebreak: false });
+      layout.applyConfig(cfg);
       layout.recomputeAfterMeasurement();
     }
   }

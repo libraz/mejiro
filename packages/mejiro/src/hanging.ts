@@ -4,6 +4,8 @@ const HANGING_TARGETS = new Set([
   0x3002, // 。
   0xff0c, // ，
   0xff0e, // ．
+  0xff61, // ｡
+  0xff64, // ､
 ]);
 
 /**

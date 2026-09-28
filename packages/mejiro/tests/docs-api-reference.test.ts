@@ -172,6 +172,25 @@ describe('shared export-path contracts', () => {
       expect(text, `${path} does not read paragraph.kind`).toContain('paragraph.kind');
     }
   });
+
+  it('restores the reading position through the same hook contract in both readers', async () => {
+    // Both readers reset their spread index when a new layout arrives, so the
+    // restore has to follow that reset: they consume `pendingRestore` after
+    // `useSpread` rather than handing the hook a `restorePosition` callback.
+    for (const path of [
+      'packages/mejiro-react/src/MejiroReader.tsx',
+      'packages/mejiro-vue/src/MejiroReader.ts',
+    ]) {
+      const text = await readFile(resolve(repoRoot, path), 'utf8');
+      expect(text, `${path} passes restorePosition`).not.toMatch(/restorePosition\s*:/u);
+      expect(text, `${path} does not consume pendingRestore`).toContain(
+        'layoutCtx.pendingRestore.current = null',
+      );
+      expect(text.indexOf('useSpread('), `${path} restores before useSpread`).toBeLessThan(
+        text.indexOf('layoutCtx.pendingRestore.current'),
+      );
+    }
+  });
 });
 
 describe('tate-chu-yoko contract', () => {

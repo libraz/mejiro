@@ -270,9 +270,9 @@ describe('JSDoc coverage of public exports', () => {
     expect(gaps).toEqual([]);
   });
 
-  it('documents every export and member of the React package', () => {
+  it.each(['mejiro-react', 'mejiro-vue'])('documents every export and member of %s', (pkg) => {
     const gaps = findGaps(true)
-      .filter((gap) => gap.module.startsWith('mejiro-react/'))
+      .filter((gap) => gap.module.startsWith(`${pkg}/`))
       .map((gap) => `${gap.module}:${gap.line} ${gap.key.split(':')[1]}`);
 
     expect(gaps).toEqual([]);
