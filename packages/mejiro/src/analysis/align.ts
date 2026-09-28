@@ -22,6 +22,8 @@ const TRANSPARENT_FORMAT_CONTROLS = new Set([
 
 /** KATAKANA-HIRAGANA PROLONGED SOUND MARK. */
 const PROLONGED_SOUND_MARK = 0x30fc;
+/** HALFWIDTH KATAKANA-HIRAGANA PROLONGED SOUND MARK, folded to the full-width mark. */
+const HALFWIDTH_PROLONGED_SOUND_MARK = 0xff70;
 
 /**
  * Voiced and semi-voiced sound marks that compose onto the preceding kana.
@@ -99,7 +101,12 @@ export function alignMorphemeOffsets(
 
   let read = 0;
   for (let write = 0; write < target.length; write++) {
-    while (read < source.length && source[read] !== target[write] && isAbsorbed(source, read)) {
+    // A mark that folds to the character being written is the one the normalizer kept.
+    while (
+      read < source.length &&
+      !foldsTo(source[read], target[write]) &&
+      isAbsorbed(source, read)
+    ) {
       removed[read] = 1;
       read++;
     }
@@ -219,7 +226,7 @@ function isSpan(start: number, end: number, limit: number): boolean {
 function isAbsorbed(source: readonly string[], index: number): boolean {
   const cp = source[index].codePointAt(0) ?? 0;
   if (isTransparentFormatControl(cp)) return true;
-  if (cp !== PROLONGED_SOUND_MARK) return false;
+  if (!isProlongedSoundMark(source[index])) return false;
   return isProlongedSoundMark(source[index - 1]) || isProlongedSoundMark(source[index + 1]);
 }
 
@@ -232,9 +239,16 @@ function isTransparentFormatControl(cp: number): boolean {
   return cp >= 0xfe00 && cp <= 0xfe0f; // variation selectors
 }
 
-/** Whether `char` is a prolonged sound mark, tolerating an out-of-range read. */
+/** Whether `char` is a full- or half-width prolonged sound mark, tolerating an out-of-range read. */
 function isProlongedSoundMark(char: string | undefined): boolean {
-  return char !== undefined && char.codePointAt(0) === PROLONGED_SOUND_MARK;
+  if (char === undefined) return false;
+  const cp = char.codePointAt(0);
+  return cp === PROLONGED_SOUND_MARK || cp === HALFWIDTH_PROLONGED_SOUND_MARK;
+}
+
+/** Whether `char` is `target` itself or its width/compatibility fold. */
+function foldsTo(char: string, target: string): boolean {
+  return char === target || char.normalize('NFKC') === target.normalize('NFKC');
 }
 
 /**

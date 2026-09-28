@@ -25,7 +25,7 @@ describe('line breaking documentation examples', () => {
     });
 
     expect([...result.breakPoints]).toEqual([5]);
-    expect([...(result.hangingAdjustments ?? [])]).toEqual([16]);
+    expect([...(result.hangingAdjustments ?? [])]).toEqual([16, 0]);
   });
 
   it('breaks earlier with hanging punctuation disabled', () => {
@@ -38,6 +38,19 @@ describe('line breaking documentation examples', () => {
 
     expect([...result.breakPoints]).toEqual([3, 8]);
     expect(result.hangingAdjustments).toBeUndefined();
+
+    // The per-line grouping printed under the example matches the real lines.
+    const chars = [...HANGING_TEXT];
+    const lines = getLineRanges(result.breakPoints, chars.length).map(([start, end]) =>
+      chars.slice(start, end).join(''),
+    );
+    expect(lines).toEqual(['あいうえ', 'お、かきく', 'けこ']);
+    const en = readFileSync('docs/en/03-line-breaking.md', 'utf8');
+    const ja = readFileSync('docs/ja/03-line-breaking.md', 'utf8');
+    lines.slice(1).forEach((line, k) => {
+      expect(en).toContain(`// Line ${k + 2}: ${line}\n`);
+      expect(ja).toContain(`// ${k + 2}行目: ${line}\n`);
+    });
   });
 
   it('backtracks in strict mode and keeps the break in loose mode', () => {

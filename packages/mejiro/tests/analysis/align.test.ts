@@ -111,6 +111,25 @@ describe('alignMorphemeOffsets', () => {
     expect(aligned.morphemes.map((m) => span(text, m))).toEqual(['ラー', '漢']);
   });
 
+  it('skips the surplus marks of a collapsed half-width prolonged sound mark run', () => {
+    // ｶｰｰ本 folds to カー本; ｶﾞｰｰｰ本 also composes ｶﾞ into ガ.
+    const cases: Array<[string, string, string]> = [
+      [String.fromCodePoint(0xff76, 0xff70, 0xff70), 'カー', 'カー本'],
+      [`${HALFWIDTH_GA}${String.fromCodePoint(0xff70, 0xff70, 0xff70)}`, 'ガー', 'ガー本'],
+    ];
+    for (const [head, headSurface, normalized] of cases) {
+      const text = `${head}本`;
+      const input = [morpheme(headSurface, 0, 2), morpheme('本', 2, 3)];
+
+      const aligned = align(text, normalized, input);
+
+      expect(aligned.warnings).toEqual([]);
+      const spans = aligned.morphemes.map((m) => span(text, m));
+      expect(spans.map((s) => s.normalize('NFKC'))).toEqual([headSurface, '本']);
+      expect(spans[1]).toBe('本');
+    }
+  });
+
   it('reconciles all three shortenings in one text', () => {
     const text = `猫${ZWSP}は${KA_PLUS_DAKUTEN}ラーーー漢`;
     const input = [

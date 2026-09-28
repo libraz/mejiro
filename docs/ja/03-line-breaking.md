@@ -110,7 +110,7 @@ const result = computeBreaks({
 interface BreakResult {
   breakPoints: Uint32Array;             // Indices of last char before each break
   hangingAdjustments?: Float32Array;    // Hanging overhang per line (px), 0 if none
-  effectiveAdvances?: Float32Array;     // Per-char advances after ruby distribution
+  effectiveAdvances?: Float32Array;     // Per-char advances after tate-chu-yoko and ruby
   lineWidths?: Float32Array;            // Width actually used per line
 }
 ```
@@ -127,11 +127,11 @@ interface BreakResult {
 
 ### hangingAdjustments
 
-`enableHanging` が `true`（デフォルト）の場合に存在します。各要素は `breakPoints` の各行に対応します。ゼロでない値は、その行の最後の文字が行端からはみ出しているピクセル数を示します。
+`enableHanging` が `true`（デフォルト）の場合に存在します。要素は行ごとに 1 つで、最終行も含みます。空でないテキストでは `breakPoints.length + 1` 個です。ゼロでない値は、その行の最後の文字が行端からはみ出しているピクセル数を示します。
 
 ### effectiveAdvances
 
-`rubyAnnotations` が指定された場合にのみ存在します。ルビ幅の分配後の文字ごとの送り幅を含み、元の `advances` 入力とは異なる場合があります。
+`rubyAnnotations` または `tcyAnnotations` が指定された場合に存在します。縦中横による幅の圧縮とルビ幅の分配を反映した文字ごとの送り幅を含み、元の `advances` 入力とは異なる場合があります。
 
 ---
 
@@ -179,7 +179,8 @@ strict モードを少し緩め、次の文字の行頭配置を許可します�
 
 1. 位置 `pos` の文字が行末禁則文字**でない**こと。
 2. 位置 `pos + 1` の文字が（現在のモードにおいて）行頭禁則文字**でない**こと。
-3. 改行がクラスタを分割しないこと（位置 `pos` と `pos + 1` の文字が異なるクラスタ ID を持つか、クラスタ ID が指定されていないこと）。
+3. 改行がクラスタを分割しないこと。位置 `pos` と `pos + 1` の文字が異なるクラスタ ID を持つ（またはクラスタ ID が指定されていない）うえで、`pos + 1` が `pos` の書記素を延長していないことが条件です。延長とみなすのは、異体字セレクタ、結合文字、絵文字の肌色修飾子、前後いずれかにある ZWJ、地域指示記号ペアの後半です。
+4. 2 文字が分割禁止の組（`——` や `……` など）でないこと。
 
 これは `canBreakAt()` で実装されています:
 
@@ -271,9 +272,9 @@ const result = computeBreaks({
 });
 // インデックス5の「、」はオーバーフローするが、ぶら下げが許可される。
 // result.breakPoints → [5]
-// result.hangingAdjustments → Float32Array [16]
+// result.hangingAdjustments → Float32Array [16, 0]
 // 1行目: あいうえお、 (「、」が行端から16pxはみ出す)
-// 2行目: かきくけこ
+// 2行目: かきくけこ (ぶら下げなし)
 ```
 
 ### ぶら下げ無効時の例
@@ -289,8 +290,8 @@ const result = computeBreaks({
 // 後方探索によって改行位置がもう 1 つ手前へ移動する。
 // result.breakPoints → [3, 8]
 // 1行目: あいうえ (4文字)
-// 2行目: お、かきくけ
-// 3行目: こ
+// 2行目: お、かきく
+// 3行目: けこ
 ```
 
 注意: `enableHanging` が `false` の場合、結果の `hangingAdjustments` は `undefined` になります。

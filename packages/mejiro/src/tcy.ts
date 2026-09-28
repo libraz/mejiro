@@ -1,4 +1,5 @@
 import type { InlineAnnotation } from './browser/types.js';
+import { mergeAnnotationClusters } from './cluster.js';
 
 /**
  * A tate-chu-yoko (縦中横) span: characters drawn side by side inside a single
@@ -85,19 +86,9 @@ export function preprocessTcy(
   const len = text.length;
   const effectiveAdvances = new Float32Array(advances);
 
-  let clusterIds: Uint32Array;
-  let nextClusterId: number;
-  if (existingClusterIds) {
-    clusterIds = new Uint32Array(existingClusterIds);
-    nextClusterId = 0;
-    for (let i = 0; i < clusterIds.length; i++) {
-      if (clusterIds[i] >= nextClusterId) nextClusterId = clusterIds[i] + 1;
-    }
-  } else {
-    clusterIds = new Uint32Array(len);
-    for (let i = 0; i < len; i++) clusterIds[i] = i;
-    nextClusterId = len;
-  }
+  const clusterIds = new Uint32Array(len);
+  for (let i = 0; i < len; i++) clusterIds[i] = i;
+  let nextClusterId = len;
 
   let appliedEnd = 0;
   for (const ann of sortedTcySpans(annotations, len)) {
@@ -117,7 +108,7 @@ export function preprocessTcy(
     for (let i = startIndex; i < endIndex; i++) clusterIds[i] = cid;
   }
 
-  return { effectiveAdvances, clusterIds };
+  return { effectiveAdvances, clusterIds: mergeAnnotationClusters(existingClusterIds, clusterIds) };
 }
 
 /**

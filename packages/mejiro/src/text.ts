@@ -1,12 +1,23 @@
+/** CJK Compatibility Ideographs and their supplement, which NFC maps to other glyphs. */
+const COMPATIBILITY_IDEOGRAPH = /[\uF900-\uFAFF\u{2F800}-\u{2FA1F}]/u;
+const COMPATIBILITY_IDEOGRAPH_RUN = /([\uF900-\uFAFF\u{2F800}-\u{2FA1F}]+)/u;
+
 /**
  * Normalizes text to NFC before codepoint-based layout.
  *
  * Mejiro's public offsets are NFC Unicode codepoint offsets. This keeps
  * decomposed input such as `か\u3099` aligned with the same rendered character
- * as precomposed `が`.
+ * as precomposed `が`. CJK compatibility ideographs (U+F900–FAFF,
+ * U+2F800–2FA1F) are kept as written: NFC would replace each with a unified
+ * ideograph of a different glyph, losing a deliberate glyph choice.
  */
 export function normalizeText(str: string): string {
-  return str.normalize('NFC');
+  if (!COMPATIBILITY_IDEOGRAPH.test(str)) return str.normalize('NFC');
+  // Odd split indices are the captured ideograph runs; nothing composes across them.
+  return str
+    .split(COMPATIBILITY_IDEOGRAPH_RUN)
+    .map((part, i) => (i % 2 === 1 ? part : part.normalize('NFC')))
+    .join('');
 }
 
 /**

@@ -434,6 +434,90 @@ describe('canBreakAt', () => {
   });
 });
 
+describe('grapheme clusters', () => {
+  it('never breaks before a variation selector, combining mark or emoji modifier', () => {
+    for (const s of ['葛\u{E0100}', '辻\uFE00', 'セ\u309A', 'q\u0301', '👍\u{1F3FD}']) {
+      expect(canBreakAt(toCodepoints(s), 0), s).toBe(false);
+    }
+  });
+
+  it('never breaks on either side of a ZWJ', () => {
+    const text = toCodepoints('👩\u200D💻');
+    expect(canBreakAt(text, 0)).toBe(false);
+    expect(canBreakAt(text, 1)).toBe(false);
+  });
+
+  it('keeps regional indicators paired', () => {
+    const text = toCodepoints('🇯🇵🇺🇸');
+    expect([0, 1, 2].map((p) => canBreakAt(text, p))).toEqual([false, true, false]);
+  });
+
+  it('keeps an IVS with its base when a kinsoku backtrack lands next to it', () => {
+    const s = 'あいう葛\u{E0100}」';
+    const text = toCodepoints(s);
+    const advances = uniformAdvances(text.length, 16);
+    advances[4] = 0;
+    const result = computeBreaks({ text, advances, lineWidth: 64 });
+    for (const line of linesFromBreakPoints(s, result.breakPoints)) {
+      expect(line.startsWith('\u{E0100}')).toBe(false);
+    }
+  });
+
+  it('keeps a ZWJ sequence whole across a line boundary', () => {
+    const s = 'あいう👩\u200D💻え';
+    const text = toCodepoints(s);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 16),
+      lineWidth: 64,
+    });
+    expect(linesFromBreakPoints(s, result.breakPoints)).toEqual(['あいう', '👩\u200D💻え']);
+  });
+});
+
+describe('caller clusters with annotation spans', () => {
+  it('keeps a hint cluster over 12章 whole when tate-chu-yoko covers only 12', () => {
+    const s = 'あいう12章です';
+    const text = toCodepoints(s);
+    const advances = uniformAdvances(text.length, 16);
+    // Hint joins 1, 2 and 章 (3-5); tate-chu-yoko combines 12 (3-4) into one box.
+    const clusterIds = new Uint32Array([0, 1, 2, 3, 3, 3, 6, 7]);
+    const tcyAnnotations = [{ startIndex: 3, endIndex: 5, advance: 16 }];
+    for (const lineWidth of [48, 64, 80]) {
+      const result = computeBreaks({ text, advances, lineWidth, clusterIds, tcyAnnotations });
+      expect([...result.breakPoints], `width ${lineWidth}`).not.toContain(4);
+    }
+  });
+});
+
+describe('per-line widths after a backtrack', () => {
+  const cases: Array<[string, number[]]> = [
+    ['あい」」」」」」かきくけこ', [32, 20, 200]],
+    ['あいうえ」」かきくけこ', [100, 30, 100]],
+    ['あいうえおかきく。」」さしすせそたちつてと', [128, 40, 24, 200]],
+  ];
+  for (const [s, lineWidths] of cases) {
+    it(`fits every line of ${s} to its own lineWidths entry`, () => {
+      const text = toCodepoints(s);
+      const advances = uniformAdvances(text.length, 16);
+      const result = computeBreaks({
+        text,
+        advances,
+        lineWidth: 200,
+        lineWidths,
+        enableHanging: false,
+      });
+      const sums = lineAdvanceSums(advances, result.breakPoints);
+      const widths = result.lineWidths ?? new Float32Array(0);
+      expect(widths.length).toBe(sums.length);
+      sums.forEach((sum, i) => {
+        // A single character wider than its line fits nowhere and is the one exception.
+        if (sum > 16) expect(sum, `line ${i}`).toBeLessThanOrEqual(widths[i]);
+      });
+    });
+  }
+});
+
 describe('hanging punctuation with kinsoku', () => {
   it('does not hang a period when it would leave a closing bracket at line start', () => {
     const text = toCodepoints('あいうえおかきく。」さ');
@@ -445,7 +529,7 @@ describe('hanging punctuation with kinsoku', () => {
 
     expect([...result.breakPoints]).not.toContain(8);
     expect([...result.breakPoints]).toEqual([6]);
-    expect(result.hangingAdjustments ? [...result.hangingAdjustments] : undefined).toEqual([0]);
+    expect(result.hangingAdjustments ? [...result.hangingAdjustments] : undefined).toEqual([0, 0]);
   });
 });
 

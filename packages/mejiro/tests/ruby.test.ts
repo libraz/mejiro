@@ -228,6 +228,20 @@ describe('preprocessRuby', () => {
     expect(result.clusterIds[4]).toBe(2); // unchanged
   });
 
+  it('keeps a caller cluster joined when it reaches past a group ruby span', () => {
+    // Caller joins 東京都 (0-2); group ruby covers only 東京 (0-1).
+    const text = toCodepoints('東京都へ');
+    const advances = uniformAdvances(text.length, 16);
+    const existing = new Uint32Array([7, 7, 7, 9]);
+    const ann = makeAnnotation(0, 2, 'とうきょう', 8, 'group');
+
+    const ids = preprocessRuby(text, advances, [ann], existing).clusterIds;
+
+    expect(ids[1]).toBe(ids[2]);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[3]).toBe(9);
+  });
+
   it('distributes excess proportionally for non-uniform base advances', () => {
     const text = toCodepoints('漢字');
     // Non-uniform: 漢=20px, 字=10px

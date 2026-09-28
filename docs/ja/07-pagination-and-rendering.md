@@ -29,7 +29,7 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 
 | フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `chars` | `string[]` | 段落テキストの文字配列（書記素クラスター）。 |
+| `chars` | `string[]` | 段落テキストを Unicode コードポイント単位で分けた配列です。`breakPoints` が指すコードポイントの位置と一致します。異体字セレクタや結合文字も独立した要素になりますが、改行位置がそれを基底文字から切り離すことはありません。 |
 | `breakPoints` | `Uint32Array` | 行分割アルゴリズムによる分割位置。 |
 | `inlineAnnotations` | `InlineAnnotation[]` | この段落のルビ・圏点・縦中横・リンク等の注釈。 |
 | `kind` | `ParagraphKind \| undefined` | 段落の構造種別（`'body'` / `'heading'` / `'blockquote'` / `'sceneBreak'` / `'pre'` / `'figure'`）。ページ分割を越えて `RenderParagraph.kind` に残り、`mejiro-paragraph--*` クラスの選択に使われる。既定は `'body'`。 |

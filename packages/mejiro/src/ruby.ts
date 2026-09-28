@@ -1,3 +1,5 @@
+import { mergeAnnotationClusters } from './cluster.js';
+
 /** Ruby annotation type per JLReq. */
 export type RubyType = 'mono' | 'group' | 'jukugo';
 
@@ -79,25 +81,12 @@ export function preprocessRuby(
   const len = text.length;
   const effectiveAdvances = new Float32Array(advances);
 
-  // Initialize cluster IDs: use existing or sequential
-  let clusterIds: Uint32Array;
-  let nextClusterId: number;
-
-  if (existingClusterIds) {
-    clusterIds = new Uint32Array(existingClusterIds);
-    nextClusterId = 0;
-    for (let i = 0; i < clusterIds.length; i++) {
-      if (clusterIds[i] >= nextClusterId) {
-        nextClusterId = clusterIds[i] + 1;
-      }
-    }
-  } else {
-    clusterIds = new Uint32Array(len);
-    for (let i = 0; i < len; i++) {
-      clusterIds[i] = i;
-    }
-    nextClusterId = len;
+  // Annotation clusters are built alone and merged with the caller's at the end.
+  const clusterIds = new Uint32Array(len);
+  for (let i = 0; i < len; i++) {
+    clusterIds[i] = i;
   }
+  let nextClusterId = len;
 
   // Aggregate jukugo annotations carry no width of their own: the covered
   // annotations already reserve room for the same ruby text.
@@ -155,7 +144,7 @@ export function preprocessRuby(
     // mono: single base char, no clustering needed
   }
 
-  return { effectiveAdvances, clusterIds };
+  return { effectiveAdvances, clusterIds: mergeAnnotationClusters(existingClusterIds, clusterIds) };
 }
 
 function validateRubyInput(

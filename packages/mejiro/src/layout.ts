@@ -1,4 +1,4 @@
-import { isClusterBreakAllowed } from './cluster.js';
+import { isClusterBreakAllowed, isGraphemeContinuation } from './cluster.js';
 import { isHangingTarget } from './hanging.js';
 import { isLineEndProhibited, isLineStartProhibited, isUnbreakablePair } from './kinsoku.js';
 import { preprocessRuby } from './ruby.js';
@@ -15,7 +15,8 @@ const LINE_FEED = 10;
  *
  * The shape of the result depends only on the options: `hangingAdjustments` is
  * present exactly when `enableHanging` is true, and `lineWidths` exactly when
- * per-line `lineWidths` were passed. For empty text both are zero-length.
+ * per-line `lineWidths` were passed. Both hold one entry per line, i.e.
+ * `breakPoints.length + 1`; for empty text both are zero-length.
  *
  * A cluster wider than the available line width does not fit on any line; it is
  * split by the forced-break rule. That is the only case in which a break falls
@@ -102,6 +103,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
   let lineStart = 0;
   let accWidth = 0;
   let lineIndex = 0;
+  // Overhang of the final line, which has no break point to record it with.
+  let lastLineHang = 0;
 
   /** Returns the effective width for the current line. */
   const getLineWidth = (): number =>
@@ -138,6 +141,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
           hangingAdj.push(accWidth - lineWidth);
           usedLineWidths.push(lineWidth);
           lineIndex++;
+        } else {
+          lastLineHang = accWidth - lineWidth;
         }
         lineStart = i + 1;
         accWidth = 0;
@@ -166,7 +171,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         let examined = 0;
         while (candidatePos > lineStart && examined < maxBacktrackChars) {
           candidateWidth -= adv[candidatePos + 1];
-          if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, candidatePos, text.length)) {
+          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, candidatePos)) {
             clusterSafePos = candidatePos;
           }
           if (canBreakAt(text, candidatePos, clusterIds, mode, kinsokuRules)) {
@@ -193,7 +198,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         breakPos = lowestCostPos;
       } else if (tokenBoundarySet && !breakPenalties) {
         while (breakPos > lineStart) {
-          if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, breakPos, text.length)) {
+          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos)) {
             clusterSafePos = breakPos;
           }
           if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
@@ -213,7 +218,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         }
       } else {
         while (breakPos > lineStart) {
-          if (clusterSafePos < 0 && isClusterBreakAllowed(clusterIds, breakPos, text.length)) {
+          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos)) {
             clusterSafePos = breakPos;
           }
           if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
@@ -238,10 +243,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         breakPos < 0 ||
         (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules))
       ) {
-        if (
-          clusterSafePos < lineStart &&
-          isClusterBreakAllowed(clusterIds, lineStart, text.length)
-        ) {
+        if (clusterSafePos < lineStart && isClusterBoundary(text, clusterIds, lineStart)) {
           clusterSafePos = lineStart;
         }
         breakPos = clusterSafePos >= lineStart ? clusterSafePos : i - 1;
@@ -253,15 +255,15 @@ export function computeBreaks(input: LayoutInput): BreakResult {
       lineIndex++;
       lineStart = breakPos + 1;
 
-      // Recalculate accumulated width for the new line
+      // Rescan the carried-over run against the new line's own width, which
+      // may be narrower, so it is broken again rather than committed unchecked.
       accWidth = 0;
-      for (let j = lineStart; j <= i; j++) {
-        accWidth += adv[j];
-      }
+      i = lineStart - 1;
     }
   }
 
-  // Record width for the final line (after the last break)
+  // Record the final line (after the last break), so both arrays hold one entry per line
+  hangingAdj.push(lastLineHang);
   if (perLineWidths) {
     usedLineWidths.push(getLineWidth());
   }
@@ -409,7 +411,24 @@ function estimateEmSize(advances: Float32Array): number {
 }
 
 /**
+ * Returns whether `pos` ends an indivisible unit: neither an explicit cluster
+ * ID nor a grapheme extension (variation selector, combining mark, ZWJ,
+ * regional-indicator pair) continues past it.
+ */
+function isClusterBoundary(
+  text: Uint32Array,
+  clusterIds: Uint32Array | undefined,
+  pos: number,
+): boolean {
+  return isClusterBreakAllowed(clusterIds, pos, text.length) && !isGraphemeContinuation(text, pos);
+}
+
+/**
  * Determines whether a line break is allowed after position `pos`.
+ *
+ * A break never splits a cluster: neither one given by `clusterIds` nor a
+ * grapheme joined by a variation selector, combining mark, ZWJ or
+ * regional-indicator pair.
  *
  * @param text - Unicode codepoint array.
  * @param pos - Position to check (break would occur after this index).
@@ -426,7 +445,7 @@ export function canBreakAt(
   rules?: KinsokuRules,
 ): boolean {
   // Cannot break within a cluster
-  if (!isClusterBreakAllowed(clusterIds, pos, text.length)) {
+  if (!isClusterBoundary(text, clusterIds, pos)) {
     return false;
   }
   // Line-end prohibition: cannot break if current char is prohibited at line end

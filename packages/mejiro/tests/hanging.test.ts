@@ -51,6 +51,20 @@ describe('computeHangingAdjustment', () => {
 });
 
 describe('BreakResult optional fields', () => {
+  it('reports one entry per line, including a hang on the last line', () => {
+    const cases: Array<[string, number, number[]]> = [
+      ['あいうえお、', 80, [16]],
+      ['あいうえお、かきくけこ。', 80, [16, 16]],
+      ['あいうえおかきくけこ', 80, [0, 0]],
+    ];
+    for (const [s, lineWidth, expected] of cases) {
+      const text = toCodepoints(s);
+      const result = computeBreaks({ text, advances: uniformAdvances(text.length, 16), lineWidth });
+      expect(result.hangingAdjustments?.length, s).toBe(result.breakPoints.length + 1);
+      expect([...(result.hangingAdjustments ?? [])], s).toEqual(expected);
+    }
+  });
+
   it('returns zero-length hangingAdjustments for empty text when hanging is enabled', () => {
     const result = computeBreaks({
       text: new Uint32Array(0),

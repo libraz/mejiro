@@ -110,7 +110,7 @@ The `computeBreaks` function returns a `BreakResult`:
 interface BreakResult {
   breakPoints: Uint32Array;             // Indices of last char before each break
   hangingAdjustments?: Float32Array;    // Hanging overhang per line (px), 0 if none
-  effectiveAdvances?: Float32Array;     // Per-char advances after ruby distribution
+  effectiveAdvances?: Float32Array;     // Per-char advances after tate-chu-yoko and ruby
   lineWidths?: Float32Array;            // Width actually used per line
 }
 ```
@@ -127,11 +127,11 @@ For example, given text of length 15 and `breakPoints = [4, 9]`:
 
 ### hangingAdjustments
 
-Present when `enableHanging` is `true` (the default). Each entry corresponds to a line in `breakPoints`. A non-zero value indicates that the line's final character hangs past the line edge by that many pixels.
+Present when `enableHanging` is `true` (the default). It holds one entry per line — `breakPoints.length + 1` for non-empty text, the last line included. A non-zero value indicates that the line's final character hangs past the line edge by that many pixels.
 
 ### effectiveAdvances
 
-Present only when `rubyAnnotations` were provided. Contains per-character advance widths after ruby width distribution, which may differ from the original `advances` input.
+Present when `rubyAnnotations` or `tcyAnnotations` were provided. Contains per-character advance widths after tate-chu-yoko collapsing and ruby width distribution, which may differ from the original `advances` input.
 
 ---
 
@@ -183,7 +183,8 @@ A break after position `pos` is valid when all of the following hold:
 
 1. The character at `pos` is **not** line-end prohibited.
 2. The character at `pos + 1` is **not** line-start prohibited (under the current mode).
-3. The break does not split a cluster (characters at `pos` and `pos + 1` have different cluster IDs, or no cluster IDs are specified).
+3. The break does not split a cluster: the characters at `pos` and `pos + 1` have different cluster IDs (or no cluster IDs are specified), and `pos + 1` does not extend the grapheme at `pos` — a variation selector, combining mark, emoji modifier, a ZWJ on either side, or the second half of a regional-indicator pair.
+4. The two characters do not form an unbreakable pair (such as `——` or `……`).
 
 This is implemented by `canBreakAt()`:
 
@@ -275,9 +276,9 @@ const result = computeBreaks({
 });
 // The 、 at index 5 overflows but is allowed to hang.
 // result.breakPoints → [5]
-// result.hangingAdjustments → Float32Array [16]
+// result.hangingAdjustments → Float32Array [16, 0]
 // Line 1: あいうえお、 (、 hangs 16px past the edge)
-// Line 2: かきくけこ
+// Line 2: かきくけこ (no hang)
 ```
 
 ### Example: Hanging Disabled
@@ -293,8 +294,8 @@ const result = computeBreaks({
 // so the backward search moves the break one position earlier.
 // result.breakPoints → [3, 8]
 // Line 1: あいうえ (4 chars)
-// Line 2: お、かきくけ
-// Line 3: こ
+// Line 2: お、かきく
+// Line 3: けこ
 ```
 
 Note: When `enableHanging` is `false`, `hangingAdjustments` is `undefined` in the result.

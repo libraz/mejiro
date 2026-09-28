@@ -74,6 +74,61 @@ describe('prepareImage', () => {
     expect(result.warnings.some((w) => /Quality reduced/.test(w))).toBe(true);
   });
 
+  it('treats an option set to undefined exactly like an omitted one', async () => {
+    const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
+    const omitted = await prepareImage(file);
+    const undefinedKeys = await prepareImage(file, {
+      maxBytes: undefined,
+      maxWidth: undefined,
+      maxHeight: undefined,
+      convertTo: undefined,
+      quality: undefined,
+    });
+    expect(undefinedKeys.width).toBe(1024);
+    expect(undefinedKeys.height).toBe(768);
+    expect(undefinedKeys).toEqual(omitted);
+  });
+
+  it('still enforces the default maxBytes when maxBytes is undefined', async () => {
+    // One byte per pixel at any quality: the 2048x2048 default bound encodes to 4 MiB.
+    vi.stubGlobal(
+      'createImageBitmap',
+      vi.fn(async () => ({ width: 2048, height: 2048, close: vi.fn() }) as unknown as ImageBitmap),
+    );
+    class LargeOffscreen {
+      constructor(
+        public width: number,
+        public height: number,
+      ) {}
+      getContext(): { drawImage: () => void } {
+        return { drawImage: () => {} };
+      }
+      async convertToBlob(opts: { type: string }): Promise<Blob> {
+        return new Blob([new Uint8Array(this.width * this.height)], { type: opts.type });
+      }
+    }
+    vi.stubGlobal('OffscreenCanvas', LargeOffscreen as unknown as typeof OffscreenCanvas);
+    const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
+    const result = await prepareImage(file, { maxBytes: undefined, quality: undefined });
+    expect(
+      result.warnings.some((w) =>
+        /exceeds maxBytes \(2097152\); quality is already at 0\.40/.test(w),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    { maxWidth: Number.NaN },
+    { maxHeight: Number.POSITIVE_INFINITY },
+    { maxBytes: -1 },
+    { maxWidth: 0 },
+    { quality: 1.5 },
+    { quality: Number.NaN },
+  ])('rejects the invalid bound %o', async (options) => {
+    const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
+    await expect(prepareImage(file, options)).rejects.toThrow(RangeError);
+  });
+
   it('falls back to JPEG when the source type is unsupported', async () => {
     const file = new Blob([new Uint8Array(16)], { type: 'image/avif' });
     const result = await prepareImage(file);

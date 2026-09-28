@@ -9,6 +9,19 @@ import { computeBreaks } from '../src/layout.js';
 import { toCodepoints, uniformAdvances } from './helpers.js';
 
 describe('computeLineWidths', () => {
+  it('covers every line a fractional zone touches', () => {
+    const widths = computeLineWidths(100, 5, [{ blockStart: 0.5, blockEnd: 3, inlineSize: 40 }]);
+    expect([...widths]).toEqual([60, 60, 60, 100, 100]);
+    const tail = computeLineWidths(100, 5, [{ blockStart: 2, blockEnd: 3.2, inlineSize: 40 }]);
+    expect([...tail]).toEqual([100, 100, 60, 60, 100]);
+  });
+
+  it('rejects a NaN zone bound instead of skipping the zone', () => {
+    expect(() =>
+      computeLineWidths(100, 5, [{ blockStart: Number.NaN, blockEnd: 3, inlineSize: 40 }]),
+    ).toThrow(RangeError);
+  });
+
   it('returns uniform widths when no exclusions', () => {
     const widths = computeLineWidths(100, 5, []);
     expect([...widths]).toEqual([100, 100, 100, 100, 100]);
@@ -216,6 +229,26 @@ describe('computeExclusionSlots', () => {
       expect(slot.height).toBe(400);
     }
     expect([...lineWidths]).toEqual([400, 400, 400, 400, 400]);
+  });
+
+  it('does not obstruct a neighbouring column over floating-point noise at a column edge', () => {
+    // 30.4px columns: an image snapped to column k by k * pitch lands a few ULPs
+    // off the engine's own edge arithmetic, and must still obstruct exactly one column.
+    const linePitch = 30.4;
+    const lineCount = 5;
+    for (let k = 0; k < lineCount; k++) {
+      const { slots } = computeExclusionSlots({
+        lineWidth: 400,
+        lineCount,
+        linePitch,
+        contentWidth: lineCount * linePitch,
+        images: [{ x: k * linePitch, y: 100, w: linePitch, h: 100 }],
+      });
+      const obstructed = new Set(
+        slots.filter((slot) => slot.height < 400).map((s) => s.columnIndex),
+      );
+      expect([...obstructed], `image at column ${k}`).toEqual([lineCount - 1 - k]);
+    }
   });
 
   it('produces two slots per affected column (above + below)', () => {

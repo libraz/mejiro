@@ -313,7 +313,11 @@ export interface TypographyHintOptions {
 export interface BreakResult {
   /** Array of break point indices (index of the last character before each break). */
   breakPoints: Uint32Array;
-  /** Hanging adjustment amount in pixels for each line. 0 if no hanging occurs. */
+  /**
+   * Hanging overhang in pixels for each line, including the last one
+   * (`breakPoints.length + 1` entries for non-empty text). 0 where the line's
+   * final character does not hang. Present when `enableHanging` is true.
+   */
   hangingAdjustments?: Float32Array;
   /**
    * Per-character effective advances after tate-chu-yoko collapsing and ruby

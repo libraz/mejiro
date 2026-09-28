@@ -26,6 +26,17 @@ export interface ExclusionZone {
 const MIN_EXCLUSION_LINE_WIDTH = 1;
 
 /**
+ * Overlap below this many px is floating-point noise, not geometry: an image
+ * snapped to a column edge through different arithmetic lands a few ULPs off.
+ */
+const OVERLAP_EPSILON = 1e-6;
+
+/** Returns whether `[start, end)` overlaps `[rangeStart, rangeEnd)` by more than rounding noise. */
+function overlapsRange(start: number, end: number, rangeStart: number, rangeEnd: number): boolean {
+  return end - rangeStart > OVERLAP_EPSILON && rangeEnd - start > OVERLAP_EPSILON;
+}
+
+/**
  * Computes per-line widths by subtracting exclusion zones from the base line width.
  *
  * Multiple exclusion zones may overlap; their inline sizes are summed per line.
@@ -33,10 +44,14 @@ const MIN_EXCLUSION_LINE_WIDTH = 1;
  * positive width rather than to 0, so the result is always a valid `lineWidths`
  * input for `computeBreaks()`.
  *
+ * Zone bounds need not be integers: a zone covers every line it touches, from
+ * `floor(blockStart)` up to `ceil(blockEnd)`.
+ *
  * @param baseLineWidth - Default line width in pixels.
  * @param lineCount - Number of lines to generate widths for.
  * @param exclusions - Exclusion zones that reduce available line width.
  * @returns A `Float32Array` of per-line widths, every entry strictly positive.
+ * @throws RangeError if a zone's `blockStart` or `blockEnd` is NaN.
  */
 export function computeLineWidths(
   baseLineWidth: number,
@@ -47,8 +62,11 @@ export function computeLineWidths(
   widths.fill(baseLineWidth);
 
   for (const zone of exclusions) {
-    const start = Math.max(0, zone.blockStart);
-    const end = Math.min(lineCount, zone.blockEnd);
+    if (Number.isNaN(zone.blockStart) || Number.isNaN(zone.blockEnd)) {
+      throw new RangeError('computeLineWidths: blockStart and blockEnd must be numbers, not NaN');
+    }
+    const start = Math.max(0, Math.floor(zone.blockStart));
+    const end = Math.min(lineCount, Math.ceil(zone.blockEnd));
     for (let i = start; i < end; i++) {
       widths[i] = Math.max(MIN_EXCLUSION_LINE_WIDTH, widths[i] - zone.inlineSize);
     }
@@ -373,7 +391,7 @@ function computeColumnGaps(
     const im = img.inlineMargin ?? 0;
     const effX = img.x - bm;
     const effW = img.w + bm * 2;
-    if (effX + effW > colLeft && effX < colRight) {
+    if (overlapsRange(effX, effX + effW, colLeft, colRight)) {
       const top = Math.max(0, img.y - im);
       const bottom = Math.min(lineWidth, img.y + img.h + im);
       if (bottom > top) intervals.push([top, bottom]);
@@ -609,13 +627,13 @@ export class SpreadExclusionEngine {
       };
 
       // Right page: image overlaps if its right edge > 0 and left edge < contentW
-      if (cx + img.w + bm > 0 && cx - bm < contentW) {
+      if (overlapsRange(cx - bm, cx + img.w + bm, 0, contentW)) {
         rightEngine.addImage({ ...baseProps, x: cx });
       }
 
       // Left page: image extends past the right page's left edge (x < pagePaddingX)
       // Coordinate conversion accounts for the gutter (both pages' inner padding)
-      if (img.x - bm < 0) {
+      if (overlapsRange(img.x - bm, img.x + img.w + bm, Number.NEGATIVE_INFINITY, 0)) {
         leftEngine.addImage({ ...baseProps, x: cx + pageWidth });
       }
     }

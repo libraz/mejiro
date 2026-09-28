@@ -1,6 +1,7 @@
 /**
  * Options for {@link prepareImage}. All fields are optional; defaults are
- * conservative so calling `prepareImage(file)` is safe.
+ * conservative so calling `prepareImage(file)` is safe. A field set to
+ * `undefined` takes its default, exactly as if it were omitted.
  */
 export interface PrepareImageOptions {
   /**
@@ -54,6 +55,28 @@ const DEFAULTS = {
   quality: 0.85,
 };
 
+type ResolvedOptions = Required<PrepareImageOptions>;
+
+/** Fills each unset field from {@link DEFAULTS} and rejects bounds no encoder can honour. */
+function resolveOptions(options: PrepareImageOptions): ResolvedOptions {
+  const config: ResolvedOptions = {
+    maxBytes: options.maxBytes ?? DEFAULTS.maxBytes,
+    maxWidth: options.maxWidth ?? DEFAULTS.maxWidth,
+    maxHeight: options.maxHeight ?? DEFAULTS.maxHeight,
+    convertTo: options.convertTo ?? DEFAULTS.convertTo,
+    quality: options.quality ?? DEFAULTS.quality,
+  };
+  for (const key of ['maxBytes', 'maxWidth', 'maxHeight'] as const) {
+    if (!Number.isFinite(config[key]) || config[key] <= 0) {
+      throw new RangeError(`prepareImage: ${key} must be a positive finite number`);
+    }
+  }
+  if (!Number.isFinite(config.quality) || config.quality < 0 || config.quality > 1) {
+    throw new RangeError('prepareImage: quality must be a finite number between 0 and 1');
+  }
+  return config;
+}
+
 /**
  * Decodes an image, downscales it if it exceeds the given pixel bounds, and
  * re-encodes it to fit within {@link PrepareImageOptions.maxBytes}.
@@ -61,12 +84,15 @@ const DEFAULTS = {
  * Runs only in browsers (uses `createImageBitmap`, `OffscreenCanvas`, and
  * `HTMLCanvasElement`). The library itself does not depend on this module —
  * import it from `@libraz/mejiro/image` only when needed.
+ *
+ * @throws RangeError if `maxBytes`, `maxWidth` or `maxHeight` is not a positive
+ *   finite number, or `quality` is not a finite number in [0, 1].
  */
 export async function prepareImage(
   file: Blob | File,
   options: PrepareImageOptions = {},
 ): Promise<PrepareImageResult> {
-  const config = { ...DEFAULTS, ...options };
+  const config = resolveOptions(options);
   const warnings: string[] = [];
 
   const bitmap = await decodeImage(file);

@@ -29,7 +29,7 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `chars` | `string[]` | Character array (grapheme clusters) of the paragraph text. |
+| `chars` | `string[]` | The paragraph text as one entry per Unicode code point, index-aligned with the code points `breakPoints` refers to. A variation selector or combining mark is its own entry; line breaking never separates it from its base. |
 | `breakPoints` | `Uint32Array` | Break points from the line breaking algorithm. |
 | `inlineAnnotations` | `InlineAnnotation[]` | Inline ruby / emphasis / tcy / link annotations for this paragraph. |
 | `kind` | `ParagraphKind \| undefined` | Structural classification (`'body'`, `'heading'`, `'blockquote'`, `'sceneBreak'`, `'pre'`, `'figure'`). Survives pagination into `RenderParagraph.kind`, where it selects the `mejiro-paragraph--*` class. Defaults to `'body'`. |
