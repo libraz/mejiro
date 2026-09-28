@@ -3,8 +3,9 @@ import type { TextAnalyzer } from '@libraz/mejiro/analysis';
 import { createSuzumeAnalyzer } from '@libraz/mejiro/analysis';
 import type { ChapterLayout, ChapterLayoutSnapshot, PageResult } from '@libraz/mejiro/book';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { createOverlayDragSession, isPrimaryPointerPress } from '@libraz/mejiro/browser';
 import type { EpubBook } from '@libraz/mejiro/epub';
-import { parseEpub } from '@libraz/mejiro/epub';
+import { assertEpubInputSize, parseEpub } from '@libraz/mejiro/epub';
 import type { RenderPage, RenderSegment } from '@libraz/mejiro/render';
 import suzumeWasmUrl from '@libraz/suzume/wasm?url';
 
@@ -527,11 +528,6 @@ function setupOverlayDrag(placement: ImagePlacement): void {
   const closeEl = placement.el.querySelector(
     '.mejiro-reader-image-overlay-close',
   ) as HTMLDivElement;
-  let dragging = false;
-  let resizing = false;
-  let startX = 0;
-  let startY = 0;
-  let startVal = { x: 0, y: 0, w: 0, h: 0 };
 
   closeEl.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
@@ -547,52 +543,47 @@ function setupOverlayDrag(placement: ImagePlacement): void {
   });
 
   resizeEl.addEventListener('pointerdown', (e) => {
+    if (!isPrimaryPointerPress(e)) return;
     e.stopPropagation();
     e.preventDefault();
-    resizing = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    startVal = { x: placement.x, y: placement.y, w: placement.w, h: placement.h };
-    placement.el.classList.add('is-dragging');
-    resizeEl.setPointerCapture(e.pointerId);
+    createOverlayDragSession({
+      mode: 'resize',
+      rect: { x: placement.x, y: placement.y, w: placement.w, h: placement.h },
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      captureElement: resizeEl,
+      activeElement: placement.el,
+      dragClass: 'is-dragging',
+      onChange: (rect) => {
+        placement.w = rect.w;
+        placement.h = rect.h;
+        applyOverlayStyle(placement);
+        scheduleReflow();
+      },
+    });
   });
 
   placement.el.addEventListener('pointerdown', (e) => {
-    if (resizing) return;
+    if (!isPrimaryPointerPress(e)) return;
     e.preventDefault();
-    dragging = true;
-    startX = e.clientX;
-    startY = e.clientY;
-    startVal = { x: placement.x, y: placement.y, w: placement.w, h: placement.h };
-    placement.el.classList.add('is-dragging');
-    placement.el.setPointerCapture(e.pointerId);
+    createOverlayDragSession({
+      mode: 'move',
+      rect: { x: placement.x, y: placement.y, w: placement.w, h: placement.h },
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      captureElement: placement.el,
+      activeElement: placement.el,
+      dragClass: 'is-dragging',
+      onChange: (rect) => {
+        placement.x = rect.x;
+        placement.y = rect.y;
+        applyOverlayStyle(placement);
+        scheduleReflow();
+      },
+    });
   });
-
-  const onMove = (e: PointerEvent) => {
-    if (!(dragging || resizing)) return;
-    e.preventDefault();
-    const dx = e.clientX - startX;
-    const dy = e.clientY - startY;
-    if (resizing) {
-      placement.w = Math.max(40, startVal.w + dx);
-      placement.h = Math.max(40, startVal.h + dy);
-    } else {
-      placement.x = startVal.x + dx;
-      placement.y = startVal.y + dy;
-    }
-    applyOverlayStyle(placement);
-    scheduleReflow();
-  };
-
-  const onUp = () => {
-    dragging = false;
-    resizing = false;
-    placement.el.classList.remove('is-dragging');
-  };
-
-  placement.el.addEventListener('pointermove', onMove);
-  document.addEventListener('pointermove', onMove);
-  document.addEventListener('pointerup', onUp);
 }
 
 function syncImagesToLayout(): void {
@@ -898,7 +889,21 @@ function updatePageInfo(): void {
 }
 
 // ── EPUB Loading ──
+function reportEpubLoadError(err: unknown): void {
+  loadingEl.hidden = true;
+  currentBook = null;
+  updateReaderOptionsDemo();
+  console.error('Failed to parse EPUB:', err);
+  alert(`Failed to parse EPUB: ${err instanceof Error ? err.message : err}`);
+}
+
 async function loadEpubFile(file: File): Promise<void> {
+  try {
+    assertEpubInputSize(file.size);
+  } catch (err) {
+    reportEpubLoadError(err);
+    return;
+  }
   const buffer = await file.arrayBuffer();
   await loadEpubBuffer(buffer);
 }
@@ -932,11 +937,7 @@ async function loadEpubBuffer(buffer: ArrayBuffer): Promise<void> {
     bookEl.hidden = false;
     render();
   } catch (err) {
-    loadingEl.hidden = true;
-    currentBook = null;
-    updateReaderOptionsDemo();
-    console.error('Failed to parse EPUB:', err);
-    alert(`Failed to parse EPUB: ${err instanceof Error ? err.message : err}`);
+    reportEpubLoadError(err);
   }
 }
 
