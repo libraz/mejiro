@@ -89,6 +89,8 @@ reader.current?.goToSpread(12);
 | `turnEnd` | `{ to }` | めくりアニメーション完了時。 |
 | `chapterFinished` | `{ chapter }` | 章の最終見開きに到達したとき。`onChapterCompleted` プロップと同等。 |
 
+読み込み後に最初に落ち着いた位置は基準点として扱い、イベントは発火しません。以降は章か見開きインデックスが変わるたびに `spreadChanged` が 1 回発火し、新しいインデックスが章の最後であれば続けて `chapterFinished` が発火します。インデックスが変わらない再レイアウトでは何も発火しません。`onPageRead(anchor, dwellMs)` プロップも同じ遷移で呼ばれ、離れた側の見開きを受け取ります。React と Vue は同じ順序でイベントを発火します。
+
 単ページ表示（`spreadMode="single"`、または縦長の表示面での `"auto"`）では 1 ページずつ表示し、上記の見開きインデックスはすべてページ単位になります。対象は `goToSpread`・`next` / `prev`・`spreadIdx` / `totalSpreads`・`spreadChanged` のペイロード・`onSpreadIdxChange` です。`getAnchor` と `getVisibleRange` も現在のページを対象にします。`"auto"` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。
 
 #### 読書位置の永続化
@@ -330,7 +332,7 @@ const layout = useChapterLayout(book, epub, chapter, surface, {
 
 ### useImageOverlay フック
 
-`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。レイアウトが差し替わったときや見開きが変わったときには排除を再登録するため、リサイズやページ送りのあともテキストは画像を避けて流れ続けます。React では `margin` オプションが変わったときも再登録します。Vue のコンポーザブルはオプションを呼び出し時に 1 度だけ読みます。
+`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。レイアウトが差し替わったときや見開きが変わったときには排除を再登録するため、リサイズやページ送りのあともテキストは画像を避けて流れ続けます。React では `margin` オプションが変わったときも再登録します。Vue のコンポーザブルはオプションを呼び出し時に 1 度だけ読みます。ドラッグは `isPrimaryPointerPress` が受け付ける押下（タッチ、ペン、マウスの主ボタン）でだけ始まり、`MejiroSpread` はオーバーレイ上の押下ではページをめくりません。`enableImageOverlay` を有効にした `MejiroReader` は、本を読み込んだときと章が変わったときにオーバーレイを消去します。
 
 ```ts
 const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
@@ -853,7 +855,7 @@ function Notation() {
 `useAnnotations` と `MejiroReader` の `annotations` prop を組み合わせると、永続化付きハイライトを 10 行ほどで実装できます。
 
 ```tsx
-import { MejiroReader, useAnnotations, useReadingPosition } from '@libraz/mejiro-react';
+import { MejiroReader, type MejiroReaderHandle, useAnnotations } from '@libraz/mejiro-react';
 import { useRef } from 'react';
 
 function Reader({ bookId, epub }) {
@@ -870,9 +872,9 @@ function Reader({ bookId, epub }) {
 }
 ```
 
-`annotations` は `{ chapter, start, end, color? }` の配列。Reader は現在の章のものだけ自動でハイライト rect に変換して `MejiroSpread` に渡します。`useAnnotations` の `storage` オプションはサーバ送信に置き換え可能です (`useReadingPosition` と同じ interface)。
+`annotations` は `{ chapter, start, end, color? }` の配列です。Reader は現在の章のエントリだけを `ChapterLayout.selectionRects` でハイライト矩形に変換し、`MejiroSpread` に渡します。`storage` オプションは `useReadingPosition` と同じインターフェースなので、`localStorage` をサーバー側のストアに差し替えるだけで済みます。
 
-サーバ同期するなら、`onChange` で確定後の全件を受け取って送ります（初回ハイドレートでは発火しません）。読書位置と同様、送信するバイト列は `serializeAnnotations` で作れば次回訪問時に `parseAnnotations` がそのまま受理します。
+サーバーと非同期に同期するには、`onChange` で変更を 1 件ずつ転送します。`onChange` は `add` / `remove` / `update` / `clear` の直後に同期的に呼ばれ、初回のハイドレーションでは呼ばれません。読書位置と同様に、送信するバイト列は `serializeAnnotations` で作ってください。次回の訪問時に `parseAnnotations` がそのまま受け付けます。
 
 ```tsx
 import { serializeAnnotations } from '@libraz/mejiro';

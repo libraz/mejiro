@@ -50,7 +50,7 @@ React 版と Vue 版は experimental です。一次 API は hooks と低レベ�
 ## インストール
 
 ```bash
-npm install @libraz/mejiro                     # コア、ブラウザ、EPUB、レンダリング、ブック、画像
+npm install @libraz/mejiro                     # コア、ブラウザ、EPUB、レンダリング、ブック、画像、解析
 npm install @libraz/mejiro-react react react-dom   # React コンポーネント（experimental）
 npm install @libraz/mejiro-vue vue                 # Vue コンポーネント（experimental）
 ```
@@ -60,7 +60,7 @@ npm install @libraz/mejiro-vue vue                 # Vue コンポーネント�
 ### コアのレイアウト
 
 ```ts
-import { getLineRanges, paginate } from '@libraz/mejiro';
+import { getLineRanges, paginate, toCodepoints } from '@libraz/mejiro';
 import { MejiroBrowser } from '@libraz/mejiro/browser';
 
 const mejiro = new MejiroBrowser({
@@ -76,8 +76,8 @@ const result = await mejiro.layout({
   lineWidth: mejiro.verticalLineWidth(600), // コンテナ高さから実効行長を求める
 });
 
-// 2. 行範囲を取得 → [[start, end), ...]
-const lines = getLineRanges(result.breakPoints, text.length);
+// 2. 行範囲を取得 → [[start, end), ...]（改行位置は NFC 正規化後のコードポイント単位）
+const lines = getLineRanges(result.breakPoints, toCodepoints(text).length);
 
 // 3. 幅 400px のページに分割
 const pages = paginate(400, [
@@ -122,7 +122,8 @@ const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
 import { MejiroReader } from '@libraz/mejiro-react';
 import '@libraz/mejiro/render/mejiro-reader.css';
 
-<MejiroReader file={epubFile} theme="sepia" />;
+// URL から取得して開く。自分で解析した本を表示するなら `epub={parsedBook}` を渡す
+<MejiroReader epubUrl="/book.epub" theme="sepia" />;
 ```
 
 Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます。props、テーマ、controlled な使い方、SSR は [React / Vue ガイド](docs/ja/08-react-and-vue.md) を参照してください。
@@ -131,10 +132,10 @@ Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます
 
 **禁則処理**は、句読点や括弧などが行頭・行末に来ないようにする日本語組版のルールで、[JIS X 4051](https://www.jisc.go.jp/app/jis/general/GnrJISNumberNameSearchList?show&jisStdNo=X4051) や [JLREQ](https://www.w3.org/TR/jlreq/) で整理されています。mejiro には 2 つのモードがあります。
 
-- **Strict**（既定）— 閉じ括弧、句読点、小書き仮名、長音記号、踊り字が行頭に来ないようにし、開き括弧が行末に来ないようにします。
+- **Strict**（既定）— 閉じ括弧、句読点、小書き仮名、長音記号、踊り字が行頭に来ないようにし、開き括弧が行末に来ないようにします。これらの半角形・ASCII 形にも同じ規則を適用します。
 - **Loose** — Strict を少し緩め、小書き仮名と長音記号（`ー`）の行頭配置を許可します。狭い段組みで詰まりを減らしたい場合に向いています。
 
-**ぶら下げ組み**では、`。` `、` `，` `．` を次の行へ送らず、行末の外側へはみ出して配置します。
+**ぶら下げ組み**では、`。` `、` `，` `．` と半角の `｡` `､` を次の行へ送らず、行末の外側へはみ出して配置します。
 
 **ルビ**は改行計算の前に解決します。ルビの付いた範囲は本文の幅とルビの幅の広いほうを確保するため、載っている行によってルビが欠けることはありません。**縦中横**は、縦組みの列の中で横に並ぶ範囲を 1 つの正立したボックスにまとめ、改行アルゴリズムからは分割不可の塊として扱います。
 

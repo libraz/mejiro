@@ -91,6 +91,8 @@ Lifecycle events available via `subscribe`:
 | `turnEnd` | `{ to }` | When a turn animation completes. |
 | `chapterFinished` | `{ chapter }` | When the reader reaches the last spread of a chapter. Mirrors the `onChapterCompleted` prop. |
 
+The first position the reader settles on after loading is the baseline and fires nothing. After that, each change of chapter or spread index fires `spreadChanged` once, then `chapterFinished` if the new index is the last one in the chapter, and a re-layout that keeps the index fires nothing. The `onPageRead(anchor, dwellMs)` prop fires on the same transitions, for the spread that was left. React and Vue emit the same sequence.
+
 In single-page mode (`spreadMode="single"`, or `"auto"` on a portrait surface) the reader shows one page at a time, and every spread index above counts pages instead: `goToSpread`, `next` / `prev`, `spreadIdx` / `totalSpreads`, the `spreadChanged` payload and `onSpreadIdxChange`. `getAnchor` and `getVisibleRange` then cover the current page. When `"auto"` switches mode, the index is converted so the page on screen stays visible.
 
 #### Persisting the reading position
@@ -332,7 +334,7 @@ Without `restorePosition`, read `pendingRestore.current` yourself once the new l
 
 ### useImageOverlay Hook
 
-`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow. While an overlay is active, the exclusion is re-issued when the layout is replaced or the spread changes, so the text keeps flowing around it after a resize or a page turn. In React a change of the `margin` option re-issues it as well; the Vue composable reads its options once, when it is called.
+`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow. While an overlay is active, the exclusion is re-issued when the layout is replaced or the spread changes, so the text keeps flowing around it after a resize or a page turn. In React a change of the `margin` option re-issues it as well; the Vue composable reads its options once, when it is called. A drag starts only on a press `isPrimaryPointerPress` accepts (touch, pen or the primary mouse button), and `MejiroSpread` does not turn the page for a press on an overlay. With `enableImageOverlay`, `MejiroReader` clears its overlays when a book loads or the chapter changes.
 
 ```ts
 const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
@@ -872,7 +874,7 @@ The token values are `ruby`, `emphasis`, `tcy`, `em`, `strong`, `link` and `foot
 Pair `useAnnotations` with the `annotations` prop on `MejiroReader` to persist highlights with about ten lines of glue.
 
 ```tsx
-import { MejiroReader, useAnnotations } from '@libraz/mejiro-react';
+import { MejiroReader, type MejiroReaderHandle, useAnnotations } from '@libraz/mejiro-react';
 import { useRef } from 'react';
 
 function Reader({ bookId, epub }) {

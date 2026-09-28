@@ -242,7 +242,8 @@ When forwarding state to a server through the `onChange` callback of `useReading
 UI string catalogs for the bundled components. `resolveMessages` merges partial overrides
 on top of a built-in catalog; `formatMessage` substitutes `{name}` placeholders. The
 reader / editor components take the same values through their `locale` and `messages`
-props, so a host rarely calls these directly.
+props, so a host rarely calls these directly. An override key whose value is `undefined`
+keeps the catalog string.
 
 ### Text and URL Helpers
 
@@ -619,6 +620,7 @@ calling in.
 `EpubParseOptions.limits` overrides the archive resource limits applied to untrusted
 input (`DEFAULT_EPUB_PARSE_LIMITS`): `maxInputBytes` (100 MiB), `maxEntries` (10,000),
 `maxEntryBytes` (50 MiB), `maxTotalBytes` (200 MiB) and `maxCompressionRatio` (1,000).
+A key left out or set to `undefined` keeps its default.
 
 | Export | Signature |
 |---|---|
@@ -1163,10 +1165,10 @@ Every component exports a matching props type; `MejiroSettingsPanel` additionall
 | `useSpread` | `UseSpreadOptions` / `UseSpreadReturn` | — |
 | `useReadingPosition` | `UseReadingPositionOptions` / `UseReadingPositionReturn` | `ReadingPositionStorage`, `ReadingPositionValue` |
 | `useI18n` | `UseI18nOptions` | `MejiroLocale`, `MejiroMessages`; `enMessages`, `jaMessages`, `resolveMessages`, `format` |
-
-`useLibrary` prefers `initialVolumeId` whenever the current `volumes` list contains it, including a list that arrives after mount, until `next` / `prev` / `goTo` is called. A list change that drops the current volume falls back to the first entry and calls `onChange` with it. `MejiroShelf` also works outside `MejiroReader`: `mejiro-reader.css` declares the default palette on a standalone `.mejiro-shelf`.
 | `useImageOverlay` | `UseImageOverlayOptions` / `UseImageOverlayReturn` | `ImageOverlayRect` (and its deprecated alias `ImageRect`) |
 | `useMultiImageOverlay` | `UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn` | `MultiImageItem` |
+
+`useLibrary` prefers `initialVolumeId` whenever the current `volumes` list contains it, including a list that arrives after mount, until `next` / `prev` / `goTo` is called. A list change that drops the current volume falls back to the first entry and calls `onChange` with it. `MejiroShelf` also works outside `MejiroReader`: `mejiro-reader.css` declares the default palette on a standalone `.mejiro-shelf`.
 
 `format(template, vars)` substitutes `{name}` placeholders, the same contract as the core `formatMessage`. `AnnotationsStorage` and `ReadingPositionStorage` are both aliases of the core `MejiroStorage`. `PageDimensions` and `ManuscriptPageDimensions` are both `{ pageWidth, pageHeight, contentHeight }`, and `RecomputeOptions` / `ManuscriptRecomputeOptions` are both `{ blank?: boolean }`. `VolumeInfo` is `{ id, label, author?, cover?, meta? }`, `EpubProjectChapterDraft` and `ManuscriptEditorChapter` are both `{ id, title, body }`, and `MultiImageItem` is `{ id, rect }`.
 
@@ -1206,6 +1208,8 @@ Common headless editor returns:
 **`MejiroReader` presentation props** -- `theme?: MejiroTheme` (reflected as `data-mejiro-theme` on the reader root, which the bundled CSS reads to swap palettes), `mode?: MejiroReaderMode` (`'paginated'` default / `'scroll'` stacks every page in a vertical scroller), `spreadMode?: MejiroSpreadMode` (`'double'` default / `'single'` / `'auto'`), `fit?: MejiroReaderFit` (`'fill'` default / `'width'`), `pageNumbers?: PageNumberDisplay`, `locale?: MejiroLocale` and `messages?: Partial<MejiroMessages>` for UI strings, and `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` to replace the settings panel body with a custom form.
 
 In single-page mode (`'single'`, or `'auto'` on a portrait surface) the reader shows one page at a time, and every spread index counts pages: `spreadIdx`, `goToSpread`, `next` / `prev`, `onSpreadIdxChange`, the `spreadChanged` event and `ReadingPosition.totalSpreads`. When `'auto'` switches mode, the index is converted so the page on screen stays visible. `useSpread` implements this rule through its `single` option and reports the page shown as `firstPage`, `layoutSpreadIdx` and `singleSide`, which `MejiroSpread` takes as `singlePage` / `singleSide`. Image overlay rectangles stay relative to the right page; in single-page mode `MejiroSpread` draws only those whose centre lies on the page shown, and the reader's image button adds a new one on that page.
+
+**`MejiroScrollView`** -- The page stack behind `mode="scroll"`. It draws highlights and image overlays like `MejiroSpread`: `selectionRects` are painted on the page each entry's `pageIdx` addresses, and `images` (the overlays of the spread at `spreadIdx`) each render on the page containing their centre, with `onImagePointerDown`, `onImageResizePointerDown` and `onImageClose` for the handles. A new `images` array is also what makes the view re-read reflowed pages; `useMultiImageOverlay`'s `currentImages` provides one on every change.
 
 **`MejiroReader` `annotations` prop** -- Pass an array of `{ chapter, start, end, color? }` and the Reader converts entries on the current chapter into highlight rectangles via `ChapterLayout.selectionRects`, forwarding them to `MejiroSpread`. Typically paired with `useAnnotations`, but any shape that satisfies the structural type works.
 
@@ -1282,11 +1286,13 @@ Unlike React, `MejiroReaderProps` is a single object type rather than a discrimi
 
 The Vue `MejiroShelf` is not generic: `defineComponent` cannot carry a type parameter into `h()` or `.ts` render functions, so `volumes` is typed `readonly VolumeInfo[]` and the `select` payload is `VolumeInfo<unknown>`. Narrow `meta` in the handler where the React `MejiroShelf<T>` would infer it.
 
+The Vue `MejiroScrollView` takes the same `selectionRects`, `spreadIdx` and `images` props and emits `image-pointerdown`, `image-resize-pointerdown` and `image-close` where React takes callback props.
+
 ### Composables
 
 The Vue composables expose the same operations as the React hooks and share the option / return type names: `useEpub` (`UseEpubOptions` / `UseEpubReturn`), `useEditableEpub` (`UseEditableEpubOptions` / `UseEditableEpubReturn`, `EditableEpubSelection`), `useEpubProject` (`UseEpubProjectOptions` / `UseEpubProjectReturn`, `EpubProjectChapterDraft`), `useLibrary` (`UseLibraryOptions` / `UseLibraryReturn`, `VolumeInfo`), `useManuscriptDraft` (`UseManuscriptDraftOptions` / `UseManuscriptDraftReturn`), `useManuscriptLayout` (`UseManuscriptLayoutOptions` / `UseManuscriptLayoutReturn`, `ManuscriptPageDimensions`, `ManuscriptRecomputeOptions`), `useAnnotations` (`UseAnnotationsOptions` / `UseAnnotationsReturn`, `Annotation`, `AnnotationsStorage`), `useMejiroBook` (`UseMejiroBookOptions` / `UseMejiroBookReturn`), `useChapterLayout` (`UseChapterLayoutOptions` / `UseChapterLayoutReturn`, `PageDimensions`, `RecomputeOptions`), `useSpread` (`UseSpreadOptions` / `UseSpreadReturn`), `useReadingPosition` (`UseReadingPositionOptions` / `UseReadingPositionReturn`, `ReadingPositionStorage`), `useI18n` (`UseI18nOptions`, plus `enMessages` / `jaMessages` / `resolveMessages` / `format`), `useImageOverlay` (`UseImageOverlayOptions` / `UseImageOverlayReturn`) and `useMultiImageOverlay` (`UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn`, `MultiImageItem`).
 
-Reactive state is returned as `Ref` / `ComputedRef` values, and composables that take a layout or index accept refs rather than plain values. `useLibrary` re-resolves the current volume on an in-place mutation of a reactive `volumes` array as well as on reassignment.
+Reactive state is returned as `Ref` / `ComputedRef` values, and composables that take a layout or index accept refs rather than plain values. `useLibrary` re-resolves the current volume on an in-place mutation of a reactive `volumes` array as well as on reassignment. `useMejiroBook` takes `(initial, options?)` as in React, or `(initial, source, options?)` where `source` is a `Ref<Partial<BookOptions>>` whose changes are applied to the book through `setOptions`.
 
 ### `MejiroReader` presentation props
 

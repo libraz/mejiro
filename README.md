@@ -149,11 +149,11 @@ usage and SSR.
 line, as defined in [JIS X 4051](https://www.jisc.go.jp/app/jis/general/GnrJISNumberNameSearchList?show&jisStdNo=X4051)
 and [JLREQ](https://www.w3.org/TR/jlreq/). Two modes ship:
 
-- **Strict** (default) — closing brackets, punctuation, small kana, the long vowel mark and iteration marks never start a line; opening brackets never end one.
+- **Strict** (default) — closing brackets, punctuation, small kana, the long vowel mark and iteration marks never start a line; opening brackets never end one. Half-width and ASCII forms of these marks follow the same rules.
 - **Loose** — strict, except small kana and `ー` may start a line. Useful for narrow columns.
 
-**Hanging punctuation** lets `。` `、` `，` `．` protrude past the line end
-instead of being pushed to the next line.
+**Hanging punctuation** lets `。` `、` `，` `．` and the half-width `｡` `､`
+protrude past the line end instead of being pushed to the next line.
 
 **Ruby** is resolved before line breaking: each annotated span reserves the wider
 of its base text and its reading, so a reading can never be clipped by the line

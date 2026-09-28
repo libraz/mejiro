@@ -234,7 +234,7 @@
 | `resolveMessages` | `(locale: MejiroLocale \| undefined, overrides: Partial<MejiroMessages> \| undefined, fallback?: MejiroMessages) => MejiroMessages` |
 | `formatMessage` | `(template: string, vars: Record<string, string \| number>) => string` |
 
-同梱コンポーネントの UI 文字列カタログです。`resolveMessages` は組み込みカタログに部分的な上書きをマージし、`formatMessage` は `{name}` プレースホルダを置換します。リーダー／エディタのコンポーネントは同じ値を `locale` / `messages` prop から受け取るため、ホスト側が直接呼ぶ場面はほとんどありません。
+同梱コンポーネントの UI 文字列カタログです。`resolveMessages` は組み込みカタログに部分的な上書きをマージし、`formatMessage` は `{name}` プレースホルダを置換します。リーダー／エディタのコンポーネントは同じ値を `locale` / `messages` prop から受け取るため、ホスト側が直接呼ぶ場面はほとんどありません。値が `undefined` の上書きキーは無視され、カタログの文字列が残ります。
 
 ### テキスト・URL 補助
 
@@ -603,7 +603,7 @@ EPUBファイルをルビ注釈付きの構造化されたチャプターに解�
 
 読み込み系の API はいずれも DOM の XML パーサを必要とします。`parseEpub()` / `parseEditableEpub()` / `EditableEpub.load()` はグローバルの `DOMParser` / `XMLSerializer` / `Node` を要求します。ブラウザには標準で存在しますが、Node で使う場合は DOM 実装を導入し、呼び出し前に `globalThis` へ載せてください。
 
-`EpubParseOptions.limits` は、未信頼入力に適用されるアーカイブのリソース上限（`DEFAULT_EPUB_PARSE_LIMITS`）を上書きします。`maxInputBytes`（100 MiB）、`maxEntries`（10,000）、`maxEntryBytes`（50 MiB）、`maxTotalBytes`（200 MiB）、`maxCompressionRatio`（1,000）です。
+`EpubParseOptions.limits` は、未信頼入力に適用されるアーカイブのリソース上限（`DEFAULT_EPUB_PARSE_LIMITS`）を上書きします。`maxInputBytes`（100 MiB）、`maxEntries`（10,000）、`maxEntryBytes`（50 MiB）、`maxTotalBytes`（200 MiB）、`maxCompressionRatio`（1,000）です。省略したキーと `undefined` を渡したキーは既定値のままです。
 
 | エクスポート | シグネチャ |
 |---|---|
@@ -1133,10 +1133,10 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 | `useSpread` | `UseSpreadOptions` / `UseSpreadReturn` | — |
 | `useReadingPosition` | `UseReadingPositionOptions` / `UseReadingPositionReturn` | `ReadingPositionStorage`、`ReadingPositionValue` |
 | `useI18n` | `UseI18nOptions` | `MejiroLocale`、`MejiroMessages`、および `enMessages` / `jaMessages` / `resolveMessages` / `format` |
-
-`useLibrary` は、`next` / `prev` / `goTo` が呼ばれるまで、現在の `volumes` に `initialVolumeId` が含まれていればそれを優先します。マウント後に届いたリストでも同じです。現在の巻がリストから消えたときは先頭の巻に戻り、その巻を引数に `onChange` を呼びます。`MejiroShelf` は `MejiroReader` の外でも使えます。`mejiro-reader.css` は単独で置かれた `.mejiro-shelf` にも既定のパレットを宣言しています。
 | `useImageOverlay` | `UseImageOverlayOptions` / `UseImageOverlayReturn` | `ImageOverlayRect`（およびその非推奨エイリアス `ImageRect`） |
 | `useMultiImageOverlay` | `UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn` | `MultiImageItem` |
+
+`useLibrary` は、`next` / `prev` / `goTo` が呼ばれるまで、現在の `volumes` に `initialVolumeId` が含まれていればそれを優先します。マウント後に届いたリストでも同じです。現在の巻がリストから消えたときは先頭の巻に戻り、その巻を引数に `onChange` を呼びます。`MejiroShelf` は `MejiroReader` の外でも使えます。`mejiro-reader.css` は単独で置かれた `.mejiro-shelf` にも既定のパレットを宣言しています。
 
 `format(template, vars)` は `{name}` プレースホルダを置換します（コアの `formatMessage` と同じ契約）。`AnnotationsStorage` と `ReadingPositionStorage` はどちらもコアの `MejiroStorage` の別名です。`PageDimensions` と `ManuscriptPageDimensions` はどちらも `{ pageWidth, pageHeight, contentHeight }`、`RecomputeOptions` と `ManuscriptRecomputeOptions` はどちらも `{ blank?: boolean }` です。`VolumeInfo` は `{ id, label, author?, cover?, meta? }`、`EpubProjectChapterDraft` と `ManuscriptEditorChapter` はどちらも `{ id, title, body }`、`MultiImageItem` は `{ id, rect }` です。
 
@@ -1176,6 +1176,8 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 **`MejiroReader` の表示系 props** -- `theme?: MejiroTheme`（リーダー root の `data-mejiro-theme` に反映され、同梱 CSS がパレットを切り替えます）、`mode?: MejiroReaderMode`（既定の `'paginated'` / 章の全ページを縦スクローラに積む `'scroll'`）、`spreadMode?: MejiroSpreadMode`（既定の `'double'` / `'single'` / `'auto'`）、`fit?: MejiroReaderFit`（既定の `'fill'` / `'width'`）、`pageNumbers?: PageNumberDisplay`、UI 文字列用の `locale?: MejiroLocale` と `messages?: Partial<MejiroMessages>`、設定パネルの中身を差し替える `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` があります。
 
 単ページ表示（`'single'`、または縦長の表示面での `'auto'`）では 1 ページずつ表示し、見開きインデックスはすべてページ単位になります。対象は `spreadIdx`・`goToSpread`・`next` / `prev`・`onSpreadIdxChange`・`spreadChanged` イベント・`ReadingPosition.totalSpreads` です。`'auto'` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。この規則は `useSpread` の `single` オプションが実装しており、表示中のページを `firstPage`・`layoutSpreadIdx`・`singleSide` として返します。`MejiroSpread` はこれを `singlePage` / `singleSide` として受け取ります。画像オーバーレイの矩形は右ページ基準のままで、単ページ表示の `MejiroSpread` は中心が表示中のページにあるものだけを描き、リーダーの画像ボタンは新しい画像を表示中のページに置きます。
+
+**`MejiroScrollView`** -- `mode="scroll"` で使われるページの縦積み表示です。ハイライトと画像オーバーレイを `MejiroSpread` と同じように描きます。`selectionRects` は各エントリの `pageIdx` が指すページに描かれます。`images`（`spreadIdx` の見開きに置かれたオーバーレイ）は、それぞれ中心を含むページに描かれ、ハンドル操作は `onImagePointerDown`・`onImageResizePointerDown`・`onImageClose` で受け取ります。リフローしたページを読み直すきっかけも新しい `images` 配列です。`useMultiImageOverlay` の `currentImages` は変更のたびに新しい配列を返します。
 
 **`MejiroReader` の `annotations` prop** -- `{ chapter, start, end, color? }` の配列を渡すと、現在の章のものが自動でハイライト rect に変換されて見開きに描画されます。`useAnnotations` と組み合わせるのが基本ですが、自前で配列を組み立てても問題ありません。
 
@@ -1252,11 +1254,13 @@ React と違い `MejiroReaderProps` は判別可能な共用体ではなく単�
 
 Vue の `MejiroShelf` はジェネリックではありません。`defineComponent` は `h()` や `.ts` のレンダー関数に型引数を渡せないため、`volumes` の型は `readonly VolumeInfo[]`、`select` の引数は `VolumeInfo<unknown>` になります。React の `MejiroShelf<T>` なら推論される `meta` は、ハンドラ内で絞り込んでください。
 
+Vue の `MejiroScrollView` も `selectionRects`・`spreadIdx`・`images` を同じ props として受け取ります。React でコールバック props になっている操作は、`image-pointerdown`・`image-resize-pointerdown`・`image-close` イベントとして発行します。
+
 ### composables
 
 Vue の composables は React hooks と同じ操作を公開し、オプション / 戻り値の型名も共通です。`useEpub`（`UseEpubOptions` / `UseEpubReturn`）、`useEditableEpub`（`UseEditableEpubOptions` / `UseEditableEpubReturn`、`EditableEpubSelection`）、`useEpubProject`（`UseEpubProjectOptions` / `UseEpubProjectReturn`、`EpubProjectChapterDraft`）、`useLibrary`（`UseLibraryOptions` / `UseLibraryReturn`、`VolumeInfo`）、`useManuscriptDraft`（`UseManuscriptDraftOptions` / `UseManuscriptDraftReturn`）、`useManuscriptLayout`（`UseManuscriptLayoutOptions` / `UseManuscriptLayoutReturn`、`ManuscriptPageDimensions`、`ManuscriptRecomputeOptions`）、`useAnnotations`（`UseAnnotationsOptions` / `UseAnnotationsReturn`、`Annotation`、`AnnotationsStorage`）、`useMejiroBook`（`UseMejiroBookOptions` / `UseMejiroBookReturn`）、`useChapterLayout`（`UseChapterLayoutOptions` / `UseChapterLayoutReturn`、`PageDimensions`、`RecomputeOptions`）、`useSpread`（`UseSpreadOptions` / `UseSpreadReturn`）、`useReadingPosition`（`UseReadingPositionOptions` / `UseReadingPositionReturn`、`ReadingPositionStorage`）、`useI18n`（`UseI18nOptions`、および `enMessages` / `jaMessages` / `resolveMessages` / `format`）、`useImageOverlay`（`UseImageOverlayOptions` / `UseImageOverlayReturn`）、`useMultiImageOverlay`（`UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn`、`MultiImageItem`）です。
 
-リアクティブな状態は `Ref` / `ComputedRef` として返り、レイアウトや添字を受け取る composable は素の値ではなく ref を受け取ります。`useLibrary` は、リアクティブな `volumes` 配列の再代入だけでなく、配列をその場で変更した場合にも現在の巻を解決し直します。
+リアクティブな状態は `Ref` / `ComputedRef` として返り、レイアウトや添字を受け取る composable は素の値ではなく ref を受け取ります。`useLibrary` は、リアクティブな `volumes` 配列の再代入だけでなく、配列をその場で変更した場合にも現在の巻を解決し直します。`useMejiroBook` は React と同じ `(initial, options?)` の形でも、`(initial, source, options?)` の形でも呼べます。後者の `source` は `Ref<Partial<BookOptions>>` で、その変更は `setOptions` を通じて本に反映されます。
 
 ### `MejiroReader` の表示系 props
 

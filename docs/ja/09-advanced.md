@@ -535,14 +535,18 @@ export default async function ReaderPage({ params }: { params: { slug: string } 
 'use client';
 import { MejiroReader } from '@libraz/mejiro-react';
 
+// initialHtml は信頼できるソース（自前サーバーが renderEpubStatic で生成したもの）
+// から渡す。ユーザーが書いた HTML を使う場合は、下の fallback ラッパーに渡す前に
+// DOMPurify などでサニタイズする。
+function StaticFallback({ html }: { html: string }) {
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 export function ReaderClient({ slug, initialHtml }: Props) {
   return (
     <MejiroReader
       epubUrl={`/api/works/${slug}/epub`}
-      // initialHtml は信頼できるソース（自前サーバが renderEpubStatic で生成）
-      // から来る前提。ユーザ生成 HTML をここに流す場合は DOMPurify などで
-      // サニタイズしてから渡すこと。
-      fallback={<div dangerouslySetInnerHTML={{ __html: initialHtml }} />}
+      fallback={<StaticFallback html={initialHtml} />}
     />
   );
 }
