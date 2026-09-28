@@ -64,7 +64,7 @@ interface KinsokuRules {
 
 ## 2. トークン境界（形態素解析連携）
 
-`tokenBoundaries` オプションを使うと、形態素解析器（MeCab、kuromoji、Sudachi、[`@libraz/suzume`](https://github.com/libraz/suzume) など）を連携させ、自然な単語境界での改行を優先できます。ブラウザ単体で完結させたい場合は、辞書同梱の WASM ビルドがおよそ 567 KB（gzip 後で約 230 KB）に収まる Suzume が手早く、サーバ側で精度重視なら MeCab/Sudachi といった使い分けになります。
+`tokenBoundaries` オプションを使うと、[`@libraz/suzume`](https://github.com/libraz/suzume) などの形態素解析器やトークナイザを連携させ、自然な単語境界での改行を優先できます。ブラウザ単体で完結させたい場合は、辞書同梱の WASM ビルドがおよそ 567 KB（gzip 後で約 230 KB）に収まる Suzume が手早く、辞書の精度を重視するならサーバ側でより大きな辞書を持つ解析器を使うのが選択肢になります。
 
 ### 基本的な使い方
 
