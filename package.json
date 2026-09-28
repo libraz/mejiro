@@ -7,11 +7,12 @@
   ],
   "packageManager": "yarn@4.18.0",
   "scripts": {
-    "build": "yarn workspaces foreach -At run build",
+    "build": "node scripts/check-doc-facts.mjs && yarn workspaces foreach -At run build",
     "test": "vitest",
     "bench": "vitest bench",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "check:docs": "node scripts/check-doc-facts.mjs",
     "format": "biome format --write .",
     "typecheck": "yarn build && tsc -b --noEmit",
     "dev": "yarn workspace @mejiro/demo dev",
