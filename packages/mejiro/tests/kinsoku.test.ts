@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { computeBreaks, getLineRanges, toCodepoints } from '../src/index.js';
 import {
   buildKinsokuRules,
   getDefaultKinsokuRules,
@@ -115,5 +116,55 @@ describe('getDefaultKinsokuRules / buildKinsokuRules', () => {
     });
     expect(rules.lineStartProhibitedSet.has(0x0041)).toBe(true);
     expect(rules.lineEndProhibitedSet.has(0x0042)).toBe(true);
+  });
+});
+
+/** Full-width counterpart of a half-width codepoint, or undefined when it has none. */
+function fullWidthOf(cp: number): number | undefined {
+  if (cp >= 0x21 && cp <= 0x7e) return cp + 0xfee0;
+  if (cp >= 0xff61 && cp <= 0xff9f)
+    return String.fromCodePoint(cp).normalize('NFKC').codePointAt(0);
+  return undefined;
+}
+
+const HALF_WIDTH_CANDIDATES = [
+  ...Array.from({ length: 0x7e - 0x21 + 1 }, (_, i) => 0x21 + i),
+  ...Array.from({ length: 0xff9f - 0xff61 + 1 }, (_, i) => 0xff61 + i),
+];
+
+describe('half-width forms', () => {
+  it.each(['strict', 'loose'] as const)(
+    'treats a half-width form like its full-width form at line start (%s)',
+    (mode) => {
+      for (const cp of HALF_WIDTH_CANDIDATES) {
+        const full = fullWidthOf(cp);
+        if (full === undefined || !isLineStartProhibited(full, mode)) continue;
+        expect(isLineStartProhibited(cp, mode), `U+${cp.toString(16)}`).toBe(true);
+      }
+    },
+  );
+
+  it('treats a half-width form like its full-width form at line end', () => {
+    for (const cp of HALF_WIDTH_CANDIDATES) {
+      const full = fullWidthOf(cp);
+      if (full === undefined || !isLineEndProhibited(full)) continue;
+      expect(isLineEndProhibited(cp), `U+${cp.toString(16)}`).toBe(true);
+    }
+  });
+
+  it('never starts a line of half-width katakana with the prolonged sound mark', () => {
+    const text = 'ｱｲｳｴｰｵｶｷｸｰｹｺｻｼｽｰｾｿ';
+    const codepoints = toCodepoints(text);
+    const chars = [...text];
+    for (let width = 32; width <= 96; width += 8) {
+      const { breakPoints } = computeBreaks({
+        text: codepoints,
+        advances: new Float32Array(codepoints.length).fill(8),
+        lineWidth: width,
+      });
+      for (const [start] of getLineRanges(breakPoints, chars.length).slice(1)) {
+        expect(chars[start]).not.toBe('ｰ');
+      }
+    }
   });
 });

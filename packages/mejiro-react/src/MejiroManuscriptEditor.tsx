@@ -7,6 +7,7 @@ import { format, useI18n } from './i18n.js';
 import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
 import { MejiroReader, type MejiroReaderSettingsSlot, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
+import { mergeDefined } from './persistence.js';
 import { useManuscriptDraft } from './useManuscriptDraft.js';
 
 /** One chapter of the manuscript being edited. */
@@ -355,10 +356,14 @@ export function MejiroManuscriptEditor({
     <div className="mejiro-editor mejiro-manuscript-editor" data-panel-side={panelSide}>
       <main className="mejiro-editor-preview">
         <MejiroReader
-          subtitle={messages.manuscriptPreviewSubtitle}
-          chapterNavMode="panel"
-          enableSurfaceTap={false}
-          {...previewProps}
+          {...mergeDefined<ManuscriptPreviewProps>(
+            {
+              subtitle: messages.manuscriptPreviewSubtitle,
+              chapterNavMode: 'panel',
+              enableSurfaceTap: false,
+            },
+            previewProps ?? {},
+          )}
           manuscript={previewManuscript}
           dialect={dialect}
           fonts={fonts}

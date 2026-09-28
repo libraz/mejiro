@@ -6,7 +6,7 @@ import { render, waitFor } from '@testing-library/vue';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref } from 'vue';
-import { jaMessages, MejiroI18nProvider } from '../src/i18n.js';
+import { enMessages, jaMessages, MejiroI18nProvider } from '../src/i18n.js';
 import {
   MejiroReader,
   type MejiroReaderHandle,
@@ -211,6 +211,21 @@ describe('MejiroReader (Vue) — enable* toggles', () => {
     wrapper.unmount();
   });
 
+  it('treats an option or message passed as undefined like an omitted one', () => {
+    const { container } = render(MejiroReader, {
+      props: {
+        epub: fakeEpub(),
+        options: { fontFamily: 'serif', fontSize: undefined },
+        messages: { logoSubtitle: undefined },
+        enableStats: true,
+      },
+    });
+    expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 16px');
+    expect(container.querySelector('.mejiro-reader-logo-sub')?.textContent).toBe(
+      enMessages.logoSubtitle,
+    );
+  });
+
   it('reacts to options prop changes', async () => {
     const options = ref({ fontFamily: 'serif', fontSize: 16 });
     const book = fakeEpub();
@@ -361,6 +376,23 @@ describe('MejiroReader (Vue) — events', () => {
     await rerender({ epub: fakeEpub() });
     expect(onLoad).toHaveBeenCalledTimes(1);
     expect(onLoad.mock.calls[0][0].title).toBe('Test Book');
+  });
+
+  it("emits 'load' once per switch into a manuscript source, like an epub swap", async () => {
+    const onLoad = vi.fn();
+    const manuscript = [{ id: 'c1', title: '原稿章', body: '本文' }];
+    const { container, rerender } = render(MejiroReader, {
+      props: { manuscript, chapterNavMode: 'panel' },
+      attrs: { onLoad },
+    });
+    expect(onLoad).toHaveBeenCalledTimes(1);
+
+    await rerender({ manuscript: undefined, epub: fakeEpub() });
+    expect(onLoad).toHaveBeenCalledTimes(2);
+
+    await rerender({ manuscript: [...manuscript], epub: undefined });
+    expect(onLoad).toHaveBeenCalledTimes(3);
+    expect(container.textContent).toContain('原稿章');
   });
 
   it("emits 'chapter-change' when a chapter is selected via the panel", () => {
@@ -1119,7 +1151,7 @@ describe('MejiroReader (Vue) — manuscript source identity', () => {
 
       expect(handle().getReadingPosition()).toMatchObject({ chapter: 1, spreadIdx: 2 });
       expect(layoutSpy.mock.calls.length).toBe(layoutsBefore);
-      expect(onLoad).not.toHaveBeenCalled();
+      expect(onLoad).toHaveBeenCalledTimes(1);
 
       // A real content edit re-lays out the chapter but keeps the chapter selection.
       const edited = chapters();
@@ -1130,6 +1162,7 @@ describe('MejiroReader (Vue) — manuscript source identity', () => {
 
       expect(layoutSpy.mock.calls.length).toBeGreaterThan(layoutsBefore);
       expect(handle().getReadingPosition().chapter).toBe(1);
+      expect(onLoad).toHaveBeenCalledTimes(1);
     } finally {
       layoutSpy.mockRestore();
       vi.useRealTimers();

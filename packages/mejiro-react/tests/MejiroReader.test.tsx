@@ -6,7 +6,7 @@ import type { EpubBook } from '@libraz/mejiro/epub';
 import { act, render, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { jaMessages, MejiroI18nProvider } from '../src/i18n.js';
+import { enMessages, jaMessages, MejiroI18nProvider } from '../src/i18n.js';
 import {
   MejiroReader,
   type MejiroReaderHandle,
@@ -196,6 +196,21 @@ describe('MejiroReader (React) — enable* toggles', () => {
     setOptionsSpy.mockRestore();
   });
 
+  it('treats an option or message passed as undefined like an omitted one', () => {
+    const { container } = render(
+      <MejiroReader
+        epub={fakeEpub()}
+        options={{ fontFamily: 'serif', fontSize: undefined }}
+        messages={{ logoSubtitle: undefined }}
+        enableStats
+      />,
+    );
+    expect(container.querySelector('.mejiro-reader-stats')?.textContent).toContain('serif 16px');
+    expect(container.querySelector('.mejiro-reader-logo-sub')?.textContent).toBe(
+      enMessages.logoSubtitle,
+    );
+  });
+
   it('reacts to options prop changes', async () => {
     const epub = fakeEpub();
     const { container, rerender } = render(
@@ -322,6 +337,22 @@ describe('MejiroReader (React) — events', () => {
     rerender(<MejiroReader epub={epub} chapter={1} onLoad={onLoad} />);
 
     expect(onLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls onLoad once per switch into a manuscript source, like an epub swap', () => {
+    const onLoad = vi.fn();
+    const manuscript = [{ id: 'c1', title: '原稿章', body: '本文' }];
+    const { container, rerender } = render(
+      <MejiroReader manuscript={manuscript} chapterNavMode="panel" onLoad={onLoad} />,
+    );
+    expect(onLoad).toHaveBeenCalledTimes(1);
+
+    rerender(<MejiroReader epub={fakeEpub()} chapterNavMode="panel" onLoad={onLoad} />);
+    expect(onLoad).toHaveBeenCalledTimes(2);
+
+    rerender(<MejiroReader manuscript={[...manuscript]} chapterNavMode="panel" onLoad={onLoad} />);
+    expect(onLoad).toHaveBeenCalledTimes(3);
+    expect(container.textContent).toContain('原稿章');
   });
 
   it('calls onChapterChange when a chapter is selected via the panel', () => {

@@ -278,6 +278,19 @@ describe('useMejiroBook (Vue)', () => {
     unmount();
   });
 
+  it('ignores an option patched to undefined inside the debounce window', async () => {
+    const { result, unmount } = withSetup(() =>
+      useMejiroBook({ fontFamily: 'serif', fontSize: 16 }, undefined, { debounceMs: 20 }),
+    );
+    await Promise.all([
+      result.setOptions({ fontSize: 18 }),
+      result.setOptions({ fontSize: undefined }),
+    ]);
+    expect(result.options.value.fontSize).toBe(18);
+    expect(result.book.getOptions().fontSize).toBe(18);
+    unmount();
+  });
+
   it('coalesces rapid changes into a single book application while updating the snapshot at once', async () => {
     const spy = vi.spyOn(MejiroBookClass.prototype, 'setOptions');
     try {

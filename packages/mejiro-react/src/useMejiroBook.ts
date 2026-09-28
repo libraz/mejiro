@@ -2,6 +2,7 @@ import type { BookOptions } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toError } from './errors.js';
+import { mergeDefined } from './persistence.js';
 
 /** Options for {@link useMejiroBook}. */
 export interface UseMejiroBookOptions {
@@ -92,10 +93,10 @@ export function useMejiroBook(
 
   const setOptions = useCallback(
     (next: Partial<BookOptions>): Promise<void> => {
-      setLocal((prev) => ({ ...prev, ...next }));
+      setLocal((prev) => mergeDefined(prev, next));
       const pending: PendingApply = pendingRef.current ?? { patch: {}, timer: null, waiters: [] };
       pendingRef.current = pending;
-      Object.assign(pending.patch, next);
+      pending.patch = mergeDefined(pending.patch, next);
       const settled = new Promise<void>((resolve, reject) => {
         pending.waiters.push({ resolve, reject });
       });

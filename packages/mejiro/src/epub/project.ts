@@ -5,7 +5,8 @@ import {
   parseManuscript,
   parseManuscriptRuby,
 } from '../manuscript.js';
-import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
+import { mergeDefined } from '../merge.js';
+import { buildInlineNodes, type InlineNode, inlineNodeContent } from '../render/inline-tree.js';
 import { sanitizeUrl } from '../url.js';
 import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
 import {
@@ -262,12 +263,15 @@ export class EpubProject {
    * than at export time.
    */
   constructor(options: EpubProjectOptions) {
-    this.metadata = {
-      language: 'ja',
-      identifier: `urn:uuid:${crypto.randomUUID()}`,
-      modified: new Date(),
-      ...options.metadata,
-    };
+    this.metadata = mergeDefined<EpubProjectMetadata>(
+      {
+        title: options.metadata.title,
+        language: 'ja',
+        identifier: `urn:uuid:${crypto.randomUUID()}`,
+        modified: new Date(),
+      },
+      options.metadata,
+    );
     if (!this.metadata.identifier?.trim()) {
       this.metadata.identifier = `urn:uuid:${crypto.randomUUID()}`;
     }
@@ -637,9 +641,7 @@ function renderInlineNode(node: InlineNode): string {
 }
 
 function renderInlineChildren(node: Exclude<InlineNode, { type: 'text' }>): string {
-  return node.children.length > 0
-    ? renderInlineNodes(node.children)
-    : escapeTextWithBreaks(node.type === 'ruby' ? node.base : node.text);
+  return renderInlineNodes(inlineNodeContent(node));
 }
 
 /** Builds the manuscript marker for an inline image inserted via `addInlineImage`. */

@@ -40,6 +40,7 @@ import type { EditableSettings, FontChoice } from './MejiroSettingsPanel.js';
 import { MejiroSettingsPanel } from './MejiroSettingsPanel.js';
 import { MejiroSpread } from './MejiroSpread.js';
 import { MejiroStats } from './MejiroStats.js';
+import { mergeDefined } from './persistence.js';
 import { useChapterLayout } from './useChapterLayout.js';
 import { useEpub } from './useEpub.js';
 import { useMejiroBook } from './useMejiroBook.js';
@@ -680,16 +681,19 @@ function MejiroReaderInner(
     // instead of halving it for a two-page spread (the host can still override
     // `columns` via `pageGeometry`).
     const columns: 1 | 2 = effectiveSingle ? 1 : 2;
-    if (fit !== 'width') return { columns, ...pageGeometryProp };
-    return {
-      columns,
-      gutterOffset: 0,
-      headerOffset: 0,
-      maxHeight: Number.POSITIVE_INFINITY,
-      minWidth: 0,
-      minHeight: 0,
-      ...pageGeometryProp,
-    };
+    const geometry = pageGeometryProp ?? {};
+    if (fit !== 'width') return mergeDefined<ComputePageSizeOptions>({ columns }, geometry);
+    return mergeDefined<ComputePageSizeOptions>(
+      {
+        columns,
+        gutterOffset: 0,
+        headerOffset: 0,
+        maxHeight: Number.POSITIVE_INFINITY,
+        minWidth: 0,
+        minHeight: 0,
+      },
+      geometry,
+    );
   }, [fit, pageGeometryProp, effectiveSingle]);
 
   // The spread aspect (width / height) used to self-size the surface in
@@ -703,7 +707,7 @@ function MejiroReaderInner(
   }, [effectiveSingle, resolvedGeometry]);
 
   const resolvedOptions = useMemo<BookOptions>(
-    () => ({ ...DEFAULT_BOOK_OPTIONS, ...(optionsProp ?? {}) }),
+    () => mergeDefined(DEFAULT_BOOK_OPTIONS, optionsProp ?? {}),
     [optionsProp],
   );
 

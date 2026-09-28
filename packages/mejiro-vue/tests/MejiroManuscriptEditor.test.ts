@@ -89,6 +89,17 @@ describe('MejiroManuscriptEditor (Vue)', () => {
     });
   });
 
+  it('keeps the editor preview defaults for previewProps passed as undefined', async () => {
+    const { container } = render(MejiroManuscriptEditor, {
+      props: { previewProps: { subtitle: undefined } },
+    });
+    await waitFor(() => {
+      expect(container.querySelector('.mejiro-reader-logo-sub')?.textContent).toBe(
+        'Manuscript Preview',
+      );
+    });
+  });
+
   it('previewProps cannot override the editor-driven epub/fonts/enableImageOverlay', async () => {
     const { container } = render(MejiroManuscriptEditor, {
       props: { previewProps: { subtitle: 'Sub' } },

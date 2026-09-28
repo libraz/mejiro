@@ -767,6 +767,71 @@ describe('MejiroSpread (Vue)', () => {
     expect(onSelectionChange).toHaveBeenNthCalledWith(2, { start: anchors[0], end: anchors[1] });
   });
 
+  describe('selection drag session', () => {
+    function mountSelectable(onSurfaceTap?: () => void) {
+      const spread: SpreadResult = {
+        right: pageResult('右頁'),
+        left: pageResult('左頁'),
+        totalPages: 2,
+      };
+      let charIndex = 0;
+      const anchorAtCoord = () => ({ paragraph: 0, charIndex: charIndex++ });
+      const onSelectionChange = vi.fn();
+      const { container } = render(MejiroSpread, {
+        props: {
+          spread,
+          pageWidth: 320,
+          pageHeight: 460,
+          contentHeight: 360,
+          anchorAtCoord,
+          onSelectionChange,
+          onSurfaceTap,
+        },
+      });
+      const spreadEl = container.querySelector('.mejiro-reader-spread') as HTMLElement;
+      spreadEl.setPointerCapture = vi.fn();
+      spreadEl.hasPointerCapture = vi.fn(() => false);
+      const content = container.querySelector('.mejiro-reader-page-content') as HTMLElement;
+      const fire = (type: string, pointerId: number) =>
+        content.dispatchEvent(
+          new PointerEvent(type, { bubbles: true, cancelable: true, pointerId }),
+        );
+      return { fire, onSelectionChange };
+    }
+
+    it.each(['pointerup', 'pointercancel', 'lostpointercapture'])(
+      'ends on %s so later moves leave the selection alone',
+      (type) => {
+        const { fire, onSelectionChange } = mountSelectable();
+        fire('pointerdown', 1);
+        fire('pointermove', 1);
+        expect(onSelectionChange).toHaveBeenCalledTimes(2);
+        fire(type, 1);
+        fire('pointermove', 1);
+        expect(onSelectionChange).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it('does not treat a cancelled press as a surface tap', () => {
+      const onSurfaceTap = vi.fn();
+      const { fire } = mountSelectable(onSurfaceTap);
+      fire('pointerdown', 1);
+      fire('pointercancel', 1);
+      expect(onSurfaceTap).not.toHaveBeenCalled();
+    });
+
+    it('ignores pointers other than the one that started the drag', () => {
+      const { fire, onSelectionChange } = mountSelectable();
+      fire('pointerdown', 1);
+      fire('pointerdown', 2);
+      fire('pointermove', 2);
+      fire('pointerup', 2);
+      expect(onSelectionChange).toHaveBeenCalledTimes(1);
+      fire('pointermove', 1);
+      expect(onSelectionChange).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('prints each page number in its own running head and hides it when null', () => {
     const spread: SpreadResult = {
       right: pageResult('右頁'),

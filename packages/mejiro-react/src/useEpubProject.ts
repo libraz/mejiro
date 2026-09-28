@@ -8,6 +8,7 @@ import {
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toError } from './errors.js';
+import { mergeDefined } from './persistence.js';
 
 /** One chapter of the manuscript draft the hook keeps in React state. */
 export interface EpubProjectChapterDraft {
@@ -116,11 +117,12 @@ export interface UseEpubProjectReturn {
 export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProjectReturn {
   const defaultTitle = options.defaultChapterTitle;
   const defaultBody = options.defaultChapterBody;
-  const [metadata, setMetadataState] = useState<EpubProjectMetadata>({
-    title: '新しい作品',
-    language: 'ja',
-    ...options.metadata,
-  });
+  const [metadata, setMetadataState] = useState<EpubProjectMetadata>(() =>
+    mergeDefined<EpubProjectMetadata>(
+      { title: '新しい作品', language: 'ja' },
+      options.metadata ?? {},
+    ),
+  );
   const [chapters, setChaptersState] = useState<EpubProjectChapterDraft[]>(
     options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
   );

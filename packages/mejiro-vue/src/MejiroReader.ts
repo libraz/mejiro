@@ -39,6 +39,7 @@ import type { EditableSettings, FontChoice } from './MejiroSettingsPanel.js';
 import { MejiroSettingsPanel } from './MejiroSettingsPanel.js';
 import { MejiroSpread } from './MejiroSpread.js';
 import { MejiroStats } from './MejiroStats.js';
+import { mergeDefined } from './persistence.js';
 import { useChapterLayout } from './useChapterLayout.js';
 import { useEpub } from './useEpub.js';
 import { useMejiroBook } from './useMejiroBook.js';
@@ -627,16 +628,19 @@ export const MejiroReader = defineComponent({
       // width instead of halving it for a two-page spread (the host can still
       // override `columns` via `pageGeometry`).
       const columns: 1 | 2 = effectiveSingle.value ? 1 : 2;
-      if (props.fit !== 'width') return { columns, ...props.pageGeometry };
-      return {
-        columns,
-        gutterOffset: 0,
-        headerOffset: 0,
-        maxHeight: Number.POSITIVE_INFINITY,
-        minWidth: 0,
-        minHeight: 0,
-        ...props.pageGeometry,
-      };
+      const geometry = props.pageGeometry ?? {};
+      if (props.fit !== 'width') return mergeDefined<ComputePageSizeOptions>({ columns }, geometry);
+      return mergeDefined<ComputePageSizeOptions>(
+        {
+          columns,
+          gutterOffset: 0,
+          headerOffset: 0,
+          maxHeight: Number.POSITIVE_INFINITY,
+          minWidth: 0,
+          minHeight: 0,
+        },
+        geometry,
+      );
     });
 
     // The spread aspect (width / height) used to self-size the surface in
@@ -653,7 +657,7 @@ export const MejiroReader = defineComponent({
       if (props.locale == null && props.messages == null) return inheritedMessages.value;
       const base =
         props.locale != null ? resolveMessages(props.locale, undefined) : inheritedMessages.value;
-      return props.messages ? { ...base, ...props.messages } : base;
+      return props.messages ? mergeDefined(base, props.messages) : base;
     });
 
     // `bare` toggles defaults; explicit props always win.
@@ -667,10 +671,9 @@ export const MejiroReader = defineComponent({
     // fields it cares about (`:options="{ fontSize: 15 }"`) without dropping the
     // rest. Shallow by design — a supplied nested map (e.g. `headingStyles`)
     // replaces, not merges.
-    const resolvedOptions = computed<BookOptions>(() => ({
-      ...DEFAULT_BOOK_OPTIONS,
-      ...props.options,
-    }));
+    const resolvedOptions = computed<BookOptions>(() =>
+      mergeDefined(DEFAULT_BOOK_OPTIONS, props.options ?? {}),
+    );
     // Option changes are coalesced before they reach the book: the settings
     // panel emits one per keystroke / slider step, and every metric change costs
     // a font load plus a full re-measurement. Failures are emitted as `error`
@@ -889,6 +892,20 @@ export const MejiroReader = defineComponent({
         imageCtx.clearImages();
         book.clearCache();
         if (next) emit('load', next);
+      },
+      { immediate: true },
+    );
+
+    // Entering manuscript source is a book swap, as for a new `epub`; content
+    // edits within it are not.
+    watch(
+      () => props.manuscript !== undefined,
+      (isManuscript) => {
+        if (!isManuscript) return;
+        if (props.chapter == null) chapter.value = 0;
+        imageCtx.clearImages();
+        book.clearCache();
+        if (synthesizedEpub.value) emit('load', synthesizedEpub.value);
       },
       { immediate: true },
     );

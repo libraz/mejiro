@@ -8,6 +8,7 @@ import {
 } from '@libraz/mejiro/epub';
 import { type ComputedRef, computed, type Ref, ref, shallowRef, watch } from 'vue';
 import { toError } from './errors.js';
+import { mergeDefined } from './persistence.js';
 
 /** One chapter of the manuscript draft the composable keeps in reactive state. */
 export interface EpubProjectChapterDraft {
@@ -112,11 +113,12 @@ export interface UseEpubProjectReturn {
 export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProjectReturn {
   const defaultTitle = options.defaultChapterTitle;
   const defaultBody = options.defaultChapterBody;
-  const metadata = ref<EpubProjectMetadata>({
-    title: '新しい作品',
-    language: 'ja',
-    ...options.metadata,
-  });
+  const metadata = ref<EpubProjectMetadata>(
+    mergeDefined<EpubProjectMetadata>(
+      { title: '新しい作品', language: 'ja' },
+      options.metadata ?? {},
+    ),
+  );
   const chapters = ref<EpubProjectChapterDraft[]>(
     options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
   );

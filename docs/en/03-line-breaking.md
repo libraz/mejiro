@@ -145,19 +145,19 @@ Kinsoku shori is the set of Japanese typographic rules that prohibit certain cha
 
 | Category           | Characters                                  |
 |--------------------|---------------------------------------------|
-| Closing brackets   | ）〕］｝〉》」』】〗〙〛                    |
+| Closing brackets   | ）〕］｝〉》」』】〗〙〛)]}｣                |
 | Closing quotes     | ’”〟                                        |
-| Punctuation        | 、。，．・：；？！                          |
+| Punctuation        | 、。，．・：；？！,.:;?!｡､･                 |
 | Dashes and ellipses | ‥…〜—―                                     |
-| Small kana         | ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶ |
-| Long vowel mark    | ー                                          |
+| Small kana         | ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶｧｨｩｪｫｬｭｮｯ |
+| Long vowel mark    | ーｰ                                         |
 | Iteration marks    | 々〻ヽヾゝゞ                                |
 
 **Line-end prohibited characters** (`getDefaultKinsokuRules().lineEndProhibited`):
 
 | Category           | Characters                                  |
 |--------------------|---------------------------------------------|
-| Opening brackets   | （〔［｛〈《「『【〖〘〚                    |
+| Opening brackets   | （〔［｛〈《「『【〖〘〚([{｢                |
 | Opening quotes     | 〝‘“                                         |
 
 **Unbreakable pairs** (`getDefaultKinsokuRules().unbreakablePairs`) — never split between the two characters: `‥‥`, `……`, `——`, `――`.
@@ -168,8 +168,8 @@ Same rules as strict mode, but these characters are allowed at line start:
 
 | Category           | Characters                                  |
 |--------------------|---------------------------------------------|
-| Small kana         | ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ |
-| Long vowel mark    | ー                                          |
+| Small kana         | ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶｧｨｩｪｫｬｭｮｯ |
+| Long vowel mark    | ーｰ                                         |
 
 This is useful for narrow columns where strict kinsoku would cause excessive whitespace.
 Note the asymmetry between the two small ka/ke pairs: katakana `ヵヶ` are allowed at line

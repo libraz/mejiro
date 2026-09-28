@@ -131,6 +131,12 @@ describe('resolveEpubParseLimits', () => {
     expect(resolveEpubParseLimits({})).toEqual(DEFAULT_EPUB_PARSE_LIMITS);
   });
 
+  it('treats a limit passed as undefined like an omitted one', () => {
+    expect(resolveEpubParseLimits({ limits: { maxEntries: undefined } })).toEqual(
+      DEFAULT_EPUB_PARSE_LIMITS,
+    );
+  });
+
   it('overrides only the named limit', () => {
     const limits = resolveEpubParseLimits({ limits: { maxEntries: 5 } });
 

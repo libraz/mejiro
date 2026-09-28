@@ -25,6 +25,13 @@ const chapters = [
 ];
 
 describe('useEpubProject (React)', () => {
+  it('defaults metadata fields passed as undefined like omitted ones', () => {
+    const { result } = renderHook(() =>
+      useEpubProject({ metadata: { title: undefined, language: undefined }, debounceMs: 10_000 }),
+    );
+    expect(result.current.metadata).toMatchObject({ title: '新しい作品', language: 'ja' });
+  });
+
   it('keeps selection on the same chapter when removing earlier chapters', () => {
     const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
 

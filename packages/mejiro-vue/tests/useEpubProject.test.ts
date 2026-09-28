@@ -36,6 +36,13 @@ function harness<T>(setup: () => T): { result: { current: T } } {
 }
 
 describe('useEpubProject (Vue)', () => {
+  it('defaults metadata fields passed as undefined like omitted ones', () => {
+    const { result } = harness(() =>
+      useEpubProject({ metadata: { title: undefined, language: undefined }, debounceMs: 10_000 }),
+    );
+    expect(result.current.metadata.value).toMatchObject({ title: '新しい作品', language: 'ja' });
+  });
+
   it('keeps selection on the same chapter when removing earlier chapters', () => {
     const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
 

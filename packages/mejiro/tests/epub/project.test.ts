@@ -169,6 +169,14 @@ describe('EpubProject', () => {
     ]);
   });
 
+  it('defaults metadata fields passed as undefined like omitted ones', () => {
+    const project = new EpubProject({
+      metadata: { title: 'T', language: undefined, modified: undefined },
+    });
+    expect(project.metadata.language).toBe('ja');
+    expect(project.metadata.modified).toBeInstanceOf(Date);
+  });
+
   it('uses metadata language in chapter XHTML as well as package metadata', async () => {
     const project = EpubProject.fromManuscript({
       metadata: {

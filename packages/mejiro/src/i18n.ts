@@ -1,3 +1,5 @@
+import { mergeDefined } from './merge.js';
+
 /**
  * All UI strings rendered by the bundled framework components.
  *
@@ -308,7 +310,7 @@ export function resolveMessages(
   fallback: MejiroMessages = enMessages,
 ): MejiroMessages {
   const base = locale != null ? messageCatalogs[locale] : fallback;
-  return overrides ? { ...base, ...overrides } : base;
+  return overrides ? mergeDefined(base, overrides) : base;
 }
 
 /**

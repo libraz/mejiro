@@ -1,4 +1,5 @@
 import type JSZip from 'jszip';
+import { mergeDefined } from '../merge.js';
 
 /** Resource limits applied while opening an untrusted EPUB archive. */
 export interface EpubParseLimits {
@@ -42,7 +43,7 @@ const UTF8_DECODER = new TextDecoder('utf-8', { ignoreBOM: true });
 
 /** Resolves caller limits and rejects malformed limit values early. */
 export function resolveEpubParseLimits(options: EpubParseOptions = {}): EpubParseLimits {
-  const limits = { ...DEFAULT_EPUB_PARSE_LIMITS, ...options.limits };
+  const limits = mergeDefined<EpubParseLimits>(DEFAULT_EPUB_PARSE_LIMITS, options.limits ?? {});
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isSafeInteger(value) || value <= 0) {
       throw new RangeError(`EPUB parse limit ${name} must be a positive integer`);

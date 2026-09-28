@@ -7,6 +7,10 @@ describe('i18n catalogs', () => {
     expect(resolveMessages('en', { openButton: 'Browse' }).openButton).toBe('Browse');
   });
 
+  it('keeps the base string for an override passed as undefined', () => {
+    expect(resolveMessages('ja', { openButton: undefined }).openButton).toBe(jaMessages.openButton);
+  });
+
   it('uses a caller-provided fallback when no locale is specified', () => {
     expect(resolveMessages(undefined, { settingsButton: 'Prefs' }, jaMessages)).toMatchObject({
       openButton: jaMessages.openButton,

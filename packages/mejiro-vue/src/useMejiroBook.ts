@@ -2,6 +2,7 @@ import type { BookOptions } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
 import { isRef, onScopeDispose, type Ref, readonly, ref, watch } from 'vue';
 import { toError } from './errors.js';
+import { mergeDefined } from './persistence.js';
 
 /** Options for {@link useMejiroBook}. */
 export interface UseMejiroBookOptions {
@@ -108,10 +109,10 @@ export function useMejiroBook(
   }
 
   function setOptions(next: Partial<BookOptions>): Promise<void> {
-    opts.value = { ...opts.value, ...next };
+    opts.value = mergeDefined(opts.value, next);
     const current: PendingApply = pending ?? { patch: {}, timer: null, waiters: [] };
     pending = current;
-    Object.assign(current.patch, next);
+    current.patch = mergeDefined(current.patch, next);
     const settled = new Promise<void>((resolve, reject) => {
       current.waiters.push({ resolve, reject });
     });

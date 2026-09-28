@@ -153,7 +153,7 @@ export function MejiroSpread({
 }: MejiroSpreadProps): ReactNode {
   const messages = useI18n();
   const hasImages = images.length > 0;
-  const selectionStartRef = useRef<InChapterAnchor | null>(null);
+  const selectionRef = useRef<{ start: InChapterAnchor; pointerId: number } | null>(null);
   const selectionEnabled = anchorAtCoord != null && onSelectionChange != null;
   const gestureRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const gestureEnabled = onSwipe != null || onSurfaceTap != null;
@@ -205,28 +205,30 @@ export function MejiroSpread({
   }
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
-    if (!selectionEnabled) return;
+    if (!selectionEnabled || selectionRef.current) return;
     const anchor = resolvePointer(e);
     if (!anchor) return;
     e.preventDefault();
-    selectionStartRef.current = anchor;
+    selectionRef.current = { start: anchor, pointerId: e.pointerId };
     e.currentTarget.setPointerCapture(e.pointerId);
     onSelectionChange?.(null);
   }
 
   function handlePointerMove(e: ReactPointerEvent<HTMLDivElement>): void {
-    if (!selectionEnabled) return;
-    const start = selectionStartRef.current;
-    if (!start) return;
+    const session = selectionRef.current;
+    if (!session || e.pointerId !== session.pointerId) return;
     const end = resolvePointer(e);
     if (!end) return;
+    const { start } = session;
     if (end.paragraph === start.paragraph && end.charIndex === start.charIndex) return;
     onSelectionChange?.({ start, end });
   }
 
-  function handlePointerUp(e: ReactPointerEvent<HTMLDivElement>): void {
-    if (!selectionEnabled) return;
-    selectionStartRef.current = null;
+  // The one teardown path: pointerup, pointercancel and lost capture all end here, once.
+  function endSelection(e: ReactPointerEvent<HTMLDivElement>): void {
+    const session = selectionRef.current;
+    if (!session || e.pointerId !== session.pointerId) return;
+    selectionRef.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
@@ -302,12 +304,14 @@ export function MejiroSpread({
     if (gestureEnabled) handleGesturePointerDown(e);
     if (selectionEnabled) handlePointerDown(e);
   }
-  function combinedPointerMove(e: ReactPointerEvent<HTMLDivElement>): void {
-    if (selectionEnabled) handlePointerMove(e);
-  }
   function combinedPointerUp(e: ReactPointerEvent<HTMLDivElement>): void {
     if (gestureEnabled) handleGesturePointerUp(e);
-    if (selectionEnabled) handlePointerUp(e);
+    endSelection(e);
+  }
+  // A cancelled press is neither a tap nor a swipe.
+  function combinedPointerCancel(e: ReactPointerEvent<HTMLDivElement>): void {
+    gestureRef.current = null;
+    endSelection(e);
   }
 
   const useCombined = selectionEnabled || gestureEnabled;
@@ -317,9 +321,10 @@ export function MejiroSpread({
       <div
         className={`mejiro-reader-spread${turning ? ' is-turning' : ''}${singlePage ? ' mejiro-reader-spread--single' : ''}`}
         onPointerDown={useCombined ? combinedPointerDown : undefined}
-        onPointerMove={useCombined ? combinedPointerMove : undefined}
+        onPointerMove={useCombined ? handlePointerMove : undefined}
         onPointerUp={useCombined ? combinedPointerUp : undefined}
-        onPointerCancel={useCombined ? combinedPointerUp : undefined}
+        onPointerCancel={useCombined ? combinedPointerCancel : undefined}
+        onLostPointerCapture={selectionEnabled ? endSelection : undefined}
       >
         {renderPage(singlePage ? singleSide : 'right')}
         {!singlePage && renderPage('left')}

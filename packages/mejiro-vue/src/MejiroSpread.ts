@@ -112,7 +112,7 @@ export const MejiroSpread = defineComponent({
   setup(props, { emit, slots }) {
     const messages = useI18n();
     const instance = getCurrentInstance();
-    const selectionStart = ref<InChapterAnchor | null>(null);
+    let selection: { start: InChapterAnchor; pointerId: number } | null = null;
 
     function resolvePointer(e: PointerEvent): InChapterAnchor | null {
       if (!props.anchorAtCoord) return null;
@@ -156,28 +156,30 @@ export const MejiroSpread = defineComponent({
     }
 
     function handlePointerDown(e: PointerEvent): void {
-      if (!selectionEnabled()) return;
+      if (!selectionEnabled() || selection) return;
       const anchor = resolvePointer(e);
       if (!anchor) return;
       e.preventDefault();
-      selectionStart.value = anchor;
+      selection = { start: anchor, pointerId: e.pointerId };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       emit('selection-change', null);
     }
 
     function handlePointerMove(e: PointerEvent): void {
-      if (!selectionEnabled()) return;
-      const start = selectionStart.value;
-      if (!start) return;
+      const session = selection;
+      if (!session || e.pointerId !== session.pointerId) return;
       const end = resolvePointer(e);
       if (!end) return;
+      const { start } = session;
       if (end.paragraph === start.paragraph && end.charIndex === start.charIndex) return;
       emit('selection-change', { start, end });
     }
 
-    function handlePointerUp(e: PointerEvent): void {
-      if (!selectionEnabled()) return;
-      selectionStart.value = null;
+    // The one teardown path: pointerup, pointercancel and lost capture all end here, once.
+    function endSelection(e: PointerEvent): void {
+      const session = selection;
+      if (!session || e.pointerId !== session.pointerId) return;
+      selection = null;
       const el = e.currentTarget as HTMLElement;
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
     }
@@ -211,12 +213,14 @@ export const MejiroSpread = defineComponent({
       handleGesturePointerDown(e);
       if (selectionEnabled()) handlePointerDown(e);
     }
-    function combinedPointerMove(e: PointerEvent): void {
-      if (selectionEnabled()) handlePointerMove(e);
-    }
     function combinedPointerUp(e: PointerEvent): void {
       handleGesturePointerUp(e);
-      if (selectionEnabled()) handlePointerUp(e);
+      endSelection(e);
+    }
+    // A cancelled press is neither a tap nor a swipe.
+    function combinedPointerCancel(e: PointerEvent): void {
+      gestureStart.value = null;
+      endSelection(e);
     }
     // Selection rectangles are spread-local, so painting an entry that belongs
     // to another spread would place it over unrelated text.
@@ -319,9 +323,10 @@ export const MejiroSpread = defineComponent({
               { 'is-turning': props.turning, 'mejiro-reader-spread--single': props.singlePage },
             ],
             onPointerdown: combinedPointerDown,
-            onPointermove: combinedPointerMove,
+            onPointermove: handlePointerMove,
             onPointerup: combinedPointerUp,
-            onPointercancel: combinedPointerUp,
+            onPointercancel: combinedPointerCancel,
+            onLostpointercapture: endSelection,
           },
           [
             renderPage(props.singlePage ? props.singleSide : 'right'),

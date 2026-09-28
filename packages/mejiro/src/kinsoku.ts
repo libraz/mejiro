@@ -33,6 +33,21 @@ const STRICT_LINE_START_PROHIBITED = new Set([
   0x300d, // 」
   0x300f, // 』
   0x3011, // 】
+  // Half-width forms of the marks above
+  0x002c, // ,
+  0x002e, // .
+  0x003a, // :
+  0x003b, // ;
+  0x003f, // ?
+  0x0021, // !
+  0x0029, // )
+  0x005d, // ]
+  0x007d, // }
+  0xff61, // ｡
+  0xff63, // ｣
+  0xff64, // ､
+  0xff65, // ･
+  0xff70, // ｰ
   // Small kana
   0x3041, // ぁ
   0x3043, // ぃ
@@ -58,6 +73,15 @@ const STRICT_LINE_START_PROHIBITED = new Set([
   0x30ee, // ヮ
   0x30f5, // ヵ
   0x30f6, // ヶ
+  0xff67, // ｧ
+  0xff68, // ｨ
+  0xff69, // ｩ
+  0xff6a, // ｪ
+  0xff6b, // ｫ
+  0xff6c, // ｬ
+  0xff6d, // ｭ
+  0xff6e, // ｮ
+  0xff6f, // ｯ
   // Iteration marks
   0x3005, // 々
   0x303b, // 〻
@@ -92,8 +116,18 @@ const LOOSE_LINE_START_EXCLUSIONS = new Set([
   0x30ee, // ッャュョヮ
   0x30f5,
   0x30f6, // ヵヶ
+  0xff67,
+  0xff68,
+  0xff69,
+  0xff6a,
+  0xff6b, // ｧｨｩｪｫ
+  0xff6c,
+  0xff6d,
+  0xff6e,
+  0xff6f, // ｬｭｮｯ
   // Long vowel mark
   0x30fc, // ー
+  0xff70, // ｰ
 ]);
 
 /** Characters prohibited at the end of a line (same for strict and loose). */
@@ -113,6 +147,11 @@ const LINE_END_PROHIBITED = new Set([
   0x300c, // 「
   0x300e, // 『
   0x3010, // 【
+  // Half-width forms of the marks above
+  0x0028, // (
+  0x005b, // [
+  0x007b, // {
+  0xff62, // ｢
 ]);
 
 /** Adjacent pairs that should be kept together. */
