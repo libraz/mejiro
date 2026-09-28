@@ -41,7 +41,7 @@ Aozora-bunko style:
 ```bash
 npx degit libraz/mejiro/examples/vue-manuscript my-author
 cd my-author
-node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.9.0\"'));"
+node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.9.1\"'));"
 npm install
 npm run dev
 ```
