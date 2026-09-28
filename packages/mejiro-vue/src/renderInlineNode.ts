@@ -5,6 +5,10 @@ import {
 } from '@libraz/mejiro/render';
 import { Fragment, h, type VNode } from 'vue';
 
+/**
+ * Renders one {@link RenderSegment} as Vue vnodes, via the framework-neutral
+ * inline tree from `segmentToInlineNode`. `key` becomes the vnode key.
+ */
 export function renderSegment(segment: RenderSegment, key: string): VNode | string {
   return renderInlineNode(segmentToInlineNode(segment), key);
 }

@@ -1,4 +1,4 @@
-import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import type { ChapterLayout, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 /** Options for {@link useSpread}. */
@@ -7,34 +7,50 @@ export interface UseSpreadOptions {
   enableKeyboard?: boolean;
   /** Page-turn animation duration in ms. @defaultValue 180 */
   turnDuration?: number;
+  /**
+   * Show one page at a time: the navigation index then counts pages instead
+   * of two-page spreads. Toggling it converts the index so the page on
+   * screen stays visible. @defaultValue false
+   */
+  single?: boolean;
   /** Called when the spread index changes (after the turn animation midpoint). */
   onChange?: (spreadIdx: number) => void;
 }
 
 /** Return value of {@link useSpread}. */
 export interface UseSpreadReturn {
-  /** Current spread index. */
+  /** Current navigation index: a page index in single mode, a spread index otherwise. */
   spreadIdx: number;
-  /** Current spread result, or `null` until the layout is ready. */
+  /** Layout spread holding the visible page(s), or `null` until the layout is ready. */
   spread: SpreadResult | null;
+  /** First page shown, in reading order. */
+  firstPage: number;
+  /** Index of {@link UseSpreadReturn.spread} in the layout (`ChapterLayout.getSpread`). */
+  layoutSpreadIdx: number;
+  /** Side of {@link UseSpreadReturn.spread} shown in single mode; `null` in double mode. */
+  singleSide: 'right' | 'left' | null;
   /** Total number of pages. */
   totalPages: number;
-  /** Total number of two-page spreads. */
+  /** Number of navigation positions: pages in single mode, two-page spreads otherwise. */
   totalSpreads: number;
   /** Whether the turn animation is currently in flight. */
   turning: boolean;
-  /** Advance one spread forward. */
+  /** Advance one position (page or spread) forward. */
   next: () => void;
-  /** Go back one spread. */
+  /** Go back one position. */
   prev: () => void;
-  /** Jump to an arbitrary spread index (clamped). */
+  /** Jump to an arbitrary navigation index (clamped). */
   goTo: (index: number) => void;
   /**
-   * Set the spread index immediately, with no page-turn animation, clamped to
-   * `[0, totalSpreads − 1]`. Use to restore a reading position after a reflow
+   * Set the navigation index immediately, with no page-turn animation, clamped
+   * to `[0, totalSpreads − 1]`. Use to restore a reading position after a reflow
    * re-layout (where an animated {@link goTo} would briefly flash spread 0).
    */
   setSpread: (index: number) => void;
+  /** Navigation index that shows the given page index. */
+  indexOfPage: (pageIdx: number) => number;
+  /** Anchor at the start of the first page shown at navigation index `index`, or `null`. */
+  anchorAt: (index: number) => InChapterAnchor | null;
   /** Manually refresh `spread` from `layout` at the current index. */
   refresh: () => void;
 }
@@ -54,6 +70,21 @@ function ignoreNavigationKey(e: KeyboardEvent): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
+/** Number of navigation positions for `totalPages` pages. */
+function navigationCount(totalPages: number, single: boolean): number {
+  return Math.max(1, single ? totalPages : Math.ceil(totalPages / 2));
+}
+
+/** First page shown at navigation index `index`. */
+function firstPageOf(index: number, single: boolean): number {
+  return single ? index : index * 2;
+}
+
+/** Navigation index that shows page `pageIdx`. */
+function indexOfPageIn(pageIdx: number, single: boolean): number {
+  return single ? pageIdx : Math.floor(pageIdx / 2);
+}
+
 /**
  * React hook that tracks the current spread index for a chapter layout
  * and exposes navigation helpers with an optional page-turn animation.
@@ -64,10 +95,18 @@ export function useSpread(
 ): UseSpreadReturn {
   const enableKeyboard = options.enableKeyboard ?? true;
   const turnDuration = options.turnDuration ?? 180;
+  const single = options.single ?? false;
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
 
   const [spreadIdx, setSpreadIdx] = useState(0);
+  // Mode the stored index was counted in; a flip converts it before commit so
+  // the page on screen stays visible.
+  const [indexSingle, setIndexSingle] = useState(single);
+  if (indexSingle !== single) {
+    setIndexSingle(single);
+    setSpreadIdx(indexOfPageIn(firstPageOf(spreadIdx, indexSingle), single));
+  }
   const [spread, setSpread] = useState<SpreadResult | null>(null);
   const [turning, setTurning] = useState(false);
 
@@ -75,19 +114,25 @@ export function useSpread(
   layoutRef.current = layout;
   const spreadIdxRef = useRef(0);
   spreadIdxRef.current = spreadIdx;
+  const singleRef = useRef(single);
+  singleRef.current = single;
   const turnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutGenerationRef = useRef(0);
   const lastEmittedRef = useRef<{ layout: ChapterLayout; spreadIdx: number } | null>(null);
 
   const totalPages = layout?.totalPages ?? 0;
-  const totalSpreads = Math.max(1, Math.ceil(totalPages / 2));
+  const totalSpreads = navigationCount(totalPages, single);
+  const firstPage = firstPageOf(spreadIdx, single);
+  const layoutSpreadIdx = Math.floor(firstPage / 2);
+  const singleSide = single ? (firstPage % 2 === 0 ? 'right' : 'left') : null;
 
   const refresh = useCallback(() => {
     if (!layoutRef.current) {
       setSpread(null);
       return;
     }
-    setSpread(layoutRef.current.getSpread(spreadIdxRef.current));
+    const page = firstPageOf(spreadIdxRef.current, singleRef.current);
+    setSpread(layoutRef.current.getSpread(Math.floor(page / 2)));
   }, []);
 
   // Reset before paint when layout changes so a stale spread from the previous
@@ -110,7 +155,7 @@ export function useSpread(
   // Refresh spread when the index changes.
   useEffect(() => {
     if (!layout) return;
-    setSpread(layout.getSpread(spreadIdx));
+    setSpread(layout.getSpread(layoutSpreadIdx));
     const last = lastEmittedRef.current;
     if (!last) {
       lastEmittedRef.current = { layout, spreadIdx };
@@ -120,12 +165,13 @@ export function useSpread(
       onChangeRef.current?.(spreadIdx);
     }
     lastEmittedRef.current = { layout, spreadIdx };
-  }, [layout, spreadIdx]);
+  }, [layout, spreadIdx, layoutSpreadIdx]);
 
   const goTo = useCallback(
     (index: number) => {
       if (!layoutRef.current) return;
-      const max = Math.max(1, Math.ceil(layoutRef.current.totalPages / 2)) - 1;
+      const targetSingle = singleRef.current;
+      const max = navigationCount(layoutRef.current.totalPages, targetSingle) - 1;
       const target = Math.max(0, Math.min(max, index));
       if (target === spreadIdxRef.current) return;
       if (turnDuration > 0) {
@@ -134,7 +180,8 @@ export function useSpread(
         setTurning(true);
         turnTimerRef.current = setTimeout(() => {
           if (generation !== layoutGenerationRef.current) return;
-          setSpreadIdx(target);
+          // A mode flip during the turn re-counts the target in the new mode.
+          setSpreadIdx(indexOfPageIn(firstPageOf(target, targetSingle), singleRef.current));
           setTurning(false);
           turnTimerRef.current = null;
         }, turnDuration);
@@ -152,9 +199,20 @@ export function useSpread(
       turnTimerRef.current = null;
     }
     setTurning(false);
-    const max = Math.max(1, Math.ceil(layoutRef.current.totalPages / 2)) - 1;
+    const max = navigationCount(layoutRef.current.totalPages, singleRef.current) - 1;
     setSpreadIdx(Math.max(0, Math.min(max, index)));
   }, []);
+
+  const indexOfPage = useCallback((pageIdx: number) => indexOfPageIn(pageIdx, single), [single]);
+
+  const anchorAt = useCallback(
+    (index: number): InChapterAnchor | null => {
+      if (!layout || index < 0 || index >= navigationCount(layout.totalPages, single)) return null;
+      const page = firstPageOf(index, single);
+      return layout.anchorAt(Math.floor(page / 2), page % 2 === 0 ? 'right' : 'left');
+    },
+    [layout, single],
+  );
 
   const next = useCallback(() => goTo(spreadIdxRef.current + 1), [goTo]);
   const prev = useCallback(() => goTo(spreadIdxRef.current - 1), [goTo]);
@@ -181,6 +239,9 @@ export function useSpread(
   return {
     spreadIdx,
     spread,
+    firstPage,
+    layoutSpreadIdx,
+    singleSide,
     totalPages,
     totalSpreads,
     turning,
@@ -188,6 +249,8 @@ export function useSpread(
     prev,
     goTo,
     setSpread: setSpreadIndex,
+    indexOfPage,
+    anchorAt,
     refresh,
   };
 }

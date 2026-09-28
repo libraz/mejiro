@@ -2,6 +2,10 @@ import type { EpubBook } from '@libraz/mejiro/epub';
 import { defineComponent, h, type PropType } from 'vue';
 import { format, useI18n } from './i18n.js';
 
+/**
+ * Layout of {@link MejiroChapterNav}: `'select'` is a compact dropdown,
+ * `'panel'` a chapter list with titles, headings and a text preview.
+ */
 export type MejiroChapterNavVariant = 'select' | 'panel';
 
 function textPreview(text: string, max = 72): string {
@@ -133,4 +137,5 @@ export const MejiroChapterNav = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroChapterNav}. */
 export type MejiroChapterNavProps = InstanceType<typeof MejiroChapterNav>['$props'];

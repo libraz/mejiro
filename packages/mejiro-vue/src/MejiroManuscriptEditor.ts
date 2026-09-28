@@ -11,6 +11,7 @@ import {
   ref,
   watch,
 } from 'vue';
+import { withErrorReporting } from './errors.js';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
@@ -18,17 +19,25 @@ import { MejiroReader, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
 import { useManuscriptDraft } from './useManuscriptDraft.js';
 
+/** One chapter of the manuscript being edited. */
 export interface ManuscriptEditorChapter {
+  /** Stable identifier; survives reordering and title edits. */
   id: string;
+  /** Chapter title; an empty title falls back to the localized "untitled" label. */
   title: string;
+  /** Chapter body in the editor's manuscript notation. */
   body: string;
 }
 
 /** Autosave payload emitted by {@link MejiroManuscriptEditor}. */
 export interface ManuscriptAutosaveDraft {
+  /** Book title as currently entered. */
   title: string;
+  /** Author name as currently entered. */
   author: string;
+  /** Selected cover image, or `null` when none is set. */
   cover: File | null;
+  /** Chapters in reading order, as plain (non-reactive) copies. */
   chapters: ManuscriptEditorChapter[];
 }
 
@@ -39,14 +48,23 @@ export interface ManuscriptAutosaveDraft {
  * supplied here.
  */
 export interface ManuscriptPreviewProps {
+  /** Header subtitle of the preview reader. */
   subtitle?: string;
+  /** Header title of the preview reader. */
   title?: string;
+  /** Where the preview places its chapter navigation. @defaultValue 'panel' */
   chapterNavMode?: 'select' | 'panel' | 'both' | 'none';
+  /** Show the preview header. */
   enableHeader?: boolean;
+  /** Show the preview chapter navigation. */
   enableChapterNav?: boolean;
+  /** Show the preview settings panel toggle. */
   enableSettings?: boolean;
+  /** Show the preview layout statistics. */
   enableStats?: boolean;
+  /** Enable arrow-key page turns in the preview. */
   enableKeyboard?: boolean;
+  /** Show the preview page indicator. */
   enablePageIndicator?: boolean;
   /** Book options forwarded to the embedded reader preview. */
   options?: Partial<BookOptions>;
@@ -59,6 +77,7 @@ export interface ManuscriptPreviewProps {
    * to `true` to demo the fullscreen-reader behavior.
    */
   enableSurfaceTap?: boolean;
+  /** Render the preview without any reader chrome. */
   bare?: boolean;
 }
 
@@ -227,7 +246,10 @@ export const MejiroManuscriptEditor = defineComponent({
       initialChapters: props.chapters?.length
         ? [...props.chapters]
         : [defaultChapter(messages.value)],
-      onAutosave: props.onAutosave,
+      // A getter, so the hook's flush always calls the latest prop value.
+      get onAutosave() {
+        return props.onAutosave;
+      },
       autosavePayload: (savedChapters) => ({
         title: title.value,
         author: author.value,
@@ -284,33 +306,35 @@ export const MejiroManuscriptEditor = defineComponent({
     // Every way an export can fail — cover bytes, asset resolution, packaging —
     // reports through the same channel the panel already uses for autosave.
     async function exportEpub(): Promise<void> {
-      try {
-        const project = EpubProject.fromManuscript({
-          metadata: { title: title.value, author: author.value || undefined },
-          dialect: props.dialect,
-          chapters: chapters.value.map((chapter) => ({
-            id: chapter.id,
-            title: chapter.title || messages.value.untitled,
-            body: chapter.body,
-          })),
-        });
-        if (cover.value) {
-          project.setCover({
-            href: coverAssetHref(cover.value),
-            mediaType: cover.value.type || undefined,
-            data: await cover.value.arrayBuffer(),
+      await withErrorReporting(
+        async () => {
+          const project = EpubProject.fromManuscript({
+            metadata: { title: title.value, author: author.value || undefined },
+            dialect: props.dialect,
+            chapters: chapters.value.map((chapter) => ({
+              id: chapter.id,
+              title: chapter.title || messages.value.untitled,
+              body: chapter.body,
+            })),
           });
-        }
-        const resolver = props.assetResolver;
-        const buffer = await project.export(resolver ? { assetResolver: resolver } : undefined);
-        exportError.value = null;
-        emit('export', buffer);
-        downloadEpub(buffer, title.value);
-      } catch (cause) {
-        const error = cause instanceof Error ? cause : new Error(String(cause));
-        exportError.value = error;
-        emit('error', error);
-      }
+          if (cover.value) {
+            project.setCover({
+              href: coverAssetHref(cover.value),
+              mediaType: cover.value.type || undefined,
+              data: await cover.value.arrayBuffer(),
+            });
+          }
+          const resolver = props.assetResolver;
+          const buffer = await project.export(resolver ? { assetResolver: resolver } : undefined);
+          exportError.value = null;
+          emit('export', buffer);
+          downloadEpub(buffer, title.value);
+        },
+        (error) => {
+          exportError.value = error;
+          emit('error', error);
+        },
+      );
     }
 
     /** Root attributes, including the panel-side switch the stylesheet reads. */

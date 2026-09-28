@@ -86,11 +86,16 @@ export interface MejiroSpreadProps {
    */
   onSelectionChange?: (range: AnchorRange | null) => void;
   /**
-   * Hide the left page and render only the right page (centered). Use this
-   * for portrait viewports or when a reader explicitly opts into single-page
-   * mode.
+   * Render only one page of the spread (centered), chosen by
+   * {@link MejiroSpreadProps.singleSide}. Use this for portrait viewports or
+   * when a reader explicitly opts into single-page mode.
    */
   singlePage?: boolean;
+  /**
+   * Page of the spread shown when {@link MejiroSpreadProps.singlePage} is set
+   * (`useSpread` reports it as `singleSide`). @defaultValue 'right'
+   */
+  singleSide?: 'right' | 'left';
   /**
    * Called when the user makes a quick swipe gesture on the spread.
    * `direction === 'next'` means the user swiped from right to left (the
@@ -113,8 +118,9 @@ function defaultHeader(data: PageHeaderData): ReactNode {
 }
 
 /**
- * Renders a two-page spread with the book frame, page chrome, navigation
- * zones, and image overlays. Used inside `mejiro-reader-surface`.
+ * Renders a two-page spread (or one page of it in single-page mode) with the
+ * book frame, page chrome, navigation zones, and image overlays. Used inside
+ * `mejiro-reader-surface`.
  */
 export function MejiroSpread({
   spread,
@@ -141,6 +147,7 @@ export function MejiroSpread({
   selectionRects,
   onSelectionChange,
   singlePage = false,
+  singleSide = 'right',
   onSwipe,
   onSurfaceTap,
 }: MejiroSpreadProps): ReactNode {
@@ -237,8 +244,13 @@ export function MejiroSpread({
       ? selectionRects.filter((r) => r.spreadIdx === spreadIdx)
       : selectionRects;
 
+  // Image rects are relative to the right page, so the left page hosts them
+  // (shifted by one page width) only when it is shown alone.
+  const imageSide = singlePage ? singleSide : 'right';
+
   const renderPage = (side: 'right' | 'left'): ReactNode => {
     const isRight = side === 'right';
+    const hostsImages = side === imageSide;
     const result = isRight ? spread.right : spread.left;
     const header = isRight ? rightHeader : leftHeader;
     const pageKey = `${side}-${header.pageNumber ?? 'blank'}`;
@@ -246,7 +258,7 @@ export function MejiroSpread({
       width: pageWidth,
       height: pageHeight,
     };
-    if (isRight && hasImages) pageStyle.overflow = 'visible';
+    if (hostsImages && hasImages) pageStyle.overflow = 'visible';
 
     return (
       <div
@@ -272,11 +284,11 @@ export function MejiroSpread({
             )}
           </div>
         </div>
-        {isRight &&
+        {hostsImages &&
           images.map((item) => (
             <MejiroImageOverlay
               key={item.id}
-              rect={item.rect}
+              rect={isRight ? item.rect : { ...item.rect, x: item.rect.x + pageWidth }}
               onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
               onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
               onClose={() => onImageClose?.(item.id)}
@@ -309,7 +321,7 @@ export function MejiroSpread({
         onPointerUp={useCombined ? combinedPointerUp : undefined}
         onPointerCancel={useCombined ? combinedPointerUp : undefined}
       >
-        {renderPage('right')}
+        {renderPage(singlePage ? singleSide : 'right')}
         {!singlePage && renderPage('left')}
         <button
           type="button"

@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 
 import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
+import type { EpubBook } from '@libraz/mejiro/epub';
 import { render } from '@testing-library/vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { defineComponent, h, nextTick, ref } from 'vue';
+import { MejiroReader, type MejiroReaderHandle } from '../src/MejiroReader.js';
 import { MejiroScrollView, type MejiroScrollViewProps } from '../src/MejiroScrollView.js';
 
 /** Minimal stand-in for a real `IntersectionObserver`, driven manually by the tests. */
@@ -222,6 +225,97 @@ describe('MejiroScrollView (Vue) — scrollToPage', () => {
       intersect(observers[0], pages[7], 0.95);
 
       expect(onVisiblePageChange).toHaveBeenLastCalledWith(7, 'user');
+    } finally {
+      restoreOffsets();
+    }
+  });
+});
+
+function longEpub(): EpubBook {
+  return {
+    title: 'Long Book',
+    author: 'Author',
+    chapters: [
+      {
+        title: 'Long Chapter',
+        paragraphs: Array.from({ length: 80 }, (_, i) => ({
+          text: `段落${i}。`.repeat(80),
+          inlineAnnotations: [],
+        })),
+      },
+    ],
+  };
+}
+
+async function settle(step?: () => void): Promise<void> {
+  step?.();
+  for (let i = 0; i < 3; i++) {
+    await vi.runAllTimersAsync();
+    await nextTick();
+  }
+}
+
+// The React suite (MejiroScrollView.test.tsx) drives the identical scenarios.
+describe('MejiroReader (Vue) — scroll mode page wiring', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('paints annotations and the image overlay on the visible page', async () => {
+    vi.useFakeTimers();
+    installIntersectionObserver();
+    const { container } = render(MejiroReader, {
+      props: {
+        epub: longEpub(),
+        mode: 'scroll',
+        enableImageOverlay: true,
+        annotations: [
+          {
+            chapter: 0,
+            start: { paragraph: 0, charIndex: 0 },
+            end: { paragraph: 0, charIndex: 8 },
+            color: 'rgb(255, 235, 59)',
+          },
+        ],
+      },
+    });
+    await settle();
+    const imageButton = Array.from(container.querySelectorAll('.mejiro-reader-btn')).find((b) =>
+      b.textContent?.includes('Image'),
+    ) as HTMLButtonElement;
+    await settle(() => imageButton.click());
+
+    const first = container.querySelector('.mejiro-reader-scroll [data-page-idx="0"]');
+    const rects = Array.from(first?.querySelectorAll<HTMLElement>('.mejiro-selection-rect') ?? []);
+    expect(rects.length).toBeGreaterThan(0);
+    for (const rect of rects) expect(rect.style.backgroundColor).toBe('rgb(255, 235, 59)');
+    expect(first?.querySelectorAll('.mejiro-reader-image-overlay')).toHaveLength(1);
+    expect(container.querySelectorAll('.mejiro-reader-image-overlay')).toHaveLength(1);
+  });
+
+  it('leaves a user scroll onto an odd page where the user put it', async () => {
+    vi.useFakeTimers();
+    const observers = installIntersectionObserver();
+    const restoreOffsets = stubPageOffsets();
+    try {
+      const reader = ref<MejiroReaderHandle | null>(null);
+      const Wrapped = defineComponent({
+        setup: () => () => h(MejiroReader, { ref: reader, epub: longEpub(), mode: 'scroll' }),
+      });
+      const { container } = render(Wrapped);
+      await settle();
+      const scroller = container.querySelector('.mejiro-reader-scroll') as HTMLElement;
+      const page3 = container.querySelector('.mejiro-reader-scroll [data-page-idx="3"]') as Element;
+
+      scroller.scrollTop = 330;
+      await settle(() => intersect(observers[observers.length - 1], page3, 0.9));
+
+      expect(reader.value?.getReadingPosition().spreadIdx).toBe(1);
+      expect(scroller.scrollTop).toBe(330);
+
+      // A programmatic turn still scrolls to its spread.
+      await settle(() => reader.value?.goToSpread(3));
+      expect(scroller.scrollTop).toBe(600);
     } finally {
       restoreOffsets();
     }

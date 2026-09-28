@@ -1,6 +1,7 @@
 import type { BookOptions } from '@libraz/mejiro/book';
 import { type AssetResolver, EpubProject, type ManuscriptDialect } from '@libraz/mejiro/epub';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { withErrorReporting } from './errors.js';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
@@ -8,17 +9,25 @@ import { MejiroReader, type MejiroReaderSettingsSlot, type MejiroTheme } from '.
 import type { FontChoice } from './MejiroSettingsPanel.js';
 import { useManuscriptDraft } from './useManuscriptDraft.js';
 
+/** One chapter of the manuscript being edited. */
 export interface ManuscriptEditorChapter {
+  /** Stable identifier; survives reordering and title edits. */
   id: string;
+  /** Chapter title; an empty title falls back to the localized "untitled" label. */
   title: string;
+  /** Chapter body in the editor's manuscript notation. */
   body: string;
 }
 
 /** Autosave payload emitted by {@link MejiroManuscriptEditor}. */
 export interface ManuscriptAutosaveDraft {
+  /** Book title as currently entered. */
   title: string;
+  /** Author name as currently entered. */
   author: string;
+  /** Selected cover image, or `null` when none is set. */
   cover: File | null;
+  /** Chapters in reading order, as plain (non-reactive) copies. */
   chapters: ManuscriptEditorChapter[];
 }
 
@@ -29,14 +38,23 @@ export interface ManuscriptAutosaveDraft {
  * supplied here.
  */
 export interface ManuscriptPreviewProps {
+  /** Header subtitle of the preview reader. */
   subtitle?: string;
+  /** Header title of the preview reader. */
   title?: string;
+  /** Where the preview places its chapter navigation. @defaultValue 'panel' */
   chapterNavMode?: 'select' | 'panel' | 'both' | 'none';
+  /** Show the preview header. */
   enableHeader?: boolean;
+  /** Show the preview chapter navigation. */
   enableChapterNav?: boolean;
+  /** Show the preview settings panel toggle. */
   enableSettings?: boolean;
+  /** Show the preview layout statistics. */
   enableStats?: boolean;
+  /** Enable arrow-key page turns in the preview. */
   enableKeyboard?: boolean;
+  /** Show the preview page indicator. */
   enablePageIndicator?: boolean;
   /** Book options forwarded to the embedded reader preview. */
   options?: Partial<BookOptions>;
@@ -51,6 +69,7 @@ export interface ManuscriptPreviewProps {
    * to `true` to demo the fullscreen-reader behavior.
    */
   enableSurfaceTap?: boolean;
+  /** Render the preview without any reader chrome. */
   bare?: boolean;
 }
 
@@ -282,32 +301,34 @@ export function MejiroManuscriptEditor({
   // Every way an export can fail — cover bytes, asset resolution, packaging —
   // reports through the same channel the panel already uses for autosave.
   const exportEpub = useCallback(async () => {
-    try {
-      const project = EpubProject.fromManuscript({
-        metadata: { title, author: author || undefined },
-        dialect,
-        chapters: chapters.map((chapter) => ({
-          id: chapter.id,
-          title: chapter.title || messages.untitled,
-          body: chapter.body,
-        })),
-      });
-      if (cover) {
-        project.setCover({
-          href: coverAssetHref(cover),
-          mediaType: cover.type || undefined,
-          data: await cover.arrayBuffer(),
+    await withErrorReporting(
+      async () => {
+        const project = EpubProject.fromManuscript({
+          metadata: { title, author: author || undefined },
+          dialect,
+          chapters: chapters.map((chapter) => ({
+            id: chapter.id,
+            title: chapter.title || messages.untitled,
+            body: chapter.body,
+          })),
         });
-      }
-      const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
-      setExportError(null);
-      onExport?.(buffer);
-      downloadEpub(buffer, title);
-    } catch (cause) {
-      const error = cause instanceof Error ? cause : new Error(String(cause));
-      setExportError(error);
-      onError?.(error);
-    }
+        if (cover) {
+          project.setCover({
+            href: coverAssetHref(cover),
+            mediaType: cover.type || undefined,
+            data: await cover.arrayBuffer(),
+          });
+        }
+        const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
+        setExportError(null);
+        onExport?.(buffer);
+        downloadEpub(buffer, title);
+      },
+      (error) => {
+        setExportError(error);
+        onError?.(error);
+      },
+    );
   }, [
     assetResolver,
     author,
@@ -320,6 +341,16 @@ export function MejiroManuscriptEditor({
     title,
   ]);
 
+  const previewManuscript = useMemo(
+    () =>
+      chapters.map((chapter) => ({
+        id: chapter.id,
+        title: chapter.title || messages.untitled,
+        body: chapter.body,
+      })),
+    [chapters, messages.untitled],
+  );
+
   return (
     <div className="mejiro-editor mejiro-manuscript-editor" data-panel-side={panelSide}>
       <main className="mejiro-editor-preview">
@@ -328,11 +359,7 @@ export function MejiroManuscriptEditor({
           chapterNavMode="panel"
           enableSurfaceTap={false}
           {...previewProps}
-          manuscript={chapters.map((chapter) => ({
-            id: chapter.id,
-            title: chapter.title || messages.untitled,
-            body: chapter.body,
-          }))}
+          manuscript={previewManuscript}
           dialect={dialect}
           fonts={fonts}
           chapter={selected}

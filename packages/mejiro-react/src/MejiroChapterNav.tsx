@@ -2,6 +2,10 @@ import type { EpubBook } from '@libraz/mejiro/epub';
 import type { ReactNode } from 'react';
 import { format, useI18n } from './i18n.js';
 
+/**
+ * Layout of {@link MejiroChapterNav}: `'select'` is a compact dropdown,
+ * `'panel'` a chapter list with titles, headings and a text preview.
+ */
 export type MejiroChapterNavVariant = 'select' | 'panel';
 
 /** Props for {@link MejiroChapterNav}. */

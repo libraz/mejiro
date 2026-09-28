@@ -284,6 +284,29 @@ describe('useMejiroBook (Vue)', () => {
       spy.mockRestore();
     }
   });
+
+  it('applies options passed in the React (initial, options) form', async () => {
+    const failure = new Error('font unavailable');
+    const spy = vi.spyOn(MejiroBookClass.prototype, 'setOptions').mockRejectedValue(failure);
+    const onError = vi.fn();
+    try {
+      const { result, unmount } = withSetup(() =>
+        useMejiroBook({ fontFamily: 'serif', fontSize: 16 }, { debounceMs: 20, onError }),
+      );
+      const settled = Promise.all([
+        result.setOptions({ fontSize: 17 }),
+        result.setOptions({ fontSize: 18 }),
+      ]);
+      expect(spy).not.toHaveBeenCalled();
+      await expect(settled).resolves.toEqual([undefined, undefined]);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith({ fontSize: 18 });
+      expect(onError).toHaveBeenCalledWith(failure);
+      unmount();
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('useEpub (Vue)', () => {
@@ -349,15 +372,32 @@ describe('useEpub (Vue)', () => {
     unmount();
   });
 
-  it('loadUrl returns null on a non-OK response without setting an error', async () => {
+  it('loadUrl reports a non-OK response through error and onError exactly once', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(null, { status: 404 }));
-    const { result, unmount } = withSetup(() => useEpub());
+    const onError = vi.fn();
+    const { result, unmount } = withSetup(() => useEpub({ onError }));
     const book = await result.loadUrl('/missing.epub');
     expect(book).toBeNull();
-    expect(result.error.value).toBeNull();
+    expect(result.error.value?.message).toBe('Failed to load EPUB: 404');
+    expect(result.loading.value).toBe(false);
     expect(result.epub.value).toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toBe(result.error.value);
+    fetchSpy.mockRestore();
+    unmount();
+  });
+
+  it('reports a non-OK defaultUrl response through onError', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const onError = vi.fn();
+    const { result, unmount } = withSetup(() => useEpub({ defaultUrl: '/down.epub', onError }));
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(result.error.value?.message).toBe('Failed to load EPUB: 503');
+    expect(result.loading.value).toBe(false);
     fetchSpy.mockRestore();
     unmount();
   });

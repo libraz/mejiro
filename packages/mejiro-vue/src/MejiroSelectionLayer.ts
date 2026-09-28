@@ -73,4 +73,5 @@ export const MejiroSelectionLayer = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroSelectionLayer}. */
 export type MejiroSelectionLayerProps = InstanceType<typeof MejiroSelectionLayer>['$props'];

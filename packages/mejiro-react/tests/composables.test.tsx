@@ -337,18 +337,34 @@ describe('useEpub (React)', () => {
     expect(onLoad.mock.calls[0][0].title).toBe('Mocked');
   });
 
-  it('loadUrl returns null on a non-OK response without setting an error', async () => {
+  it('loadUrl reports a non-OK response through error and onError exactly once', async () => {
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response(null, { status: 404 }));
-    const { result } = renderHook(() => useEpub());
+    const onError = vi.fn();
+    const { result } = renderHook(() => useEpub({ onError }));
     let book: unknown;
     await act(async () => {
       book = await result.current.loadUrl('/missing.epub');
     });
     expect(book).toBeNull();
-    expect(result.current.error).toBeNull();
+    expect(result.current.error?.message).toBe('Failed to load EPUB: 404');
+    expect(result.current.loading).toBe(false);
     expect(result.current.epub).toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toBe(result.current.error);
+    fetchSpy.mockRestore();
+  });
+
+  it('reports a non-OK defaultUrl response through onError', async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+    const onError = vi.fn();
+    const { result } = renderHook(() => useEpub({ defaultUrl: '/down.epub', onError }));
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(result.current.error?.message).toBe('Failed to load EPUB: 503');
+    expect(result.current.loading).toBe(false);
     fetchSpy.mockRestore();
   });
 
@@ -896,6 +912,59 @@ describe('useSpread (React)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it.each([7, 6])('single mode visits every page of a %i-page chapter once, in order', (n) => {
+    const onChange = vi.fn();
+    const layout = mockLayout(n);
+    const { result } = renderHook(() =>
+      useSpread(layout, { turnDuration: 0, single: true, onChange }),
+    );
+    expect(result.current.totalSpreads).toBe(n);
+
+    const shown: string[] = [];
+    for (let i = 0; i < n + 2; i++) {
+      const { spreadIdx, layoutSpreadIdx, singleSide, spread } = result.current;
+      shown.push(`${spreadIdx}:${layoutSpreadIdx}:${singleSide}`);
+      expect((spread as unknown as { spreadIdx: number }).spreadIdx).toBe(layoutSpreadIdx);
+      act(() => result.current.next());
+    }
+    const expected = Array.from(
+      { length: n },
+      (_, p) => `${p}:${Math.floor(p / 2)}:${p % 2 === 0 ? 'right' : 'left'}`,
+    );
+    expect([...new Set(shown)]).toEqual(expected);
+    expect(onChange.mock.calls.map((c) => c[0])).toEqual(
+      Array.from({ length: n - 1 }, (_, i) => i + 1),
+    );
+
+    act(() => result.current.goTo(3));
+    expect(result.current.layoutSpreadIdx).toBe(1);
+    expect(result.current.singleSide).toBe('left');
+  });
+
+  it('keeps the visible page when single mode is toggled mid-chapter', () => {
+    const layout = mockLayout(9);
+    const { result, rerender } = renderHook(
+      ({ single }: { single: boolean }) => useSpread(layout, { turnDuration: 0, single }),
+      { initialProps: { single: false } },
+    );
+    act(() => result.current.setSpread(2));
+    expect(result.current.layoutSpreadIdx).toBe(2);
+
+    // Double → single: the first page of the spread in reading order.
+    rerender({ single: true });
+    expect(result.current.spreadIdx).toBe(4);
+    expect(result.current.layoutSpreadIdx).toBe(2);
+    expect(result.current.singleSide).toBe('right');
+
+    // Single on a left page → double: the spread containing that page.
+    act(() => result.current.next());
+    expect(result.current.singleSide).toBe('left');
+    rerender({ single: false });
+    expect(result.current.spreadIdx).toBe(2);
+    expect(result.current.layoutSpreadIdx).toBe(2);
+    expect(result.current.singleSide).toBeNull();
   });
 });
 

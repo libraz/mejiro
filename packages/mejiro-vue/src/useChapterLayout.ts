@@ -5,7 +5,7 @@ import type {
   MejiroBook,
 } from '@libraz/mejiro/book';
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
-import { onUnmounted, type Ref, shallowRef, unref, watch } from 'vue';
+import { onScopeDispose, type Ref, shallowRef, unref, watch } from 'vue';
 
 /** Options for {@link useChapterLayout}. */
 export interface UseChapterLayoutOptions {
@@ -220,11 +220,11 @@ export function useChapterLayout(
     if (typeof ResizeObserver === 'undefined' && typeof window !== 'undefined') {
       const onWindowResize = (): void => scheduleReflow(false);
       window.addEventListener('resize', onWindowResize);
-      onUnmounted(() => window.removeEventListener('resize', onWindowResize));
+      onScopeDispose(() => window.removeEventListener('resize', onWindowResize));
     }
   }
 
-  onUnmounted(() => {
+  onScopeDispose(() => {
     disconnect();
     clearTimer();
   });

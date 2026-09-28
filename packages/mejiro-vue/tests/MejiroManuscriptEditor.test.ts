@@ -234,6 +234,29 @@ describe('MejiroManuscriptEditor (Vue)', () => {
     }
   });
 
+  it('autosaves through the latest onAutosave prop, including one supplied after mount', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = vi.fn();
+      const second = vi.fn();
+      const { container, rerender } = render(MejiroManuscriptEditor, {
+        props: { title: 'Before', autosaveDelay: 100 },
+      });
+      await rerender({ title: 'Before', autosaveDelay: 100, onAutosave: first });
+      await rerender({ title: 'Before', autosaveDelay: 100, onAutosave: second });
+      const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
+      await fireEvent.update(titleInput, 'After');
+
+      vi.advanceTimersByTime(150);
+
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(second.mock.calls[0][0]).toMatchObject({ title: 'After' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('surfaces autosave errors in the editor panel', async () => {
     vi.useFakeTimers();
     try {

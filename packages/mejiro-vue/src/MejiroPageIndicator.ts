@@ -15,4 +15,5 @@ export const MejiroPageIndicator = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroPageIndicator}. */
 export type MejiroPageIndicatorProps = InstanceType<typeof MejiroPageIndicator>['$props'];

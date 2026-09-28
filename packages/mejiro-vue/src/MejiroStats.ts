@@ -55,4 +55,5 @@ export const MejiroStats = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroStats}. */
 export type MejiroStatsProps = InstanceType<typeof MejiroStats>['$props'];

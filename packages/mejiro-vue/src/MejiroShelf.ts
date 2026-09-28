@@ -66,4 +66,5 @@ export const MejiroShelf = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroShelf}. */
 export type MejiroShelfProps = InstanceType<typeof MejiroShelf>['$props'];

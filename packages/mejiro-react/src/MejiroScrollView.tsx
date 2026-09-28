@@ -1,14 +1,18 @@
-import type { ChapterLayout } from '@libraz/mejiro/book';
+import type { AnchorRect, ChapterLayout } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import {
   type CSSProperties,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
 } from 'react';
+import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
+import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
+import type { MultiImageItem } from './useMultiImageOverlay.js';
 
 /** Props for {@link MejiroScrollView}. */
 export interface MejiroScrollViewProps {
@@ -40,6 +44,22 @@ export interface MejiroScrollViewProps {
   scrollToPage?: number;
   /** Vertical gap between pages (px). @defaultValue 24 */
   pageGap?: number;
+  /**
+   * Selection rectangles to highlight. Compute via
+   * {@link ChapterLayout.selectionRects}; each entry is painted on the page its
+   * `pageIdx` addresses. An entry may carry a `color` fill.
+   */
+  selectionRects?: readonly (AnchorRect & { color?: string })[];
+  /** Zero-based spread whose right page carries {@link MejiroScrollViewProps.images}. */
+  spreadIdx?: number;
+  /** Image overlays on the right page of {@link MejiroScrollViewProps.spreadIdx}. */
+  images?: MultiImageItem[];
+  /** Pointer-down on an image overlay. */
+  onImagePointerDown?: (id: string, e: ReactPointerEvent) => void;
+  /** Pointer-down on an image resize handle. */
+  onImageResizePointerDown?: (id: string, e: ReactPointerEvent) => void;
+  /** Image overlay close button. */
+  onImageClose?: (id: string) => void;
 }
 
 /**
@@ -60,18 +80,37 @@ export function MejiroScrollView({
   onVisiblePageChange,
   scrollToPage,
   pageGap = 24,
+  selectionRects,
+  spreadIdx,
+  images = [],
+  onImagePointerDown,
+  onImageResizePointerDown,
+  onImageClose,
 }: MejiroScrollViewProps): ReactNode {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const onVisiblePageChangeRef = useRef(onVisiblePageChange);
   onVisiblePageChangeRef.current = onVisiblePageChange;
   const programmaticScrollRef = useRef(false);
+  // The page a user scroll last settled on; it is already under the viewport.
+  const userPageRef = useRef<number | null>(null);
+  const imagesPage = spreadIdx != null && images.length > 0 ? spreadIdx * 2 : -1;
 
   const pages = useMemo(() => {
     const total = layout.totalPages;
     return Array.from({ length: total }, (_, i) => layout.getPage(i));
   }, [layout]);
   const pageCount = pages.length;
+
+  const rectsByPage = useMemo(() => {
+    const byPage: Array<(AnchorRect & { color?: string })[]> = [];
+    for (const rect of selectionRects ?? []) {
+      const list = byPage[rect.pageIdx] ?? [];
+      list.push(rect);
+      byPage[rect.pageIdx] = list;
+    }
+    return byPage;
+  }, [selectionRects]);
 
   const contentStyle: CSSProperties = { height: contentHeight };
   if (fontFamily) contentStyle.fontFamily = normalizeFontFamily(fontFamily);
@@ -101,10 +140,9 @@ export function MejiroScrollView({
           }
         }
         if (mostVisibleIdx >= 0) {
-          onVisiblePageChangeRef.current?.(
-            mostVisibleIdx,
-            programmaticScrollRef.current ? 'programmatic' : 'user',
-          );
+          const source = programmaticScrollRef.current ? 'programmatic' : 'user';
+          if (source === 'user') userPageRef.current = mostVisibleIdx;
+          onVisiblePageChangeRef.current?.(mostVisibleIdx, source);
         }
       },
       { root: container, threshold: [0.25, 0.5, 0.75] },
@@ -118,8 +156,11 @@ export function MejiroScrollView({
   useLayoutEffect(() => {
     if (scrollToPage == null) return;
     if (pageCount === 0) return;
+    // Scrolling to the page the user just scrolled onto would snap it away.
+    if (scrollToPage === userPageRef.current) return;
     const el = pageRefs.current[scrollToPage];
     if (!(el && containerRef.current)) return;
+    userPageRef.current = null;
     programmaticScrollRef.current = true;
     containerRef.current.scrollTo({
       top: el.offsetTop,
@@ -146,7 +187,12 @@ export function MejiroScrollView({
             }}
             data-page-idx={i}
             className="mejiro-reader-page"
-            style={{ width: pageWidth, height: pageHeight, flexShrink: 0 }}
+            style={{
+              width: pageWidth,
+              height: pageHeight,
+              flexShrink: 0,
+              ...(i === imagesPage ? { overflow: 'visible' } : null),
+            }}
           >
             <div className="mejiro-reader-page-rule" />
             <div className="mejiro-reader-page-header">
@@ -163,8 +209,24 @@ export function MejiroScrollView({
                   className="mejiro-reader-page-content"
                   style={contentStyle}
                 />
+                {rectsByPage[i] && (
+                  <MejiroSelectionLayer
+                    rects={rectsByPage[i]}
+                    side={i % 2 === 0 ? 'right' : 'left'}
+                  />
+                )}
               </div>
             </div>
+            {i === imagesPage &&
+              images.map((item) => (
+                <MejiroImageOverlay
+                  key={item.id}
+                  rect={item.rect}
+                  onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
+                  onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
+                  onClose={() => onImageClose?.(item.id)}
+                />
+              ))}
           </div>
         ))}
       </div>

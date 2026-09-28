@@ -1,4 +1,4 @@
-import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
+import type { AnchorRect, ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import {
   computed,
@@ -10,7 +10,10 @@ import {
   ref,
   watch,
 } from 'vue';
+import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
+import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
+import type { MultiImageItem } from './useMultiImageOverlay.js';
 
 /**
  * Continuous-scroll variant of {@link MejiroSpread} for Vue. Stacks every
@@ -44,6 +47,19 @@ export const MejiroScrollView = defineComponent({
     scrollToPage: { type: Number, default: undefined },
     /** Vertical gap between pages (px). @defaultValue 24 */
     pageGap: { type: Number, default: 24 },
+    /**
+     * Selection rectangles to highlight. Compute via
+     * `ChapterLayout.selectionRects`; each entry is painted on the page its
+     * `pageIdx` addresses. An entry may carry a `color` fill.
+     */
+    selectionRects: {
+      type: Array as PropType<readonly (AnchorRect & { color?: string })[]>,
+      default: undefined,
+    },
+    /** Zero-based spread whose right page carries `images`. */
+    spreadIdx: { type: Number, default: undefined },
+    /** Image overlays on the right page of `spreadIdx`. */
+    images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
   },
   emits: {
     /**
@@ -57,6 +73,12 @@ export const MejiroScrollView = defineComponent({
      * `@visible-page-change`.
      */
     visiblePageChange: (_pageIdx: number, _source: 'user' | 'programmatic') => true,
+    /** Pointer-down on an image overlay. */
+    'image-pointerdown': (_id: string, _e: PointerEvent) => true,
+    /** Pointer-down on an image resize handle. */
+    'image-resize-pointerdown': (_id: string, _e: PointerEvent) => true,
+    /** Image overlay close button. */
+    'image-close': (_id: string) => true,
   },
   setup(props, { emit }) {
     const containerEl = ref<HTMLDivElement | null>(null);
@@ -66,6 +88,18 @@ export const MejiroScrollView = defineComponent({
       const total = props.layout.totalPages;
       return Array.from({ length: total }, (_, i) => props.layout.getPage(i));
     });
+    const rectsByPage = computed(() => {
+      const byPage: Array<(AnchorRect & { color?: string })[]> = [];
+      for (const rect of props.selectionRects ?? []) {
+        const list = byPage[rect.pageIdx] ?? [];
+        list.push(rect);
+        byPage[rect.pageIdx] = list;
+      }
+      return byPage;
+    });
+    const imagesPage = computed(() =>
+      props.spreadIdx != null && props.images.length > 0 ? props.spreadIdx * 2 : -1,
+    );
     const contentStyle = computed(() => {
       const style: Record<string, string | number> = { height: `${props.contentHeight}px` };
       if (props.fontFamily) style.fontFamily = normalizeFontFamily(props.fontFamily);
@@ -80,6 +114,8 @@ export const MejiroScrollView = defineComponent({
     // scroll the host should navigate to.
     let programmaticScroll = false;
     let programmaticTimer: ReturnType<typeof setTimeout> | null = null;
+    // The page a user scroll last settled on; it is already under the viewport.
+    let userPage: number | null = null;
 
     // Rebuilt from scratch whenever the page list changes, so the observed
     // elements always match the currently rendered pages: a reflow re-layout
@@ -109,7 +145,9 @@ export const MejiroScrollView = defineComponent({
             }
           }
           if (mostVisibleIdx >= 0) {
-            emit('visiblePageChange', mostVisibleIdx, programmaticScroll ? 'programmatic' : 'user');
+            const source = programmaticScroll ? 'programmatic' : 'user';
+            if (source === 'user') userPage = mostVisibleIdx;
+            emit('visiblePageChange', mostVisibleIdx, source);
           }
         },
         { root: container, threshold: [0.25, 0.5, 0.75] },
@@ -139,8 +177,11 @@ export const MejiroScrollView = defineComponent({
       const next = props.scrollToPage;
       if (next == null) return;
       if (pages.value.length === 0) return;
+      // Scrolling to the page the user just scrolled onto would snap it away.
+      if (next === userPage) return;
       const el = pageEls.value[next];
       if (!(el && containerEl.value)) return;
+      userPage = null;
       programmaticScroll = true;
       containerEl.value.scrollTo({ top: el.offsetTop, behavior: 'auto' });
       if (programmaticTimer) clearTimeout(programmaticTimer);
@@ -185,6 +226,7 @@ export const MejiroScrollView = defineComponent({
                   width: `${props.pageWidth}px`,
                   height: `${props.pageHeight}px`,
                   flexShrink: 0,
+                  overflow: i === imagesPage.value ? 'visible' : undefined,
                 },
               },
               [
@@ -209,9 +251,28 @@ export const MejiroScrollView = defineComponent({
                         class: 'mejiro-reader-page-content',
                         style: contentStyle.value,
                       }),
+                      rectsByPage.value[i]
+                        ? h(MejiroSelectionLayer, {
+                            rects: rectsByPage.value[i],
+                            side: i % 2 === 0 ? 'right' : 'left',
+                          })
+                        : null,
                     ],
                   ),
                 ]),
+                ...(i === imagesPage.value
+                  ? props.images.map((item) =>
+                      h(MejiroImageOverlay, {
+                        key: item.id,
+                        rect: item.rect,
+                        onOverlayPointerdown: (e: PointerEvent) =>
+                          emit('image-pointerdown', item.id, e),
+                        onResizePointerdown: (e: PointerEvent) =>
+                          emit('image-resize-pointerdown', item.id, e),
+                        onClose: () => emit('image-close', item.id),
+                      }),
+                    )
+                  : []),
               ],
             ),
           ),

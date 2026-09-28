@@ -126,6 +126,7 @@ export const MejiroNotationHighlighter = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroNotationHighlighter}. */
 export type MejiroNotationHighlighterProps = InstanceType<
   typeof MejiroNotationHighlighter
 >['$props'];

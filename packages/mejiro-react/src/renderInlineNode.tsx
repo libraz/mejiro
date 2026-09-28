@@ -5,6 +5,10 @@ import {
 } from '@libraz/mejiro/render';
 import { createElement, Fragment, type ReactNode } from 'react';
 
+/**
+ * Renders one {@link RenderSegment} as React nodes, via the framework-neutral
+ * inline tree from `segmentToInlineNode`. `key` becomes the React key.
+ */
 export function renderSegment(segment: RenderSegment, key: string): ReactNode {
   return renderInlineNode(segmentToInlineNode(segment), key);
 }

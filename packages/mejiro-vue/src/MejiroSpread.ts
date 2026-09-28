@@ -19,8 +19,8 @@ import type { MultiImageItem } from './useMultiImageOverlay.js';
 export type { PageHeaderData };
 
 /**
- * Renders a two-page spread with the book frame, page chrome, navigation
- * zones, and image overlays. Designed to be used inside a
+ * Renders a two-page spread (or one page of it in single-page mode) with the
+ * book frame, page chrome, navigation zones, and image overlays. Designed to be used inside a
  * `mejiro-reader-surface` element.
  *
  * The component is purely presentational — pair it with `useSpread`,
@@ -88,10 +88,16 @@ export const MejiroSpread = defineComponent({
       default: undefined,
     },
     /**
-     * Hide the left page and render only the right page. Use this for
-     * portrait viewports or when explicit single-page mode is requested.
+     * Render only one page of the spread (centered), chosen by `singleSide`.
+     * Use this for portrait viewports or when explicit single-page mode is
+     * requested.
      */
     singlePage: { type: Boolean, default: false },
+    /**
+     * Page of the spread shown when `singlePage` is set (`useSpread` reports
+     * it as `singleSide`).
+     */
+    singleSide: { type: String as PropType<'right' | 'left'>, default: 'right' },
   },
   emits: {
     prev: () => true,
@@ -234,6 +240,9 @@ export const MejiroSpread = defineComponent({
 
     function renderPage(side: 'right' | 'left'): VNode {
       const isRight = side === 'right';
+      // Image rects are relative to the right page, so the left page hosts
+      // them (shifted by one page width) only when it is shown alone.
+      const hostsImages = side === (props.singlePage ? props.singleSide : 'right');
       const result = isRight ? props.spread.right : props.spread.left;
       const header = isRight ? props.rightHeader : props.leftHeader;
       const pageKey = `${side}-${header.pageNumber ?? 'blank'}`;
@@ -245,11 +254,11 @@ export const MejiroSpread = defineComponent({
       if (props.fontSize != null) contentStyle.fontSize = `${props.fontSize}px`;
       if (props.lineSpacing != null) contentStyle.lineHeight = String(props.lineSpacing);
 
-      const overlays = isRight
+      const overlays = hostsImages
         ? props.images.map((item) =>
             h(MejiroImageOverlay, {
               key: item.id,
-              rect: item.rect,
+              rect: isRight ? item.rect : { ...item.rect, x: item.rect.x + props.pageWidth },
               onOverlayPointerdown: (e: PointerEvent) => emit('image-pointerdown', item.id, e),
               onResizePointerdown: (e: PointerEvent) =>
                 emit('image-resize-pointerdown', item.id, e),
@@ -269,7 +278,7 @@ export const MejiroSpread = defineComponent({
           style: {
             width: `${props.pageWidth}px`,
             height: `${props.pageHeight}px`,
-            overflow: isRight && hasImages ? 'visible' : undefined,
+            overflow: hostsImages && hasImages ? 'visible' : undefined,
           },
         },
         [
@@ -315,7 +324,7 @@ export const MejiroSpread = defineComponent({
             onPointercancel: combinedPointerUp,
           },
           [
-            renderPage('right'),
+            renderPage(props.singlePage ? props.singleSide : 'right'),
             props.singlePage ? null : renderPage('left'),
             h('button', {
               type: 'button',
@@ -336,4 +345,5 @@ export const MejiroSpread = defineComponent({
   },
 });
 
+/** Props accepted by {@link MejiroSpread}. */
 export type MejiroSpreadProps = InstanceType<typeof MejiroSpread>['$props'];

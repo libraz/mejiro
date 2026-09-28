@@ -3,7 +3,7 @@
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, isReactive, nextTick, shallowRef } from 'vue';
+import { defineComponent, h, isReactive, nextTick, ref, shallowRef } from 'vue';
 import { useSpread } from '../src/useSpread.js';
 
 /** Layout stub that hands out one stable spread object per index. */
@@ -96,5 +96,69 @@ describe('useSpread (Vue)', () => {
     expect(result.current.spreadIdx.value).toBe(0);
     expect(result.current.spread.value).toBe(second.getSpread(0));
     expect(onChange).toHaveBeenCalledWith(0);
+  });
+
+  it.each([7, 6])(
+    'single mode visits every page of a %i-page chapter once, in order',
+    async (n) => {
+      const onChange = vi.fn();
+      const layout = shallowRef<ChapterLayout | null>(mockLayout(n));
+      const { result } = harness(() =>
+        useSpread(layout, { turnDuration: 0, enableKeyboard: false, single: true, onChange }),
+      );
+      await nextTick();
+      expect(result.current.totalSpreads.value).toBe(n);
+
+      const shown: string[] = [];
+      for (let i = 0; i < n + 2; i++) {
+        const { spreadIdx, layoutSpreadIdx, singleSide, spread } = result.current;
+        shown.push(`${spreadIdx.value}:${layoutSpreadIdx.value}:${singleSide.value}`);
+        expect(spread.value).toBe((layout.value as ChapterLayout).getSpread(layoutSpreadIdx.value));
+        result.current.next();
+        await nextTick();
+      }
+      const expected = Array.from(
+        { length: n },
+        (_, p) => `${p}:${Math.floor(p / 2)}:${p % 2 === 0 ? 'right' : 'left'}`,
+      );
+      expect([...new Set(shown)]).toEqual(expected);
+      expect(onChange.mock.calls.map((c) => c[0])).toEqual(
+        Array.from({ length: n - 1 }, (_, i) => i + 1),
+      );
+
+      result.current.goTo(3);
+      await nextTick();
+      expect(result.current.layoutSpreadIdx.value).toBe(1);
+      expect(result.current.singleSide.value).toBe('left');
+    },
+  );
+
+  it('keeps the visible page when single mode is toggled mid-chapter', async () => {
+    const layout = shallowRef<ChapterLayout | null>(mockLayout(9));
+    const single = ref(false);
+    const { result } = harness(() =>
+      useSpread(layout, { turnDuration: 0, enableKeyboard: false, single }),
+    );
+    await nextTick();
+    result.current.setSpread(2);
+    await nextTick();
+    expect(result.current.layoutSpreadIdx.value).toBe(2);
+
+    // Double → single: the first page of the spread in reading order.
+    single.value = true;
+    await nextTick();
+    expect(result.current.spreadIdx.value).toBe(4);
+    expect(result.current.layoutSpreadIdx.value).toBe(2);
+    expect(result.current.singleSide.value).toBe('right');
+
+    // Single on a left page → double: the spread containing that page.
+    result.current.next();
+    await nextTick();
+    expect(result.current.singleSide.value).toBe('left');
+    single.value = false;
+    await nextTick();
+    expect(result.current.spreadIdx.value).toBe(2);
+    expect(result.current.layoutSpreadIdx.value).toBe(2);
+    expect(result.current.singleSide.value).toBeNull();
   });
 });
