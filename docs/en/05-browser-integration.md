@@ -28,7 +28,8 @@ const mejiro = new MejiroBrowser({
 |--------|------|-------------|
 | `fixedFontFamily` | `string` | Default font family for all layouts. |
 | `fixedFontSize` | `number` | Default font size (in px) for all layouts. |
-| `strictFontCheck` | `boolean` | When `true`, throws an error if font fallback is detected during loading. |
+| `strictFontCheck` | `boolean` | When `true`, `layout()`, `layoutChapter()` and `preloadFont()` reject if the requested family measures like the host's default font (a silent fallback). When `false` (the default), a font that fails to load is not an error: layout proceeds with whatever font the host resolves. |
+| `onFontsLoaded` | `() => void` | Called after the host reports newly loaded fonts and the width cache has been cleared. Results measured earlier may hold fallback widths; lay them out again here. |
 
 When `fixedFontFamily` and `fixedFontSize` are set, you can omit them from individual `layout()` and `layoutChapter()` calls.
 
@@ -47,6 +48,10 @@ await mejiro.preloadFont();
 ```
 
 Internally, `preloadFont()` delegates to the `FontLoader` class, which calls `document.fonts.load()` to ensure the specified font is available for Canvas measurement.
+
+`preloadFont()` runs the same `strictFontCheck` probe as `layout()`. The probe compares Latin glyph widths, so under `strictFontCheck` mejiro also requests the family's Latin range before probing. A family that loads for the measured text but has no Latin glyphs is not rejected. Outside the browser (no `document.fonts`), font loading resolves immediately.
+
+A `MejiroBrowser` subscribes to `document.fonts` so it can clear its width cache when new fonts arrive. Call `dispose()` when you are done with an instance, so the font set stops referencing it. A disposed instance still works and subscribes again on its next layout. `MejiroBook.dispose()` does the same for a book, and `useMejiroBook` calls it on unmount.
 
 ## 3. Character Measurement
 

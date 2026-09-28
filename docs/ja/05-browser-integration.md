@@ -28,7 +28,8 @@ const mejiro = new MejiroBrowser({
 |--------|------|-------------|
 | `fixedFontFamily` | `string` | すべてのレイアウトに適用されるデフォルトのフォントファミリー。 |
 | `fixedFontSize` | `number` | すべてのレイアウトに適用されるデフォルトのフォントサイズ（px単位）。 |
-| `strictFontCheck` | `boolean` | `true`の場合、フォント読み込み時にフォールバックが検出されるとエラーをスローします。 |
+| `strictFontCheck` | `boolean` | `true` の場合、指定したファミリーがホストの既定フォントと同じ幅で計測される（フォールバックしている）と、`layout()`・`layoutChapter()`・`preloadFont()` がエラーで reject します。`false`（既定）では、フォントの読み込みに失敗してもエラーにはならず、ホストが実際に選んだフォントでレイアウトを続けます。 |
+| `onFontsLoaded` | `() => void` | ホストが新しいフォントの読み込み完了を通知し、幅キャッシュを消去した後に呼ばれます。それ以前に計測した結果はフォールバックの幅を含んでいる可能性があるため、ここでレイアウトし直してください。 |
 
 `fixedFontFamily` と `fixedFontSize` を設定しておくと、個別の `layout()` や `layoutChapter()` ではそれらを省略できます。
 
@@ -47,6 +48,10 @@ await mejiro.preloadFont();
 ```
 
 内部的には、`preloadFont()`は`FontLoader`クラスに処理を委譲し、`document.fonts.load()`を呼び出して指定されたフォントがCanvas計測で利用可能であることを保証します。
+
+`preloadFont()` は `layout()` と同じ `strictFontCheck` の判定を行います。判定はラテン文字の字幅を比べるため、`strictFontCheck` が有効なときは判定の前にそのファミリーのラテン文字の範囲も読み込みます。計測するテキストの範囲は読み込めていてラテン文字のグリフを持たないファミリーは、フォールバック扱いになりません。ブラウザ外（`document.fonts` がない環境）では、フォント読み込みは待たずに完了します。
+
+`MejiroBrowser` は新しいフォントが届いたときに幅キャッシュを消去するため、`document.fonts` を購読しています。使い終わったインスタンスは `dispose()` を呼んで購読を解除してください。解除後もインスタンスは使え、次のレイアウトで再び購読します。`MejiroBook.dispose()` はブックに対して同じことを行い、`useMejiroBook` はアンマウント時にこれを呼びます。
 
 ## 3. 文字幅計測
 

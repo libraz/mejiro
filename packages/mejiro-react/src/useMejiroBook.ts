@@ -15,11 +15,10 @@ export interface UseMejiroBookOptions {
    */
   debounceMs?: number;
   /**
-   * Called when applying options to the book fails — typically a font that
-   * could not be loaded. When supplied, failures are reported here and the
-   * promise returned by {@link UseMejiroBookReturn.setOptions} resolves instead
-   * of rejecting, so fire-and-forget callers cannot leave an unhandled
-   * rejection behind.
+   * Called when applying options to the book fails. When supplied, failures are
+   * reported here and the promise returned by
+   * {@link UseMejiroBookReturn.setOptions} resolves instead of rejecting, so
+   * fire-and-forget callers cannot leave an unhandled rejection behind.
    */
   onError?: (error: Error) => void;
 }
@@ -117,9 +116,11 @@ export function useMejiroBook(
   );
 
   // A change still inside its debounce window is dropped on unmount — nothing
-  // is left to render it — but its awaiters must not hang.
+  // is left to render it — but its awaiters must not hang. The book releases
+  // its font subscription; it resubscribes if a remount keeps using it.
   useEffect(
     () => () => {
+      bookRef.current?.dispose();
       const pending = pendingRef.current;
       if (!pending) return;
       pendingRef.current = null;

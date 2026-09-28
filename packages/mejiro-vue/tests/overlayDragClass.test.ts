@@ -32,6 +32,11 @@ function pointerDown(target: HTMLElement): PointerEvent {
   } as unknown as PointerEvent;
 }
 
+/** Releases the pointer that {@link pointerDown} started the gesture with. */
+function pointerUp(): void {
+  document.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 1 }));
+}
+
 /** The class the drag session put on the overlay, checked against the shipped stylesheet. */
 function dragClassOf(el: HTMLElement): string {
   const added = [...el.classList].filter((name) => name !== 'mejiro-reader-image-overlay');
@@ -58,12 +63,12 @@ describe('overlay composables (Vue) — drag feedback class', () => {
 
     result.onOverlayPointerDown(pointerDown(overlay));
     const moveClass = dragClassOf(overlay);
-    document.dispatchEvent(new Event('pointerup'));
+    pointerUp();
     expect(overlay.classList.contains(moveClass)).toBe(false);
 
     result.onResizePointerDown(pointerDown(handle));
     expect(dragClassOf(overlay)).toBe(moveClass);
-    document.dispatchEvent(new Event('pointerup'));
+    pointerUp();
     scope.stop();
   });
 
@@ -81,7 +86,7 @@ describe('overlay composables (Vue) — drag feedback class', () => {
     multi.onOverlayPointerDown(id, pointerDown(b));
 
     expect(dragClassOf(a)).toBe(dragClassOf(b));
-    document.dispatchEvent(new Event('pointerup'));
+    pointerUp();
     scope.stop();
   });
 });

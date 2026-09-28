@@ -31,9 +31,9 @@ import type { BookOptions, BookParagraph, ComputePageSizeOptions, PageSize } fro
  */
 export interface MejiroBookOptions extends BookOptions {
   /**
-   * When true, layout throws if the requested font family measures exactly
-   * like the host's default font, which is how a silent fallback presents
-   * itself. @defaultValue false
+   * When true, layout and font changes through `setOptions` reject if the
+   * requested font family measures exactly like the host's default font, which
+   * is how a silent fallback presents itself. @defaultValue false
    */
   strictFontCheck?: boolean;
 }
@@ -232,11 +232,17 @@ export class MejiroBook {
    * {@link MejiroBook.setPageSize} (or {@link MejiroBook.computePageSize})
    * before laying out a chapter — otherwise `layoutChapter` throws.
    *
+   * Live layouts are re-measured whenever the host reports newly loaded
+   * fonts, so widths taken against a fallback face do not outlive it.
+   *
    * @param options - Typography plus the optional `strictFontCheck` guard,
    *   which is forwarded to the measurer and cannot be changed afterwards.
    */
   constructor(options: MejiroBookOptions) {
-    this.browser = new MejiroBrowser({ strictFontCheck: options.strictFontCheck });
+    this.browser = new MejiroBrowser({
+      strictFontCheck: options.strictFontCheck,
+      onFontsLoaded: () => this.remeasureLayouts(),
+    });
     this.opts = {
       fontFamily: options.fontFamily,
       fontSize: options.fontSize,
@@ -251,6 +257,16 @@ export class MejiroBook {
     this.keepWholePos = options.keepWholePos;
     this.keepWholePenalty = options.keepWholePenalty;
     this.breakCost = options.breakCost;
+  }
+
+  /**
+   * Releases the book's `document.fonts` subscription so the book, its width
+   * cache and its layouts can be collected once the host drops them. Call it
+   * when the owning view unmounts. The book stays usable: the next layout or
+   * font change subscribes again. Idempotent.
+   */
+  dispose(): void {
+    this.browser.dispose();
   }
 
   /** Returns a snapshot of the current options. */
@@ -280,8 +296,10 @@ export class MejiroBook {
    * Overlapping calls converge on the last one — an earlier call whose font is
    * still loading resolves without overwriting the newer options.
    *
-   * @throws If the font of a staged change fails to load. The rejection leaves
-   *   the previously applied options in place.
+   * @throws If `strictFontCheck` is enabled and the font of a staged change
+   *   measures as a fallback. The rejection leaves the previously applied
+   *   options in place. Without `strictFontCheck`, a font that fails to load is
+   *   committed and measured as the host resolves it.
    */
   setOptions(options: Partial<BookOptions>): Promise<void> {
     // Stack the patch on the in-flight request when there is one, so a change

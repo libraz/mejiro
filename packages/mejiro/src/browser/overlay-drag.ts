@@ -18,9 +18,9 @@ export interface OverlayDragSessionOptions {
   /** Pointer y at pointer-down, in client coordinates (px). */
   startY: number;
   /**
-   * Pointer that owns the gesture. When set together with
-   * {@link OverlayDragSessionOptions.captureElement}, the element captures it so
-   * the gesture survives the pointer leaving the overlay.
+   * Pointer that owns the gesture. When set, events from any other pointer are
+   * ignored; together with {@link OverlayDragSessionOptions.captureElement}, the
+   * element captures it so the gesture survives the pointer leaving the overlay.
    */
   pointerId?: number;
   /** Element the pointer is captured on — usually the pointer-down target. */
@@ -41,7 +41,10 @@ export interface OverlayDragSessionOptions {
    * rounding never accumulates across a gesture.
    */
   onChange: (rect: ImageOverlayRect) => void;
-  /** Called exactly once when the gesture ends, however it ended. */
+  /**
+   * Called exactly once when the gesture ends, however it ended: `pointerup`,
+   * `pointercancel`, loss of pointer capture, or `cancel()`.
+   */
   onEnd?: () => void;
   /**
    * Set the session registers its disposer in for the gesture's lifetime, so a
@@ -55,7 +58,10 @@ export interface OverlayDragSessionOptions {
 export interface OverlayDragSession {
   /** Whether the gesture is still running. */
   readonly active: boolean;
-  /** Ends the gesture and releases every listener. Idempotent. */
+  /**
+   * Ends the gesture and releases every listener, dropping any update not yet
+   * delivered. Idempotent.
+   */
   cancel: () => void;
 }
 
@@ -64,9 +70,9 @@ export interface OverlayDragSession {
  *
  * This is the single pointer-drag implementation behind the framework overlay
  * hooks: it owns pointer capture, the drag class, the document-level
- * `pointermove` / `pointerup` listeners, animation-frame coalescing and
- * teardown, leaving each host with nothing but its own state update in
- * {@link OverlayDragSessionOptions.onChange}. Call it from a pointer-down
+ * `pointermove` / `pointerup` / `pointercancel` / `lostpointercapture`
+ * listeners, animation-frame coalescing and teardown, leaving each host with
+ * nothing but its own state update in {@link OverlayDragSessionOptions.onChange}. Call it from a pointer-down
  * handler after the host has decided the gesture applies.
  *
  * Framework-agnostic on purpose — no effect or watcher is involved, so the
@@ -75,7 +81,8 @@ export interface OverlayDragSession {
  * applies stays in the DOM-free core as {@link moveImageOverlayRect} and
  * {@link resizeImageOverlayRect}. Updates are coalesced with
  * `requestAnimationFrame` where the runtime provides it, and delivered
- * synchronously where it does not.
+ * synchronously where it does not; an update still queued when the pointer is
+ * released or cancelled is delivered before `onEnd`.
  *
  * The rectangle is never clamped to the content area beyond the `'resize'`
  * minimum size, so an overlay can be dragged partly out of view; a host needing
@@ -93,41 +100,61 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
 
   let active = true;
   let frame = 0;
+  // Rect computed by the latest move and not yet handed to `onChange`.
+  let pending: ImageOverlayRect | null = null;
+
+  const owns = (event: PointerEvent): boolean =>
+    pointerId === undefined || event.pointerId === pointerId;
+
+  const deliver = (): void => {
+    frame = 0;
+    const next = pending;
+    pending = null;
+    if (next) options.onChange(next);
+  };
 
   const handleMove = (event: PointerEvent): void => {
+    if (!owns(event)) return;
     const deltaX = event.clientX - startX;
     const deltaY = event.clientY - startY;
-    const next =
+    pending =
       mode === 'move'
         ? moveImageOverlayRect(rect, deltaX, deltaY)
         : resizeImageOverlayRect(rect, deltaX, deltaY, options.minSize);
-    if (!coalesces) {
-      options.onChange(next);
-      return;
-    }
-    if (frame) cancelAnimationFrame(frame);
-    frame = requestAnimationFrame(() => {
-      frame = 0;
-      options.onChange(next);
-    });
+    if (!coalesces) deliver();
+    else if (!frame) frame = requestAnimationFrame(deliver);
   };
 
-  const cancel = (): void => {
+  // The one teardown path. A gesture the browser ended delivers its last
+  // position first; an explicit cancel() drops it.
+  const end = (settle: boolean): void => {
     if (!active) return;
     active = false;
     if (frame && coalesces) cancelAnimationFrame(frame);
+    if (settle) deliver();
     frame = 0;
+    pending = null;
     if (dragClass) activeElement?.classList.remove(dragClass);
     target?.removeEventListener('pointermove', handleMove);
-    target?.removeEventListener('pointerup', cancel);
+    target?.removeEventListener('pointerup', handleEnd);
+    target?.removeEventListener('pointercancel', handleEnd);
+    target?.removeEventListener('lostpointercapture', handleEnd);
     options.registry?.delete(cancel);
     options.onEnd?.();
   };
 
+  const handleEnd = (event: PointerEvent): void => {
+    if (owns(event)) end(true);
+  };
+
+  const cancel = (): void => end(false);
+
   if (pointerId !== undefined) captureElement?.setPointerCapture(pointerId);
   if (dragClass) activeElement?.classList.add(dragClass);
   target?.addEventListener('pointermove', handleMove);
-  target?.addEventListener('pointerup', cancel);
+  target?.addEventListener('pointerup', handleEnd);
+  target?.addEventListener('pointercancel', handleEnd);
+  target?.addEventListener('lostpointercapture', handleEnd);
   options.registry?.add(cancel);
 
   return {

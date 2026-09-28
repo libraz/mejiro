@@ -15,12 +15,12 @@ export interface UseMejiroBookOptions {
    */
   debounceMs?: number;
   /**
-   * Called when applying options to the book fails — typically a font that
-   * could not be loaded. When supplied, failures are reported here and the
-   * promise returned by {@link UseMejiroBookReturn.setOptions} resolves instead
-   * of rejecting, so fire-and-forget callers cannot leave an unhandled
-   * rejection behind. Applications triggered by `source` are only observable
-   * through this callback.
+   * Called when applying options to the book fails. When supplied, failures are
+   * reported here and the promise returned by
+   * {@link UseMejiroBookReturn.setOptions} resolves instead of rejecting, so
+   * fire-and-forget callers cannot leave an unhandled rejection behind.
+   * Applications triggered by `source` are only observable through this
+   * callback.
    */
   onError?: (error: Error) => void;
 }
@@ -143,7 +143,9 @@ export function useMejiroBook(
 
   // A change still inside its debounce window is dropped when the scope is
   // disposed — nothing is left to render it — but its awaiters must not hang.
+  // The book releases its font subscription.
   onScopeDispose(() => {
+    book.dispose();
     const current = pending;
     if (!current) return;
     pending = null;

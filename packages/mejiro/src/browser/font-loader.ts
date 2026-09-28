@@ -62,6 +62,10 @@ export class FontLoader {
    */
   private generation = 0;
 
+  private readonly onFontsLoaded?: () => void;
+  /** The `loadingdone` subscription, or null while none is held. */
+  private unsubscribe: (() => void) | null = null;
+
   /**
    * Subscribes to the document's `loadingdone` event so the set of
    * already-loaded specs is discarded whenever new faces arrive — a family that
@@ -75,16 +79,43 @@ export class FontLoader {
    *   host invalidate width caches measured against the previous faces.
    */
   constructor(options: { onFontsLoaded?: () => void } = {}) {
-    if (typeof document === 'undefined' || !document.fonts) return;
-    const fonts = document.fonts as FontFaceSet & {
-      addEventListener?: FontFaceSet['addEventListener'];
+    this.onFontsLoaded = options.onFontsLoaded;
+    this.subscribe();
+  }
+
+  /**
+   * Removes the `loadingdone` subscription so the host's font set no longer
+   * references this loader, and forgets every readiness answer that depended on
+   * it. The loader stays usable: the next {@link ensureLoaded} subscribes again.
+   * Idempotent.
+   */
+  dispose(): void {
+    this.unsubscribe?.();
+    this.unsubscribe = null;
+    this.invalidate();
+  }
+
+  private subscribe(): void {
+    if (this.unsubscribe || !hasFontSet()) return;
+    const fonts = document.fonts as FontFaceSet & Partial<Pick<EventTarget, 'addEventListener'>>;
+    if (!fonts.addEventListener) return;
+    const handler = (): void => {
+      this.invalidate();
+      this.onFontsLoaded?.();
     };
-    fonts.addEventListener?.('loadingdone', () => {
-      this.loaded.clear();
-      this.inFlight.clear();
-      this.generation++;
-      options.onFontsLoaded?.();
-    });
+    fonts.addEventListener('loadingdone', handler);
+    this.unsubscribe = () => {
+      (fonts as Partial<Pick<EventTarget, 'removeEventListener'>>).removeEventListener?.(
+        'loadingdone',
+        handler,
+      );
+    };
+  }
+
+  private invalidate(): void {
+    this.loaded.clear();
+    this.inFlight.clear();
+    this.generation++;
   }
 
   /**
@@ -102,9 +133,13 @@ export class FontLoader {
    * @param fontSpec - CSS font specification (e.g. '16px "Noto Serif JP"').
    * @param text - Text about to be measured with this spec. Defaults to a
    *   representative sample spanning every range mejiro measures.
-   * @throws If the font fails to load.
+   * @throws If the font fails to load. Resolves at once when the runtime has
+   *   no `document.fonts`.
    */
   async ensureLoaded(fontSpec: string, text?: string): Promise<void> {
+    // Without a font set there is nothing to wait on.
+    if (!hasFontSet()) return;
+    this.subscribe();
     // Everything up to the shared request runs synchronously, so callers made
     // in the same turn see each other's in-flight entry.
     const sample = coverageSample(text);
@@ -171,9 +206,13 @@ export class FontLoader {
    * @param text - Text whose ranges the answer applies to.
    */
   isAvailable(fontSpec: string, text?: string): boolean {
-    if (typeof document === 'undefined' || !document.fonts) return false;
+    if (!hasFontSet()) return false;
     return document.fonts.check(fontSpec, coverageSample(text));
   }
+}
+
+function hasFontSet(): boolean {
+  return typeof document !== 'undefined' && !!document.fonts;
 }
 
 function loadedKey(fontSpec: string, sample: string): string {

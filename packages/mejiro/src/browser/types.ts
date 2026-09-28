@@ -9,11 +9,18 @@ export interface MejiroBrowserOptions {
   /** Fixed font size in pixels. When set, all layouts use this font size. */
   fixedFontSize?: number;
   /**
-   * When true, `layout()` throws if the requested family measures exactly like
-   * the host's default font, which is how a silent fallback presents itself.
-   * When false (the default), layout proceeds with whatever the host resolved.
+   * When true, `layout()`, `layoutChapter()` and `preloadFont()` throw if the
+   * requested family measures exactly like the host's default font, which is
+   * how a silent fallback presents itself. When false (the default), they
+   * proceed with whatever the host resolved, even if the web font failed to load.
    */
   strictFontCheck?: boolean;
+  /**
+   * Called after the host reports newly loaded fonts (`loadingdone`) and the
+   * width cache has been cleared. Results measured before that point may hold
+   * fallback widths; re-lay them out here.
+   */
+  onFontsLoaded?: () => void;
 }
 
 /** Ruby variant of {@link InlineAnnotation}. */

@@ -196,6 +196,39 @@ function mockLayout(totalPages = 6): ChapterLayout {
   } as unknown as ChapterLayout;
 }
 
+/**
+ * Counts the `loadingdone` listeners attached to `document.fonts` while
+ * installed; `restore` puts the host's own methods back.
+ */
+function countFontListeners(): { listeners: () => number; restore: () => void } {
+  const handlers = new Set<unknown>();
+  const fonts = document.fonts as FontFaceSet & Record<string, unknown>;
+  const originals = ['addEventListener', 'removeEventListener'].map(
+    (name) => [name, Object.getOwnPropertyDescriptor(fonts, name)] as const,
+  );
+  Object.defineProperty(fonts, 'addEventListener', {
+    configurable: true,
+    value: (type: string, listener: unknown) => {
+      if (type === 'loadingdone') handlers.add(listener);
+    },
+  });
+  Object.defineProperty(fonts, 'removeEventListener', {
+    configurable: true,
+    value: (type: string, listener: unknown) => {
+      if (type === 'loadingdone') handlers.delete(listener);
+    },
+  });
+  return {
+    listeners: () => handlers.size,
+    restore: () => {
+      for (const [name, original] of originals) {
+        if (original) Object.defineProperty(fonts, name, original);
+        else delete fonts[name];
+      }
+    },
+  };
+}
+
 describe('useMejiroBook (React)', () => {
   it('creates a stable MejiroBook instance and reflects initial options', () => {
     const { result } = renderHook(() => useMejiroBook({ fontFamily: 'serif', fontSize: 16 }));
@@ -247,6 +280,20 @@ describe('useMejiroBook (React)', () => {
       expect(result.current.book.getOptions().fontSize).toBe(18);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('releases the book font subscription on unmount', () => {
+    const fonts = countFontListeners();
+    try {
+      for (let i = 0; i < 3; i++) {
+        const { unmount } = renderHook(() => useMejiroBook({ fontFamily: 'serif', fontSize: 16 }));
+        expect(fonts.listeners()).toBe(1);
+        unmount();
+        expect(fonts.listeners()).toBe(0);
+      }
+    } finally {
+      fonts.restore();
     }
   });
 

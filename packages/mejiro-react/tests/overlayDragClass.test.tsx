@@ -34,6 +34,11 @@ function pointerDown(target: HTMLElement): ReactPointerEvent {
   } as unknown as ReactPointerEvent;
 }
 
+/** Releases the pointer that {@link pointerDown} started the gesture with. */
+function pointerUp(): void {
+  document.dispatchEvent(Object.assign(new Event('pointerup'), { pointerId: 1 }));
+}
+
 /** The class the drag session put on the overlay, checked against the shipped stylesheet. */
 function dragClassOf(el: HTMLElement): string {
   const added = [...el.classList].filter((name) => name !== 'mejiro-reader-image-overlay');
@@ -58,12 +63,12 @@ describe('overlay hooks (React) — drag feedback class', () => {
 
     act(() => result.current.onOverlayPointerDown(pointerDown(overlay)));
     const moveClass = dragClassOf(overlay);
-    document.dispatchEvent(new Event('pointerup'));
+    pointerUp();
     expect(overlay.classList.contains(moveClass)).toBe(false);
 
     act(() => result.current.onResizePointerDown(pointerDown(handle)));
     expect(dragClassOf(overlay)).toBe(moveClass);
-    document.dispatchEvent(new Event('pointerup'));
+    pointerUp();
   });
 
   it('uses the same class as useMultiImageOverlay', () => {
@@ -81,6 +86,6 @@ describe('overlay hooks (React) — drag feedback class', () => {
     act(() => multi.result.current.onOverlayPointerDown(id, pointerDown(b)));
 
     expect(dragClassOf(a)).toBe(dragClassOf(b));
-    document.dispatchEvent(new Event('pointerup'));
+    pointerUp();
   });
 });

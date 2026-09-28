@@ -172,20 +172,36 @@ describe('MejiroBook measurement', () => {
     expect(snapshot.paragraphs[0].advances[0]).toBe(28 * FAMILY_WIDTH_RATIO['sans-serif']);
   });
 
-  it('keeps the previous options when the font of a staged change fails to load', async () => {
+  it('rejects a strict font change that measures as a fallback and keeps the previous options', async () => {
+    // `fantasy` fails to load and measures like the fallback sentinel (both
+    // take the default ratio), so only the strict probe can catch it.
+    installFontsStub({ failingFamily: 'fantasy' });
+    const book = new MejiroBook({ fontFamily: 'sans-serif', fontSize: 16, strictFontCheck: true });
+    book.setPageSize({ pageWidth: 400, lineWidth: 320 });
+    const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
+
+    await expect(book.setOptions({ fontFamily: 'fantasy', fontSize: 40 })).rejects.toThrow(
+      /Font not available \(possible fallback\)/,
+    );
+
+    expect(book.getOptions().fontFamily).toBe('sans-serif');
+    expect(book.getOptions().fontSize).toBe(16);
+    const snapshot = layout.snapshot();
+    expect(snapshot.config.fontSize).toBe(16);
+    expect(snapshot.paragraphs[0].advances[0]).toBe(16 * FAMILY_WIDTH_RATIO['sans-serif']);
+  });
+
+  it('commits a font change whose load fails when strictFontCheck is off', async () => {
     installFontsStub({ failingFamily: 'monospace' });
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
     book.setPageSize({ pageWidth: 400, lineWidth: 320 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
 
-    await expect(book.setOptions({ fontFamily: 'monospace', fontSize: 40 })).rejects.toThrow(
-      'font fetch failed',
-    );
+    await expect(
+      book.setOptions({ fontFamily: 'monospace', fontSize: 40 }),
+    ).resolves.toBeUndefined();
 
-    expect(book.getOptions().fontFamily).toBe('serif');
-    expect(book.getOptions().fontSize).toBe(16);
-    const snapshot = layout.snapshot();
-    expect(snapshot.config.fontSize).toBe(16);
-    expect(snapshot.paragraphs[0].advances[0]).toBe(16 * FAMILY_WIDTH_RATIO.serif);
+    expect(book.getOptions().fontFamily).toBe('monospace');
+    expect(layout.snapshot().paragraphs[0].advances[0]).toBe(40 * FAMILY_WIDTH_RATIO.monospace);
   });
 });

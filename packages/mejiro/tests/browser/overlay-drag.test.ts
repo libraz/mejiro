@@ -42,12 +42,19 @@ function flushFrames(): void {
   for (const callback of pending) callback?.(0);
 }
 
-function pointerMove(clientX: number, clientY: number): void {
-  document.dispatchEvent(Object.assign(new Event('pointermove'), { clientX, clientY }));
+/** Pointer ids the tests below start gestures with. */
+const POINTER_IDS = [undefined, 1, 2, 3, 7];
+
+function pointerEvent(type: string, fields: Partial<PointerEvent> = {}): void {
+  document.dispatchEvent(Object.assign(new Event(type), fields));
 }
 
-function pointerUp(): void {
-  document.dispatchEvent(new Event('pointerup'));
+function pointerMove(clientX: number, clientY: number, pointerId?: number): void {
+  pointerEvent('pointermove', { clientX, clientY, pointerId });
+}
+
+function pointerUp(pointerId?: number): void {
+  pointerEvent('pointerup', { pointerId });
 }
 
 function overlayElements(): { overlay: HTMLElement; handle: HTMLElement } {
@@ -77,7 +84,7 @@ describe('createOverlayDragSession', () => {
   afterEach(() => {
     // Sessions attach to the document, which outlives a single test, so end
     // any gesture still running before the frame stubs go away.
-    pointerUp();
+    for (const id of POINTER_IDS) pointerUp(id);
     vi.unstubAllGlobals();
     document.body.replaceChildren();
   });
@@ -101,20 +108,20 @@ describe('createOverlayDragSession', () => {
     expect(overlay.setPointerCapture).toHaveBeenCalledWith(7);
     expect(overlay.classList.contains('dragging')).toBe(true);
 
-    pointerMove(230, 280);
+    pointerMove(230, 280, 7);
     flushFrames();
     expect(onChange).toHaveBeenLastCalledWith({ x: 40, y: 0, w: 100, h: 120 });
 
     // Deltas are measured from the gesture start, never accumulated.
-    pointerMove(190, 300);
+    pointerMove(190, 300, 7);
     flushFrames();
     expect(onChange).toHaveBeenLastCalledWith({ x: 0, y: 20, w: 100, h: 120 });
 
-    pointerUp();
+    pointerUp(7);
     expect(session.active).toBe(false);
     expect(overlay.classList.contains('dragging')).toBe(false);
 
-    pointerMove(500, 500);
+    pointerMove(500, 500, 7);
     flushFrames();
     expect(onChange).toHaveBeenCalledTimes(2);
     expect(START).toEqual({ x: 10, y: 20, w: 100, h: 120 });
@@ -140,11 +147,11 @@ describe('createOverlayDragSession', () => {
     expect(handle.setPointerCapture).toHaveBeenCalledWith(3);
     expect(overlay.classList.contains('dragging')).toBe(true);
 
-    pointerMove(40, 30);
+    pointerMove(40, 30, 3);
     flushFrames();
     expect(onChange).toHaveBeenLastCalledWith({ x: 10, y: 20, w: 140, h: 150 });
 
-    pointerMove(-500, -500);
+    pointerMove(-500, -500, 3);
     flushFrames();
     expect(onChange).toHaveBeenLastCalledWith({ x: 10, y: 20, w: 40, h: 40 });
   });
@@ -210,11 +217,113 @@ describe('createOverlayDragSession', () => {
     expect(overlay.classList.contains('dragging')).toBe(false);
     expect(removeListener).toHaveBeenCalledWith('pointermove', expect.any(Function));
     expect(removeListener).toHaveBeenCalledWith('pointerup', expect.any(Function));
+    expect(removeListener).toHaveBeenCalledWith('pointercancel', expect.any(Function));
+    expect(removeListener).toHaveBeenCalledWith('lostpointercapture', expect.any(Function));
 
     session.cancel();
     expect(onEnd).toHaveBeenCalledTimes(1);
     removeListener.mockRestore();
   });
+
+  it.each(['pointercancel', 'lostpointercapture'])(
+    'ends the gesture once on %s and stops following the pointer',
+    (type) => {
+      const onChange = vi.fn();
+      const onEnd = vi.fn();
+      const registry = new Set<() => void>();
+      const { overlay } = overlayElements();
+
+      const session = createOverlayDragSession({
+        mode: 'move',
+        rect: START,
+        startX: 0,
+        startY: 0,
+        pointerId: 1,
+        captureElement: overlay,
+        activeElement: overlay,
+        dragClass: 'dragging',
+        registry,
+        onChange,
+        onEnd,
+      });
+
+      pointerEvent(type, { pointerId: 1 });
+
+      expect(session.active).toBe(false);
+      expect(onEnd).toHaveBeenCalledTimes(1);
+      expect(registry.size).toBe(0);
+      expect(overlay.classList.contains('dragging')).toBe(false);
+
+      pointerMove(50, 50, 1);
+      flushFrames();
+      pointerUp(1);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onEnd).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('follows only the pointer that owns the gesture', () => {
+    const onChange = vi.fn();
+    const onEnd = vi.fn();
+
+    const session = createOverlayDragSession({
+      mode: 'move',
+      rect: START,
+      startX: 0,
+      startY: 0,
+      pointerId: 1,
+      onChange,
+      onEnd,
+    });
+
+    pointerMove(10, 10, 1);
+    pointerMove(300, 300, 2);
+    flushFrames();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith({ x: 20, y: 30, w: 100, h: 120 });
+
+    // A second finger lifting or being cancelled does not end the gesture.
+    pointerUp(2);
+    pointerEvent('pointercancel', { pointerId: 2 });
+    pointerEvent('lostpointercapture', { pointerId: 2 });
+    expect(session.active).toBe(true);
+    expect(onEnd).not.toHaveBeenCalled();
+
+    pointerUp(1);
+    expect(session.active).toBe(false);
+    expect(onEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['pointerup', 'pointercancel'])(
+    'delivers a move still queued at %s before ending',
+    (type) => {
+      const onChange = vi.fn();
+      const onEnd = vi.fn(() => {
+        expect(onChange).toHaveBeenLastCalledWith({ x: 70, y: 60, w: 100, h: 120 });
+      });
+
+      createOverlayDragSession({
+        mode: 'move',
+        rect: START,
+        startX: 0,
+        startY: 0,
+        pointerId: 1,
+        onChange,
+        onEnd,
+      });
+
+      // A flick: the last move and the release land before the next frame.
+      pointerMove(30, 30, 1);
+      pointerMove(60, 40, 1);
+      pointerEvent(type, { pointerId: 1, clientX: 60, clientY: 40 });
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledWith({ x: 70, y: 60, w: 100, h: 120 });
+      expect(onEnd).toHaveBeenCalledTimes(1);
+      flushFrames();
+      expect(onChange).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('delivers changes synchronously when the runtime has no frame scheduler', () => {
     vi.unstubAllGlobals();

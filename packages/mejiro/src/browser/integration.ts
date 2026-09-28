@@ -77,30 +77,43 @@ function buildRubyAnnotations(
  * fallback font. Latin letters carry family-specific metrics; full-width CJK
  * glyphs are one em in nearly every font and cannot discriminate.
  */
-const FALLBACK_PROBE_CODEPOINTS = [0x4d, 0x69, 0x57, 0x67]; // M i W g
+const FALLBACK_PROBE_TEXT = 'MiWg';
 
 /** Family name no host can provide, so it always measures as the default font. */
 const FALLBACK_SENTINEL_FAMILY = '"__mejiro_absent_family__"';
 
 /**
- * Reports whether `fontFamily` measures exactly like a family that is
+ * Reports whether `fontSpec` measures exactly like a family that is
  * guaranteed to be missing — the observable signature of a silent fallback.
  *
  * Heuristic by nature: it catches the common case where the requested family
  * resolves to the host's default font, and stays silent when the family's own
  * CSS fallback list absorbs the miss.
  */
-function measuresAsFallback(
-  measurer: CharMeasurer,
-  fontFamily: FontFamily,
-  fontSize: number,
-): boolean {
-  const wanted = toFontSpec(fontFamily, fontSize);
+function measuresAsFallback(measurer: CharMeasurer, fontSpec: string, fontSize: number): boolean {
   const sentinel = `${fontSize}px ${FALLBACK_SENTINEL_FAMILY}`;
-  if (wanted === sentinel) return false;
-  return FALLBACK_PROBE_CODEPOINTS.every(
-    (cp) => measurer.measure(wanted, cp) === measurer.measure(sentinel, cp),
-  );
+  if (fontSpec === sentinel) return false;
+  for (const ch of FALLBACK_PROBE_TEXT) {
+    const cp = ch.codePointAt(0) as number;
+    if (measurer.measure(fontSpec, cp) !== measurer.measure(sentinel, cp)) return false;
+  }
+  return true;
+}
+
+/**
+ * Waits for `fontSpec` to cover `text`. A font that cannot be confirmed loaded
+ * is not an error here: layout proceeds with whatever the host resolves, and
+ * only the `strictFontCheck` probe may reject it.
+ *
+ * @returns Whether the host confirmed the font loaded.
+ */
+async function tryLoad(loader: FontLoader, fontSpec: string, text?: string): Promise<boolean> {
+  try {
+    await loader.ensureLoaded(fontSpec, text);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Concatenates every ruby reading so font readiness covers their ranges too. */
@@ -144,12 +157,22 @@ export async function layoutText(options: {
   breakCost?: BreakCostOptions;
 }): Promise<BreakResult> {
   const fontSpec = toFontSpec(options.fontFamily, options.fontSize);
-  const loader = new FontLoader();
   const { text, inlineAnnotations } = normalizeAnnotatedText(
     options.text,
     options.inlineAnnotations ?? [],
   );
-  await loader.ensureLoaded(fontSpec, text);
+  // One-shot loader: released before returning so the host keeps no reference.
+  const loader = new FontLoader();
+  let rubyFontSpec: string | undefined;
+  try {
+    await tryLoad(loader, fontSpec, text);
+    if (inlineAnnotations.length) {
+      rubyFontSpec = deriveRubyFont(options.fontFamily, options.fontSize);
+      await tryLoad(loader, rubyFontSpec, rubyTextOf(inlineAnnotations));
+    }
+  } finally {
+    loader.dispose();
+  }
 
   const measurer = new CharMeasurer();
   const codepoints = toCodepoints(text);
@@ -157,9 +180,7 @@ export async function layoutText(options: {
 
   let rubyAnnotations: RubyAnnotation[] | undefined;
   let tcyAnnotations: TcyAnnotation[] | undefined;
-  if (inlineAnnotations.length) {
-    const rubyFontSpec = deriveRubyFont(options.fontFamily, options.fontSize);
-    await loader.ensureLoaded(rubyFontSpec, rubyTextOf(inlineAnnotations));
+  if (rubyFontSpec) {
     rubyAnnotations = buildRubyAnnotations(inlineAnnotations, rubyFontSpec, measurer);
     tcyAnnotations = buildTcyAnnotations(inlineAnnotations, options.fontSize);
   }
@@ -198,8 +219,9 @@ export class MejiroBrowser {
    * discarded once the real font arrives.
    *
    * @param options - Fixed font family / size used when a layout call omits
-   *   them, plus the `strictFontCheck` guard. Captured at construction; layout
-   *   calls override the fixed values per call rather than mutating these.
+   *   them, the `strictFontCheck` guard and the `onFontsLoaded` hook. Captured
+   *   at construction; layout calls override the fixed values per call rather
+   *   than mutating these.
    */
   constructor(options?: MejiroBrowserOptions) {
     this.options = options ?? {};
@@ -207,8 +229,35 @@ export class MejiroBrowser {
     this.fontLoader = new FontLoader({
       onFontsLoaded: () => {
         this.measurer.getCache().clear();
+        this.options.onFontsLoaded?.();
       },
     });
+  }
+
+  /**
+   * Releases the `document.fonts` subscription, so an instance the host no
+   * longer uses can be collected together with its width cache. The instance
+   * stays usable: the next layout subscribes again. Idempotent.
+   */
+  dispose(): void {
+    this.fontLoader.dispose();
+  }
+
+  /**
+   * Makes `fontFamily` at `fontSize` ready for measuring `text`, and under
+   * `strictFontCheck` rejects it when it measures as a fallback. Every path
+   * that measures with a font goes through here, so none can skip the check.
+   */
+  private async ensureFont(fontFamily: FontFamily, fontSize: number, text?: string): Promise<void> {
+    const fontSpec = toFontSpec(fontFamily, fontSize);
+    const loaded = await tryLoad(this.fontLoader, fontSpec, text);
+    if (!this.options.strictFontCheck) return;
+    // The probe glyphs may live in a subset `text` never requested. A family
+    // that loaded for `text` but cannot supply them leaves the probe blind.
+    if (loaded && !(await tryLoad(this.fontLoader, fontSpec, FALLBACK_PROBE_TEXT))) return;
+    if (measuresAsFallback(this.measurer, fontSpec, fontSize)) {
+      throw new Error(`Font not available (possible fallback): ${fontSpec}`);
+    }
   }
 
   /**
@@ -222,7 +271,9 @@ export class MejiroBrowser {
    * @param options - Layout options including text, font, and line width.
    * @throws If no font family or font size is specified and no fixed values were configured.
    * @throws If `strictFontCheck` is enabled and the requested family measures
-   *   like the host's default font, i.e. it silently fell back.
+   *   like the host's default font, i.e. it silently fell back. Without
+   *   `strictFontCheck`, a font that fails to load is measured as the host
+   *   resolves it rather than rejected.
    */
   async layout(options: LayoutOptions): Promise<BreakResult> {
     const fontFamily = options.fontFamily ?? this.options.fixedFontFamily;
@@ -235,11 +286,7 @@ export class MejiroBrowser {
       options.text,
       options.inlineAnnotations ?? [],
     );
-    await this.fontLoader.ensureLoaded(fontSpec, text);
-
-    if (this.options.strictFontCheck && measuresAsFallback(this.measurer, fontFamily, fontSize)) {
-      throw new Error(`Font not available (possible fallback): ${fontSpec}`);
-    }
+    await this.ensureFont(fontFamily, fontSize, text);
 
     const codepoints = toCodepoints(text);
     const advances = this.measurer.measureAll(fontSpec, codepoints);
@@ -248,7 +295,7 @@ export class MejiroBrowser {
     let tcyAnnotations: TcyAnnotation[] | undefined;
     if (inlineAnnotations.length) {
       const rubyFontSpec = deriveRubyFont(fontFamily, fontSize);
-      await this.fontLoader.ensureLoaded(rubyFontSpec, rubyTextOf(inlineAnnotations));
+      await tryLoad(this.fontLoader, rubyFontSpec, rubyTextOf(inlineAnnotations));
       rubyAnnotations = buildRubyAnnotations(inlineAnnotations, rubyFontSpec, this.measurer);
       tcyAnnotations = buildTcyAnnotations(inlineAnnotations, fontSize);
     }
@@ -276,13 +323,15 @@ export class MejiroBrowser {
    * Preloads a font so it is available for subsequent layout calls.
    * @param fontFamily - CSS font family to preload (string or array).
    * @param fontSize - Font size in pixels (used for the font loading check).
+   * @throws If `strictFontCheck` is enabled and the family measures like the
+   *   host's default font — the same check {@link MejiroBrowser.layout} runs.
    */
   async preloadFont(fontFamily?: FontFamily, fontSize?: number): Promise<void> {
     const family = fontFamily ?? this.options.fixedFontFamily;
     const size = fontSize ?? this.options.fixedFontSize;
     if (!family) throw new Error('fontFamily must be specified');
     if (!size) throw new Error('fontSize must be specified');
-    await this.fontLoader.ensureLoaded(toFontSpec(family, size));
+    await this.ensureFont(family, size);
   }
 
   /**

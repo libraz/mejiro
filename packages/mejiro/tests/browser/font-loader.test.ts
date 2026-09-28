@@ -101,17 +101,31 @@ describe('FontLoader', () => {
    * Installs the `loadingdone` listener plumbing a real FontFaceSet has and
    * returns both a way to fire the event and a way to undo the installation.
    */
-  function withLoadingDoneSupport(): { fire: () => void; restore: () => void } {
+  function withLoadingDoneSupport(): {
+    fire: () => void;
+    listeners: () => number;
+    restore: () => void;
+  } {
     const handlers: EventListener[] = [];
-    const target = document.fonts as FontFaceSet & {
-      addEventListener?: FontFaceSet['addEventListener'];
+    const target = document.fonts as FontFaceSet &
+      Partial<Pick<EventTarget, 'addEventListener' | 'removeEventListener'>>;
+    const originals = {
+      add: Object.getOwnPropertyDescriptor(target, 'addEventListener'),
+      remove: Object.getOwnPropertyDescriptor(target, 'removeEventListener'),
     };
-    const original = Object.getOwnPropertyDescriptor(target, 'addEventListener');
     Object.defineProperty(target, 'addEventListener', {
       configurable: true,
       writable: true,
       value: (type: string, listener: EventListenerOrEventListenerObject | null) => {
         if (type === 'loadingdone' && typeof listener === 'function') handlers.push(listener);
+      },
+    });
+    Object.defineProperty(target, 'removeEventListener', {
+      configurable: true,
+      writable: true,
+      value: (type: string, listener: EventListenerOrEventListenerObject | null) => {
+        const at = handlers.indexOf(listener as EventListener);
+        if (type === 'loadingdone' && at >= 0) handlers.splice(at, 1);
       },
     });
 
@@ -120,12 +134,40 @@ describe('FontLoader', () => {
         expect(handlers).toHaveLength(1);
         handlers[0](new Event('loadingdone'));
       },
+      listeners: () => handlers.length,
       restore: () => {
-        if (original) Object.defineProperty(target, 'addEventListener', original);
+        if (originals.add) Object.defineProperty(target, 'addEventListener', originals.add);
         else delete target.addEventListener;
+        if (originals.remove)
+          Object.defineProperty(target, 'removeEventListener', originals.remove);
+        else delete target.removeEventListener;
       },
     };
   }
+
+  it('releases its loadingdone listener on dispose and resubscribes when used again', async () => {
+    vi.spyOn(document.fonts, 'check').mockReturnValue(true);
+    const { listeners, restore } = withLoadingDoneSupport();
+    try {
+      const loaders = [new FontLoader(), new FontLoader(), new FontLoader()];
+      expect(listeners()).toBe(3);
+
+      for (const loader of loaders) loader.dispose();
+      expect(listeners()).toBe(0);
+
+      // Disposing twice is harmless, and a disposed loader still works.
+      loaders[0].dispose();
+      await loaders[0].ensureLoaded('16px serif');
+      expect(loaders[0].isLoaded('16px serif')).toBe(true);
+      expect(listeners()).toBe(1);
+
+      loaders[0].dispose();
+      expect(listeners()).toBe(0);
+      expect(loaders[0].isLoaded('16px serif')).toBe(false);
+    } finally {
+      restore();
+    }
+  });
 
   it('invalidates readiness and notifies the caller on loadingdone', async () => {
     vi.spyOn(document.fonts, 'check').mockReturnValue(true);
