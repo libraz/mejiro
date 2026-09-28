@@ -64,7 +64,7 @@ Always use `buildKinsokuRules()` to create rules -- it generates the lookup sets
 
 ## 2. Token Boundaries (Morphological Analysis Integration)
 
-The `tokenBoundaries` option lets you integrate a morphological analyzer or tokenizer, such as [`@libraz/suzume`](https://github.com/libraz/suzume), to prefer natural word boundaries for line breaks. For browser-only deployments, Suzume's WASM build is roughly 567 KB with its dictionaries embedded, about 230 KB gzipped; a server-side analyzer with a larger dictionary is the trade when dictionary accuracy matters more than footprint.
+The `tokenBoundaries` option lets you integrate a morphological analyzer or tokenizer, such as [`@libraz/suzume`](https://github.com/libraz/suzume), to prefer natural word boundaries for line breaks. For browser-only deployments, Suzume's WASM build is roughly 578 KB with its dictionaries embedded, about 237 KB gzipped; a server-side analyzer with a larger dictionary is the trade when dictionary accuracy matters more than footprint.
 
 ### Basic Usage
 

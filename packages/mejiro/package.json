@@ -79,7 +79,7 @@
     "dev": "tsup --watch"
   },
   "dependencies": {
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.2"
   },
   "peerDependencies": {
     "@libraz/suzume": "^0.9.9"
@@ -90,6 +90,6 @@
     }
   },
   "devDependencies": {
-    "@libraz/suzume": "^0.9.9"
+    "@libraz/suzume": "^0.9.11"
   }
 }

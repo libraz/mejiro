@@ -332,7 +332,7 @@ let breakBaseline: BreakBaseline | null = null;
 /**
  * Loads the suzume analyzer once and reuses it for every later stage change.
  *
- * Not loaded at start-up on purpose: the analyzer pulls in a ~567 KB
+ * Not loaded at start-up on purpose: the analyzer pulls in a ~578 KB
  * WebAssembly module, which a reader that stays at `off` should never pay for.
  * The wasm URL is resolved through the bundler so the binary is emitted as a
  * demo asset instead of being looked for next to the bundled chunk.
