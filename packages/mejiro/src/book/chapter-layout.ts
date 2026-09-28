@@ -1,19 +1,16 @@
 import type { InlineAnnotation } from '../browser/types.js';
-import type { ColumnSlot, SpreadExclusionResult } from '../exclusion.js';
-import { SpreadExclusionEngine } from '../exclusion.js';
+import type { ColumnSlot, ImageRect, SpreadPageImages } from '../exclusion.js';
+import { splitSpreadImages } from '../exclusion.js';
 import { computeBreaks } from '../layout.js';
 import type { PageSlice } from '../paginate.js';
 import { paginate } from '../paginate.js';
 import type { HeadingStyle, MeasureOptions } from '../render/measures.js';
 import {
-  adjustExclusionSlots,
   buildColumnSlots,
   buildLineMetrics,
   buildParagraphMeasures,
-  findPhysicalColumn,
-  getImageXOffset,
-  packPageLines,
   paragraphHeading,
+  paragraphMetrics,
   resolveHeadingScale,
 } from '../render/measures.js';
 import { buildRenderPage } from '../render/page.js';
@@ -22,6 +19,7 @@ import { preprocessRuby, type RubyAnnotation } from '../ruby.js';
 import { preprocessTcy, type TcyAnnotation } from '../tcy.js';
 import type { BreakCostOptions } from '../types.js';
 import type { AnchorLocation, AnchorRange, AnchorRect, InChapterAnchor } from './anchor.js';
+import { ColumnFlow, type SpreadLayoutInfo } from './column-flow.js';
 import type { FindTextOptions, SearchMatch } from './search.js';
 import type { ChapterLayoutSnapshot, LayoutRubySnapshot, ParagraphSnapshot } from './snapshot.js';
 import type {
@@ -108,21 +106,6 @@ interface ExclusionCache {
   totalPages: number;
 }
 
-interface SpreadLayoutInfo {
-  lineStart: number;
-  slotCount: number;
-  rightSlotCount: number;
-  rightSlots: ColumnSlot[];
-  leftSlots: ColumnSlot[];
-  hasRightImages: boolean;
-  hasLeftImages: boolean;
-}
-
-interface SpreadLayoutBuildResult {
-  layouts: SpreadLayoutInfo[];
-  lineWidths: Float32Array;
-}
-
 /** A contiguous run of selected characters inside one line of one paragraph. */
 interface SelectionRun {
   paragraph: number;
@@ -140,12 +123,6 @@ interface BrokenChapter {
   /** Per paragraph: the advance array {@link BrokenChapter.entries} came from. */
   layoutAdvances: Float32Array[];
 }
-
-/**
- * Spreads of line widths computed past the end of the chapter, so text pushed
- * out of image-shortened columns still finds a width to reflow into.
- */
-const SPREAD_REFLOW_MARGIN = 10;
 
 const MAX_REGEX_SEARCH_PATTERN_LENGTH = 256;
 const MAX_REGEX_SEARCH_TEXT_LENGTH = 1_000_000;
@@ -365,19 +342,6 @@ function cloneHeadingStyles(styles: Record<number, HeadingStyle>): Record<number
   return out;
 }
 
-function sameBreakPoints(a: readonly RenderEntry[], b: readonly RenderEntry[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    const abp = a[i].breakPoints;
-    const bbp = b[i].breakPoints;
-    if (abp.length !== bbp.length) return false;
-    for (let j = 0; j < abp.length; j++) {
-      if (abp[j] !== bbp[j]) return false;
-    }
-  }
-  return true;
-}
-
 /**
  * Manages the layout of a single chapter with pagination, heading support,
  * and image exclusion. Created by {@link MejiroBook.layoutChapter}.
@@ -404,15 +368,6 @@ export class ChapterLayout {
 
   private normal: NormalCache | null = null;
   private excl: ExclusionCache | null = null;
-
-  /**
-   * @internal Cached `SpreadExclusionEngine.compute()` results per spread.
-   *
-   * The spread-local exclusion compute is independent across spreads, so we
-   * can keep results for unchanged spreads when `setImages` only modifies a
-   * single spread. Invalidated wholesale on font / size / page-size changes.
-   */
-  private spreadExclusionCache = new Map<number, SpreadExclusionResult>();
 
   /** @internal Created by MejiroBook — do not construct directly. */
   constructor(
@@ -530,13 +485,13 @@ export class ChapterLayout {
     } else {
       this.images.set(spreadIndex, [...images]);
     }
-    this.invalidate({ spread: spreadIndex });
+    this.invalidate(true);
   }
 
   /** Removes all image exclusions. */
   clearImages(): void {
     this.images.clear();
-    this.invalidate({});
+    this.invalidate(true);
   }
 
   /**
@@ -905,18 +860,12 @@ export class ChapterLayout {
    * it in a single pass, however many changes preceded it; cached paragraph
    * data (advances, hints) is never touched.
    *
-   * @param images - Present for an image change: geometry is unchanged, so
-   *   normal pagination and, when `spread` is given, every other spread's
-   *   engine output stay valid. Absent for a geometry, font or option change.
+   * @param imagesOnly - True for an image change: geometry is unchanged, so
+   *   normal pagination stays valid.
    */
-  private invalidate(images?: { spread?: number }): void {
+  private invalidate(imagesOnly = false): void {
     this.excl = null;
-    if (images?.spread != null) {
-      this.spreadExclusionCache.delete(images.spread);
-      return;
-    }
-    this.spreadExclusionCache.clear();
-    if (!images) this.normal = null;
+    if (!imagesOnly) this.normal = null;
   }
 
   private ensureBreaks(): void {
@@ -1050,153 +999,62 @@ export class ChapterLayout {
 
   private computeExclusion(): void {
     const { fontSize } = this.config;
-    const lp = this.linePitch();
-    const cw = this.contentWidth();
-    const normalLinesPerPage = Math.floor(cw / lp);
-    const normalLinesPerSpread = normalLinesPerPage * 2;
     const opts = this.measureOpts();
+    const pm = paragraphMetrics(opts);
 
-    // Pre-reflow metrics for image coordinate adjustment
-    const preMetrics = buildLineMetrics(this.entries, opts);
-    const preMeasures = buildParagraphMeasures(this.entries, opts);
-    const prePages = paginate(cw, preMeasures);
-    const preParaLineStarts: number[] = [];
-    let preTotal = 0;
-    for (const entry of this.entries) {
-      preParaLineStarts.push(preTotal);
-      preTotal += entry.breakPoints.length + 1;
-    }
-    const prePageStarts = prePages.map((slices) => {
-      const first = slices[0];
-      return first ? preParaLineStarts[first.paragraphIndex] + first.lineStart : preTotal;
-    });
-
-    // Compute exclusion for each spread that has images
-    const spreadEngine = new SpreadExclusionEngine({
-      pageWidth: this.size.pageWidth,
-      pagePaddingX: this.size.pagePaddingX,
-      pagePaddingY: this.size.pagePaddingY,
-      lineWidth: this.size.lineWidth,
-      linePitch: lp,
-    });
-
-    const exclBySpread = new Map<number, SpreadExclusionResult>();
+    const pageImages = new Map<number, SpreadPageImages>();
     for (const [si, imgs] of this.images) {
-      if (imgs.length === 0) continue;
-      const cached = this.spreadExclusionCache.get(si);
-      if (cached) {
-        exclBySpread.set(si, cached);
-        continue;
-      }
-      spreadEngine.clearImages();
-      // Column offsets restart on each page, so each page is measured from its own first line.
-      const rightStartLine = prePageStarts[si * 2] ?? si * normalLinesPerSpread;
-      const leftStartLine =
-        prePageStarts[si * 2 + 1] ?? si * normalLinesPerSpread + normalLinesPerPage;
-      // Distance of a spread x from the right content edge of the page that holds it.
-      const rightFromEdge = (x: number): number => this.size.pageWidth - this.size.pagePaddingX - x;
-      const leftFromEdge = (x: number): number => -this.size.pagePaddingX - x;
-      for (const img of imgs) {
-        const margin = img.margin ?? fontSize;
-        const crossesSpine = img.x < 0 && img.x + img.w > 0;
-
-        if (crossesSpine) {
-          // Split straddling images at the spine so each page gets the
-          // correct heading offset compensation independently.
-          const rightW = img.x + img.w; // portion on right page (x >= 0)
-          if (rightW > 0) {
-            const rCenter = rightW / 2;
-            const col = findPhysicalColumn(
-              preMetrics.offsets,
-              rightStartLine,
-              rightFromEdge(rCenter),
-              lp,
-            );
-            const rAdj = getImageXOffset(preMetrics.offsets, rightStartLine, col);
-            spreadEngine.addImage({
-              x: rAdj,
-              y: img.y,
-              w: rightW,
-              h: img.h,
-              inlineMargin: margin,
-            });
-          }
-          const leftW = -img.x; // portion on left page (x < 0)
-          if (leftW > 0) {
-            const lCenter = img.x + leftW / 2;
-            const col = findPhysicalColumn(
-              preMetrics.offsets,
-              leftStartLine,
-              leftFromEdge(lCenter),
-              lp,
-            );
-            const lAdj = getImageXOffset(preMetrics.offsets, leftStartLine, col);
-            spreadEngine.addImage({
-              x: img.x + lAdj,
-              y: img.y,
-              w: leftW,
-              h: img.h,
-              inlineMargin: margin,
-            });
-          }
-        } else {
-          const center = img.x + img.w / 2;
-          const onRight = center > 0 && center < this.size.pageWidth;
-          const onLeft = center < 0;
-          let xAdj = 0;
-          if (onRight) {
-            const col = findPhysicalColumn(
-              preMetrics.offsets,
-              rightStartLine,
-              rightFromEdge(center),
-              lp,
-            );
-            xAdj = getImageXOffset(preMetrics.offsets, rightStartLine, col);
-          } else if (onLeft) {
-            const col = findPhysicalColumn(
-              preMetrics.offsets,
-              leftStartLine,
-              leftFromEdge(center),
-              lp,
-            );
-            xAdj = getImageXOffset(preMetrics.offsets, leftStartLine, col);
-          }
-          spreadEngine.addImage({
-            x: img.x + xAdj,
-            y: img.y,
-            w: img.w,
-            h: img.h,
-            inlineMargin: margin,
-          });
-        }
-      }
-      const result = spreadEngine.compute();
-      exclBySpread.set(si, result);
-      this.spreadExclusionCache.set(si, result);
+      const rects: ImageRect[] = imgs.map((img) => ({
+        x: img.x,
+        y: img.y,
+        w: img.w,
+        h: img.h,
+        inlineMargin: img.margin ?? fontSize,
+      }));
+      pageImages.set(si, splitSpreadImages(rects, this.size));
     }
+    const flow = new ColumnFlow(
+      {
+        contentWidth: this.contentWidth(),
+        lineWidth: this.size.lineWidth,
+        basePitch: pm.basePitch,
+      },
+      pageImages,
+    );
 
-    let entries = this.entries;
-    for (let attempt = 0; attempt < 6; attempt++) {
-      // Reflow can only lengthen the chapter by shortening columns, so the
-      // widths are computed for the current line count plus a margin — sized
-      // in lines, never in characters. Each attempt re-derives the margin from
-      // the lines the previous attempt produced, so repeated growth converges.
-      const actualLines = entries.reduce((sum, e) => sum + e.breakPoints.length + 1, 0);
-      const lineLimit =
-        actualLines +
-        Math.max(normalLinesPerSpread * SPREAD_REFLOW_MARGIN, Math.ceil(actualLines / 2));
-      const candidateMetrics = buildLineMetrics(entries, opts).metrics;
-      const candidateWidths = this.buildSpreadLayoutsAndWidths(
-        exclBySpread,
-        candidateMetrics,
-        lineLimit,
-      ).lineWidths;
-      const nextEntries = this.computeEntriesWithLineWidths(candidateWidths);
-      if (sameBreakPoints(entries, nextEntries)) {
-        entries = nextEntries;
-        break;
+    // A line's slot depends only on the lines before it, so each paragraph is
+    // broken once against the widths a probe of the flow reports, then placed.
+    const entries: RenderEntry[] = [];
+    for (let pi = 0; pi < this.cached.length; pi++) {
+      const para = this.cached[pi];
+      const entry: RenderEntry = {
+        chars: para.chars,
+        breakPoints: new Uint32Array(0),
+        inlineAnnotations: para.inlineAnnotations,
+        isHeading: para.isHeading,
+        headingLevel: para.headingLevel,
+        kind: para.kind,
+      };
+      const pitch = pm.pitch(entry);
+      const first: LineMetric = {
+        pitch,
+        gapBefore: pi > 0 ? pm.gapBefore(entry, entries[pi - 1]) : 0,
+      };
+      const rest: LineMetric = { pitch, gapBefore: 0 };
+
+      let lineWidths: Float32Array | undefined;
+      if (!flow.pastImages) {
+        // A paragraph occupies at most one line per character.
+        const probe = flow.probe();
+        const widths: number[] = [];
+        while (widths.length <= para.text.length && !probe.pastImages) {
+          widths.push(probe.place(widths.length === 0 ? first : rest));
+        }
+        lineWidths = new Float32Array(widths);
       }
-      entries = nextEntries;
+      entry.breakPoints = this.breakWithLineWidths(para, lineWidths);
+      for (let li = 0; li <= entry.breakPoints.length; li++) flow.place(li === 0 ? first : rest);
+      entries.push(entry);
     }
 
     // Flatten all lines for slot-based rendering
@@ -1206,8 +1064,7 @@ export class ChapterLayout {
       lineEnd: e.breakPoints.length + 1,
     }));
     const fullPage = buildRenderPage(allSlices, entries);
-    const postMetrics = buildLineMetrics(entries, opts);
-    const { metrics: lm } = postMetrics;
+    const { metrics: lm } = buildLineMetrics(entries, opts);
 
     const allLines: PageLine[] = [];
     const lineParaIdx: number[] = [];
@@ -1220,7 +1077,7 @@ export class ChapterLayout {
       pi++;
     }
 
-    const { layouts } = this.buildSpreadLayoutsAndWidths(exclBySpread, lm, allLines.length);
+    const layouts = flow.finish();
 
     const paraLineStarts: number[] = [];
     let paraLine = 0;
@@ -1240,138 +1097,22 @@ export class ChapterLayout {
     };
   }
 
-  private computeEntriesWithLineWidths(lineWidths: Float32Array): RenderEntry[] {
-    let gi = 0;
-    const entries: RenderEntry[] = [];
-    for (const para of this.cached) {
-      // A paragraph can occupy at most one line per character, so it never
-      // needs to see the widths beyond that. The view is a subarray, so no
-      // per-paragraph copy of the remaining widths is made.
-      const end = Math.min(lineWidths.length, gi + para.text.length + 1);
-      const plw = end > gi ? lineWidths.subarray(gi, end) : undefined;
-      const br = computeBreaks({
-        text: para.text,
-        advances: para.advances,
-        lineWidth: this.size.lineWidth,
-        lineWidths: plw,
-        mode: this.config.mode,
-        enableHanging: this.config.enableHanging,
-        rubyAnnotations: para.layoutRubyAnnotations,
-        tcyAnnotations: para.layoutTcyAnnotations,
-        // Same replayed hints as the uniform-width break, so a column shortened
-        // by an image breaks under the same constraints as an unobstructed one.
-        clusterIds: para.hintClusterIds,
-        breakPenalties: para.hintBreakPenalties,
-        breakCost: this.config.breakCost,
-      });
-      gi += br.breakPoints.length + 1;
-      entries.push({
-        chars: para.chars,
-        breakPoints: br.breakPoints,
-        inlineAnnotations: para.inlineAnnotations,
-        isHeading: para.isHeading,
-        headingLevel: para.headingLevel,
-        kind: para.kind,
-      });
-    }
-    return entries;
-  }
-
-  private buildSpreadLayoutsAndWidths(
-    exclBySpread: ReadonlyMap<number, SpreadExclusionResult>,
-    metrics: LineMetric[],
-    lineLimit: number,
-  ): SpreadLayoutBuildResult {
-    const layouts: SpreadLayoutInfo[] = [];
-    const lineWidths: number[] = [];
-    const lp = this.linePitch();
-    const cw = this.contentWidth();
-    const fallbackLinesPerSpread = Math.max(1, Math.floor(cw / lp)) * 2;
-    let li = 0;
-
-    while (li < lineLimit) {
-      const si = layouts.length;
-      const start = li;
-      const excl = exclBySpread.get(si);
-
-      if (li >= metrics.length) {
-        const fallbackWidths = excl?.lineWidths;
-        const count = Math.min(
-          lineLimit - li,
-          Math.max(fallbackWidths?.length ?? 0, fallbackLinesPerSpread),
-        );
-        for (let i = 0; i < count; i++) {
-          lineWidths.push(fallbackWidths?.[i] ?? this.size.lineWidth);
-        }
-        layouts.push({
-          lineStart: start,
-          slotCount: count,
-          rightSlotCount: Math.ceil(count / 2),
-          rightSlots: [],
-          leftSlots: [],
-          hasRightImages: false,
-          hasLeftImages: false,
-        });
-        li += count;
-        continue;
-      }
-
-      let rSlots: ColumnSlot[];
-      let lSlots: ColumnSlot[];
-      let rCount: number;
-      let lCount: number;
-      let rHasImg = false;
-      let lHasImg = false;
-
-      if (excl) {
-        // Ask the engine whether it changed the page's slot coverage. Probing
-        // for a shortened slot misses a column that an image blocks entirely,
-        // because such a column drops out of the slot list at full height.
-        rHasImg = excl.rightAffected;
-        lHasImg = excl.leftAffected;
-
-        if (rHasImg) {
-          rSlots = adjustExclusionSlots(excl.rightSlots, metrics, li, lp, cw);
-          rCount = rSlots.length;
-        } else {
-          rCount = packPageLines(metrics, li, cw);
-          rSlots = buildColumnSlots(metrics, li, rCount, this.size.lineWidth);
-        }
-
-        if (lHasImg) {
-          lSlots = adjustExclusionSlots(excl.leftSlots, metrics, li + rCount, lp, cw);
-          lCount = lSlots.length;
-        } else {
-          lCount = packPageLines(metrics, li + rCount, cw);
-          lSlots = buildColumnSlots(metrics, li + rCount, lCount, this.size.lineWidth);
-        }
-      } else {
-        rCount = packPageLines(metrics, li, cw);
-        rSlots = buildColumnSlots(metrics, li, rCount, this.size.lineWidth);
-        lCount = packPageLines(metrics, li + rCount, cw);
-        lSlots = buildColumnSlots(metrics, li + rCount, lCount, this.size.lineWidth);
-      }
-
-      for (const slot of rHasImg ? rSlots : rSlots.slice(0, rCount)) {
-        lineWidths.push(rHasImg ? slot.height : this.size.lineWidth);
-      }
-      for (const slot of lHasImg ? lSlots : lSlots.slice(0, lCount)) {
-        lineWidths.push(lHasImg ? slot.height : this.size.lineWidth);
-      }
-
-      layouts.push({
-        lineStart: start,
-        slotCount: rCount + lCount,
-        rightSlotCount: rCount,
-        rightSlots: rSlots,
-        leftSlots: lSlots,
-        hasRightImages: rHasImg,
-        hasLeftImages: lHasImg,
-      });
-      li += rCount + lCount;
-    }
-
-    return { layouts, lineWidths: new Float32Array(lineWidths) };
+  private breakWithLineWidths(para: CachedParagraph, lineWidths?: Float32Array): Uint32Array {
+    return computeBreaks({
+      text: para.text,
+      advances: para.advances,
+      lineWidth: this.size.lineWidth,
+      lineWidths,
+      mode: this.config.mode,
+      enableHanging: this.config.enableHanging,
+      rubyAnnotations: para.layoutRubyAnnotations,
+      tcyAnnotations: para.layoutTcyAnnotations,
+      // Same replayed hints as the uniform-width break, so a column shortened
+      // by an image breaks under the same constraints as an unobstructed one.
+      clusterIds: para.hintClusterIds,
+      breakPenalties: para.hintBreakPenalties,
+      breakCost: this.config.breakCost,
+    }).breakPoints;
   }
 
   private getExclusionSpread(spreadIndex: number, totalPages: number): SpreadResult {

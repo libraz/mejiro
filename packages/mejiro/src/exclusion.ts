@@ -263,9 +263,10 @@ export class ExclusionEngine {
     let affected = false;
 
     for (let col = 0; col < lineCount; col++) {
-      const column = computeColumnGaps(
-        col,
+      const column = columnGapsAt(
+        col * linePitch,
         linePitch,
+        col,
         contentWidth,
         lineWidth,
         this.images,
@@ -311,13 +312,15 @@ export function computeExclusionSlots(
 }
 
 /** Usable gaps of one physical column, in top-to-bottom order. */
-interface ColumnGaps {
+export interface ColumnGaps {
+  /** Gaps text may occupy; empty when images block the whole column. */
   gaps: ColumnSlot[];
+  /** Whether any image took inline space away from the column. */
   obstructed: boolean;
 }
 
 /** True when two columns are split into the same vertical gaps. */
-function sameGapPartition(a: readonly ColumnSlot[], b: readonly ColumnSlot[]): boolean {
+export function sameGapPartition(a: readonly ColumnSlot[], b: readonly ColumnSlot[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i].yStart !== b[i].yStart || a[i].height !== b[i].height) return false;
@@ -364,25 +367,32 @@ function orderGapsForReading(columns: readonly ColumnGaps[]): ColumnSlot[] {
 }
 
 /**
- * Computes all usable vertical gaps in a single column
- * after subtracting all overlapping image regions.
- * Returns one slot per gap (possibly multiple per column, or none when the
- * column is fully blocked), plus whether any image took inline space away
- * from this column — the latter is independent of how many gaps survived
- * the `minGapHeight` filter.
+ * Computes all usable vertical gaps in one column after subtracting every
+ * overlapping image region. Returns one slot per gap (possibly several, or
+ * none when the column is fully blocked), plus whether any image took inline
+ * space away from the column — independent of how many gaps survived the
+ * `minGapHeight` filter.
+ *
+ * @param xPos - Column's distance from the right content edge (px).
+ * @param width - Column extent in the block direction (px).
+ * @param columnIndex - Physical column index stamped on each slot.
+ * @param contentW - Page content width (px).
+ * @param lineWidth - Full inline size of the column (px).
+ * @param images - Images in content-area coordinates.
+ * @param minGapHeight - Smallest gap height kept as a slot (px).
  */
-function computeColumnGaps(
-  colIndex: number,
-  linePitch: number,
+export function columnGapsAt(
+  xPos: number,
+  width: number,
+  columnIndex: number,
   contentW: number,
   lineWidth: number,
   images: readonly ImageRect[],
   minGapHeight: number,
 ): ColumnGaps {
-  const xPos = colIndex * linePitch;
   // Column horizontal range (in content coords, measured from left)
-  const colRight = contentW - colIndex * linePitch;
-  const colLeft = colRight - linePitch;
+  const colRight = contentW - xPos;
+  const colLeft = colRight - width;
 
   // Collect vertical intervals of images overlapping this column (with margins)
   const intervals: [number, number][] = [];
@@ -400,7 +410,7 @@ function computeColumnGaps(
 
   if (intervals.length === 0) {
     return {
-      gaps: [{ xPos, yStart: 0, height: lineWidth, columnIndex: colIndex }],
+      gaps: [{ xPos, yStart: 0, height: lineWidth, columnIndex }],
       obstructed: false,
     };
   }
@@ -425,13 +435,13 @@ function computeColumnGaps(
   for (const [top, bottom] of merged) {
     const gapH = top - prevEnd;
     if (gapH > 0 && gapH >= minGapHeight) {
-      gaps.push({ xPos, yStart: prevEnd, height: gapH, columnIndex: colIndex });
+      gaps.push({ xPos, yStart: prevEnd, height: gapH, columnIndex });
     }
     prevEnd = bottom;
   }
   const tailGap = lineWidth - prevEnd;
   if (tailGap > 0 && tailGap >= minGapHeight) {
-    gaps.push({ xPos, yStart: prevEnd, height: tailGap, columnIndex: colIndex });
+    gaps.push({ xPos, yStart: prevEnd, height: tailGap, columnIndex });
   }
 
   return { gaps, obstructed: true };
@@ -487,6 +497,55 @@ export interface SpreadExclusionResult {
   rightAffected: boolean;
   /** Same as {@link SpreadExclusionResult.rightAffected} for the left page. */
   leftAffected: boolean;
+}
+
+/** Images of one spread, split by page into each page's content-area coordinates. */
+export interface SpreadPageImages {
+  /** Images overlapping the right page. */
+  right: ImageRect[];
+  /** Images overlapping the left page. */
+  left: ImageRect[];
+}
+
+/**
+ * Distributes spread images to the pages they overlap, converting each from
+ * right-page-relative coordinates to that page's content-area coordinates. An
+ * image straddling the gutter lands on both pages.
+ *
+ * @param images - Images relative to the right page's top-left corner.
+ * @param geometry - Page extent and padding of the spread.
+ */
+export function splitSpreadImages(
+  images: readonly ImageRect[],
+  geometry: Pick<SpreadGeometry, 'pageWidth' | 'pagePaddingX' | 'pagePaddingY'>,
+): SpreadPageImages {
+  const { pageWidth, pagePaddingX, pagePaddingY } = geometry;
+  const contentW = pageWidth - pagePaddingX * 2;
+  const pages: SpreadPageImages = { right: [], left: [] };
+  for (const img of images) {
+    // Convert from right-page-relative to content-area coordinates
+    const cx = img.x - pagePaddingX;
+    const bm = img.blockMargin ?? 0;
+    const baseProps = {
+      y: img.y - pagePaddingY,
+      w: img.w,
+      h: img.h,
+      inlineMargin: img.inlineMargin,
+      blockMargin: img.blockMargin,
+    };
+
+    // Right page: image overlaps if its right edge > 0 and left edge < contentW
+    if (overlapsRange(cx - bm, cx + img.w + bm, 0, contentW)) {
+      pages.right.push({ ...baseProps, x: cx });
+    }
+
+    // Left page: image extends past the right page's left edge (x < pagePaddingX)
+    // Coordinate conversion accounts for the gutter (both pages' inner padding)
+    if (overlapsRange(img.x - bm, img.x + img.w + bm, Number.NEGATIVE_INFINITY, 0)) {
+      pages.left.push({ ...baseProps, x: cx + pageWidth });
+    }
+  }
+  return pages;
 }
 
 /**
@@ -599,7 +658,7 @@ export class SpreadExclusionEngine {
    * leave every surviving slot at full height".
    */
   compute(): SpreadExclusionResult {
-    const { pageWidth, pagePaddingX, pagePaddingY, lineWidth, linePitch } = this.geometry;
+    const { pageWidth, pagePaddingX, lineWidth, linePitch } = this.geometry;
     const contentW = pageWidth - pagePaddingX * 2;
     const slotsPerPage = Math.floor(contentW / linePitch);
 
@@ -610,33 +669,11 @@ export class SpreadExclusionEngine {
       contentWidth: contentW,
     };
 
+    const pages = splitSpreadImages(this.images, this.geometry);
     const rightEngine = new ExclusionEngine(pageGeometry);
     const leftEngine = new ExclusionEngine(pageGeometry);
-
-    for (const img of this.images) {
-      // Convert from right-page-relative to content-area coordinates
-      const cx = img.x - pagePaddingX;
-      const cy = img.y - pagePaddingY;
-      const bm = img.blockMargin ?? 0;
-      const baseProps = {
-        y: cy,
-        w: img.w,
-        h: img.h,
-        inlineMargin: img.inlineMargin,
-        blockMargin: img.blockMargin,
-      };
-
-      // Right page: image overlaps if its right edge > 0 and left edge < contentW
-      if (overlapsRange(cx - bm, cx + img.w + bm, 0, contentW)) {
-        rightEngine.addImage({ ...baseProps, x: cx });
-      }
-
-      // Left page: image extends past the right page's left edge (x < pagePaddingX)
-      // Coordinate conversion accounts for the gutter (both pages' inner padding)
-      if (overlapsRange(img.x - bm, img.x + img.w + bm, Number.NEGATIVE_INFINITY, 0)) {
-        leftEngine.addImage({ ...baseProps, x: cx + pageWidth });
-      }
-    }
+    for (const img of pages.right) rightEngine.addImage(img);
+    for (const img of pages.left) leftEngine.addImage(img);
 
     const rightResult = rightEngine.compute();
     const leftResult = leftEngine.compute();

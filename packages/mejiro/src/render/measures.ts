@@ -158,13 +158,20 @@ const KIND_GAP_BEFORE_EM: Partial<Record<ParagraphKind, number>> = {
 const BLOCKQUOTE_GAP_AFTER_EM = 1;
 
 /** Per-paragraph pitch and gap resolution shared by the measure builders. */
-interface ParagraphMetrics {
+export interface ParagraphMetrics {
+  /** Body line pitch (font size × line spacing). */
   basePitch: number;
+  /** Column pitch of every line of `entry`. */
   pitch(entry: RenderEntry): number;
+  /** Gap before the first line of `entry` when `prev` precedes it. */
   gapBefore(entry: RenderEntry, prev: RenderEntry | undefined): number;
 }
 
-function paragraphMetrics(options: MeasureOptions): ParagraphMetrics {
+/**
+ * Resolves line pitch and paragraph gaps for `options`. They depend only on
+ * each paragraph's kind and heading level, never on its line breaks.
+ */
+export function paragraphMetrics(options: MeasureOptions): ParagraphMetrics {
   const { fontSize, paragraphGapEm = 0.4 } = options;
   const lineSpacing = resolveLineSpacing(options);
   const basePitch = fontSize * lineSpacing;

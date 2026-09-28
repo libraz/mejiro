@@ -671,42 +671,6 @@ describe('ChapterLayout', () => {
     });
   });
 
-  it('reuses cached SpreadExclusionEngine output for unchanged spreads after setImages', () => {
-    const text = 'あ'.repeat(300);
-    const codepoints = toCodepoints(text);
-    const cached: CachedParagraph[] = [
-      {
-        text: codepoints,
-        advances: uniformAdvances(codepoints.length, 10),
-        chars: chars(text),
-        inlineAnnotations: [],
-      },
-    ];
-    const entries: RenderEntry[] = [
-      {
-        chars: chars(text),
-        breakPoints: new Uint32Array(0),
-        inlineAnnotations: [],
-      },
-    ];
-    const layout = makeLayout(cached, entries);
-    layout.resize({ lineWidth: 50 });
-
-    layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 20 }]);
-    layout.setImages(1, [{ x: 20, y: 10, w: 20, h: 20 }]);
-    // Force computation.
-    layout.getSpread(0);
-    const cacheBefore = (layout as unknown as { spreadExclusionCache: Map<number, unknown> })
-      .spreadExclusionCache;
-    expect(cacheBefore.has(0)).toBe(true);
-    expect(cacheBefore.has(1)).toBe(true);
-
-    // Modify spread 1 only — spread 0 cache entry should survive.
-    layout.setImages(1, [{ x: 30, y: 30, w: 30, h: 30 }]);
-    expect(cacheBefore.has(0)).toBe(true);
-    expect(cacheBefore.has(1)).toBe(false);
-  });
-
   describe('image exclusion that blocks a whole column', () => {
     // 400px page, 40px padding → 320px content; fontSize 16 × lineSpacing 1.9
     // → 30.4px pitch → 10 columns per page.
@@ -947,6 +911,133 @@ describe('ChapterLayout', () => {
         return overlapsX && overlapsY;
       });
       expect(intruding).toEqual([]);
+    });
+  });
+
+  describe('image exclusion after paragraph breaks shift', () => {
+    // fontSize 10, lineSpacing 1 → pitch 10 (14 for an h2), paragraph gap 4.
+    // 120px pages with 10px padding → 100px content; 100px columns hold 10
+    // characters. Short paragraphs of mixed length take more columns once an
+    // image shortens them, so every later paragraph gap moves to another column.
+    const PAD_X = 10;
+    const PAD_Y = 20;
+    const CONTENT_WIDTH = 100;
+    const LINE_WIDTH = 100;
+    const LENGTHS = [21, 18, 13, 18, 5, 7, 5, 21, 21, 14];
+
+    /** Every `headingEvery`-th paragraph is an h2 when set. */
+    function makeShortParagraphLayout(headingEvery = 0): ChapterLayout {
+      const texts = Array.from({ length: 80 }, (_, i) => 'あ'.repeat(LENGTHS[i % LENGTHS.length]));
+      const heading = (i: number) =>
+        headingEvery > 0 && i % headingEvery === headingEvery - 1
+          ? { headingLevel: 2, isHeading: true }
+          : {};
+      const cached: CachedParagraph[] = texts.map((text, i) => ({
+        text: toCodepoints(text),
+        advances: uniformAdvances(text.length, 'headingLevel' in heading(i) ? 14 : 10),
+        chars: chars(text),
+        inlineAnnotations: [],
+        ...heading(i),
+      }));
+      const entries: RenderEntry[] = texts.map((text, i) => ({
+        chars: chars(text),
+        breakPoints: computedBreakPoints(text.length),
+        inlineAnnotations: [],
+        ...heading(i),
+      }));
+      return new ChapterLayout(
+        cached,
+        entries,
+        { fontSize: 10, lineSpacing: 1, headingScale: 1.4, mode: 'strict', enableHanging: true },
+        {
+          pageWidth: CONTENT_WIDTH + PAD_X * 2,
+          lineWidth: LINE_WIDTH,
+          pagePaddingX: PAD_X,
+          pagePaddingY: PAD_Y,
+        },
+      );
+    }
+
+    interface DrawnImage {
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      margin: number;
+    }
+
+    /** Spread x-range of a slot's column; right-page coordinates, left page negative. */
+    function columnRange(side: 'right' | 'left', xPos: number, pitch: number): [number, number] {
+      const edge = side === 'right' ? PAD_X + CONTENT_WIDTH : -PAD_X;
+      return [edge - xPos - pitch, edge - xPos];
+    }
+
+    function overlaps(a0: number, a1: number, b0: number, b1: number): boolean {
+      return a1 - b0 > 1e-6 && b1 - a0 > 1e-6;
+    }
+
+    function lineLength(line: { segments: readonly { type: string; text?: string }[] }): number {
+      return line.segments.reduce((sum, s) => sum + [...(s.text ?? '')].length, 0);
+    }
+
+    function expectTextClear(layout: ChapterLayout, spreadIndex: number, images: DrawnImage[]) {
+      layout.setImages(spreadIndex, images);
+      const spread = layout.getSpread(spreadIndex);
+      let shortened = 0;
+      for (const side of ['right', 'left'] as const) {
+        const page = spread[side];
+        expect(page.lines).toHaveLength(page.slots.length);
+        page.slots.forEach((slot, i) => {
+          // With lineSpacing 1 a line's pitch and advance equal its font size.
+          const { fontSize } = page.lines[i];
+          const [x0, x1] = columnRange(side, slot.xPos, fontSize);
+          const y0 = PAD_Y + slot.yStart;
+          const y1 = y0 + slot.height;
+          expect(x0).toBeGreaterThanOrEqual(
+            side === 'right' ? PAD_X - 0.5 : -PAD_X - CONTENT_WIDTH - 0.5,
+          );
+          for (const img of images) {
+            if (!overlaps(x0, x1, img.x, img.x + img.w)) continue;
+            shortened++;
+            expect(slot.height).toBeLessThan(LINE_WIDTH);
+            expect(overlaps(y0, y1, img.y - img.margin, img.y + img.h + img.margin)).toBe(false);
+          }
+          expect(lineLength(page.lines[i]) * fontSize).toBeLessThanOrEqual(slot.height + 0.5);
+        });
+      }
+      expect(shortened).toBeGreaterThan(0);
+    }
+
+    it('keeps text out of an off-centre image on the right page', () => {
+      expectTextClear(makeShortParagraphLayout(), 0, [
+        { x: 25, y: PAD_Y + 30, w: 45, h: 40, margin: 0 },
+      ]);
+    });
+
+    it('keeps text out of an off-centre image on the left page', () => {
+      expectTextClear(makeShortParagraphLayout(), 0, [
+        { x: -80, y: PAD_Y + 30, w: 55, h: 40, margin: 0 },
+      ]);
+    });
+
+    it('keeps text out of an image spanning the spine', () => {
+      expectTextClear(makeShortParagraphLayout(), 0, [
+        { x: -85, y: PAD_Y + 30, w: 150, h: 40, margin: 0 },
+      ]);
+    });
+
+    it('keeps text out of several images and their margins on a later spread', () => {
+      expectTextClear(makeShortParagraphLayout(), 1, [
+        { x: 45, y: PAD_Y + 10, w: 25, h: 20, margin: 5 },
+        { x: 40, y: PAD_Y + 60, w: 40, h: 20, margin: 5 },
+        { x: -75, y: PAD_Y + 40, w: 35, h: 30, margin: 5 },
+      ]);
+    });
+
+    it('keeps wider heading columns out of an image and inside the page', () => {
+      expectTextClear(makeShortParagraphLayout(3), 0, [
+        { x: 5, y: PAD_Y + 30, w: 20, h: 40, margin: 0 },
+      ]);
     });
   });
 
