@@ -3,6 +3,7 @@ import type { PageSlice } from '../paginate.js';
 import { getLineRanges } from '../paginate.js';
 import { sanitizeUrl } from '../url.js';
 import { buildInlineNodes, type InlineNode, inlineNodeContent } from './inline-tree.js';
+import { paragraphHeading } from './measures.js';
 import type { RenderEntry, RenderLine, RenderPage, RenderSegment } from './types.js';
 
 /**
@@ -101,13 +102,7 @@ export function buildRenderPage(slices: PageSlice[], entries: RenderEntry[]): Re
       });
     }
 
-    const headingLevel = entry.headingLevel;
-    return {
-      lines,
-      isHeading: headingLevel != null || entry.isHeading === true,
-      headingLevel,
-      kind: entry.kind,
-    };
+    return { lines, ...paragraphHeading(entry) };
   });
 
   return { paragraphs };

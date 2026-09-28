@@ -5,7 +5,7 @@ import type { FontFamily, InlineAnnotation, InlineRubyAnnotation } from '../brow
 import { toFontSpec } from '../browser/types.js';
 import { type ManuscriptDialect, parseManuscript } from '../manuscript.js';
 import { normalizeAnnotatedText } from '../normalize.js';
-import type { HeadingStyle } from '../render/measures.js';
+import { type HeadingStyle, isHeadingParagraph, resolveHeadingScale } from '../render/measures.js';
 import type { RenderEntry } from '../render/types.js';
 import type { RubyAnnotation } from '../ruby.js';
 import type { TcyAnnotation } from '../tcy.js';
@@ -101,26 +101,6 @@ interface InternalOptions {
   enableHanging: boolean;
   headingStyles?: Record<number, HeadingStyle>;
   headingScale: number;
-}
-
-function resolveScale(
-  level: number | undefined,
-  opts: { headingStyles?: Record<number, HeadingStyle>; headingScale: number },
-): number {
-  if (level == null) return 1;
-  return opts.headingStyles?.[level]?.scale ?? opts.headingScale;
-}
-
-function paragraphIsHeading(p: Pick<BookParagraph, 'headingLevel' | 'kind'>): boolean {
-  return p.headingLevel != null || p.kind === 'heading';
-}
-
-function paragraphHeadingScale(
-  p: Pick<CachedParagraph, 'headingLevel' | 'isHeading'>,
-  opts: InternalOptions,
-): number {
-  if (p.headingLevel != null) return resolveScale(p.headingLevel, opts);
-  return p.isHeading === true ? opts.headingScale : 1;
 }
 
 function buildLayoutRubyAnnotations(
@@ -224,6 +204,18 @@ export class MejiroBook {
   private breakCost?: BreakCostOptions;
   // One notice per book: a broken analyzer would otherwise log once per paragraph.
   private analyzerWarned = false;
+  // Hints already derived for a source paragraph, so laying the same chapter
+  // out again (resize, option change) replays them instead of re-analysing.
+  private derivedHints = new WeakMap<
+    BookParagraph,
+    { text: string; hints: TypographyHints | undefined }
+  >();
+  // Paragraphs parsed from a manuscript chapter, kept while its text is
+  // unchanged so they stay the same objects the hints above are keyed on.
+  private manuscriptParagraphs = new WeakMap<
+    ManuscriptChapter,
+    { title: string; body: string; dialect: ManuscriptDialect; paragraphs: BookParagraph[] }
+  >();
 
   /**
    * Records the typographic options and creates the browser-side measurer.
@@ -377,11 +369,9 @@ export class MejiroBook {
     for (const layout of this.liveLayouts()) {
       const cached = layout.getCachedParagraphs();
       for (const para of cached) {
-        const scale = paragraphHeadingScale(para, this.opts);
-        const pFontSize =
-          para.isHeading === true || para.headingLevel != null
-            ? Math.round(fontSize * scale)
-            : fontSize;
+        const pFontSize = isHeadingParagraph(para)
+          ? Math.round(fontSize * resolveHeadingScale(para, this.opts))
+          : fontSize;
         const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
         // Ruby is measured at half the *paragraph's* scaled size, matching the
         // initial layout path and the shipped `rt { font-size: 0.5em }` rule.
@@ -417,10 +407,11 @@ export class MejiroBook {
   /**
    * Derives the line breaking hints for one already-normalized paragraph.
    *
-   * Called exactly once per paragraph, from {@link MejiroBook.layoutChapter}.
-   * The result is cached on the paragraph, so every later re-break replays it:
-   * a resize, a font change or an image-exclusion reflow is on the interactive
-   * path, and the analysis of a paragraph cannot change while its text does not.
+   * Called once per paragraph text, through {@link MejiroBook.hintsFor}. The
+   * result is cached, so every later re-break and every re-layout of the same
+   * chapter replays it: a resize, a font change or an image-exclusion reflow is
+   * on the interactive path, and the analysis of a paragraph cannot change while
+   * its text does not.
    *
    * @param text - The paragraph in the same NFC form the layout is given. The
    *   offsets an analysis carries address exactly this string; handing the
@@ -444,6 +435,39 @@ export class MejiroBook {
       ...(this.keepWholePos === undefined ? {} : { keepWholePos: this.keepWholePos }),
       ...(this.keepWholePenalty === undefined ? {} : { keepWholePenalty: this.keepWholePenalty }),
     });
+  }
+
+  /** Hints for a source paragraph, derived once per paragraph text. */
+  private hintsFor(p: BookParagraph, text: string): TypographyHints | undefined {
+    if (this.wordAwareBreaking === 'off' || !this.analyzer) return undefined;
+    const known = this.derivedHints.get(p);
+    if (known?.text === text) return known.hints;
+    const hints = this.deriveHints(text);
+    this.derivedHints.set(p, { text, hints });
+    return hints;
+  }
+
+  /** Parsed paragraphs of a manuscript chapter, reused while its text is unchanged. */
+  private manuscriptParagraphsOf(
+    chapter: ManuscriptChapter,
+    dialect: ManuscriptDialect,
+  ): BookParagraph[] {
+    const known = this.manuscriptParagraphs.get(chapter);
+    if (
+      known?.title === chapter.title &&
+      known.body === chapter.body &&
+      known.dialect === dialect
+    ) {
+      return known.paragraphs;
+    }
+    const paragraphs = manuscriptChapterToParagraphs(chapter, dialect);
+    this.manuscriptParagraphs.set(chapter, {
+      title: chapter.title,
+      body: chapter.body,
+      dialect,
+      paragraphs,
+    });
+    return paragraphs;
   }
 
   /**
@@ -542,18 +566,19 @@ export class MejiroBook {
     // together, and the same pair has to feed the initial break, the render
     // entries and the cached paragraphs every later re-break works from.
     const normalized = chapter.paragraphs.map((p) => {
-      const isHeading = paragraphIsHeading(p);
-      const scale = paragraphHeadingScale({ headingLevel: p.headingLevel, isHeading }, opts);
+      const isHeading = isHeadingParagraph(p);
       const annotated = normalizeAnnotatedText(p.text, p.inlineAnnotations ?? []);
       return {
         ...annotated,
         isHeading,
-        paragraphFontSize: isHeading ? Math.round(fontSize * scale) : fontSize,
+        paragraphFontSize: isHeading
+          ? Math.round(fontSize * resolveHeadingScale(p, opts))
+          : fontSize,
         // The analysis runs here, once, against the NFC text — the same string
         // the break, the render entries and every later re-break work from. A
         // paragraph carrying its own hints is taken at its word and the
         // analyzer is not consulted for it.
-        hints: p.hints ?? this.deriveHints(annotated.text),
+        hints: p.hints ?? this.hintsFor(p, annotated.text),
       };
     });
 
@@ -645,7 +670,7 @@ export class MejiroBook {
     const result = new Map<string, ChapterLayout>();
     let i = 0;
     for (const chapter of options.chapters) {
-      const paragraphs = manuscriptChapterToParagraphs(chapter, dialect);
+      const paragraphs = this.manuscriptParagraphsOf(chapter, dialect);
       const layout = await this.layoutChapter({ paragraphs });
       result.set(chapter.id ?? `chapter-${i + 1}`, layout);
       i++;

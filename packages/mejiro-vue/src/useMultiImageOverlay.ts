@@ -93,24 +93,28 @@ export function useMultiImageOverlay(
     [...imagesBySpread.value.values()].some((list) => list.length > 0),
   );
 
-  function syncSpread(si: number): void {
+  // Every spread's images are set before any spread is read back, so the
+  // layout reflows once however many spreads change.
+  function syncSpreads(spreads: readonly number[]): void {
     const lo = layout.value;
     if (!lo) return;
-    const items = imagesBySpread.value.get(si) ?? [];
-    const images: BookImage[] = items.map((it) => ({
-      x: it.rect.x,
-      y: it.rect.y,
-      w: it.rect.w,
-      h: it.rect.h,
-      margin,
-    }));
-    lo.setImages(si, images);
-    options.onUpdate?.(lo.getSpread(si));
+    for (const si of spreads) {
+      const items = imagesBySpread.value.get(si) ?? [];
+      const images: BookImage[] = items.map((it) => ({
+        x: it.rect.x,
+        y: it.rect.y,
+        w: it.rect.w,
+        h: it.rect.h,
+        margin,
+      }));
+      lo.setImages(si, images);
+    }
+    for (const si of spreads) options.onUpdate?.(lo.getSpread(si));
   }
 
   function notify(affectedSpread: number): void {
     triggerRef(imagesBySpread);
-    syncSpread(affectedSpread);
+    syncSpreads([affectedSpread]);
   }
 
   function findById(id: string): { spread: number; index: number; item: MultiImageItem } | null {
@@ -218,7 +222,7 @@ export function useMultiImageOverlay(
   // a fresh layoutChapter or resize) so image exclusions are reapplied.
   watch(layout, (lo) => {
     if (!lo) return;
-    for (const si of imagesBySpread.value.keys()) syncSpread(si);
+    syncSpreads([...imagesBySpread.value.keys()]);
   });
 
   return {

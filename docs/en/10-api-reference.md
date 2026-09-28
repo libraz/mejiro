@@ -849,6 +849,7 @@ avoiding external requests.
 - `isHeading: boolean`
 - `headingLevel?: number`
 - `kind?: ParagraphKind` — Structural classification of the source paragraph, mapped to a `mejiro-paragraph--*` class by the page components
+- `scale?: number` — Font scale a `ChapterLayout` measured this heading at. The page components set it as `--mejiro-paragraph-scale`, so the drawn size is the measured one. Absent on body paragraphs and on pages built directly with `buildRenderPage()`, where the stylesheet's per-level scale applies
 
 **`RenderLine`**:
 
@@ -877,10 +878,10 @@ avoiding external requests.
 - `fontSize: number`
 - `lineSpacing?: number` — Line spacing multiplier
 - `lineHeight?: number` — Deprecated alias of `lineSpacing`
-- `headingScale?: number` (default: 1.4)
+- `headingScale?: number` (default: 1.4) — A heading without a level takes it as is; levels 1–6 scale their `DEFAULT_HEADING_STYLES` size in proportion to it, unless `headingStyles` sets the level's `scale`
 - `paragraphGapEm?: number` (default: 0.4)
-- `headingGapEm?: number` (default: 1.2)
-- `headingStyles?: Record<number, HeadingStyle>` — Per-level overrides of `scale` / `gapAfterEm` for levels 1–6. Pass the same value used for layout, otherwise measuring and rendering disagree on heading size
+- `headingGapEm?: number` — Gap after every heading level `headingStyles` does not override. Unset, each level takes its `DEFAULT_HEADING_STYLES` gap (`1.2` without a level)
+- `headingStyles?: Record<number, HeadingStyle>` — Per-level overrides of `scale` / `gapAfterEm` for levels 1–6; a level left out keeps its default. `ChapterLayout` pages carry the measured scale to the page components; when rendering `buildRenderPage()` output yourself with non-default heading sizes, set `--mejiro-paragraph-scale` to the same scale, or measuring and rendering disagree on heading size
 
 **`HeadingStyle`**:
 
@@ -896,8 +897,8 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 | Export | Description |
 |---|---|
-| `DEFAULT_HEADING_STYLES` | Default heading style overrides for levels 1–6 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`) |
-| `DEFAULT_BOOK_OPTIONS` | Default font, spacing, kinsoku, and heading options |
+| `DEFAULT_HEADING_STYLES` | Default heading style for levels 1–6 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`), matching the per-level sizes and gaps of the bundled stylesheets. Applied when `headingStyles` leaves a level out, with each `scale` proportional to `headingScale` |
+| `DEFAULT_BOOK_OPTIONS` | Default font, spacing and kinsoku options. Carries no `headingStyles`, so `headingScale` resizes every heading level |
 | `DEFAULT_PAGE_GEOMETRY` | Defaults `computePageSize()` fits pages with: the `aspect` ratio (height / width), `minWidth` / `minHeight` / `maxHeight`, and the container space reserved for the header (`headerOffset`) and spread gutter (`gutterOffset`); lengths in pixels |
 | `DEFAULT_PAGE_PADDING` | Default page padding values in pixels (`{ x: 52, y: 56, bottom: 40 }`) |
 
@@ -952,8 +953,8 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `lineSpacing?: number` — Line spacing multiplier (default: 1.8)
 - `mode?: 'strict' | 'loose'` — Kinsoku mode (default: `'strict'`)
 - `enableHanging?: boolean` — Hanging punctuation (default: `true`)
-- `headingStyles?: Record<number, HeadingStyle>` — Per-level heading overrides
-- `headingScale?: number` — Default heading scale (default: 1.4)
+- `headingStyles?: Record<number, HeadingStyle>` — Per-level heading overrides; a level left out keeps its `DEFAULT_HEADING_STYLES` style, scaled by `headingScale`
+- `headingScale?: number` — Heading scale (default: 1.4). Levels 1–6 scale their default size in proportion to it unless `headingStyles` sets the level's `scale`; a heading without a level takes it as is
 - `analyzer?: TextAnalyzer` — Morphological analyzer used to derive line breaking hints. Consulted only when `wordAwareBreaking` asks for hints, and once per paragraph at layout time; a re-break (resize, font change, exclusion reflow) replays what the first pass produced. Read when a chapter is laid out, and not changeable through `setOptions()`
 - `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — How far the analyzer's findings reach into line breaking (default: `'off'`). `'clusters'` keeps break positions as the character-class rules would choose them, except where a break would have split a unit it is a typesetting error to split; `'full'` adds per-position penalties, which do move break positions
 - `keepWholePos?: readonly string[]` — Parts of speech a break should avoid landing inside, forwarded to `deriveTypographyHints()` as `TypographyHintOptions.keepWholePos` (default: `DEFAULT_KEEP_WHOLE_POS`). Read only under `'full'`, the only stage that emits penalties
@@ -998,6 +999,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 - `segments: RenderSegment[]` — Text and inline annotation segments
 - `headingLevel?: number` — Heading level (undefined for body)
+- `kind?: ParagraphKind` — The line's paragraph kind (`'heading'` for a heading without a kind of its own); slot-mode page components pass it to `paragraphClassName()`
 - `fontSize: number` — Computed font size (px, accounts for heading scale)
 
 **`MejiroBookOptions`** — Constructor options for `MejiroBook`: `BookOptions` plus `strictFontCheck?: boolean`, which is captured at construction time and cannot be changed afterwards.
@@ -1168,7 +1170,8 @@ Common headless editor returns:
 - `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` returns `epub`, `loading`, `error`, `loadBuffer`, `loadFile`, `loadUrl`, and `setEpub`.
 - `useEpubProject({ metadata?, chapters?, cover?, assets?, debounceMs?, onPreview?, onExport? })` returns `metadata`, `chapters`, `selectedChapter`, `currentChapter`, `cover`, `assets`, `previewBook`, `previewError`, `previewing`, plus `setMetadata`, `setChapters`, `setSelectedChapter`, `setCover`, `setAssets`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `buildProject`, and `exportEpub`. `currentChapter` is the selected draft (or `null`); `setCover(null)` drops the cover, and both the debounced preview and `exportEpub` reflect cover/asset changes.
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` returns draft chapter state plus add/remove/reorder/patch helpers.
-- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce? })` lays out a single manuscript chapter directly, with no EPUB ZIP round-trip. Returns `{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute }` (same shape as `useChapterLayout`). Designed for live preview surfaces.
+- `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition? })` lays out the selected chapter and lays it out again when the surface resizes. Returns `{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }`. A re-layout replays the line-breaking hints the book already derived, so it never re-runs the analyzer. For the reading position across a re-flow, see [Keeping the reading position across a re-flow](./08-react-and-vue.md#keeping-the-reading-position-across-a-re-flow).
+- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition? })` lays out a single manuscript chapter directly, with no EPUB ZIP round-trip. Returns the same shape as `useChapterLayout`. Designed for live preview surfaces.
 - `useAnnotations({ key, storage?, throttleMs?, onChange? })` persists highlights / bookmarks / comments. Returns `{ annotations, add, remove, update, clear }`. `storage` follows the same `getItem` / `setItem` / `removeItem` interface as `useReadingPosition`. `onChange(next)` fires synchronously after `add` / `remove` / `update` / `clear` (skipped on initial hydration and no-ops) — handy for forwarding each mutation to a server.
 - `useReadingPosition({ key, storage?, throttleMs?, onChange? })` exposes the same `onChange(next | null)` hook, fired right after `save` / `clear`.
 

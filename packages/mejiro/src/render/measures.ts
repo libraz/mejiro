@@ -23,17 +23,18 @@ export interface MeasureOptions {
    */
   lineHeight?: number;
   /**
-   * Scale factor for heading font size (applies to all heading levels
-   * unless overridden by `headingStyles`).
+   * Heading font scale. A heading without a level takes it as is; levels 1–6
+   * scale their {@link DEFAULT_HEADING_STYLES} size in proportion to it,
+   * unless `headingStyles` sets the level's own `scale`.
    * @defaultValue 1.4
    */
   headingScale?: number;
   /** Gap before body paragraphs in em units. @defaultValue 0.4 */
   paragraphGapEm?: number;
   /**
-   * Gap after a heading paragraph in em units (applies to all heading levels
-   * unless overridden by `headingStyles`).
-   * @defaultValue 1.2
+   * Gap after a heading paragraph in em units, for every level `headingStyles`
+   * does not override. Unset, each level takes its
+   * {@link DEFAULT_HEADING_STYLES} gap (`1.2` for a heading without a level).
    */
   headingGapEm?: number;
   /**
@@ -43,9 +44,105 @@ export interface MeasureOptions {
   headingStyles?: Record<number, HeadingStyle>;
 }
 
-/** Returns whether an entry should use heading metrics. */
-function isHeadingEntry(entry: RenderEntry): boolean {
-  return entry.headingLevel != null || entry.isHeading === true;
+/**
+ * Default heading style for levels 1–6, in step with the per-level
+ * `--mejiro-paragraph-scale` and gaps of the bundled stylesheets.
+ *
+ * @example
+ * ```ts
+ * const book = new MejiroBook({
+ *   fontFamily: 'serif',
+ *   fontSize: 16,
+ *   headingStyles: { ...DEFAULT_HEADING_STYLES, 1: { scale: 2, gapAfterEm: 1.6 } },
+ * });
+ * ```
+ */
+export const DEFAULT_HEADING_STYLES: Readonly<Record<number, HeadingStyle>> = {
+  1: { scale: 1.6, gapAfterEm: 1.4 },
+  2: { scale: 1.4, gapAfterEm: 1.2 },
+  3: { scale: 1.2, gapAfterEm: 1.0 },
+  4: { scale: 1.1, gapAfterEm: 0.8 },
+  5: { scale: 1.0, gapAfterEm: 0.6 },
+  6: { scale: 1.0, gapAfterEm: 0.6 },
+};
+
+/** `headingScale` the {@link DEFAULT_HEADING_STYLES} scales are stated against. */
+const DEFAULT_HEADING_SCALE = 1.4;
+const DEFAULT_HEADING_GAP_EM = 1.2;
+
+/** Heading fields of a paragraph, whichever layer it comes from. */
+export interface HeadingFields {
+  /** Heading level (1–6). */
+  headingLevel?: number;
+  /** Structural classification. */
+  kind?: ParagraphKind;
+  /** Legacy heading flag of {@link RenderEntry}. */
+  isHeading?: boolean;
+}
+
+/**
+ * The one heading predicate: a paragraph is a heading when it carries a
+ * `headingLevel`, is classified `kind: 'heading'`, or sets the legacy
+ * `isHeading` flag. Measurement, rendering and reading-time estimates all ask
+ * here, so no two of them can disagree about a paragraph.
+ */
+export function isHeadingParagraph(p: HeadingFields): boolean {
+  return p.headingLevel != null || p.kind === 'heading' || p.isHeading === true;
+}
+
+/**
+ * Resolves the heading classification a {@link RenderParagraph} carries.
+ *
+ * @returns The paragraph's `isHeading`, `headingLevel` and `kind`, as every
+ *   page builder emits them.
+ */
+export function paragraphHeading(p: HeadingFields): {
+  isHeading: boolean;
+  headingLevel?: number;
+  kind?: ParagraphKind;
+} {
+  return { isHeading: isHeadingParagraph(p), headingLevel: p.headingLevel, kind: p.kind };
+}
+
+/**
+ * Resolves a paragraph's font scale relative to the base font size.
+ *
+ * Body text is `1`. A level's explicit `headingStyles` entry wins; otherwise
+ * the level takes its {@link DEFAULT_HEADING_STYLES} scale in proportion to
+ * `headingScale` (so the default `1.4` reproduces the table and any other value
+ * resizes every level). A heading without a level takes `headingScale`. This
+ * is the only place a heading size is decided: measurement, slot-mode font
+ * sizes and the rendered `--mejiro-paragraph-scale` all read it.
+ *
+ * @param p - Heading fields of the paragraph.
+ * @param options - `headingScale` (default `1.4`) and per-level `headingStyles`.
+ */
+export function resolveHeadingScale(
+  p: HeadingFields,
+  options: Pick<MeasureOptions, 'headingScale' | 'headingStyles'>,
+): number {
+  if (!isHeadingParagraph(p)) return 1;
+  const headingScale = options.headingScale ?? DEFAULT_HEADING_SCALE;
+  const level = p.headingLevel;
+  if (level == null) return headingScale;
+  const explicit = options.headingStyles?.[level]?.scale;
+  if (explicit != null) return explicit;
+  const levelDefault = DEFAULT_HEADING_STYLES[level]?.scale;
+  if (levelDefault == null) return headingScale;
+  return headingScale === DEFAULT_HEADING_SCALE
+    ? levelDefault
+    : levelDefault * (headingScale / DEFAULT_HEADING_SCALE);
+}
+
+function headingGapAfterEm(p: HeadingFields, options: MeasureOptions): number {
+  const level = p.headingLevel;
+  const explicit = level != null ? options.headingStyles?.[level]?.gapAfterEm : undefined;
+  if (explicit != null) return explicit;
+  if (options.headingGapEm != null) return options.headingGapEm;
+  return (
+    (level != null ? DEFAULT_HEADING_STYLES[level]?.gapAfterEm : undefined) ??
+    DEFAULT_HEADING_GAP_EM
+  );
 }
 
 /**
@@ -68,35 +165,23 @@ interface ParagraphMetrics {
 }
 
 function paragraphMetrics(options: MeasureOptions): ParagraphMetrics {
-  const {
-    fontSize,
-    headingScale = 1.4,
-    paragraphGapEm = 0.4,
-    headingGapEm = 1.2,
-    headingStyles,
-  } = options;
+  const { fontSize, paragraphGapEm = 0.4 } = options;
   const lineSpacing = resolveLineSpacing(options);
   const basePitch = fontSize * lineSpacing;
-
-  // Legacy `isHeading` without a level uses the generic heading settings.
-  const scaleOf = (entry: RenderEntry): number =>
-    entry.headingLevel != null
-      ? (headingStyles?.[entry.headingLevel]?.scale ?? headingScale)
-      : headingScale;
-  const gapAfterOf = (entry: RenderEntry): number =>
-    entry.headingLevel != null
-      ? (headingStyles?.[entry.headingLevel]?.gapAfterEm ?? headingGapEm)
-      : headingGapEm;
 
   return {
     basePitch,
     pitch: (entry) =>
-      isHeadingEntry(entry) ? Math.round(fontSize * scaleOf(entry)) * lineSpacing : basePitch,
+      isHeadingParagraph(entry)
+        ? Math.round(fontSize * resolveHeadingScale(entry, options)) * lineSpacing
+        : basePitch,
     gapBefore: (entry, prev) => {
       if (prev == null) return fontSize * paragraphGapEm;
-      if (isHeadingEntry(prev)) return fontSize * gapAfterOf(prev);
+      if (isHeadingParagraph(prev)) return fontSize * headingGapAfterEm(prev, options);
       if (prev.kind === 'blockquote') return fontSize * BLOCKQUOTE_GAP_AFTER_EM;
-      const kindGap = isHeadingEntry(entry) ? undefined : KIND_GAP_BEFORE_EM[entry.kind ?? 'body'];
+      const kindGap = isHeadingParagraph(entry)
+        ? undefined
+        : KIND_GAP_BEFORE_EM[entry.kind ?? 'body'];
       return fontSize * (kindGap ?? paragraphGapEm);
     },
   };

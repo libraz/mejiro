@@ -24,13 +24,20 @@ export interface UseManuscriptLayoutOptions {
   /** Debounce window (ms) applied to size-triggered re-flows. @defaultValue 120 */
   resizeDebounce?: number;
   /**
-   * Capture the current reading position from the outgoing layout, just before
-   * a **reflow** (non-blank) re-layout replaces it. The returned anchor is
-   * exposed via {@link UseManuscriptLayoutReturn.pendingRestore} and should be
-   * applied once the new layout commits. Return `null` to skip preservation.
-   * Never called for blank (content-change) re-layouts.
+   * Capture the reading position from the outgoing layout, just before a
+   * **reflow** (non-blank) re-layout replaces it. The anchor is held in
+   * `pendingRestore` until the new layout is in place, then handed to
+   * `restorePosition` when one is given. Return `null` to skip preservation.
+   * Never called for blank (content-change) re-layouts, which start at spread 0.
    */
   capturePosition?: (layout: ChapterLayout) => InChapterAnchor | null;
+  /**
+   * Apply an anchor captured by `capturePosition` to the new layout, e.g. by
+   * locating it and jumping to its spread. Called once the new layout is in
+   * place — after it commits, before paint — and `pendingRestore` is cleared
+   * first. Without it, consume `pendingRestore` yourself.
+   */
+  restorePosition?: (layout: ChapterLayout, position: InChapterAnchor) => void;
 }
 
 /** Options for {@link UseManuscriptLayoutReturn.recompute}. */
@@ -69,9 +76,10 @@ export interface UseManuscriptLayoutReturn {
   /** Force a fresh layout computation. */
   recompute: (opts?: ManuscriptRecomputeOptions) => Promise<void>;
   /**
-   * Anchor captured before the most recent reflow re-layout, awaiting
-   * restoration into the new {@link layout}. Consume it in a layout effect keyed
-   * on `layout` (after any index reset) and clear it back to `null`.
+   * Anchor captured by `capturePosition` before the most recent reflow,
+   * awaiting restoration into the new layout. `restorePosition`, when given,
+   * consumes it; otherwise read it once the new layout is in place and set it
+   * back to `null`.
    */
   pendingRestore: MutableRefObject<InChapterAnchor | null>;
 }
@@ -92,8 +100,10 @@ export interface UseManuscriptLayoutReturn {
  * is computed (no blank flash) and yields a new {@link ChapterLayout} object,
  * which resets any downstream spread index to 0; the reading position is
  * preserved across such reflows via
- * {@link UseManuscriptLayoutOptions.capturePosition} and
- * {@link UseManuscriptLayoutReturn.pendingRestore}.
+ * {@link UseManuscriptLayoutOptions.capturePosition},
+ * {@link UseManuscriptLayoutOptions.restorePosition} and
+ * {@link UseManuscriptLayoutReturn.pendingRestore}, identically in the Vue
+ * composable.
  */
 export function useManuscriptLayout(
   book: MejiroBook,
@@ -174,6 +184,14 @@ export function useManuscriptLayout(
       requestIdRef.current++;
     };
   }, [recompute]);
+
+  useLayoutEffect(() => {
+    const anchor = pendingRestore.current;
+    const restore = optionsRef.current.restorePosition;
+    if (!(layout && anchor && restore)) return;
+    pendingRestore.current = null;
+    restore(layout, anchor);
+  }, [layout]);
 
   useEffect(() => {
     if (!enableResize) return;

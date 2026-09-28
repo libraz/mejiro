@@ -819,6 +819,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `isHeading: boolean`
 - `headingLevel?: number`
 - `kind?: ParagraphKind` — 元段落の構造分類。ページコンポーネントが `mejiro-paragraph--*` クラスに変換する
+- `scale?: number` — `ChapterLayout` がこの見出しを計測したフォントスケール。ページコンポーネントが `--mejiro-paragraph-scale` に設定するので、描画サイズが計測サイズと一致する。本文段落と、`buildRenderPage()` で直接作ったページには付かず、スタイルシートのレベル別スケールが使われる
 
 **`RenderLine`**:
 
@@ -847,10 +848,10 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `fontSize: number`
 - `lineSpacing?: number` — 行間の倍率
 - `lineHeight?: number` — 非推奨。`lineSpacing` の別名
-- `headingScale?: number`（デフォルト: 1.4）
+- `headingScale?: number`（デフォルト: 1.4）— レベルのない見出しはこの値をそのまま使う。レベル 1–6 は `headingStyles` がそのレベルの `scale` を指定しない限り、`DEFAULT_HEADING_STYLES` のサイズをこの値に比例して拡縮する
 - `paragraphGapEm?: number`（デフォルト: 0.4）
-- `headingGapEm?: number`（デフォルト: 1.2）
-- `headingStyles?: Record<number, HeadingStyle>` — レベル 1–6 ごとの `scale` / `gapAfterEm` 上書き。レイアウトと同じ値を渡さないと、計測と描画で見出しサイズが食い違います
+- `headingGapEm?: number` — `headingStyles` で上書きしていない全見出しレベルの後の間隔。未指定なら各レベルが `DEFAULT_HEADING_STYLES` の間隔を使う（レベルなしは `1.2`）
+- `headingStyles?: Record<number, HeadingStyle>` — レベル 1–6 ごとの `scale` / `gapAfterEm` 上書き。指定しなかったレベルは既定値のまま。`ChapterLayout` のページは計測したスケールをページコンポーネントに渡す。`buildRenderPage()` の出力を自前で描画し、見出しサイズを既定から変える場合は、`--mejiro-paragraph-scale` も同じスケールに設定しないと計測と描画で見出しサイズが食い違う
 
 **`HeadingStyle`**:
 
@@ -866,8 +867,8 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 
 | エクスポート | 説明 |
 |---|---|
-| `DEFAULT_HEADING_STYLES` | レベル1–6のデフォルト見出しスタイル（`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`） |
-| `DEFAULT_BOOK_OPTIONS` | フォント、行間、禁則、見出しのデフォルト |
+| `DEFAULT_HEADING_STYLES` | レベル1–6のデフォルト見出しスタイル（`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`）。同梱スタイルシートのレベル別サイズ・間隔と一致する。`headingStyles` が指定しなかったレベルに適用され、各 `scale` は `headingScale` に比例する |
+| `DEFAULT_BOOK_OPTIONS` | フォント、行間、禁則のデフォルト。`headingStyles` を含まないので、`headingScale` で全見出しレベルの大きさが変わる |
 | `DEFAULT_PAGE_GEOMETRY` | `computePageSize()` がページ寸法を決めるときの既定値。縦横比 `aspect`（高さ / 幅）、`minWidth` / `minHeight` / `maxHeight`、コンテナ側で確保するヘッダー分（`headerOffset`）と見開きの溝（`gutterOffset`）。長さの単位はピクセル |
 | `DEFAULT_PAGE_PADDING` | デフォルトのページパディング値（px）（`{ x: 52, y: 56, bottom: 40 }`） |
 
@@ -922,8 +923,8 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `lineSpacing?: number` — 行間倍率（デフォルト: 1.8）
 - `mode?: 'strict' | 'loose'` — 禁則モード（デフォルト: `'strict'`）
 - `enableHanging?: boolean` — ぶら下げ組み（デフォルト: `true`）
-- `headingStyles?: Record<number, HeadingStyle>` — レベル別見出しスタイル
-- `headingScale?: number` — デフォルトの見出しスケール（デフォルト: 1.4）
+- `headingStyles?: Record<number, HeadingStyle>` — レベル別見出しスタイル。指定しなかったレベルは `DEFAULT_HEADING_STYLES` のスタイルを `headingScale` で拡縮したものになる
+- `headingScale?: number` — 見出しスケール（デフォルト: 1.4）。レベル 1–6 は `headingStyles` がそのレベルの `scale` を指定しない限り既定サイズをこの値に比例して拡縮し、レベルのない見出しはこの値をそのまま使う
 - `analyzer?: TextAnalyzer` — 改行ヒントの導出に使う形態素解析器。`wordAwareBreaking` がヒントを要求したときだけ、レイアウト時に段落ごとに 1 回呼ばれる。再改行（リサイズ、フォント変更、画像回り込みの再計算）では最初の解析結果をそのまま再利用する。参照されるのは章をレイアウトする時点で、`setOptions()` からは変更できない
 - `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — 解析結果を改行処理にどこまで及ばせるか（デフォルト: `'off'`）。`'clusters'` は、分割すると組版として誤りになる単位を割る位置を除けば、改行位置を文字種規則のままに保つ。`'full'` は位置ごとの罰則を加えるため、改行位置そのものが変わる
 - `keepWholePos?: readonly string[]` — 内部で改行しないよう避ける品詞。`deriveTypographyHints()` の `TypographyHintOptions.keepWholePos` にそのまま渡される（デフォルト: `DEFAULT_KEEP_WHOLE_POS`）。参照されるのは罰則を出す唯一の段階である `'full'` のときだけ
@@ -968,6 +969,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 
 - `segments: RenderSegment[]` — テキストとインライン注釈のセグメント
 - `headingLevel?: number` — 見出しレベル（本文はundefined）
+- `kind?: ParagraphKind` — 行が属する段落の種別（種別を持たない見出しは `'heading'`）。スロットモードのページコンポーネントが `paragraphClassName()` に渡す
 - `fontSize: number` — 計算済みフォントサイズ（px、見出しスケール反映済み）
 
 **`MejiroBookOptions`** — `MejiroBook` のコンストラクタオプション。`BookOptions` に `strictFontCheck?: boolean` を加えたもので、この値は構築時に確定し後から変更できません。
@@ -1138,7 +1140,8 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 - `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` は `epub`、`loading`、`error`、`loadBuffer`、`loadFile`、`loadUrl`、`setEpub` を返します。
 - `useEpubProject({ metadata?, chapters?, cover?, assets?, debounceMs?, onPreview?, onExport? })` は `metadata`、`chapters`、`selectedChapter`、`currentChapter`、`cover`、`assets`、`previewBook`、`previewError`、`previewing` と、`setMetadata`、`setChapters`、`setSelectedChapter`、`setCover`、`setAssets`、`addChapter`、`removeChapter`、`patchChapter`、`reorderChapters`、`buildProject`、`exportEpub` を返します。`currentChapter` は選択中の草稿（無ければ `null`）です。`setCover(null)` で表紙を外せ、表紙・アセットの変更はデバウンスされたプレビューと `exportEpub` の双方に反映されます。
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` は原稿章状態と追加/削除/並べ替え/更新ヘルパーを返します。
-- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce? })` は単一の原稿章を直接レイアウトする hook。`{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute }` を返します（`useChapterLayout` と同形）。EPUB を経由しないライブプレビュー用。
+- `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition? })` は選択中の章をレイアウトし、サーフェスのリサイズ時にレイアウトし直す hook。`{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }` を返します。再レイアウトでは book が導出済みの改行ヒントを再利用するため、アナライザーは再実行されません。リフローをまたぐ読書位置の扱いは [リフローをまたいで読書位置を保つ](./08-react-and-vue.md#リフローをまたいで読書位置を保つ) を参照。
+- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition? })` は単一の原稿章を直接レイアウトする hook。`useChapterLayout` と同じ形の値を返します。EPUB を経由しないライブプレビュー用。
 - `useAnnotations({ key, storage?, throttleMs?, onChange? })` はハイライト / しおり / コメントを永続化する hook。`{ annotations, add, remove, update, clear }` を返します。`storage` は `useReadingPosition` と同じ interface (`getItem` / `setItem` / `removeItem`)。`onChange(next)` は `add` / `remove` / `update` / `clear` の直後に同期的に発火（初回ハイドレートと no-op 時は呼ばれません）。サーバ同期のフックポイントに使えます。
 - `useReadingPosition({ key, storage?, throttleMs?, onChange? })` の `onChange(next | null)` も同様に `save` / `clear` 直後に発火。
 

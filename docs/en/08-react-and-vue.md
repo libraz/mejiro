@@ -170,6 +170,8 @@ Props:
 | `className` | `string` | Additional CSS class. |
 | `style` | `CSSProperties` | Additional inline styles. |
 
+Both modes give each paragraph (flow) or line (slot) the same `mejiro-paragraph--*` class, so blockquote, preformatted, scene-break and figure styling survive a chapter gaining an image. Slot mode positions and sizes each column inline; weight, style and white-space come from the class.
+
 ### Complete React Example
 
 A full component using `MejiroBook`, spread navigation, and image overlay:
@@ -303,22 +305,30 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 
 ### Keeping the reading position across a re-flow
 
-`useChapterLayout` re-runs a full layout whenever the surface resizes or a metric option changes, which produces a brand-new `ChapterLayout` and resets any downstream spread index to 0. Pass `capturePosition` to snapshot the anchor before the swap; the hook parks it in `pendingRestore`, a writable ref you consume once the new layout has committed:
+`useChapterLayout` lays the chapter out again whenever the surface resizes or a metric option changes. The book replays the line-breaking hints it already derived, so this never re-runs the analyzer, but the result is a brand-new `ChapterLayout`, which resets any downstream spread index to 0. The hook carries the reading position across the swap in three steps, and the Vue composable has exactly the same shape:
+
+- `capturePosition(layout)` is called on the outgoing layout just before a re-flow and returns the anchor to keep (or `null`). It is never called for a blank (content-change) re-layout.
+- `pendingRestore.current` holds that anchor until the new layout is in place.
+- `restorePosition(layout, anchor)`, when given, is called once the new layout is in place (React: after it commits, before paint), with `pendingRestore` already cleared.
 
 ```tsx
 const layout = useChapterLayout(book, epub, chapter, surface, {
   capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
+  restorePosition: (l, anchor) => setSpreadIdx(l.locateAnchor(anchor)?.spreadIdx ?? 0),
 });
-
-useLayoutEffect(() => {
-  const anchor = layout.pendingRestore.current;
-  if (!(anchor && layout.layout)) return;
-  layout.pendingRestore.current = null; // consume it
-  setSpreadIdx(layout.layout.locateAnchor(anchor)?.spreadIdx ?? 0);
-}, [layout.layout]);
 ```
 
-`pendingRestore` is typed as a mutable ref, so clearing it type-checks on every `@types/react` version in the supported peer range. `useManuscriptLayout` exposes the same pair for manuscript previews.
+```ts
+// Vue: the same options; `layout.layout` is a Ref.
+const layout = useChapterLayout(book, epub, chapter, surface, {
+  capturePosition: (l) => l.anchorAt(spreadIdx.value, 'right'),
+  restorePosition: (l, anchor) => {
+    spreadIdx.value = l.locateAnchor(anchor)?.spreadIdx ?? 0;
+  },
+});
+```
+
+Without `restorePosition`, read `pendingRestore.current` yourself once the new layout is in place and set it back to `null`; this suits a component that resets its spread index in its own layout effect and must restore after that reset. `useManuscriptLayout` takes the same options and returns the same `pendingRestore` for manuscript previews.
 
 ### useImageOverlay Hook
 
@@ -666,10 +676,15 @@ Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS class
   margin-right: 0.6em;
 }
 
-/* Custom heading style */
+/* Custom heading style. Size and the gaps around a heading follow
+   --mejiro-paragraph-scale, so change the scale rather than font-size. */
 .mejiro-paragraph--heading {
-  font-size: 1.6em;
   color: #333;
+}
+
+/* renderEpubStatic output takes heading sizes from the stylesheet. */
+.mejiro-page--static .mejiro-paragraph--h1 {
+  --mejiro-paragraph-scale: 1.8;
 }
 
 /* Custom ruby size */
@@ -678,6 +693,8 @@ Both `MejiroPageView` and `MejiroPage` render using `mejiro-` prefixed CSS class
   color: #666;
 }
 ```
+
+Heading sizes on pages from a `ChapterLayout` are not a stylesheet setting: the page components set `--mejiro-paragraph-scale` inline from the scale the layout measured, so change them through `headingScale` / `headingStyles` in the book options, which keeps measurement and rendering in step.
 
 ### CSS cascade layers (host resets can clobber the reader chrome)
 

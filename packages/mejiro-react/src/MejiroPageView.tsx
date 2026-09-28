@@ -1,5 +1,6 @@
 import type { PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
+import { paragraphClassName } from '@libraz/mejiro/render';
 import type { CSSProperties, ReactNode } from 'react';
 import { MejiroPage } from './MejiroPage.js';
 import { renderSegment } from './renderInlineNode.js';
@@ -49,26 +50,33 @@ export function MejiroPageView({
     const rootClass = className ? `mejiro-page-slots ${className}` : 'mejiro-page-slots';
     const fontFamilyCss = fontFamily != null ? normalizeFontFamily(fontFamily) : undefined;
     return (
-      <div className={rootClass} style={{ position: 'relative', ...style }}>
+      <div
+        className={rootClass}
+        style={{ position: 'relative', fontFamily: fontFamilyCss, ...style }}
+      >
         {result.lines.map((line, i) => {
           const slot = result.slots[i];
           if (!slot || slot.height <= 0) return null;
+          // Geometry is the layout's; weight, style and white-space come from
+          // the paragraph class, as in flow mode.
           const colStyle: CSSProperties = {
             position: 'absolute',
             writingMode: 'vertical-rl',
-            whiteSpace: 'nowrap',
             overflow: 'hidden',
+            margin: 0,
             right: slot.xPos,
             top: slot.yStart,
             height: slot.height,
             fontSize: line.fontSize,
-            fontFamily: fontFamilyCss,
             lineHeight: lineSpacing,
-            fontWeight: line.headingLevel != null ? 700 : undefined,
           };
           return (
-            // biome-ignore lint/suspicious/noArrayIndexKey: lines have no stable ID
-            <div key={i} style={colStyle}>
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: lines have no stable ID
+              key={i}
+              className={paragraphClassName(line.kind, line.headingLevel)}
+              style={colStyle}
+            >
               {line.segments.map((seg, si) => renderSegment(seg, `${i}-${si}`))}
             </div>
           );

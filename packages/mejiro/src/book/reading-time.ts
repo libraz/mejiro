@@ -1,4 +1,7 @@
+import { isHeadingParagraph } from '../render/measures.js';
 import type { BookParagraph } from './types.js';
+
+export { isHeadingParagraph };
 
 /** Options for {@link estimateReadingTime}. */
 export interface ReadingTimeOptions {
@@ -28,17 +31,6 @@ export interface ReadingTimeOptions {
 export interface ChapterLike {
   /** Paragraphs whose characters are counted, headings included or not per options. */
   paragraphs: readonly BookParagraph[];
-}
-
-/**
- * @internal Canonical "is this paragraph a heading?" predicate for the book
- * module. A paragraph is a heading when it carries a `headingLevel` or is
- * structurally classified as `kind: 'heading'`; every consumer that partitions
- * paragraphs into headings and body text must use this predicate so the two
- * markers never disagree.
- */
-export function isHeadingParagraph(p: Pick<BookParagraph, 'headingLevel' | 'kind'>): boolean {
-  return p.headingLevel != null || p.kind === 'heading';
 }
 
 function countChars(chapter: ChapterLike, includeHeadings: boolean): number {

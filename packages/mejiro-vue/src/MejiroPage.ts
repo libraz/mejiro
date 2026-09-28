@@ -38,7 +38,12 @@ export const MejiroPage = defineComponent({
 
         const lineNodes = paragraph.lines.flatMap((line, li) => renderLine(line, li));
 
-        return h('div', { key: pi, class: paraClass }, lineNodes);
+        // The heading scale the layout measured, so the stylesheet draws that size.
+        const style =
+          paragraph.scale == null
+            ? undefined
+            : { '--mejiro-paragraph-scale': String(paragraph.scale) };
+        return h('div', { key: pi, class: paraClass, style }, lineNodes);
       });
 
       return h('div', { class: 'mejiro-page' }, children);

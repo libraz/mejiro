@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { PageSlice } from '@libraz/mejiro';
-import type { BookParagraph } from '@libraz/mejiro/book';
+import { type BookParagraph, ChapterLayout } from '@libraz/mejiro/book';
 import {
   buildRenderPage,
   paragraphClassName,
@@ -11,6 +11,7 @@ import {
 import { mount } from '@vue/test-utils';
 import { describe, expect, it } from 'vitest';
 import { MejiroPage } from '../src/MejiroPage.js';
+import { MejiroPageView } from '../src/MejiroPageView.js';
 
 const CHAPTER: BookParagraph[] = [
   { text: '見出し', kind: 'heading', headingLevel: 2 },
@@ -38,6 +39,33 @@ function slicesFor(paragraphs: readonly BookParagraph[]): PageSlice[] {
 
 function staticParagraphClasses(html: string): string[] {
   return [...html.matchAll(/<div class="(mejiro-paragraph[^"]*)"/gu)].map((m) => m[1]);
+}
+
+/** A real layout of `paragraphs`, one line each, with h2 set to scale 2. */
+function layoutFor(paragraphs: readonly BookParagraph[]): ChapterLayout {
+  const entries = entriesFor(paragraphs);
+  const cached = paragraphs.map((p, i) => ({
+    text: Uint32Array.from([...p.text], (c) => c.codePointAt(0) ?? 0),
+    advances: new Float32Array([...p.text].length).fill(10),
+    chars: entries[i].chars,
+    inlineAnnotations: [],
+    isHeading: entries[i].isHeading,
+    headingLevel: p.headingLevel,
+    kind: p.kind,
+  }));
+  return new ChapterLayout(
+    cached,
+    entries,
+    {
+      fontSize: 10,
+      lineSpacing: 1,
+      headingScale: 1.4,
+      headingStyles: { 2: { scale: 2 } },
+      mode: 'strict',
+      enableHanging: true,
+    },
+    { pageWidth: 400, lineWidth: 400, pagePaddingX: 0, pagePaddingY: 0 },
+  );
 }
 
 describe('MejiroPage paragraph classes', () => {
@@ -71,5 +99,26 @@ describe('MejiroPage paragraph classes', () => {
     expect(wrapper.findAll('.mejiro-paragraph').map((el) => el.attributes('class'))).toEqual([
       paragraphClassName('heading'),
     ]);
+  });
+
+  it('gives slot-mode columns the classes flow mode gives their paragraphs', () => {
+    const result = layoutFor(CHAPTER).getPage(0);
+    const classes = (slotMode: boolean) =>
+      mount(MejiroPageView, { props: { result, slotMode } })
+        .findAll('.mejiro-paragraph')
+        .map((el) => el.attributes('class'));
+
+    expect(classes(false)).toHaveLength(CHAPTER.length);
+    expect(classes(true)).toEqual(classes(false));
+  });
+
+  it('draws a heading at the scale its layout measured', () => {
+    const result = layoutFor(CHAPTER).getPage(0);
+    const wrapper = mount(MejiroPage, { props: { page: result.page } });
+
+    const heading = wrapper.find('.mejiro-paragraph--h2').element as HTMLElement;
+    expect(heading.style.getPropertyValue('--mejiro-paragraph-scale')).toBe('2');
+    const body = wrapper.find('.mejiro-paragraph--blockquote').element as HTMLElement;
+    expect(body.style.getPropertyValue('--mejiro-paragraph-scale')).toBe('');
   });
 });

@@ -765,6 +765,26 @@ describe('ChapterLayout', () => {
       expect(layout.getSpread(1).right.lines.length).toBeGreaterThan(0);
     }, 5000);
 
+    it('returns no anchor for a side an image blocks entirely', () => {
+      const layout = makeBlockedLayout();
+      layout.setImages(0, [{ x: -400, y: 40, w: 800, h: 600 }]);
+
+      expect(layout.anchorAt(0, 'right')).toBeNull();
+      expect(layout.anchorAt(0, 'left')).toBeNull();
+    }, 5000);
+
+    it('anchors a page beside a fully blocked page on that page', () => {
+      const layout = makeBlockedLayout();
+      // Covers the whole right page, so only the left page holds text.
+      layout.setImages(0, [{ x: 0, y: 40, w: 400, h: 600 }]);
+
+      expect(layout.getSpread(0).right.lines).toEqual([]);
+      expect(layout.anchorAt(0, 'right')).toBeNull();
+      const left = layout.anchorAt(0, 'left');
+      if (!left) throw new Error('left page has text but no anchor');
+      expect(layout.locateAnchor(left)).toMatchObject({ spreadIdx: 0, side: 'left' });
+    }, 5000);
+
     it('keeps page and chapter image state in step across updates', () => {
       const layout = makeBlockedLayout();
       expect(layout.hasImages).toBe(false);
@@ -781,8 +801,8 @@ describe('ChapterLayout', () => {
   });
 
   describe('image exclusion with a wide heading column', () => {
-    // fontSize 10, lineSpacing 1 → body pitch 10; headingScale 1.4 → heading
-    // font 14, pitch 14. pageWidth/contentWidth 100 → 10 body columns / page.
+    // fontSize 10, lineSpacing 1 → body pitch 10; an h2 heading scales by
+    // 1.4 → font 14, pitch 14. pageWidth/contentWidth 100 → 10 body columns / page.
     const BASE_PITCH = 10;
     const CONTENT_WIDTH = 100;
 
@@ -795,7 +815,7 @@ describe('ChapterLayout', () => {
           advances: uniformAdvances([...heading].length, 14),
           chars: chars(heading),
           inlineAnnotations: [],
-          headingLevel: 1,
+          headingLevel: 2,
         },
         {
           text: toCodepoints(body),
@@ -809,7 +829,7 @@ describe('ChapterLayout', () => {
           chars: chars(heading),
           breakPoints: new Uint32Array(0),
           inlineAnnotations: [],
-          headingLevel: 1,
+          headingLevel: 2,
         },
         { chars: chars(body), breakPoints: new Uint32Array(0), inlineAnnotations: [] },
       ];
@@ -955,6 +975,18 @@ describe('ChapterLayout', () => {
       expect(renderedKinds(layout)).toEqual(KINDS);
     });
 
+    it('carries the kind onto the lines of both page builders', () => {
+      const lineKinds = (layout: ChapterLayout) => {
+        const spread = layout.getSpread(0);
+        return [...new Set([...spread.right.lines, ...spread.left.lines].map((l) => l.kind))];
+      };
+      expect(lineKinds(makeKindedLayout())).toEqual(KINDS);
+
+      const reflowed = makeKindedLayout();
+      reflowed.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      expect(lineKinds(reflowed)).toEqual(KINDS);
+    });
+
     it('records the kind in the snapshot, leaving body implicit', () => {
       const snapshot = makeKindedLayout().snapshot();
 
@@ -966,6 +998,49 @@ describe('ChapterLayout', () => {
         'pre',
         'figure',
       ]);
+    });
+  });
+
+  describe('heading scale', () => {
+    function makeLeveledLayout(headingScale: number): ChapterLayout {
+      const text = 'あああ';
+      const levels = [1, 3, undefined];
+      const cached: CachedParagraph[] = levels.map((headingLevel) => ({
+        text: toCodepoints(text),
+        advances: uniformAdvances(3, 10),
+        chars: chars(text),
+        inlineAnnotations: [],
+        headingLevel,
+        isHeading: headingLevel != null,
+      }));
+      const entries: RenderEntry[] = levels.map((headingLevel) => ({
+        chars: chars(text),
+        breakPoints: new Uint32Array(0),
+        inlineAnnotations: [],
+        headingLevel,
+        isHeading: headingLevel != null,
+      }));
+      return new ChapterLayout(
+        cached,
+        entries,
+        { fontSize: 10, lineSpacing: 1, headingScale, mode: 'strict', enableHanging: true },
+        { pageWidth: 100, lineWidth: 100, pagePaddingX: 0, pagePaddingY: 0 },
+      );
+    }
+
+    it('renders each level at the size it measures, following headingScale', () => {
+      for (const [headingScale, h1, h3] of [
+        [1.4, 1.6, 1.2],
+        [2.8, 3.2, 2.4],
+      ]) {
+        const page = makeLeveledLayout(headingScale).getPage(0);
+        expect(page.page.paragraphs.map((p) => p.scale)).toEqual([h1, h3, undefined]);
+        expect(page.lines.map((l) => l.fontSize)).toEqual([
+          Math.round(10 * h1),
+          Math.round(10 * h3),
+          10,
+        ]);
+      }
     });
   });
 

@@ -48,7 +48,6 @@ const measures = buildParagraphMeasures(entries, {
   lineSpacing: 1.8,
   headingScale: 1.4,
   paragraphGapEm: 0.4,
-  headingGapEm: 1.2,
 });
 ```
 
@@ -59,10 +58,10 @@ const measures = buildParagraphMeasures(entries, {
 | `fontSize` | `number` | （必須） | 基準フォントサイズ（px）。 |
 | `lineSpacing` | `number` | `1` | 行間の倍率。 |
 | `lineHeight` | `number` | -- | `lineSpacing` の非推奨エイリアス。`lineSpacing` が無いときだけ使われる。 |
-| `headingScale` | `number` | `1.4` | 見出しフォントサイズのスケール係数（例: `16 * 1.4 = 22.4`）。レベル別に `headingStyles` で上書きできる。 |
+| `headingScale` | `number` | `1.4` | 見出しフォントのスケール。レベルのない見出しはこの値をそのまま使う（`16 * 1.4 = 22.4`）。レベル 1〜6 は `DEFAULT_HEADING_STYLES` のサイズ（1.6 / 1.4 / 1.2 / 1.1 / 1 / 1。スタイルシートが描くサイズと同じ）をこの値に比例して拡縮するので、`2.8` にすると全レベルが 2 倍になる。レベル別の `headingStyles` の `scale` が優先される。 |
 | `paragraphGapEm` | `number` | `0.4` | 本文段落前の間隔（em単位）。 |
-| `headingGapEm` | `number` | `1.2` | 見出し段落後の間隔（em単位）。レベル別に `headingStyles` で上書きできる。 |
-| `headingStyles` | `Record<number, HeadingStyle>` | -- | 見出しレベル（1〜6）をキーに `scale` と `gapAfterEm` を上書きする。 |
+| `headingGapEm` | `number` | -- | 見出し段落後の間隔（em 単位）。`headingStyles` で上書きしていない全レベルに効く。未指定なら各レベルが `DEFAULT_HEADING_STYLES` の間隔（1.4 / 1.2 / 1 / 0.8 / 0.6 / 0.6。スタイルシートも同じ値を描く）を使い、レベルのない見出しは `1.2` になる。 |
+| `headingStyles` | `Record<number, HeadingStyle>` | -- | 見出しレベル（1〜6）をキーに `scale` と `gapAfterEm` を上書きする。指定しなかったレベルは既定値のまま。 |
 
 ### ParagraphMeasure
 
@@ -170,7 +169,7 @@ import '@libraz/mejiro/render/mejiro.css';
 | `.mejiro-page` | ルートコンテナ。`writing-mode: vertical-rl; width: 100%`を設定。 |
 | `.mejiro-paragraph` | 段落カラム。`writing-mode: vertical-rl; display: inline-block; white-space: nowrap; font-size: calc(var(--mejiro-paragraph-scale) * 1em); margin-right: calc(0.4em / var(--mejiro-paragraph-scale))`。本文ではスケールは `1`。段落のマージンはすべてこのスケールで割るので、見出しでも間隔はページの基準 em のままになる。 |
 | `.mejiro-paragraph:first-child` | 最初の段落のブロック開始側マージンを除去（`margin-right: 0`）。 |
-| `.mejiro-paragraph--heading` | 見出しスタイル。`--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`。`--h1`〜`--h6` はスケールをそれぞれ 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1 にする。 |
+| `.mejiro-paragraph--heading` | 見出しスタイル。`--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`。`--h1`〜`--h6` はスケールをそれぞれ既定の見出しサイズ 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1 にする。`ChapterLayout` が作るページは各見出しを計測したスケールを `RenderParagraph.scale` に持ち、ページコンポーネントがそれをインラインの `--mejiro-paragraph-scale` に設定する。そのため既定外の `headingScale` や `headingStyles` も計測どおりのサイズで描かれる。 |
 | `.mejiro-paragraph--heading + .mejiro-paragraph` | 見出し後の間隔（`margin-right: calc(1.2em / var(--mejiro-paragraph-scale))`、基準 em で 1.2）。 |
 | `.mejiro-page--static .mejiro-paragraph` | 行ごとの改行を持たない `renderEpubStatic()` の出力に付く。`display: block; white-space: normal` で、段落はページ内で折り返す。`pre` 段落は `white-space: pre` のまま。 |
 | `.mejiro-page ruby` | `ruby-align: center`。 |
@@ -192,6 +191,10 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
   for (const paragraph of page.paragraphs) {
     const div = document.createElement('div');
     div.className = paragraphClassName(paragraph.kind, paragraph.headingLevel);
+    // レイアウトが計測した見出しサイズ（スタイルシートの既定と異なる場合）。
+    if (paragraph.scale != null) {
+      div.style.setProperty('--mejiro-paragraph-scale', String(paragraph.scale));
+    }
 
     for (let li = 0; li < paragraph.lines.length; li++) {
       if (li > 0) div.appendChild(document.createElement('br'));

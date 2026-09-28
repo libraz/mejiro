@@ -1,5 +1,6 @@
 import type { PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
+import { paragraphClassName } from '@libraz/mejiro/render';
 import { defineComponent, h, type PropType, type VNode } from 'vue';
 import { MejiroPage } from './MejiroPage.js';
 import { renderSegment } from './renderInlineNode.js';
@@ -47,22 +48,23 @@ export const MejiroPageView = defineComponent({
           .map((line, i) => {
             const slot = result.slots[i];
             if (!slot || slot.height <= 0) return null;
+            // Geometry is the layout's; weight, style and white-space come from
+            // the paragraph class, as in flow mode.
             return h(
               'div',
               {
                 key: i,
+                class: paragraphClassName(line.kind, line.headingLevel),
                 style: {
                   position: 'absolute',
                   writingMode: 'vertical-rl',
-                  whiteSpace: 'nowrap',
                   overflow: 'hidden',
+                  margin: 0,
                   right: `${slot.xPos}px`,
                   top: `${slot.yStart}px`,
                   height: `${slot.height}px`,
                   fontSize: `${line.fontSize}px`,
-                  fontFamily: fontFamilyCss,
                   lineHeight: lineSpacing,
-                  fontWeight: line.headingLevel != null ? '700' : undefined,
                 },
               },
               line.segments.map((seg, si) => renderSegment(seg, `${i}-${si}`)),
@@ -74,7 +76,7 @@ export const MejiroPageView = defineComponent({
           'div',
           {
             class: 'mejiro-page-slots',
-            style: { position: 'relative' },
+            style: { position: 'relative', fontFamily: fontFamilyCss },
           },
           columns as VNode[],
         );

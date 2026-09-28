@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
 import type { InlineAnnotation } from '../browser/types.js';
-import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
+import { buildInlineNodes, type InlineNode, inlineNodeContent } from '../render/inline-tree.js';
 import { sanitizeUrl } from '../url.js';
 import { cloneEditableBlock } from './clone.js';
 import {
@@ -1226,11 +1226,7 @@ function appendInlineNodes(doc: Document, parent: Node, nodes: readonly InlineNo
 function renderInlineNode(doc: Document, inline: InlineNode): Node {
   if (inline.type === 'text') return doc.createTextNode(inline.text);
   const element = renderInlineElement(doc, inline);
-  if (inline.children.length > 0) {
-    appendInlineNodes(doc, element, inline.children);
-  } else {
-    element.appendChild(doc.createTextNode(inline.type === 'ruby' ? inline.base : inline.text));
-  }
+  appendInlineNodes(doc, element, inlineNodeContent(inline));
   if (inline.type === 'ruby') {
     const rt = doc.createElementNS(XHTML_NS, 'rt');
     rt.appendChild(doc.createTextNode(inline.rubyText));

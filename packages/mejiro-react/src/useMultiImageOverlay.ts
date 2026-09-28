@@ -92,20 +92,24 @@ export function useMultiImageOverlay(
     [],
   );
 
-  const syncSpread = useCallback(
-    (si: number) => {
+  // Every spread's images are set before any spread is read back, so the
+  // layout reflows once however many spreads change.
+  const syncSpreads = useCallback(
+    (spreads: readonly number[]) => {
       const lo = layoutRef.current;
       if (!lo) return;
-      const items = imagesRef.current.get(si) ?? [];
-      const bookImages: BookImage[] = items.map((it) => ({
-        x: it.rect.x,
-        y: it.rect.y,
-        w: it.rect.w,
-        h: it.rect.h,
-        margin,
-      }));
-      lo.setImages(si, bookImages);
-      onUpdateRef.current?.(lo.getSpread(si));
+      for (const si of spreads) {
+        const items = imagesRef.current.get(si) ?? [];
+        const bookImages: BookImage[] = items.map((it) => ({
+          x: it.rect.x,
+          y: it.rect.y,
+          w: it.rect.w,
+          h: it.rect.h,
+          margin,
+        }));
+        lo.setImages(si, bookImages);
+      }
+      for (const si of spreads) onUpdateRef.current?.(lo.getSpread(si));
     },
     [margin],
   );
@@ -114,9 +118,9 @@ export function useMultiImageOverlay(
     (next: Map<number, MultiImageItem[]>, affectedSpread: number) => {
       imagesRef.current = next;
       setImages(next);
-      syncSpread(affectedSpread);
+      syncSpreads([affectedSpread]);
     },
-    [syncSpread],
+    [syncSpreads],
   );
 
   const findById = useCallback(
@@ -249,8 +253,8 @@ export function useMultiImageOverlay(
   // Re-sync image exclusions whenever the layout is replaced.
   useEffect(() => {
     if (!layout) return;
-    for (const si of imagesRef.current.keys()) syncSpread(si);
-  }, [layout, syncSpread]);
+    syncSpreads([...imagesRef.current.keys()]);
+  }, [layout, syncSpreads]);
 
   const currentImages = useMemo(() => images.get(spreadIdx) ?? [], [images, spreadIdx]);
   const hasImages = useMemo(() => [...images.values()].some((list) => list.length > 0), [images]);

@@ -71,7 +71,8 @@ describe('render CSS', () => {
         entry({ kind: 'figure' }),
         entry({}),
       ],
-      { fontSize: 10, headingStyles: DEFAULT_HEADING_STYLES },
+      // Default options: no headingStyles, as a bare MejiroBook or measure call has.
+      { fontSize: 10 },
     ).map((m) => m.gapBefore / 10);
     for (const [name, prefix] of [
       ['mejiro.css', ''],
@@ -103,6 +104,23 @@ describe('render CSS', () => {
         expect(rules.get(cls(`h${level}`))?.get('--mejiro-paragraph-scale')).toBe(
           String(style.scale),
         );
+      }
+    }
+  });
+
+  it('measures every heading level at the size the stylesheet draws it by default', () => {
+    for (const name of ['mejiro.css', 'mejiro-reader.css'] as const) {
+      const prefix = name === 'mejiro.css' ? '' : '.mejiro-reader-page-content ';
+      const rules = cssRules(readCss(name), prefix);
+      for (const level of [1, 2, 3, 4, 5, 6]) {
+        const drawn = Number(
+          rules.get(`.mejiro-paragraph--h${level}`)?.get('--mejiro-paragraph-scale'),
+        );
+        const [measure] = buildParagraphMeasures([entry({ headingLevel: level })], {
+          fontSize: 10,
+          lineSpacing: 1,
+        });
+        expect(measure.linePitch).toBe(Math.round(10 * drawn));
       }
     }
   });

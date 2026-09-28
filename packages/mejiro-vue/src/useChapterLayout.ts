@@ -28,21 +28,18 @@ export interface UseChapterLayoutOptions {
    */
   pageGeometry?: () => ComputePageSizeOptions | undefined;
   /**
-   * Capture the current reading position from the outgoing layout, just before
-   * a **reflow** (non-blank) re-layout replaces it. The returned anchor is
-   * handed back to {@link restorePosition} once the new layout is ready. Return
-   * `null` to skip preservation. Never called for blank (content-change)
-   * re-layouts — those intentionally start at spread 0.
-   *
-   * A reflow produces a brand-new {@link ChapterLayout} object, which resets any
-   * downstream spread index to 0; capturing here and restoring after keeps the
-   * reader on the same passage across resizes and font / option changes.
+   * Capture the reading position from the outgoing layout, just before a
+   * **reflow** (non-blank) re-layout replaces it. The anchor is held in
+   * `pendingRestore` until the new layout is in place, then handed to
+   * `restorePosition` when one is given. Return `null` to skip preservation.
+   * Never called for blank (content-change) re-layouts, which start at spread 0.
    */
   capturePosition?: (layout: ChapterLayout) => InChapterAnchor | null;
   /**
-   * Restore an anchor captured by {@link capturePosition} into the freshly
-   * computed layout — e.g. locate the anchor and jump to its spread. Called
-   * synchronously after a reflow re-layout commits.
+   * Apply an anchor captured by `capturePosition` to the new layout, e.g. by
+   * locating it and jumping to its spread. Called once the new layout is in
+   * place — after it commits, before paint — and `pendingRestore` is cleared
+   * first. Without it, consume `pendingRestore` yourself.
    */
   restorePosition?: (layout: ChapterLayout, position: InChapterAnchor) => void;
 }
@@ -79,6 +76,13 @@ export interface UseChapterLayoutReturn {
   elapsedMs: Ref<number>;
   /** Force a fresh layout computation. */
   recompute: (opts?: RecomputeOptions) => Promise<void>;
+  /**
+   * Anchor captured by `capturePosition` before the most recent reflow,
+   * awaiting restoration into the new layout. `restorePosition`, when given,
+   * consumes it; otherwise read it once the new layout is in place and set it
+   * back to `null`.
+   */
+  pendingRestore: { current: InChapterAnchor | null };
 }
 
 /**
@@ -91,14 +95,15 @@ export interface UseChapterLayoutReturn {
  * mounted before its container had a final box is still sized correctly on
  * first paint), and later size changes trigger a debounced **full re-layout**.
  *
- * A full re-layout — rather than a `ChapterLayout.resize()` fast-path — is used
- * for size changes on purpose: the fast-path only stretches `pageWidth` and does
- * not re-paginate, which leaves sparse, half-empty pages after any non-trivial
- * size delta. `book.layoutChapter` is deterministic and fast, so re-running it
- * is both correct and cheap. Because a full re-layout yields a new
- * {@link ChapterLayout} object (resetting any downstream spread index to 0), the
- * reading position is preserved across reflows via the optional
- * {@link UseChapterLayoutOptions.capturePosition} / `restorePosition` hooks.
+ * Size and option changes lay the chapter out again rather than calling
+ * `ChapterLayout.resize()`, so page geometry is re-derived from the surface and
+ * the book's current options. The book replays the line-breaking hints it
+ * already derived for the chapter, so a reflow never re-runs the analyzer.
+ * Because each re-layout yields a new {@link ChapterLayout} object (resetting
+ * any downstream spread index to 0), the reading position is carried across
+ * reflows by {@link UseChapterLayoutOptions.capturePosition},
+ * {@link UseChapterLayoutOptions.restorePosition} and
+ * {@link UseChapterLayoutReturn.pendingRestore}, identically in the React hook.
  *
  * @param book - The book instance to lay out with. Pass a `Ref` to swap the
  *   book (e.g. a different typography profile) at runtime — the chapter is
@@ -124,6 +129,7 @@ export function useChapterLayout(
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
   let layoutRequestId = 0;
+  const pendingRestore: { current: InChapterAnchor | null } = { current: null };
 
   function currentChapter(): EpubChapter | null {
     return epub.value?.chapters[chapterIndex.value] ?? null;
@@ -146,6 +152,7 @@ export function useChapterLayout(
     // can restore it afterwards (a new layout object resets the spread index).
     const captured =
       !blank && layout.value ? (options.capturePosition?.(layout.value) ?? null) : null;
+    pendingRestore.current = captured;
 
     if (blank) layout.value = null;
 
@@ -160,7 +167,10 @@ export function useChapterLayout(
     if (requestId !== layoutRequestId) return;
     layout.value = nextLayout;
     elapsedMs.value = performance.now() - t0;
-    if (captured) options.restorePosition?.(nextLayout, captured);
+    if (captured && options.restorePosition) {
+      pendingRestore.current = null;
+      options.restorePosition(nextLayout, captured);
+    }
   }
 
   watch([() => unref(book), epub, chapterIndex, surface], () => void recompute(), {
@@ -229,5 +239,13 @@ export function useChapterLayout(
     clearTimer();
   });
 
-  return { layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute };
+  return {
+    layout,
+    pageWidth,
+    pageHeight,
+    contentHeight,
+    elapsedMs,
+    recompute,
+    pendingRestore,
+  };
 }

@@ -48,7 +48,6 @@ const measures = buildParagraphMeasures(entries, {
   lineSpacing: 1.8,
   headingScale: 1.4,
   paragraphGapEm: 0.4,
-  headingGapEm: 1.2,
 });
 ```
 
@@ -59,10 +58,10 @@ const measures = buildParagraphMeasures(entries, {
 | `fontSize` | `number` | (required) | Base font size in px. |
 | `lineSpacing` | `number` | `1` | Line spacing multiplier. |
 | `lineHeight` | `number` | -- | Deprecated alias for `lineSpacing`, used only when `lineSpacing` is absent. |
-| `headingScale` | `number` | `1.4` | Scale factor for heading font size (e.g., `16 * 1.4 = 22.4`). Overridden per level by `headingStyles`. |
+| `headingScale` | `number` | `1.4` | Heading font scale. A heading without a level takes it as is (`16 * 1.4 = 22.4`); levels 1--6 scale their `DEFAULT_HEADING_STYLES` size (1.6 / 1.4 / 1.2 / 1.1 / 1 / 1, the sizes the stylesheet draws) in proportion to it, so `2.8` doubles every level. A level's own `headingStyles` scale wins. |
 | `paragraphGapEm` | `number` | `0.4` | Gap before body paragraphs in em units. |
-| `headingGapEm` | `number` | `1.2` | Gap after heading paragraphs in em units. Overridden per level by `headingStyles`. |
-| `headingStyles` | `Record<number, HeadingStyle>` | -- | Per-level overrides of `scale` and `gapAfterEm`, keyed by heading level (1--6). |
+| `headingGapEm` | `number` | -- | Gap after heading paragraphs in em units, for every level `headingStyles` does not override. Unset, each level takes its `DEFAULT_HEADING_STYLES` gap (1.4 / 1.2 / 1 / 0.8 / 0.6 / 0.6), which the stylesheet also draws, and a heading without a level takes `1.2`. |
+| `headingStyles` | `Record<number, HeadingStyle>` | -- | Per-level overrides of `scale` and `gapAfterEm`, keyed by heading level (1--6). A level left out keeps its default. |
 
 ### ParagraphMeasure
 
@@ -170,7 +169,7 @@ import '@libraz/mejiro/render/mejiro.css';
 | `.mejiro-page` | Root container. Sets `writing-mode: vertical-rl; width: 100%`. |
 | `.mejiro-paragraph` | Paragraph column. `writing-mode: vertical-rl; display: inline-block; white-space: nowrap; font-size: calc(var(--mejiro-paragraph-scale) * 1em); margin-right: calc(0.4em / var(--mejiro-paragraph-scale))`. The scale is `1` on body paragraphs; every paragraph margin divides by it, so gaps stay in the page's base em on headings too. |
 | `.mejiro-paragraph:first-child` | Removes the block-start margin (`margin-right: 0`) on the first paragraph. |
-| `.mejiro-paragraph--heading` | Heading style. `--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`. `--h1` to `--h6` set the scale to 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1. |
+| `.mejiro-paragraph--heading` | Heading style. `--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`. `--h1` to `--h6` set the scale to 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1, the default heading sizes. A page built by `ChapterLayout` carries the scale it measured each heading at in `RenderParagraph.scale`, and the page components set it as an inline `--mejiro-paragraph-scale`, so a non-default `headingScale` or `headingStyles` is drawn at the measured size. |
 | `.mejiro-paragraph--heading + .mejiro-paragraph` | Gap after a heading (`margin-right: calc(1.2em / var(--mejiro-paragraph-scale))`, 1.2 base em). |
 | `.mejiro-page--static .mejiro-paragraph` | Set on `renderEpubStatic()` output, which has no per-line breaks: `display: block; white-space: normal`, so paragraphs wrap within the page. `pre` paragraphs keep `white-space: pre`. |
 | `.mejiro-page ruby` | `ruby-align: center`. |
@@ -197,6 +196,10 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
   for (const paragraph of page.paragraphs) {
     const div = document.createElement('div');
     div.className = paragraphClassName(paragraph.kind, paragraph.headingLevel);
+    // The heading size the layout measured, when it differs from the stylesheet default.
+    if (paragraph.scale != null) {
+      div.style.setProperty('--mejiro-paragraph-scale', String(paragraph.scale));
+    }
 
     for (let li = 0; li < paragraph.lines.length; li++) {
       if (li > 0) div.appendChild(document.createElement('br'));

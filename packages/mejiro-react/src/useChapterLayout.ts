@@ -29,17 +29,20 @@ export interface UseChapterLayoutOptions {
    */
   pageGeometry?: () => ComputePageSizeOptions | undefined;
   /**
-   * Capture the current reading position from the outgoing layout, just before
-   * a **reflow** (non-blank) re-layout replaces it. The returned anchor is
-   * exposed via {@link UseChapterLayoutReturn.pendingRestore} and should be
-   * applied once the new layout commits. Return `null` to skip preservation.
-   * Never called for blank (content-change) re-layouts.
-   *
-   * A reflow yields a brand-new {@link ChapterLayout} object, which resets any
-   * downstream spread index to 0; capturing here and restoring after keeps the
-   * reader on the same passage across resizes and font / option changes.
+   * Capture the reading position from the outgoing layout, just before a
+   * **reflow** (non-blank) re-layout replaces it. The anchor is held in
+   * `pendingRestore` until the new layout is in place, then handed to
+   * `restorePosition` when one is given. Return `null` to skip preservation.
+   * Never called for blank (content-change) re-layouts, which start at spread 0.
    */
   capturePosition?: (layout: ChapterLayout) => InChapterAnchor | null;
+  /**
+   * Apply an anchor captured by `capturePosition` to the new layout, e.g. by
+   * locating it and jumping to its spread. Called once the new layout is in
+   * place — after it commits, before paint — and `pendingRestore` is cleared
+   * first. Without it, consume `pendingRestore` yourself.
+   */
+  restorePosition?: (layout: ChapterLayout, position: InChapterAnchor) => void;
 }
 
 /** Options for {@link UseChapterLayoutReturn.recompute}. */
@@ -78,9 +81,10 @@ export interface UseChapterLayoutReturn {
   /** Force a fresh layout computation. */
   recompute: (opts?: RecomputeOptions) => Promise<void>;
   /**
-   * Anchor captured before the most recent reflow re-layout, awaiting
-   * restoration into the new {@link layout}. Consume it in a layout effect keyed
-   * on `layout` (after any index reset) and clear it back to `null`.
+   * Anchor captured by `capturePosition` before the most recent reflow,
+   * awaiting restoration into the new layout. `restorePosition`, when given,
+   * consumes it; otherwise read it once the new layout is in place and set it
+   * back to `null`.
    *
    * Declared as a `MutableRefObject` because consumers are expected to write to
    * it — `@types/react@18` models `RefObject.current` as read-only, so a
@@ -100,13 +104,16 @@ export interface UseChapterLayoutReturn {
  * mounted before its container had a final box is still sized correctly on
  * first paint), and later size changes trigger a debounced **full re-layout**.
  *
- * A full re-layout — rather than a `ChapterLayout.resize()` fast-path — is used
- * for size changes on purpose: the fast-path only stretches `pageWidth` and does
- * not re-paginate, leaving sparse, half-empty pages after a non-trivial size
- * delta. Because a full re-layout yields a new {@link ChapterLayout} object
- * (resetting any downstream spread index to 0), the reading position is
- * preserved across reflows via {@link UseChapterLayoutOptions.capturePosition}
- * and {@link UseChapterLayoutReturn.pendingRestore}.
+ * Size and option changes lay the chapter out again rather than calling
+ * `ChapterLayout.resize()`, so page geometry is re-derived from the surface and
+ * the book's current options. The book replays the line-breaking hints it
+ * already derived for the chapter, so a reflow never re-runs the analyzer.
+ * Because each re-layout yields a new {@link ChapterLayout} object (resetting
+ * any downstream spread index to 0), the reading position is carried across
+ * reflows by {@link UseChapterLayoutOptions.capturePosition},
+ * {@link UseChapterLayoutOptions.restorePosition} and
+ * {@link UseChapterLayoutReturn.pendingRestore}, identically in the Vue
+ * composable.
  *
  * @param book - The book instance to lay out with.
  * @param epub - The current parsed EPUB.
@@ -195,8 +202,15 @@ export function useChapterLayout(
     };
   }, [recompute]);
 
-  // Size-driven re-flow. A full re-layout is used (not `ChapterLayout.resize`)
-  // so pagination stays correct; see the hook doc comment.
+  useLayoutEffect(() => {
+    const anchor = pendingRestore.current;
+    const restore = optionsRef.current.restorePosition;
+    if (!(layout && anchor && restore)) return;
+    pendingRestore.current = null;
+    restore(layout, anchor);
+  }, [layout]);
+
+  // Size-driven re-flow, as a fresh layout; see the hook doc comment.
   useEffect(() => {
     if (!enableResize) return;
     const el = surface.current;

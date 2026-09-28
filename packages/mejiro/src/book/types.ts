@@ -28,12 +28,14 @@ export interface BookOptions {
   enableHanging?: boolean;
   /**
    * Per-level heading style overrides. Keys are heading levels (1–6).
-   * Each level can override `scale` and `gapAfterEm`.
+   * Each level can override `scale` and `gapAfterEm`; a level left out keeps
+   * its `DEFAULT_HEADING_STYLES` style, scaled by `headingScale`.
    */
   headingStyles?: Record<number, HeadingStyle>;
   /**
-   * Default scale factor for heading font sizes when no per-level
-   * style is defined in `headingStyles`.
+   * Heading font scale. Levels 1–6 scale their `DEFAULT_HEADING_STYLES`
+   * size in proportion to it unless `headingStyles` sets the level's `scale`;
+   * a heading without a level takes it as is.
    * @defaultValue 1.4
    */
   headingScale?: number;
@@ -224,6 +226,12 @@ export interface PageLine {
   readonly segments: readonly RenderSegment[];
   /** Heading level if this line belongs to a heading paragraph. */
   readonly headingLevel?: number;
+  /**
+   * Structural classification of the line's paragraph, `'heading'` for a
+   * heading that carries no kind of its own. Slot-mode page components pass it
+   * to `paragraphClassName` so a line keeps its paragraph's styling.
+   */
+  readonly kind?: ParagraphKind;
   /** Computed font size in pixels for this line (accounts for heading scale). */
   readonly fontSize: number;
 }

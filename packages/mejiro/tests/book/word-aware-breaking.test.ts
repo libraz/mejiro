@@ -263,6 +263,52 @@ describe('word-aware breaking', () => {
     }
   });
 
+  it('does not re-analyse when the same chapter is laid out again', async () => {
+    const analyzer = createAnalyzer();
+    const book = new MejiroBook({ ...baseOptions, analyzer, wordAwareBreaking: 'full' });
+    book.setPageSize({ pageWidth: 400, lineWidth: 200 });
+    const first = await book.layoutChapter(CHAPTER);
+    expect(analyzer.calls).toHaveLength(2);
+
+    // What a reader does on resize: new page size, fresh layout of the same chapter.
+    book.setPageSize({ pageWidth: 300, lineWidth: 120 });
+    const resized = await book.layoutChapter(CHAPTER);
+    // And on an option change: setOptions, then a fresh layout.
+    await book.setOptions({ fontSize: 20, lineSpacing: 2 });
+    const restyled = await book.layoutChapter(CHAPTER);
+
+    expect(analyzer.calls).toHaveLength(2);
+    const hintsOf = (l: typeof first) => l.getCachedParagraphs().map((p) => p.hintClusterIds);
+    expect(hintsOf(resized)).toEqual(hintsOf(first));
+    expect(hintsOf(restyled)).toEqual(hintsOf(first));
+  });
+
+  it('analyses a paragraph again once its text changes', async () => {
+    const analyzer = createAnalyzer();
+    const book = new MejiroBook({ ...baseOptions, analyzer, wordAwareBreaking: 'clusters' });
+    book.setPageSize({ pageWidth: 400, lineWidth: 200 });
+    const paragraph = { text: '第１２章です。' };
+    await book.layoutChapter({ paragraphs: [paragraph] });
+    paragraph.text = '第３４章です。';
+    await book.layoutChapter({ paragraphs: [paragraph] });
+
+    expect(analyzer.calls).toEqual(['第１２章です。', '第３４章です。']);
+  });
+
+  it('does not re-analyse a manuscript chapter laid out again unchanged', async () => {
+    const analyzer = createAnalyzer();
+    const book = new MejiroBook({ ...baseOptions, analyzer, wordAwareBreaking: 'clusters' });
+    book.setPageSize({ pageWidth: 400, lineWidth: 200 });
+    const chapter = { title: '第一章', body: '第１２章はABCという。\n\n二つ目の段落。' };
+    await book.layoutManuscript({ chapters: [chapter] });
+    const analysed = analyzer.calls.length;
+    expect(analysed).toBe(3);
+
+    book.setPageSize({ pageWidth: 300, lineWidth: 120 });
+    await book.layoutManuscript({ chapters: [chapter] });
+    expect(analyzer.calls).toHaveLength(analysed);
+  });
+
   it('takes a paragraph that carries its own hints at its word', async () => {
     const analyzer = createAnalyzer();
     const book = new MejiroBook({ ...baseOptions, analyzer, wordAwareBreaking: 'clusters' });

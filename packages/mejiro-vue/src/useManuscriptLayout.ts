@@ -23,17 +23,18 @@ export interface UseManuscriptLayoutOptions {
    */
   resizeDebounce?: number;
   /**
-   * Capture the current reading position from the outgoing layout, just before
-   * a **reflow** (non-blank) re-layout replaces it. The returned anchor is
-   * handed back to {@link restorePosition} once the new layout is ready. Return
-   * `null` to skip preservation. Never called for blank (content-change)
-   * re-layouts — those intentionally start at spread 0.
+   * Capture the reading position from the outgoing layout, just before a
+   * **reflow** (non-blank) re-layout replaces it. The anchor is held in
+   * `pendingRestore` until the new layout is in place, then handed to
+   * `restorePosition` when one is given. Return `null` to skip preservation.
+   * Never called for blank (content-change) re-layouts, which start at spread 0.
    */
   capturePosition?: (layout: ChapterLayout) => InChapterAnchor | null;
   /**
-   * Restore an anchor captured by {@link capturePosition} into the freshly
-   * computed layout — e.g. locate the anchor and jump to its spread. Called
-   * synchronously after a reflow re-layout commits.
+   * Apply an anchor captured by `capturePosition` to the new layout, e.g. by
+   * locating it and jumping to its spread. Called once the new layout is in
+   * place — after it commits, before paint — and `pendingRestore` is cleared
+   * first. Without it, consume `pendingRestore` yourself.
    */
   restorePosition?: (layout: ChapterLayout, position: InChapterAnchor) => void;
 }
@@ -70,6 +71,13 @@ export interface UseManuscriptLayoutReturn {
   elapsedMs: Ref<number>;
   /** Force a fresh layout computation. */
   recompute: (opts?: ManuscriptRecomputeOptions) => Promise<void>;
+  /**
+   * Anchor captured by `capturePosition` before the most recent reflow,
+   * awaiting restoration into the new layout. `restorePosition`, when given,
+   * consumes it; otherwise read it once the new layout is in place and set it
+   * back to `null`.
+   */
+  pendingRestore: { current: InChapterAnchor | null };
 }
 
 function unwrap<T>(value: Ref<T> | T): T {
@@ -92,13 +100,16 @@ function unwrap<T>(value: Ref<T> | T): T {
  * still sized correctly on first paint), and later size changes trigger a
  * debounced **full re-layout**.
  *
- * A full re-layout — rather than a `ChapterLayout.resize()` fast-path — is used
- * for size changes on purpose: the fast-path only stretches `pageWidth` and does
- * not re-paginate, which leaves sparse, half-empty pages after any non-trivial
- * size delta. Because a full re-layout yields a new {@link ChapterLayout} object
- * (resetting any downstream spread index to 0), the reading position is
- * preserved across reflows via the optional
- * {@link UseManuscriptLayoutOptions.capturePosition} / `restorePosition` hooks.
+ * Size changes lay the chapter out again rather than calling
+ * `ChapterLayout.resize()`, so page geometry is re-derived from the surface.
+ * The book reuses the paragraphs and line-breaking hints it already derived for
+ * an unchanged chapter, so a reflow never re-runs the analyzer. Because each
+ * re-layout yields a new {@link ChapterLayout} object (resetting any downstream
+ * spread index to 0), the reading position is carried across reflows by
+ * {@link UseManuscriptLayoutOptions.capturePosition},
+ * {@link UseManuscriptLayoutOptions.restorePosition} and
+ * {@link UseManuscriptLayoutReturn.pendingRestore}, identically in the React
+ * hook.
  *
  * @param book - The book instance to lay out with. Pass a `Ref` to swap the
  *   book (e.g. a different typography profile) at runtime — the chapter is
@@ -122,6 +133,7 @@ export function useManuscriptLayout(
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
   let layoutRequestId = 0;
+  const pendingRestore: { current: InChapterAnchor | null } = { current: null };
 
   async function recompute(opts: ManuscriptRecomputeOptions = {}): Promise<void> {
     const blank = opts.blank ?? true;
@@ -140,6 +152,7 @@ export function useManuscriptLayout(
     // can restore it afterwards (a new layout object resets the spread index).
     const captured =
       !blank && layout.value ? (options.capturePosition?.(layout.value) ?? null) : null;
+    pendingRestore.current = captured;
 
     if (blank) layout.value = null;
 
@@ -156,7 +169,10 @@ export function useManuscriptLayout(
     const nextLayout = layouts.values().next().value ?? null;
     layout.value = nextLayout;
     elapsedMs.value = performance.now() - t0;
-    if (nextLayout && captured) options.restorePosition?.(nextLayout, captured);
+    if (nextLayout && captured && options.restorePosition) {
+      pendingRestore.current = null;
+      options.restorePosition(nextLayout, captured);
+    }
   }
 
   watch([() => unref(book), chapter, surface], () => void recompute(), {
@@ -228,5 +244,13 @@ export function useManuscriptLayout(
     clearTimer();
   });
 
-  return { layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute };
+  return {
+    layout,
+    pageWidth,
+    pageHeight,
+    contentHeight,
+    elapsedMs,
+    recompute,
+    pendingRestore,
+  };
 }

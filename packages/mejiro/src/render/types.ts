@@ -42,6 +42,13 @@ export interface RenderParagraph {
    * the `mejiro-paragraph--*` class the bundled stylesheets expect.
    */
   readonly kind?: ParagraphKind;
+  /**
+   * Font scale a layout measured this heading at. Page components set
+   * `--mejiro-paragraph-scale` from it, so the drawn size is the measured one.
+   * Absent on body paragraphs and on pages no layout built, where the
+   * stylesheet's per-level scale applies.
+   */
+  readonly scale?: number;
 }
 
 /** A full rendered page containing paragraphs. */

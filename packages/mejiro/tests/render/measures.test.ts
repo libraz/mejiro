@@ -37,7 +37,8 @@ describe('buildParagraphMeasures', () => {
       fontSize: 16,
       lineHeight: 1.8,
     });
-    const headingFontSize = Math.round(16 * 1.4);
+    // h1 takes its default per-level scale, the one the stylesheet draws it at.
+    const headingFontSize = Math.round(16 * 1.6);
     expect(measures).toEqual([
       { lineCount: 1, linePitch: headingFontSize * 1.8, gapBefore: 16 * 0.4 },
     ]);
@@ -52,7 +53,7 @@ describe('buildParagraphMeasures', () => {
       fontSize: 16,
       lineHeight: 1.8,
     });
-    expect(measures[1].gapBefore).toBe(16 * 1.2);
+    expect(measures[1].gapBefore).toBe(16 * 1.4);
   });
 
   it('applies paragraph gap after a body paragraph', () => {
@@ -76,7 +77,8 @@ describe('buildParagraphMeasures', () => {
       paragraphGapEm: 0.5,
       headingGapEm: 1.5,
     });
-    const headingFontSize = Math.round(20 * 1.5);
+    // h1 scales its default 1.6 by 1.5 / 1.4.
+    const headingFontSize = Math.round(20 * 1.6 * (1.5 / 1.4));
     expect(measures).toEqual([
       { lineCount: 1, linePitch: headingFontSize * 2.0, gapBefore: 20 * 0.5 },
     ]);
@@ -131,8 +133,32 @@ describe('buildParagraphMeasures', () => {
         1: { scale: 2.0 },
       },
     });
-    const h3FontSize = Math.round(16 * 1.5); // falls back to headingScale
+    // Level 3 keeps its default 1.2, scaled by headingScale 1.5 / 1.4.
+    const h3FontSize = Math.round(16 * 1.2 * (1.5 / 1.4));
     expect(measures[0].linePitch).toBe(h3FontSize * 1.8);
+  });
+
+  it('resizes every leveled heading with headingScale', () => {
+    const entries = [1, 2, 3, 4, 5, 6].map((level) => makeEntry(5, 0, level));
+    const pitches = (headingScale?: number) =>
+      buildParagraphMeasures(entries, { fontSize: 20, lineSpacing: 1, headingScale }).map(
+        (m) => m.linePitch,
+      );
+    expect(pitches()).toEqual([32, 28, 24, 22, 20, 20]);
+    const doubled = pitches(2.8);
+    for (let i = 0; i < doubled.length; i++) {
+      expect(doubled[i]).toBe(pitches()[i] * 2);
+    }
+  });
+
+  it('keeps an explicit per-level scale when headingScale changes', () => {
+    const measures = buildParagraphMeasures([makeEntry(5, 0, 1)], {
+      fontSize: 20,
+      lineSpacing: 1,
+      headingScale: 2.8,
+      headingStyles: { 1: { scale: 1.5 } },
+    });
+    expect(measures[0].linePitch).toBe(30);
   });
 
   it('supports legacy isHeading without headingLevel', () => {

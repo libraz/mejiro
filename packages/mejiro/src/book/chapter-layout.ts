@@ -13,6 +13,8 @@ import {
   findPhysicalColumn,
   getImageXOffset,
   packPageLines,
+  paragraphHeading,
+  resolveHeadingScale,
 } from '../render/measures.js';
 import { buildRenderPage } from '../render/page.js';
 import type { LineMetric, RenderEntry, RenderLine, RenderParagraph } from '../render/types.js';
@@ -274,20 +276,6 @@ function emptyPageResult(): PageResult {
   return { page: { paragraphs: [] }, lines: [], slots: [], hasImages: false };
 }
 
-/**
- * Builds the render paragraph for a run of exclusion-mode lines, mirroring the
- * heading and kind resolution {@link buildRenderPage} applies in normal mode.
- */
-function exclusionParagraph(entry: RenderEntry, lines: RenderLine[]): RenderParagraph {
-  const headingLevel = entry.headingLevel;
-  return {
-    lines,
-    isHeading: headingLevel != null || entry.isHeading === true,
-    headingLevel,
-    kind: entry.kind,
-  };
-}
-
 /** Returns whether `value` can address a paragraph or a character position. */
 function isNonNegativeSafeInteger(value: number): boolean {
   return Number.isSafeInteger(value) && value >= 0;
@@ -539,17 +527,13 @@ export class ChapterLayout {
     } else {
       this.images.set(spreadIndex, [...images]);
     }
-    // Invalidate only the changed spread's cached exclusion result — other
-    // spreads' engine output is reused on the next `computeExclusion` pass.
-    this.spreadExclusionCache.delete(spreadIndex);
-    this.excl = null;
+    this.invalidate({ spread: spreadIndex });
   }
 
   /** Removes all image exclusions. */
   clearImages(): void {
     this.images.clear();
-    this.spreadExclusionCache.clear();
-    this.excl = null;
+    this.invalidate({});
   }
 
   /**
@@ -590,8 +574,14 @@ export class ChapterLayout {
    * @returns Page result with paragraph data, flat lines, and column slots.
    */
   getPage(pageIndex: number): PageResult {
-    const spread = this.getSpread(Math.floor(pageIndex / 2));
-    return pageIndex % 2 === 0 ? spread.right : spread.left;
+    const side = pageIndex % 2 === 0 ? 'right' : 'left';
+    if (this.images.size > 0) {
+      this.ensureExclusion();
+      const sl = (this.excl as ExclusionCache).spreadLayouts[Math.floor(pageIndex / 2)];
+      return sl ? this.buildExclusionSide(sl, side) : emptyPageResult();
+    }
+    this.ensureNormal();
+    return this.buildNormalPage(pageIndex);
   }
 
   /**
@@ -863,14 +853,22 @@ export class ChapterLayout {
     return this.size.pageWidth - this.size.pagePaddingX * 2;
   }
 
-  private resolveScale(level?: number): number {
-    if (level == null) return 1;
-    return this.config.headingStyles?.[level]?.scale ?? this.config.headingScale;
+  /** Adds the heading scale this layout measured the paragraph at. */
+  private scaledParagraph(paragraph: RenderParagraph): RenderParagraph {
+    if (!paragraph.isHeading) return paragraph;
+    return { ...paragraph, scale: resolveHeadingScale(paragraph, this.config) };
   }
 
-  private paragraphScale(headingLevel?: number, isHeading?: boolean): number {
-    if (headingLevel != null) return this.resolveScale(headingLevel);
-    return isHeading === true ? this.config.headingScale : 1;
+  /** Flattens a render paragraph into slot-mode lines. */
+  private pageLinesOf(paragraph: RenderParagraph): PageLine[] {
+    const fontSize = Math.round(this.config.fontSize * resolveHeadingScale(paragraph, this.config));
+    const kind = paragraph.kind ?? (paragraph.isHeading ? 'heading' : undefined);
+    return paragraph.lines.map((line) => ({
+      segments: line.segments,
+      headingLevel: paragraph.headingLevel,
+      kind,
+      fontSize,
+    }));
   }
 
   private linePitch(): number {
@@ -886,14 +884,23 @@ export class ChapterLayout {
     };
   }
 
-  private invalidate(): void {
-    this.normal = null;
+  /**
+   * The one reflow entry point. Drops derived layout so the next read rebuilds
+   * it in a single pass, however many changes preceded it; cached paragraph
+   * data (advances, hints) is never touched.
+   *
+   * @param images - Present for an image change: geometry is unchanged, so
+   *   normal pagination and, when `spread` is given, every other spread's
+   *   engine output stay valid. Absent for a geometry, font or option change.
+   */
+  private invalidate(images?: { spread?: number }): void {
     this.excl = null;
-    // Anything that triggers invalidate() (resize / applyConfig / re-measure)
-    // changes inputs to the per-spread exclusion engine (line pitch, line
-    // width, font size), so the spread-local cache must be cleared too. The
-    // setImages path bypasses this and invalidates only the changed spread.
+    if (images?.spread != null) {
+      this.spreadExclusionCache.delete(images.spread);
+      return;
+    }
     this.spreadExclusionCache.clear();
+    if (!images) this.normal = null;
   }
 
   private recomputeBreaks(): void {
@@ -1001,16 +1008,12 @@ export class ChapterLayout {
     const slices = pages[pageIndex];
     if (!slices || slices.length === 0) return emptyPageResult();
 
-    const page = buildRenderPage(slices, this.entries);
-    const { fontSize } = this.config;
-
-    const lines: PageLine[] = [];
-    for (const para of page.paragraphs) {
-      const fs = Math.round(fontSize * this.paragraphScale(para.headingLevel, para.isHeading));
-      for (const line of para.lines) {
-        lines.push({ segments: line.segments, headingLevel: para.headingLevel, fontSize: fs });
-      }
-    }
+    const page = {
+      paragraphs: buildRenderPage(slices, this.entries).paragraphs.map((p) =>
+        this.scaledParagraph(p),
+      ),
+    };
+    const lines = page.paragraphs.flatMap((p) => this.pageLinesOf(p));
 
     const firstSlice = slices[0];
     const startLine = paraLineStarts[firstSlice.paragraphIndex] + firstSlice.lineStart;
@@ -1171,13 +1174,8 @@ export class ChapterLayout {
     const lineParaIdx: number[] = [];
     let pi = 0;
     for (const para of fullPage.paragraphs) {
-      const fs = Math.round(fontSize * this.paragraphScale(para.headingLevel, para.isHeading));
-      for (const line of para.lines) {
-        allLines.push({
-          segments: line.segments,
-          headingLevel: para.headingLevel,
-          fontSize: fs,
-        });
+      for (const line of this.pageLinesOf(para)) {
+        allLines.push(line);
         lineParaIdx.push(pi);
       }
       pi++;
@@ -1346,16 +1344,29 @@ export class ChapterLayout {
       return { right: emptyPageResult(), left: emptyPageResult(), totalPages };
     }
 
-    const rStart = sl.lineStart;
-    const rEnd = rStart + sl.rightSlotCount;
-    const lStart = rEnd;
-    const lEnd = rStart + sl.slotCount;
-
     return {
-      right: this.buildExclusionPage(rStart, rEnd, sl.rightSlots, sl.hasRightImages),
-      left: this.buildExclusionPage(lStart, lEnd, sl.leftSlots, sl.hasLeftImages),
+      right: this.buildExclusionSide(sl, 'right'),
+      left: this.buildExclusionSide(sl, 'left'),
       totalPages,
     };
+  }
+
+  /** Global line range `[start, end)` one side of a reflowed spread holds. */
+  private exclusionSideRange(sl: SpreadLayoutInfo, side: 'right' | 'left'): [number, number] {
+    const split = sl.lineStart + sl.rightSlotCount;
+    return side === 'right' ? [sl.lineStart, split] : [split, sl.lineStart + sl.slotCount];
+  }
+
+  private buildExclusionSide(sl: SpreadLayoutInfo, side: 'right' | 'left'): PageResult {
+    const [start, end] = this.exclusionSideRange(sl, side);
+    return side === 'right'
+      ? this.buildExclusionPage(start, end, sl.rightSlots, sl.hasRightImages)
+      : this.buildExclusionPage(start, end, sl.leftSlots, sl.hasLeftImages);
+  }
+
+  /** Render paragraph for a run of exclusion-mode lines, resolved as in normal mode. */
+  private exclusionParagraph(entry: RenderEntry, lines: RenderLine[]): RenderParagraph {
+    return this.scaledParagraph({ lines, ...paragraphHeading(entry) });
   }
 
   private buildExclusionPage(
@@ -1376,7 +1387,7 @@ export class ChapterLayout {
       const pi = lineParaIndex[i];
       if (pi !== curPi) {
         if (curLines.length > 0) {
-          paragraphs.push(exclusionParagraph(entries[curPi], curLines));
+          paragraphs.push(this.exclusionParagraph(entries[curPi], curLines));
         }
         curPi = pi;
         curLines = [];
@@ -1384,7 +1395,7 @@ export class ChapterLayout {
       curLines.push({ segments: lines[i].segments });
     }
     if (curLines.length > 0 && curPi >= 0) {
-      paragraphs.push(exclusionParagraph(entries[curPi], curLines));
+      paragraphs.push(this.exclusionParagraph(entries[curPi], curLines));
     }
 
     return { page: { paragraphs }, lines: pageLines, slots, hasImages };
@@ -1454,8 +1465,9 @@ export class ChapterLayout {
     const { entries, lineParaIndex, paraLineStarts, spreadLayouts } = this.excl as ExclusionCache;
     const sl = spreadLayouts[spreadIndex];
     if (!sl) return null;
-    const targetLine = sl.lineStart + (side === 'right' ? 0 : sl.rightSlotCount);
-    if (targetLine < 0 || targetLine >= lineParaIndex.length) return null;
+    const [targetLine, end] = this.exclusionSideRange(sl, side);
+    // A side an image blocks entirely owns no lines; its range start belongs to another page.
+    if (targetLine >= end || targetLine >= lineParaIndex.length) return null;
     const paragraph = lineParaIndex[targetLine];
     const inParaLine = targetLine - paraLineStarts[paragraph];
     const bp = entries[paragraph].breakPoints;

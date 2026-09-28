@@ -23,6 +23,11 @@ function renderLine(line: RenderLine, lineIndex: number): ReactNode[] {
   return nodes;
 }
 
+/** Sets the heading scale the layout measured, so the stylesheet draws that size. */
+function paragraphScaleStyle(scale: number | undefined): CSSProperties | undefined {
+  return scale == null ? undefined : ({ '--mejiro-paragraph-scale': scale } as CSSProperties);
+}
+
 /**
  * Renders a mejiro page with vertical text layout.
  *
@@ -42,7 +47,7 @@ export function MejiroPage({ page, className, style }: MejiroPageProps): ReactNo
 
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs have no stable ID
-          <div key={pi} className={paraClass}>
+          <div key={pi} className={paraClass} style={paragraphScaleStyle(paragraph.scale)}>
             {paragraph.lines.flatMap((line, li) => renderLine(line, li))}
           </div>
         );

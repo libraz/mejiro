@@ -1,5 +1,6 @@
-import type { HeadingStyle } from '../render/measures.js';
 import type { BookOptions } from './types.js';
+
+export { DEFAULT_HEADING_STYLES } from '../render/measures.js';
 
 /** Default page padding values in pixels for the reading surface. */
 export const DEFAULT_PAGE_PADDING = {
@@ -34,27 +35,6 @@ export const DEFAULT_PAGE_GEOMETRY = {
 } as const;
 
 /**
- * Default heading style overrides for levels 1–6.
- *
- * @example
- * ```ts
- * const book = new MejiroBook({
- *   fontFamily: 'serif',
- *   fontSize: 16,
- *   headingStyles: DEFAULT_HEADING_STYLES,
- * });
- * ```
- */
-export const DEFAULT_HEADING_STYLES: Readonly<Record<number, HeadingStyle>> = {
-  1: { scale: 1.6, gapAfterEm: 1.4 },
-  2: { scale: 1.4, gapAfterEm: 1.2 },
-  3: { scale: 1.2, gapAfterEm: 1.0 },
-  4: { scale: 1.1, gapAfterEm: 0.8 },
-  5: { scale: 1.0, gapAfterEm: 0.6 },
-  6: { scale: 1.0, gapAfterEm: 0.6 },
-};
-
-/**
  * Sensible defaults for {@link BookOptions}. Used by framework components
  * when no `options` prop is supplied so `<MejiroReader />` works out of the
  * box. Override individual fields by spreading:
@@ -69,5 +49,4 @@ export const DEFAULT_BOOK_OPTIONS: Readonly<BookOptions> = {
   lineSpacing: 1.8,
   mode: 'strict',
   enableHanging: true,
-  headingStyles: DEFAULT_HEADING_STYLES,
 };

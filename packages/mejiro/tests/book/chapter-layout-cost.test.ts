@@ -124,6 +124,44 @@ describe('image reflow cost', () => {
   }, 30_000);
 });
 
+describe('reflow passes', () => {
+  function countExclusionPasses(layout: ChapterLayout): () => number {
+    const spy = vi.spyOn(layout as unknown as { computeExclusion(): void }, 'computeExclusion');
+    return () => spy.mock.calls.length;
+  }
+
+  it('reflows once for images set on several spreads before any is read', () => {
+    const layout = makeLayout(200, 100);
+    const passes = countExclusionPasses(layout);
+    for (const si of [0, 1, 2]) layout.setImages(si, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    for (const si of [0, 1, 2]) layout.getSpread(si);
+    expect(passes()).toBe(1);
+  });
+
+  it('reflows once per image move and never re-breaks on a pure read', () => {
+    const layout = makeLayout(200, 100);
+    const passes = countExclusionPasses(layout);
+    layout.syncImages(0, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    layout.getSpread(1);
+    layout.getPage(3);
+    expect(passes()).toBe(1);
+    layout.syncImages(0, [{ x: 20, y: 20, w: 30, h: 30, margin: 0 }]);
+    expect(passes()).toBe(2);
+  });
+});
+
+describe('getPage cost', () => {
+  it('builds only the requested page', () => {
+    const layout = makeLayout(50, 100);
+    expect(layout.totalPages).toBeGreaterThan(10);
+
+    counters.buildRenderPage = 0;
+    const page = layout.getPage(3);
+    expect(page.lines.length).toBeGreaterThan(0);
+    expect(counters.buildRenderPage).toBe(1);
+  });
+});
+
 describe('selectionRects cost', () => {
   it('builds each page it crosses exactly once', () => {
     const layout = makeLayout(50, 100);

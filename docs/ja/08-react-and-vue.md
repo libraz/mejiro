@@ -168,6 +168,8 @@ Props:
 | `className` | `string` | 追加のCSSクラス。 |
 | `style` | `CSSProperties` | 追加のインラインスタイル。 |
 
+どちらのモードでも、段落（フロー）や行（スロット）には同じ `mejiro-paragraph--*` クラスが付きます。章に画像が入っても、引用・整形済みテキスト・場面転換・図版のスタイルはそのまま残ります。スロットモードで各列の位置とサイズはインラインで指定し、太さ・書体スタイル・空白の扱いはクラスから受け取ります。
+
 ### React の例
 
 `MejiroBook`、見開きナビゲーション、画像オーバーレイを組み合わせたコンポーネント例です。
@@ -301,22 +303,30 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 
 ### リフローをまたいで読書位置を保つ
 
-`useChapterLayout` は、サーフェスのリサイズや組版に影響するオプション変更のたびに完全な再レイアウトを実行します。その結果 `ChapterLayout` は新しいインスタンスになり、下流の見開きインデックスは 0 に戻ります。`capturePosition` を渡すと差し替え直前のアンカーを取得でき、新しいレイアウトが確定したあとに書き込み可能な ref である `pendingRestore` から取り出して復元します。
+`useChapterLayout` は、サーフェスのリサイズや組版に影響するオプション変更のたびに章をレイアウトし直します。book はすでに導出した改行ヒントを再利用するので、アナライザーが再実行されることはありません。ただし結果は新しい `ChapterLayout` インスタンスになり、下流の見開きインデックスは 0 に戻ります。フックは次の 3 段階で読書位置を引き継ぎます。Vue のコンポーザブルもまったく同じ形です。
+
+- `capturePosition(layout)` はリフロー直前に差し替えられるレイアウトを受け取り、残すアンカー（または `null`）を返します。内容の切り替えに伴う空白化した再レイアウトでは呼ばれません。
+- `pendingRestore.current` は、新しいレイアウトが揃うまでそのアンカーを保持します。
+- `restorePosition(layout, anchor)` を渡した場合、新しいレイアウトが揃った時点で呼ばれます（React ではコミット後、描画前）。呼ばれる時点で `pendingRestore` はすでに空です。
 
 ```tsx
 const layout = useChapterLayout(book, epub, chapter, surface, {
   capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
+  restorePosition: (l, anchor) => setSpreadIdx(l.locateAnchor(anchor)?.spreadIdx ?? 0),
 });
-
-useLayoutEffect(() => {
-  const anchor = layout.pendingRestore.current;
-  if (!(anchor && layout.layout)) return;
-  layout.pendingRestore.current = null; // 消費する
-  setSpreadIdx(layout.layout.locateAnchor(anchor)?.spreadIdx ?? 0);
-}, [layout.layout]);
 ```
 
-`pendingRestore` は mutable な ref 型なので、サポート範囲内のどの `@types/react` でも上記の代入が型検査を通ります。原稿プレビュー用の `useManuscriptLayout` にも同じ組み合わせがあります。
+```ts
+// Vue: オプションは同じ。`layout.layout` は Ref です。
+const layout = useChapterLayout(book, epub, chapter, surface, {
+  capturePosition: (l) => l.anchorAt(spreadIdx.value, 'right'),
+  restorePosition: (l, anchor) => {
+    spreadIdx.value = l.locateAnchor(anchor)?.spreadIdx ?? 0;
+  },
+});
+```
+
+`restorePosition` を渡さない場合は、新しいレイアウトが揃ったあとに `pendingRestore.current` を自分で読み、`null` に戻します。見開きインデックスを自前のレイアウトエフェクトでリセットし、そのあとで復元したいコンポーネントにはこちらが向いています。原稿プレビュー用の `useManuscriptLayout` も同じオプションを受け取り、同じ `pendingRestore` を返します。
 
 ### useImageOverlay フック
 
@@ -663,10 +673,15 @@ const [cover, setCover] = useState<File | null>(null);
   margin-right: 0.6em;
 }
 
-/* 見出しスタイルのカスタマイズ */
+/* 見出しスタイルのカスタマイズ。見出しのサイズと前後の間隔は
+   --mejiro-paragraph-scale に従うので、font-size ではなくスケールを変えます。 */
 .mejiro-paragraph--heading {
-  font-size: 1.6em;
   color: #333;
+}
+
+/* renderEpubStatic の出力は見出しサイズをスタイルシートから受け取ります。 */
+.mejiro-page--static .mejiro-paragraph--h1 {
+  --mejiro-paragraph-scale: 1.8;
 }
 
 /* ルビサイズのカスタマイズ */
@@ -675,6 +690,8 @@ const [cover, setCover] = useState<File | null>(null);
   color: #666;
 }
 ```
+
+`ChapterLayout` から作ったページの見出しサイズは、スタイルシートでは決まりません。ページコンポーネントがレイアウトの計測に使ったスケールを `--mejiro-paragraph-scale` としてインラインで設定するためです。サイズは book オプションの `headingScale` / `headingStyles` で変えてください。そうすれば計測と描画が食い違いません。
 
 ### CSS カスケードレイヤー（ホスト側リセットがリーダー UI を壊しうる）
 
