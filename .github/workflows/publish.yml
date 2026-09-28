@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: '22'
 
-      - run: npm install -g npm@11.5.1
+      - run: npm install -g npm@11.20.0
       - run: corepack enable
       - run: corepack prepare yarn@4.18.0 --activate
 
@@ -50,8 +50,14 @@ jobs:
       - name: Publish @libraz/mejiro
         working-directory: packages/mejiro
         run: |
-          yarn pack -o package.tgz
-          npm publish package.tgz --access public
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already published, skipping"
+          else
+            yarn pack -o package.tgz
+            npm publish package.tgz --access public
+          fi
 
       - name: Wait for registry propagation
         run: sleep 15
@@ -59,14 +65,26 @@ jobs:
       - name: Publish @libraz/mejiro-react
         working-directory: packages/mejiro-react
         run: |
-          yarn pack -o package.tgz
-          npm publish package.tgz --access public
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already published, skipping"
+          else
+            yarn pack -o package.tgz
+            npm publish package.tgz --access public
+          fi
 
       - name: Publish @libraz/mejiro-vue
         working-directory: packages/mejiro-vue
         run: |
-          yarn pack -o package.tgz
-          npm publish package.tgz --access public
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "$NAME@$VERSION is already published, skipping"
+          else
+            yarn pack -o package.tgz
+            npm publish package.tgz --access public
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
