@@ -52,17 +52,10 @@ export const MejiroImageOverlay = defineComponent({
             class: 'mejiro-reader-image-overlay-close',
             'aria-label': messages.value.imageRemoveButton,
             title: messages.value.imageRemoveButton,
-            onPointerdown: (e: PointerEvent) => {
-              e.stopPropagation();
-              e.preventDefault();
-              emit('close');
-            },
-            onKeydown: (e: KeyboardEvent) => {
-              if (e.key !== 'Enter' && e.key !== ' ') return;
-              e.stopPropagation();
-              e.preventDefault();
-              emit('close');
-            },
+            // A press here must not start a drag of the overlay it sits on.
+            onPointerdown: (e: PointerEvent) => e.stopPropagation(),
+            // One path for pointer, keyboard and assistive-technology activation.
+            onClick: () => emit('close'),
           }),
         ],
       );

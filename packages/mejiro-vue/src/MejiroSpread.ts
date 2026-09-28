@@ -1,6 +1,10 @@
 import type { PageHeaderData } from '@libraz/mejiro';
 import type { AnchorRange, AnchorRect, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
-import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
+import {
+  type FontFamily,
+  isPrimaryPointerPress,
+  normalizeFontFamily,
+} from '@libraz/mejiro/browser';
 import {
   computed,
   defineComponent,
@@ -14,9 +18,21 @@ import { useI18n } from './i18n.js';
 import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
-import type { MultiImageItem } from './useMultiImageOverlay.js';
+import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js';
 
 export type { PageHeaderData };
+
+const OVERLAY_SELECTOR = '.mejiro-reader-image-overlay';
+const CONTENT_SELECTOR = '.mejiro-reader-page-content';
+
+/** The page content element under a client point, if any. */
+function contentAtPoint(root: HTMLElement, x: number, y: number): HTMLElement | null {
+  for (const content of root.querySelectorAll<HTMLElement>(CONTENT_SELECTOR)) {
+    const r = content.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return content;
+  }
+  return null;
+}
 
 /**
  * Renders a two-page spread (or one page of it in single-page mode) with the
@@ -53,7 +69,10 @@ export const MejiroSpread = defineComponent({
     rightHeader: { type: Object as PropType<PageHeaderData>, default: () => ({}) },
     /** Header data for the left page. */
     leftHeader: { type: Object as PropType<PageHeaderData>, default: () => ({}) },
-    /** Image overlays on the current spread (for the right page coordinate space). */
+    /**
+     * Image overlays on the current spread, relative to the right page. With
+     * `singlePage`, only those whose centre lies on the page shown are drawn.
+     */
     images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
     /**
      * Force slot-mode rendering on both pages even without images. When
@@ -114,11 +133,11 @@ export const MejiroSpread = defineComponent({
     const instance = getCurrentInstance();
     let selection: { start: InChapterAnchor; pointerId: number } | null = null;
 
+    // By coordinates, not by target: once the spread captures the pointer, every
+    // event targets the spread root, which no page content is an ancestor of.
     function resolvePointer(e: PointerEvent): InChapterAnchor | null {
       if (!props.anchorAtCoord) return null;
-      const target = e.target as HTMLElement | null;
-      if (!target) return null;
-      const content = target.closest<HTMLElement>('.mejiro-reader-page-content');
+      const content = contentAtPoint(e.currentTarget as HTMLElement, e.clientX, e.clientY);
       if (!content) return null;
       const pageEl = content.closest<HTMLElement>('.mejiro-reader-page');
       const isRight = pageEl?.classList.contains('mejiro-reader-page--right') ?? true;
@@ -157,6 +176,8 @@ export const MejiroSpread = defineComponent({
 
     function handlePointerDown(e: PointerEvent): void {
       if (!selectionEnabled() || selection) return;
+      // Only a press on the text starts a selection; buttons and overlays keep theirs.
+      if (!(e.target as HTMLElement | null)?.closest(CONTENT_SELECTOR)) return;
       const anchor = resolvePointer(e);
       if (!anchor) return;
       e.preventDefault();
@@ -188,7 +209,9 @@ export const MejiroSpread = defineComponent({
     const SWIPE_THRESHOLD = 40;
     const TAP_MOVE_THRESHOLD = 8;
     function handleGesturePointerDown(e: PointerEvent): void {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (!isPrimaryPointerPress(e)) return;
+      // A press on an overlay drags, resizes or removes it; it is never a page turn.
+      if ((e.target as HTMLElement | null)?.closest(OVERLAY_SELECTOR)) return;
       gestureStart.value = { x: e.clientX, y: e.clientY };
     }
     function handleGesturePointerUp(e: PointerEvent): void {
@@ -205,7 +228,7 @@ export const MejiroSpread = defineComponent({
       }
       if (ax < TAP_MOVE_THRESHOLD && ay < TAP_MOVE_THRESHOLD) {
         const target = e.target as HTMLElement | null;
-        if (target?.closest('button, a, .mejiro-reader-image-overlay')) return;
+        if (target?.closest(`button, a, ${OVERLAY_SELECTOR}`)) return;
         emit('surface-tap');
       }
     }
@@ -244,13 +267,16 @@ export const MejiroSpread = defineComponent({
 
     function renderPage(side: 'right' | 'left'): VNode {
       const isRight = side === 'right';
-      // Image rects are relative to the right page, so the left page hosts
-      // them (shifted by one page width) only when it is shown alone.
+      // Image rects are relative to the right page, so both pages' overlays hang
+      // off it; a page shown alone hosts only its own, the left one shifted a page width.
       const hostsImages = side === (props.singlePage ? props.singleSide : 'right');
+      const hosted = props.singlePage
+        ? props.images.filter((item) => overlayPageSide(item.rect) === props.singleSide)
+        : props.images;
       const result = isRight ? props.spread.right : props.spread.left;
       const header = isRight ? props.rightHeader : props.leftHeader;
       const pageKey = `${side}-${header.pageNumber ?? 'blank'}`;
-      const hasImages = props.images.length > 0;
+      const hasImages = hosted.length > 0;
       const contentStyle: Record<string, string | number> = {
         height: `${props.contentHeight}px`,
       };
@@ -259,7 +285,7 @@ export const MejiroSpread = defineComponent({
       if (props.lineSpacing != null) contentStyle.lineHeight = String(props.lineSpacing);
 
       const overlays = hostsImages
-        ? props.images.map((item) =>
+        ? hosted.map((item) =>
             h(MejiroImageOverlay, {
               key: item.id,
               rect: isRight ? item.rect : { ...item.rect, x: item.rect.x + props.pageWidth },

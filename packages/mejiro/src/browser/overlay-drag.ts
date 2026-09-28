@@ -66,6 +66,21 @@ export interface OverlayDragSession {
 }
 
 /**
+ * Whether a pointer-down may start an overlay gesture: any touch or pen
+ * contact, or the primary mouse button. A secondary or auxiliary button opens a
+ * context menu or autoscroll instead, and the browser may never deliver its
+ * `pointerup`, so a gesture started from it could outlive the press.
+ *
+ * @param event - The pointer-down event; only `pointerType` and `button` are read.
+ * @returns `true` when the press may start a gesture.
+ */
+export function isPrimaryPointerPress(
+  event: Pick<PointerEvent, 'pointerType' | 'button'>,
+): boolean {
+  return event.pointerType !== 'mouse' || event.button === 0;
+}
+
+/**
  * Starts a pointer drag on an image overlay and returns a handle to it.
  *
  * This is the single pointer-drag implementation behind the framework overlay
@@ -73,7 +88,8 @@ export interface OverlayDragSession {
  * `pointermove` / `pointerup` / `pointercancel` / `lostpointercapture`
  * listeners, animation-frame coalescing and teardown, leaving each host with
  * nothing but its own state update in {@link OverlayDragSessionOptions.onChange}. Call it from a pointer-down
- * handler after the host has decided the gesture applies.
+ * handler after the host has decided the gesture applies — at least that the
+ * press passes {@link isPrimaryPointerPress}.
  *
  * Framework-agnostic on purpose — no effect or watcher is involved, so the
  * session can be created from a plain DOM listener as well. It lives in the

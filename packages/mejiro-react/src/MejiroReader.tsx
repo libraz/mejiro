@@ -61,6 +61,21 @@ export type MejiroChapterNavMode = 'select' | 'panel' | 'both' | 'none';
  */
 const OPTIONS_DEBOUNCE_MS = 60;
 
+/** Default image x (px, relative to the right page), as `useMultiImageOverlay` places it. */
+const IMAGE_DEFAULT_X = 80;
+
+/**
+ * Where a new image goes when one page is shown alone: on that page, at the
+ * default x — the default cascade walks leftwards, onto the page not shown.
+ */
+function singlePageImagePlacement(
+  side: 'right' | 'left' | null,
+  pageWidth: number,
+): { x: number } | undefined {
+  if (side == null) return undefined;
+  return { x: side === 'left' ? IMAGE_DEFAULT_X - pageWidth : IMAGE_DEFAULT_X };
+}
+
 /** Book-swap key standing for any manuscript source, whatever its content. */
 const MANUSCRIPT_SOURCE = Symbol('manuscript');
 
@@ -249,14 +264,16 @@ export interface MejiroReaderHandle {
    */
   goToAnchor(anchor: ReadingAnchor): Promise<void>;
   /**
-   * Returns the {@link ReadingAnchor} at the start of the current spread,
-   * or `null` if the layout is not ready.
+   * Returns the {@link ReadingAnchor} at the start of the text on the current
+   * spread, or `null` if the layout is not ready. When an image blocks every
+   * page of the spread, the anchor is where the text resumes after it; `null`
+   * again if none follows.
    */
   getAnchor(): ReadingAnchor | null;
   /**
    * Returns the half-open range of {@link ReadingAnchor}s visible on the
-   * current spread. `end` points at the start of the next spread (or the end
-   * of the chapter for the last spread).
+   * current spread. `end` points at the start of the text on the next spread
+   * that has any (or the end of the chapter when none does).
    */
   getVisibleRange(): { start: ReadingAnchor; end: ReadingAnchor } | null;
   /**
@@ -762,6 +779,7 @@ function MejiroReaderInner(
     fetchEpub: fetchEpubFn,
     onLoad: (b) => {
       if (chapterProp == null) setChapterState(0);
+      clearImagesRef.current();
       onLoad?.(b);
     },
   });
@@ -892,9 +910,12 @@ function MejiroReaderInner(
   }, [geometryKey]);
 
   const imageCtx = useMultiImageOverlay(layoutCtx.layout, spreadCtx.layoutSpreadIdx, {
+    defaultX: IMAGE_DEFAULT_X,
     onUpdate: () => spreadCtx.refresh(),
   });
 
+  // The layout reflows in place when images change, so the image state keys this too.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: currentImages changes whenever the layout's exclusions do.
   const annotationRects = useMemo(() => {
     if (!(annotations && layoutCtx.layout)) return [];
     const result = [];
@@ -909,7 +930,7 @@ function MejiroReaderInner(
       for (const rect of rects) result.push({ ...rect, color: annotation.color });
     }
     return result;
-  }, [annotations, layoutCtx.layout, chapter]);
+  }, [annotations, layoutCtx.layout, chapter, imageCtx.currentImages]);
 
   // Controlled mode: render `epub` / `manuscript` directly instead of copying
   // it into the loader state. Copying introduces a render where layout can see
@@ -930,6 +951,14 @@ function MejiroReaderInner(
     book.clearCache();
     if (eRef.current) onLoadRef.current?.(eRef.current);
   }, [controlled, sourceKey, book, chapterIsUncontrolled]);
+
+  // Images belong to the chapter they were placed on; another chapter starts bare.
+  const imagesChapterRef = useRef(chapter);
+  useEffect(() => {
+    if (imagesChapterRef.current === chapter) return;
+    imagesChapterRef.current = chapter;
+    clearImagesRef.current();
+  }, [chapter]);
 
   // Controlled spreadIdx → host-driven navigation: animate to the prop value.
   // Every commit is reconciled, not just the ones where the prop value changed:
@@ -1095,16 +1124,7 @@ function MejiroReaderInner(
         if (!layout) return null;
         const start = spreadCtx.anchorAt(spreadCtx.spreadIdx);
         if (!start) return null;
-        const next = spreadCtx.anchorAt(spreadCtx.spreadIdx + 1);
-        let end: { paragraph: number; charIndex: number };
-        if (next) {
-          end = next;
-        } else {
-          const ch = e?.chapters[chapter];
-          const lastP = (ch?.paragraphs.length ?? 1) - 1;
-          const lastText = ch?.paragraphs[lastP]?.text ?? '';
-          end = { paragraph: Math.max(0, lastP), charIndex: [...lastText].length };
-        }
+        const end = spreadCtx.anchorAt(spreadCtx.spreadIdx + 1) ?? layout.endAnchor() ?? start;
         return {
           start: { chapter, ...start },
           end: { chapter, ...end },
@@ -1135,7 +1155,6 @@ function MejiroReaderInner(
       onChapter,
       chapter,
       layout,
-      e,
       setOptions,
       tryApplyPendingAnchor,
     ],
@@ -1219,7 +1238,14 @@ function MejiroReaderInner(
           <button
             type="button"
             className={`mejiro-reader-btn${imageCtx.hasImages ? ' is-active' : ''}`}
-            onClick={() => imageCtx.addImage()}
+            onClick={() =>
+              imageCtx.addImage(
+                singlePageImagePlacement(
+                  mode === 'paginated' ? spreadCtx.singleSide : null,
+                  layoutCtx.pageWidth,
+                ),
+              )
+            }
           >
             {resolvedMessages.imageButton}
           </button>

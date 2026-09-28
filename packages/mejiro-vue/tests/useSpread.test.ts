@@ -162,3 +162,30 @@ describe('useSpread (Vue)', () => {
     expect(result.current.singleSide.value).toBeNull();
   });
 });
+
+describe('useSpread (Vue) — anchors past image-blocked pages', () => {
+  // Spread 0's right page and all of spread 1 are covered by images.
+  function blockedLayout(): ChapterLayout {
+    return Object.assign(mockLayout(8), {
+      anchorAt: vi.fn((spread: number, side: 'right' | 'left') => {
+        if ((spread === 0 && side === 'right') || spread === 1) return null;
+        return { paragraph: spread, charIndex: side === 'right' ? 0 : 5 };
+      }),
+    });
+  }
+
+  it('takes the anchor from the next page that holds text', () => {
+    const layout = shallowRef<ChapterLayout | null>(blockedLayout());
+    const { result } = harness(() => useSpread(layout, { turnDuration: 0 }));
+    expect(result.current.anchorAt(0)).toEqual({ paragraph: 0, charIndex: 5 });
+    expect(result.current.anchorAt(1)).toEqual({ paragraph: 2, charIndex: 0 });
+    expect(result.current.anchorAt(4)).toBeNull();
+  });
+
+  it('counts pages the same way in single-page mode', () => {
+    const layout = shallowRef<ChapterLayout | null>(blockedLayout());
+    const { result } = harness(() => useSpread(layout, { turnDuration: 0, single: true }));
+    expect(result.current.anchorAt(0)).toEqual({ paragraph: 0, charIndex: 5 });
+    expect(result.current.anchorAt(2)).toEqual({ paragraph: 2, charIndex: 0 });
+  });
+});

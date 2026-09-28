@@ -1,5 +1,5 @@
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { createOverlayDragSession } from '@libraz/mejiro/browser';
+import { createOverlayDragSession, isPrimaryPointerPress } from '@libraz/mejiro/browser';
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -36,9 +36,14 @@ export interface UseMultiImageOverlayOptions {
 
 /** Return value of {@link useMultiImageOverlay}. */
 export interface UseMultiImageOverlayReturn {
-  /** Map of all images keyed by spread index. */
+  /**
+   * Map of all images keyed by spread index. A new map whenever the images or
+   * the margin they are applied with change, and a replacement layout has them
+   * before any view renders from it, so this map and the layout together key
+   * anything derived from the layout.
+   */
   imagesBySpread: Map<number, MultiImageItem[]>;
-  /** Images on the current spread. */
+  /** Images on the current spread; a new array whenever `imagesBySpread` changes. */
   currentImages: MultiImageItem[];
   /** Whether any spread has at least one image. */
   hasImages: boolean;
@@ -57,6 +62,37 @@ export interface UseMultiImageOverlayReturn {
 }
 
 let nextId = 0;
+
+/** Sets each listed spread's images on `layout`, without reading any spread back. */
+function applyImages(
+  layout: ChapterLayout,
+  images: ReadonlyMap<number, MultiImageItem[]>,
+  spreads: readonly number[],
+  margin: number | undefined,
+): void {
+  for (const si of spreads) {
+    const bookImages: BookImage[] = (images.get(si) ?? []).map((it) => ({
+      x: it.rect.x,
+      y: it.rect.y,
+      w: it.rect.w,
+      h: it.rect.h,
+      margin,
+    }));
+    layout.setImages(si, bookImages);
+  }
+}
+
+/**
+ * Page of the spread an overlay belongs to when pages are shown apart: the one
+ * holding its horizontal centre. Rects are relative to the right page, so a
+ * negative centre lies on the left page, one page width to the left.
+ *
+ * @param rect - Overlay rectangle, relative to the right page.
+ * @returns The page side the overlay is drawn on.
+ */
+export function overlayPageSide(rect: ImageRect): 'right' | 'left' {
+  return rect.x + rect.w / 2 < 0 ? 'left' : 'right';
+}
 
 /**
  * React hook that manages multiple draggable/resizable image overlays
@@ -98,21 +134,22 @@ export function useMultiImageOverlay(
     (spreads: readonly number[]) => {
       const lo = layoutRef.current;
       if (!lo) return;
-      for (const si of spreads) {
-        const items = imagesRef.current.get(si) ?? [];
-        const bookImages: BookImage[] = items.map((it) => ({
-          x: it.rect.x,
-          y: it.rect.y,
-          w: it.rect.w,
-          h: it.rect.h,
-          margin,
-        }));
-        lo.setImages(si, bookImages);
-      }
+      applyImages(lo, imagesRef.current, spreads, margin);
       for (const si of spreads) onUpdateRef.current?.(lo.getSpread(si));
     },
     [margin],
   );
+
+  // A replacement layout, or a new margin, gets the images while rendering, so
+  // every view derived from the layout in this same render already reflows.
+  const appliedRef = useRef<{ layout: ChapterLayout | null; margin: number | undefined }>({
+    layout: null,
+    margin,
+  });
+  if (layout && (appliedRef.current.layout !== layout || appliedRef.current.margin !== margin)) {
+    appliedRef.current = { layout, margin };
+    applyImages(layout, imagesRef.current, [...imagesRef.current.keys()], margin);
+  }
 
   const commit = useCallback(
     (next: Map<number, MultiImageItem[]>, affectedSpread: number) => {
@@ -207,6 +244,7 @@ export function useMultiImageOverlay(
 
   const onOverlayPointerDown = useCallback(
     (id: string, e: ReactPointerEvent) => {
+      if (!isPrimaryPointerPress(e)) return;
       e.preventDefault();
       const found = findById(id);
       if (!found) return;
@@ -229,6 +267,7 @@ export function useMultiImageOverlay(
 
   const onResizePointerDown = useCallback(
     (id: string, e: ReactPointerEvent) => {
+      if (!isPrimaryPointerPress(e)) return;
       e.preventDefault();
       e.stopPropagation();
       const found = findById(id);
@@ -250,17 +289,25 @@ export function useMultiImageOverlay(
     [findById, updateImage],
   );
 
-  // Re-sync image exclusions whenever the layout is replaced.
+  // Report the spreads re-applied during render once it commits.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new margin re-applies them too.
   useEffect(() => {
     if (!layout) return;
-    syncSpreads([...imagesRef.current.keys()]);
-  }, [layout, syncSpreads]);
+    for (const si of imagesRef.current.keys()) onUpdateRef.current?.(layout.getSpread(si));
+  }, [layout, margin]);
 
-  const currentImages = useMemo(() => images.get(spreadIdx) ?? [], [images, spreadIdx]);
+  // A new margin changes the exclusions without changing `images`.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: margin keys the copy.
+  const imagesBySpread = useMemo(() => new Map(images), [images, margin]);
+  // A fresh array per map, so it changes whenever any spread's exclusions do.
+  const currentImages = useMemo(
+    () => [...(imagesBySpread.get(spreadIdx) ?? [])],
+    [imagesBySpread, spreadIdx],
+  );
   const hasImages = useMemo(() => [...images.values()].some((list) => list.length > 0), [images]);
 
   return {
-    imagesBySpread: images,
+    imagesBySpread,
     currentImages,
     hasImages,
     addImage,

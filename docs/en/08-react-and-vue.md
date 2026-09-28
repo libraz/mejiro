@@ -77,8 +77,8 @@ reader.current?.goToSpread(12);
 | `goToChapter` | `(index: number) => void` | Switch chapter; resets the spread index to 0. |
 | `getReadingPosition` | `() => ReadingPosition` | Returns `{ chapter, spreadIdx, totalPages, totalSpreads }`. |
 | `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`; switches chapters first if needed. The promise resolves once the spread is applied. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
-| `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the current spread, or `null` before layout is ready. |
-| `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the next spread (or end of chapter). |
+| `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the text on the current spread, or `null` before layout is ready. When an image covers a whole page, the anchor comes from the next page with text. |
+| `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the text on the next spread that has any (or the end of the chapter). |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
 | `subscribe` | `(event, listener) => () => void` | Subscribe to a lifecycle event; the returned function detaches the listener. |
 
@@ -332,7 +332,7 @@ Without `restorePosition`, read `pendingRestore.current` yourself once the new l
 
 ### useImageOverlay Hook
 
-`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow. While an overlay is active, the exclusion is re-issued when the layout is replaced or the spread changes, so the text keeps flowing around it after a resize or a page turn.
+`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow. While an overlay is active, the exclusion is re-issued when the layout is replaced or the spread changes, so the text keeps flowing around it after a resize or a page turn. In React a change of the `margin` option re-issues it as well; the Vue composable reads its options once, when it is called.
 
 ```ts
 const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =

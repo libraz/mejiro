@@ -2,7 +2,7 @@
 /** @jsxImportSource react */
 
 import { MejiroBook } from '@libraz/mejiro/book';
-import type { EpubBook } from '@libraz/mejiro/epub';
+import { type EpubBook, EpubProject } from '@libraz/mejiro/epub';
 import { act, render, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -1296,6 +1296,169 @@ describe('MejiroReader (React) — single-page mode', () => {
     } finally {
       vi.useRealTimers();
       surface.restore();
+    }
+  });
+});
+
+describe('MejiroReader (React) — image overlays', () => {
+  function imageButton(container: HTMLElement): HTMLButtonElement {
+    return Array.from(container.querySelectorAll<HTMLButtonElement>('.mejiro-reader-btn')).find(
+      (b) => b.textContent === enMessages.imageButton,
+    ) as HTMLButtonElement;
+  }
+  const rectStyles = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>('.mejiro-selection-rect'), (el) =>
+      el.getAttribute('style'),
+    );
+
+  it('re-derives annotation highlights when an image reflows the text', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <MejiroReader
+          epub={longEpub()}
+          enableImageOverlay
+          annotations={[
+            {
+              chapter: 0,
+              start: { paragraph: 0, charIndex: 0 },
+              end: { paragraph: 0, charIndex: 320 },
+            },
+          ]}
+        />,
+      );
+      await settle();
+      const before = rectStyles(container);
+      expect(before.length).toBeGreaterThan(0);
+
+      await settle(() => imageButton(container).click());
+      expect(container.querySelector('.mejiro-reader-image-overlay')).not.toBeNull();
+      expect(rectStyles(container)).not.toEqual(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-reads the scroll-mode pages when an image reflows the text', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(
+        <MejiroReader epub={longEpub()} enableImageOverlay mode="scroll" />,
+      );
+      await settle();
+      const firstPage = () =>
+        container.querySelector('[data-page-idx="0"] .mejiro-reader-page-content')?.innerHTML;
+      const before = firstPage();
+      expect(before).toBeTruthy();
+
+      await settle(() => imageButton(container).click());
+      expect(container.querySelector('.mejiro-reader-image-overlay')).not.toBeNull();
+      expect(firstPage()).not.toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('places a new image on the single page shown', async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      const { container } = render(
+        <MejiroReader ref={ref} epub={pagedEpub(6)} enableImageOverlay spreadMode="single" />,
+      );
+      await settle();
+      await settle(() => ref.current?.goToSpread(1));
+      expect(container.querySelector('.mejiro-reader-page--left')).not.toBeNull();
+
+      await settle(() => imageButton(container).click());
+      const overlay = container.querySelector<HTMLElement>(
+        '.mejiro-reader-page--left .mejiro-reader-image-overlay',
+      );
+      const pageWidth = Number.parseFloat(
+        container.querySelector<HTMLElement>('.mejiro-reader-page--left')?.style.width ?? '',
+      );
+      const left = Number.parseFloat(overlay?.style.left ?? '');
+      expect(left).toBeGreaterThanOrEqual(0);
+      expect(left).toBeLessThan(pageWidth);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the images when the chapter changes', async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      const { container } = render(
+        <MejiroReader ref={ref} epub={twoChapterEpub()} enableImageOverlay />,
+      );
+      await settle();
+      await settle(() => imageButton(container).click());
+      expect(imageButton(container).classList.contains('is-active')).toBe(true);
+
+      await settle(() => ref.current?.goToChapter(1));
+      expect(imageButton(container).classList.contains('is-active')).toBe(false);
+      await settle(() => ref.current?.goToChapter(0));
+      expect(container.querySelector('.mejiro-reader-image-overlay')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the images when the reader loads another book itself', async () => {
+    const bytes = async (title: string) =>
+      new EpubProject({
+        metadata: { title },
+        chapters: [{ title, body: `${title}の本文。` }],
+        includeTitlePage: false,
+      }).export();
+    const books: Record<string, ArrayBuffer> = {
+      '/a.epub': await bytes('甲'),
+      '/b.epub': await bytes('乙'),
+    };
+    const fetchEpub = vi.fn(async (url: string) => books[url]);
+    const onLoad = vi.fn();
+    const { container, rerender } = render(
+      <MejiroReader epubUrl="/a.epub" fetchEpub={fetchEpub} enableImageOverlay onLoad={onLoad} />,
+    );
+    await waitFor(() => expect(imageButton(container)).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('.mejiro-reader-page-content')).not.toBeNull(),
+    );
+    act(() => imageButton(container).click());
+    expect(imageButton(container).classList.contains('is-active')).toBe(true);
+
+    rerender(
+      <MejiroReader epubUrl="/b.epub" fetchEpub={fetchEpub} enableImageOverlay onLoad={onLoad} />,
+    );
+    await waitFor(() => expect(onLoad).toHaveBeenCalledTimes(2));
+    expect(imageButton(container).classList.contains('is-active')).toBe(false);
+  });
+
+  it('ends the visible range of the last spread at the NFC end of the chapter', async () => {
+    vi.useFakeTimers();
+    try {
+      const ref = createRef<MejiroReaderHandle>();
+      const decomposed: EpubBook = {
+        title: 'NFC',
+        author: 'Author',
+        chapters: [
+          {
+            title: 'Only',
+            // Decomposed: three characters, six code points.
+            paragraphs: [{ text: 'か\u3099'.repeat(3), inlineAnnotations: [] }],
+          },
+        ],
+      };
+      render(<MejiroReader ref={ref} epub={decomposed} />);
+      await settle();
+      expect(ref.current?.getVisibleRange()?.end).toEqual({
+        chapter: 0,
+        paragraph: 0,
+        charIndex: 3,
+      });
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

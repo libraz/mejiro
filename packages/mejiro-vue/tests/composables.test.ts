@@ -4,7 +4,7 @@ import type { ChapterLayout, InChapterAnchor, MejiroBook, SpreadResult } from '@
 import { MejiroBook as MejiroBookClass } from '@libraz/mejiro/book';
 import type { EditableEpub, EpubBook } from '@libraz/mejiro/epub';
 import { describe, expect, it, vi } from 'vitest';
-import { type App, createApp, defineComponent, nextTick, ref, shallowRef } from 'vue';
+import { type App, computed, createApp, defineComponent, nextTick, ref, shallowRef } from 'vue';
 
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
   // Only the loaders are faked; the module's pure helpers (the book clone the
@@ -1361,4 +1361,66 @@ describe('useImageOverlay (Vue, single)', () => {
     addSpy.mockRestore();
     removeSpy.mockRestore();
   });
+});
+
+describe('image overlays (Vue) — sync and gestures', () => {
+  it('gives a replacement layout its images before views derived from it read it', () => {
+    const first = mockLayout(4);
+    const second = mockLayout(4);
+    const layoutRef = shallowRef<ChapterLayout>(first);
+    const { result, unmount } = withSetup(() => useMultiImageOverlay(layoutRef, ref(0)));
+    result.addImage();
+    // A view keyed on the layout and the images, as the readers derive theirs.
+    const appliedWhenDerived = computed(() => {
+      void result.currentImages.value;
+      return vi.mocked(layoutRef.value.setImages).mock.calls.length;
+    });
+
+    layoutRef.value = second;
+    expect(appliedWhenDerived.value).toBe(1);
+    expect(second.setImages).toHaveBeenCalledWith(0, [expect.objectContaining({ x: 80 })]);
+    unmount();
+  });
+
+  it.each(['overlay', 'resize'] as const)(
+    'starts no %s drag from a secondary or auxiliary mouse button, on either composable',
+    (handle) => {
+      const layout = shallowRef<ChapterLayout | null>(mockLayout(4));
+      const multi = withSetup(() => useMultiImageOverlay(layout, ref(0)));
+      const single = withSetup(() => useImageOverlay(layout, ref(0), vi.fn()));
+      const { id } = multi.result.addImage();
+      single.result.toggleImage();
+      const addSpy = vi.spyOn(document, 'addEventListener');
+      try {
+        for (const button of [1, 2]) {
+          const target = Object.assign(document.createElement('div'), {
+            setPointerCapture: vi.fn(),
+          });
+          const event = {
+            pointerType: 'mouse',
+            button,
+            pointerId: 1,
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+            clientX: 0,
+            clientY: 0,
+            currentTarget: target,
+          } as unknown as PointerEvent;
+          if (handle === 'overlay') {
+            multi.result.onOverlayPointerDown(id, event);
+            single.result.onOverlayPointerDown(event);
+          } else {
+            multi.result.onResizePointerDown(id, event);
+            single.result.onResizePointerDown(event);
+          }
+          expect(target.setPointerCapture).not.toHaveBeenCalled();
+        }
+        expect(addSpy).not.toHaveBeenCalledWith('pointermove', expect.any(Function));
+      } finally {
+        addSpy.mockRestore();
+        multi.unmount();
+        single.unmount();
+      }
+    },
+  );
 });

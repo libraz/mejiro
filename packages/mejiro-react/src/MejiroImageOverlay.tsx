@@ -51,17 +51,10 @@ export function MejiroImageOverlay({
         aria-label={messages.imageRemoveButton}
         title={messages.imageRemoveButton}
         className="mejiro-reader-image-overlay-close"
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          e.preventDefault();
-          onClose?.();
-        }}
-        onKeyDown={(e) => {
-          if (e.key !== 'Enter' && e.key !== ' ') return;
-          e.stopPropagation();
-          e.preventDefault();
-          onClose?.();
-        }}
+        // A press here must not start a drag of the overlay it sits on.
+        onPointerDown={(e) => e.stopPropagation()}
+        // One path for pointer, keyboard and assistive-technology activation.
+        onClick={() => onClose?.()}
       />
     </div>
   );

@@ -625,6 +625,18 @@ export class ChapterLayout {
   }
 
   /**
+   * Returns the anchor just past the chapter's last character: the last
+   * paragraph, at its length in the NFC code points the layout counts in.
+   *
+   * @returns The end-of-chapter anchor, or `null` for a chapter with no paragraphs.
+   */
+  endAnchor(): InChapterAnchor | null {
+    const last = this.cached.length - 1;
+    if (last < 0) return null;
+    return { paragraph: last, charIndex: this.cached[last].text.length };
+  }
+
+  /**
    * Returns the pixel bounding rectangle of the character at the given
    * in-chapter anchor.
    *

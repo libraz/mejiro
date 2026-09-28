@@ -6,7 +6,7 @@ export type {
   OverlayDragSession,
   OverlayDragSessionOptions,
 } from './overlay-drag.js';
-export { createOverlayDragSession } from './overlay-drag.js';
+export { createOverlayDragSession, isPrimaryPointerPress } from './overlay-drag.js';
 export type {
   ChapterLayoutOptions,
   ChapterLayoutResult,

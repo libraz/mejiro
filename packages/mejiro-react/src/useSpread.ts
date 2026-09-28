@@ -49,7 +49,11 @@ export interface UseSpreadReturn {
   setSpread: (index: number) => void;
   /** Navigation index that shows the given page index. */
   indexOfPage: (pageIdx: number) => number;
-  /** Anchor at the start of the first page shown at navigation index `index`, or `null`. */
+  /**
+   * Anchor at the start of the text shown at navigation index `index`. A page an
+   * image blocks entirely holds no text, so the anchor then comes from the next
+   * page that does, even past `index`; `null` when no page from there on holds text.
+   */
   anchorAt: (index: number) => InChapterAnchor | null;
   /** Manually refresh `spread` from `layout` at the current index. */
   refresh: () => void;
@@ -83,6 +87,18 @@ function firstPageOf(index: number, single: boolean): number {
 /** Navigation index that shows page `pageIdx`. */
 function indexOfPageIn(pageIdx: number, single: boolean): number {
   return single ? pageIdx : Math.floor(pageIdx / 2);
+}
+
+/**
+ * Anchor at the first text shown on page `page` or, when that page holds none
+ * (an image blocks it entirely), on the nearest later page that does.
+ */
+function firstTextAnchorFrom(layout: ChapterLayout, page: number): InChapterAnchor | null {
+  for (let p = page; p < layout.totalPages; p++) {
+    const anchor = layout.anchorAt(Math.floor(p / 2), p % 2 === 0 ? 'right' : 'left');
+    if (anchor) return anchor;
+  }
+  return null;
 }
 
 /**
@@ -211,8 +227,7 @@ export function useSpread(
   const anchorAt = useCallback(
     (index: number): InChapterAnchor | null => {
       if (!layout || index < 0 || index >= navigationCount(layout.totalPages, single)) return null;
-      const page = firstPageOf(index, single);
-      return layout.anchorAt(Math.floor(page / 2), page % 2 === 0 ? 'right' : 'left');
+      return firstTextAnchorFrom(layout, firstPageOf(index, single));
     },
     [layout, single],
   );

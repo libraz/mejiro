@@ -487,8 +487,11 @@ Compute effective line width for vertical text. Formula: `containerHeight - font
 | Export | Signature |
 |---|---|
 | `createOverlayDragSession` | `(options: OverlayDragSessionOptions) => OverlayDragSession` |
+| `isPrimaryPointerPress` | `(event: Pick<PointerEvent, 'pointerType' \| 'button'>) => boolean` |
 
 Drives an image-overlay drag or resize from a pointer-down handler: it listens for `pointermove` / `pointerup` on the document, coalesces updates into an animation frame where the runtime provides one, and re-derives each rectangle from the pointer-down rectangle plus the cumulative delta, so rounding never accumulates during a gesture.
+
+Start a session only for a press `isPrimaryPointerPress` accepts: a touch or pen contact, or the primary mouse button. A secondary or auxiliary button opens a context menu or autoscroll, and the browser may never deliver its `pointerup`.
 
 It lives in the browser layer rather than in core because it owns pointer capture and document-level listeners — `document`, `requestAnimationFrame` and `setPointerCapture`. The rectangle arithmetic it delegates to (`moveImageOverlayRect` / `resizeImageOverlayRect`, over `ImageOverlayRect`) is DOM-free and stays in `@libraz/mejiro`.
 
@@ -951,6 +954,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — A string is matched literally unless `options.regex` is `true`, in which case it is a regex source string; a `RegExp` always takes the regex path and keeps its own `i` / `m` / `s` flags (`options.caseSensitive`, when given, wins over `i`). Regex patterns go through a safety guard that throws on catastrophic-backtracking shapes and on oversized patterns/input. **Scope is the current `ChapterLayout` only.** Walks the chapter's paragraphs and returns hits as `SearchMatch` (an `AnchorLocation` extended with the match length, etc.). For cross-chapter or cross-book search (e.g. a novel-site search index), keep an external full-text index server-side (Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5) and hand the resolved anchors to `MejiroReaderHandle.goToAnchor()` to navigate to the hit.
 - `locateAnchor(anchor: InChapterAnchor): AnchorLocation | null` — Resolve an anchor to the spread / page / line containing it; `null` when out of range
 - `anchorAt(spreadIndex: number, side?: 'right' | 'left'): InChapterAnchor | null` — Anchor of the first character of a spread page (default `'right'`), for converting a spread index into a reflow-stable position
+- `endAnchor(): InChapterAnchor | null` — Anchor just past the chapter's last character, counted in the NFC code points the layout works from; `null` for a chapter with no paragraphs
 - `coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null` — Convert a reading anchor to spread/page coordinates
 - `anchorAtCoord(spreadIdx: number, x: number, y: number): InChapterAnchor | null` — Convert coordinates back to an anchor
 - `selectionRects(range: AnchorRange): AnchorRect[]` — Build highlight rectangles for a text range
@@ -1027,7 +1031,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 
 **`ManuscriptChapter`** — One chapter for `MejiroBook.layoutManuscript()`: `id?: string` (key in the returned map), `title: string` (emitted as an `h1` paragraph at the top of the layout), `body: string` (raw manuscript; blank lines separate paragraphs).
 
-**`InChapterAnchor` / `ReadingAnchor`** — Reflow-stable reading positions. `InChapterAnchor` is `{ paragraph, charIndex }`; `ReadingAnchor` extends it with `chapter: number` for a book-wide position. `AnchorLocation`, `AnchorRect`, `AnchorRange` and `SearchMatch` are the layout-side results built from them.
+**`InChapterAnchor` / `ReadingAnchor`** — Reflow-stable reading positions. `InChapterAnchor` is `{ paragraph, charIndex }`, where `charIndex` counts code points of the paragraph text after NFC normalization; `ReadingAnchor` extends it with `chapter: number` for a book-wide position. `AnchorLocation`, `AnchorRect`, `AnchorRange` and `SearchMatch` are the layout-side results built from them.
 
 This subpath also re-exports `RubyInputAnnotation`, the deprecated alias of `InlineRubyAnnotation`, so a `mejiro/book`-only consumer does not have to reach into `mejiro/browser` for it.
 
@@ -1198,7 +1202,7 @@ Common headless editor returns:
 
 **`MejiroReader` presentation props** -- `theme?: MejiroTheme` (reflected as `data-mejiro-theme` on the reader root, which the bundled CSS reads to swap palettes), `mode?: MejiroReaderMode` (`'paginated'` default / `'scroll'` stacks every page in a vertical scroller), `spreadMode?: MejiroSpreadMode` (`'double'` default / `'single'` / `'auto'`), `fit?: MejiroReaderFit` (`'fill'` default / `'width'`), `pageNumbers?: PageNumberDisplay`, `locale?: MejiroLocale` and `messages?: Partial<MejiroMessages>` for UI strings, and `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` to replace the settings panel body with a custom form.
 
-In single-page mode (`'single'`, or `'auto'` on a portrait surface) the reader shows one page at a time, and every spread index counts pages: `spreadIdx`, `goToSpread`, `next` / `prev`, `onSpreadIdxChange`, the `spreadChanged` event and `ReadingPosition.totalSpreads`. When `'auto'` switches mode, the index is converted so the page on screen stays visible. `useSpread` implements this rule through its `single` option and reports the page shown as `firstPage`, `layoutSpreadIdx` and `singleSide`, which `MejiroSpread` takes as `singlePage` / `singleSide`.
+In single-page mode (`'single'`, or `'auto'` on a portrait surface) the reader shows one page at a time, and every spread index counts pages: `spreadIdx`, `goToSpread`, `next` / `prev`, `onSpreadIdxChange`, the `spreadChanged` event and `ReadingPosition.totalSpreads`. When `'auto'` switches mode, the index is converted so the page on screen stays visible. `useSpread` implements this rule through its `single` option and reports the page shown as `firstPage`, `layoutSpreadIdx` and `singleSide`, which `MejiroSpread` takes as `singlePage` / `singleSide`. Image overlay rectangles stay relative to the right page; in single-page mode `MejiroSpread` draws only those whose centre lies on the page shown, and the reader's image button adds a new one on that page.
 
 **`MejiroReader` `annotations` prop** -- Pass an array of `{ chapter, start, end, color? }` and the Reader converts entries on the current chapter into highlight rectangles via `ChapterLayout.selectionRects`, forwarding them to `MejiroSpread`. Typically paired with `useAnnotations`, but any shape that satisfies the structural type works.
 

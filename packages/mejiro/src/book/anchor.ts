@@ -1,6 +1,9 @@
 /**
  * A position within a single chapter, expressed as a paragraph index and a
- * Unicode code point offset into that paragraph's `text`.
+ * Unicode code point offset into that paragraph's `text` after NFC
+ * normalization — the text the layout works from. Slicing a paragraph's
+ * original `text` by an anchor addresses the same characters only when that
+ * text is already NFC.
  *
  * Code point offsets are stable under reflow (font / size / line-width changes),
  * which is what makes them suitable for cross-device reading-position resume.
@@ -8,7 +11,7 @@
 export interface InChapterAnchor {
   /** Zero-based paragraph index within the chapter. */
   paragraph: number;
-  /** Unicode code point offset into the paragraph's `text`. */
+  /** Unicode code point offset into the paragraph's NFC-normalized `text`. */
   charIndex: number;
 }
 

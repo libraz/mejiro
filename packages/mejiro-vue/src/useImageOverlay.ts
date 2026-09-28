@@ -1,6 +1,6 @@
 import type { ImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { createOverlayDragSession } from '@libraz/mejiro/browser';
+import { createOverlayDragSession, isPrimaryPointerPress } from '@libraz/mejiro/browser';
 import { computed, onScopeDispose, type Ref, ref, watch } from 'vue';
 
 export type { ImageOverlayRect } from '@libraz/mejiro';
@@ -54,7 +54,8 @@ export interface UseImageOverlayReturn {
  * @param layout - Ref to the current chapter layout (or `null`).
  * @param spreadIdx - Ref to the current spread index.
  * @param onUpdate - Called with the updated {@link SpreadResult} after every reflow.
- * @param options - Default dimensions and position for the overlay.
+ * @param options - Default dimensions, position and margin for the overlay;
+ *   read once, when the composable is called.
  *
  * @example
  * ```ts
@@ -124,6 +125,7 @@ export function useImageOverlay(
   }
 
   function onOverlayPointerDown(e: PointerEvent): void {
+    if (!isPrimaryPointerPress(e)) return;
     e.preventDefault();
     const current = imageRect.value;
     if (!current) return;
@@ -143,6 +145,7 @@ export function useImageOverlay(
   }
 
   function onResizePointerDown(e: PointerEvent): void {
+    if (!isPrimaryPointerPress(e)) return;
     e.preventDefault();
     e.stopPropagation();
     const current = imageRect.value;

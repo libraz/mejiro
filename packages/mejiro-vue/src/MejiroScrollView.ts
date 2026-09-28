@@ -58,7 +58,12 @@ export const MejiroScrollView = defineComponent({
     },
     /** Zero-based spread whose right page carries `images`. */
     spreadIdx: { type: Number, default: undefined },
-    /** Image overlays on the right page of `spreadIdx`. */
+    /**
+     * Image overlays on the right page of `spreadIdx`. The layout reflows in
+     * place when its images change, so a new array here is also what re-reads
+     * the pages; `useMultiImageOverlay`'s `currentImages` provides one on every
+     * change.
+     */
     images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
   },
   emits: {
@@ -85,6 +90,8 @@ export const MejiroScrollView = defineComponent({
     const pageEls = ref<Array<HTMLDivElement | null>>([]);
 
     const pages = computed<PageResult[]>(() => {
+      // The layout reflows in place when images change, so `images` keys this too.
+      void props.images;
       const total = props.layout.totalPages;
       return Array.from({ length: total }, (_, i) => props.layout.getPage(i));
     });

@@ -75,8 +75,8 @@ reader.current?.goToSpread(12);
 | `goToChapter` | `(index: number) => void` | 章へ移動し、見開きを 0 にリセット。 |
 | `getReadingPosition` | `() => ReadingPosition` | 現在の `{ chapter, spreadIdx, totalPages, totalSpreads }` を取得。 |
 | `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | `ReadingAnchor` へ移動。章が異なれば章を切り替えてからアンカー解決。Promise は見開きが適用された時点で resolve。続けて別の `goToAnchor` が呼ばれた場合、先の Promise は即座に resolve（supersede）。アンマウント時も resolve するので `await` がハングしません。 |
-| `getAnchor` | `() => ReadingAnchor \| null` | 現在の見開き先頭の `ReadingAnchor`。レイアウト未確定時は `null`。 |
-| `getVisibleRange` | `() => { start, end } \| null` | 見開きに表示中のアンカー半開区間（`end` は次見開き先頭または章末）。 |
+| `getAnchor` | `() => ReadingAnchor \| null` | 現在の見開きに表示中の本文の先頭の `ReadingAnchor`。レイアウト未確定時は `null`。画像がページ全体を覆っているときは、本文のある次のページから取ります。 |
+| `getVisibleRange` | `() => { start, end } \| null` | 見開きに表示中のアンカー半開区間（`end` は本文のある次の見開きの本文先頭、なければ章末）。 |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | フォントや行間などを実行時変更。再計測・再レイアウトを伴います。 |
 | `subscribe` | `(event, listener) => () => void` | ライフサイクルイベントを購読。返り値で解除。 |
 
@@ -330,7 +330,7 @@ const layout = useChapterLayout(book, epub, chapter, surface, {
 
 ### useImageOverlay フック
 
-`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。レイアウトが差し替わったときや見開きが変わったときには排除を再登録するため、リサイズやページ送りのあともテキストは画像を避けて流れ続けます。
+`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。レイアウトが差し替わったときや見開きが変わったときには排除を再登録するため、リサイズやページ送りのあともテキストは画像を避けて流れ続けます。React では `margin` オプションが変わったときも再登録します。Vue のコンポーザブルはオプションを呼び出し時に 1 度だけ読みます。
 
 ```ts
 const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =

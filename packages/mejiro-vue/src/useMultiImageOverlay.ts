@@ -1,5 +1,5 @@
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { createOverlayDragSession } from '@libraz/mejiro/browser';
+import { createOverlayDragSession, isPrimaryPointerPress } from '@libraz/mejiro/browser';
 import {
   type ComputedRef,
   computed,
@@ -37,9 +37,13 @@ export interface UseMultiImageOverlayOptions {
 
 /** Return value of {@link useMultiImageOverlay}. */
 export interface UseMultiImageOverlayReturn {
-  /** Map of all images keyed by spread index. */
+  /**
+   * Map of all images keyed by spread index. Triggered whenever the images
+   * change, and a replacement layout has them as soon as it is assigned, so
+   * this map and the layout together key anything derived from the layout.
+   */
   imagesBySpread: Ref<Map<number, MultiImageItem[]>>;
-  /** Images on the currently-active spread. */
+  /** Images on the currently-active spread; a new array whenever `imagesBySpread` triggers. */
   currentImages: ComputedRef<MultiImageItem[]>;
   /** Whether any spread has at least one image. */
   hasImages: ComputedRef<boolean>;
@@ -60,11 +64,24 @@ export interface UseMultiImageOverlayReturn {
 let nextId = 0;
 
 /**
+ * Page of the spread an overlay belongs to when pages are shown apart: the one
+ * holding its horizontal centre. Rects are relative to the right page, so a
+ * negative centre lies on the left page, one page width to the left.
+ *
+ * @param rect - Overlay rectangle, relative to the right page.
+ * @returns The page side the overlay is drawn on.
+ */
+export function overlayPageSide(rect: ImageRect): 'right' | 'left' {
+  return rect.x + rect.w / 2 < 0 ? 'left' : 'right';
+}
+
+/**
  * Vue composable that manages multiple draggable/resizable image overlays
  * per spread, with automatic reflow via {@link ChapterLayout.setImages}.
  *
  * State is grouped by spread index, so images persist when the user
- * navigates away from and back to a spread.
+ * navigates away from and back to a spread. `options` is read once, when the
+ * composable is called.
  */
 export function useMultiImageOverlay(
   layout: Ref<ChapterLayout | null>,
@@ -85,9 +102,10 @@ export function useMultiImageOverlay(
     activeDragCleanups.clear();
   });
 
-  const currentImages = computed<MultiImageItem[]>(
-    () => imagesBySpread.value.get(spreadIdx.value) ?? [],
-  );
+  // A fresh array per trigger, so it changes whenever any spread's exclusions do.
+  const currentImages = computed<MultiImageItem[]>(() => [
+    ...(imagesBySpread.value.get(spreadIdx.value) ?? []),
+  ]);
 
   const hasImages = computed(() =>
     [...imagesBySpread.value.values()].some((list) => list.length > 0),
@@ -180,6 +198,7 @@ export function useMultiImageOverlay(
   }
 
   function onOverlayPointerDown(id: string, e: PointerEvent): void {
+    if (!isPrimaryPointerPress(e)) return;
     e.preventDefault();
     const found = findById(id);
     if (!found) return;
@@ -199,6 +218,7 @@ export function useMultiImageOverlay(
   }
 
   function onResizePointerDown(id: string, e: PointerEvent): void {
+    if (!isPrimaryPointerPress(e)) return;
     e.preventDefault();
     e.stopPropagation();
     const found = findById(id);
@@ -218,12 +238,16 @@ export function useMultiImageOverlay(
     });
   }
 
-  // Re-sync the affected spread when the underlying layout changes (e.g. after
-  // a fresh layoutChapter or resize) so image exclusions are reapplied.
-  watch(layout, (lo) => {
-    if (!lo) return;
-    syncSpreads([...imagesBySpread.value.keys()]);
-  });
+  // A replacement layout gets the images as soon as it is assigned, so every
+  // view derived from it already reflows around them.
+  watch(
+    layout,
+    (lo) => {
+      if (!lo || imagesBySpread.value.size === 0) return;
+      syncSpreads([...imagesBySpread.value.keys()]);
+    },
+    { flush: 'sync' },
+  );
 
   return {
     imagesBySpread,

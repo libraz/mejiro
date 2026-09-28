@@ -1,6 +1,10 @@
 import type { PageHeaderData } from '@libraz/mejiro';
 import type { AnchorRange, AnchorRect, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
-import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
+import {
+  type FontFamily,
+  isPrimaryPointerPress,
+  normalizeFontFamily,
+} from '@libraz/mejiro/browser';
 import {
   type CSSProperties,
   type ReactNode,
@@ -11,7 +15,7 @@ import { useI18n } from './i18n.js';
 import { MejiroImageOverlay } from './MejiroImageOverlay.js';
 import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
-import type { MultiImageItem } from './useMultiImageOverlay.js';
+import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js';
 
 export type { PageHeaderData };
 
@@ -37,7 +41,11 @@ export interface MejiroSpreadProps {
   rightHeader?: PageHeaderData;
   /** Header data for the left page. */
   leftHeader?: PageHeaderData;
-  /** Image overlays on the current spread. */
+  /**
+   * Image overlays on the current spread, relative to the right page. With
+   * {@link MejiroSpreadProps.singlePage}, only those whose centre lies on the
+   * page shown are drawn.
+   */
   images?: MultiImageItem[];
   /**
    * Force slot-mode rendering on both pages. When omitted, each page falls
@@ -106,6 +114,18 @@ export interface MejiroSpreadProps {
   onSurfaceTap?: () => void;
 }
 
+const OVERLAY_SELECTOR = '.mejiro-reader-image-overlay';
+const CONTENT_SELECTOR = '.mejiro-reader-page-content';
+
+/** The page content element under a client point, if any. */
+function contentAtPoint(root: HTMLElement, x: number, y: number): HTMLElement | null {
+  for (const content of root.querySelectorAll<HTMLElement>(CONTENT_SELECTOR)) {
+    const r = content.getBoundingClientRect();
+    if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return content;
+  }
+  return null;
+}
+
 function defaultHeader(data: PageHeaderData): ReactNode {
   return (
     <div className="mejiro-reader-page-header">
@@ -152,7 +172,6 @@ export function MejiroSpread({
   onSurfaceTap,
 }: MejiroSpreadProps): ReactNode {
   const messages = useI18n();
-  const hasImages = images.length > 0;
   const selectionRef = useRef<{ start: InChapterAnchor; pointerId: number } | null>(null);
   const selectionEnabled = anchorAtCoord != null && onSelectionChange != null;
   const gestureRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -162,7 +181,9 @@ export function MejiroSpread({
 
   function handleGesturePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
     if (!gestureEnabled) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (!isPrimaryPointerPress(e)) return;
+    // A press on an overlay drags, resizes or removes it; it is never a page turn.
+    if ((e.target as HTMLElement | null)?.closest(OVERLAY_SELECTOR)) return;
     gestureRef.current = { x: e.clientX, y: e.clientY, t: Date.now() };
   }
 
@@ -184,16 +205,16 @@ export function MejiroSpread({
       // Only treat as surface tap if the press landed on a neutral zone
       // (the spread or pages themselves, not the buttons / overlays).
       const target = e.target as HTMLElement | null;
-      if (target?.closest('button, a, .mejiro-reader-image-overlay')) return;
+      if (target?.closest(`button, a, ${OVERLAY_SELECTOR}`)) return;
       onSurfaceTap?.();
     }
   }
 
-  function resolvePointer(e: ReactPointerEvent): InChapterAnchor | null {
+  // By coordinates, not by target: once the spread captures the pointer, every
+  // event targets the spread root, which no page content is an ancestor of.
+  function resolvePointer(e: ReactPointerEvent<HTMLDivElement>): InChapterAnchor | null {
     if (!anchorAtCoord) return null;
-    const target = e.target as HTMLElement | null;
-    if (!target) return null;
-    const content = target.closest<HTMLElement>('.mejiro-reader-page-content');
+    const content = contentAtPoint(e.currentTarget, e.clientX, e.clientY);
     if (!content) return null;
     const pageEl = content.closest<HTMLElement>('.mejiro-reader-page');
     const isRight = pageEl?.classList.contains('mejiro-reader-page--right') ?? true;
@@ -206,6 +227,8 @@ export function MejiroSpread({
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
     if (!selectionEnabled || selectionRef.current) return;
+    // Only a press on the text starts a selection; buttons and overlays keep theirs.
+    if (!(e.target as HTMLElement | null)?.closest(CONTENT_SELECTOR)) return;
     const anchor = resolvePointer(e);
     if (!anchor) return;
     e.preventDefault();
@@ -246,9 +269,13 @@ export function MejiroSpread({
       ? selectionRects.filter((r) => r.spreadIdx === spreadIdx)
       : selectionRects;
 
-  // Image rects are relative to the right page, so the left page hosts them
-  // (shifted by one page width) only when it is shown alone.
+  // Image rects are relative to the right page, so both pages' overlays hang off
+  // it; a page shown alone hosts only its own, the left one shifted a page width.
   const imageSide = singlePage ? singleSide : 'right';
+  const hostedImages = singlePage
+    ? images.filter((item) => overlayPageSide(item.rect) === singleSide)
+    : images;
+  const hasImages = hostedImages.length > 0;
 
   const renderPage = (side: 'right' | 'left'): ReactNode => {
     const isRight = side === 'right';
@@ -287,7 +314,7 @@ export function MejiroSpread({
           </div>
         </div>
         {hostsImages &&
-          images.map((item) => (
+          hostedImages.map((item) => (
             <MejiroImageOverlay
               key={item.id}
               rect={isRight ? item.rect : { ...item.rect, x: item.rect.x + pageWidth }}

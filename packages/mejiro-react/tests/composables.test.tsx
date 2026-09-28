@@ -5,7 +5,7 @@ import type { ChapterLayout, InChapterAnchor, MejiroBook, SpreadResult } from '@
 import { MejiroBook as MejiroBookClass } from '@libraz/mejiro/book';
 import type { EditableEpub, EpubBook } from '@libraz/mejiro/epub';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { MutableRefObject } from 'react';
+import { type MutableRefObject, useMemo } from 'react';
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
@@ -1344,5 +1344,169 @@ describe('useImageOverlay (React, single)', () => {
     expect(removeSpy).toHaveBeenCalledWith('pointerup', expect.any(Function));
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+});
+
+describe('image overlays (React) — sync and gestures', () => {
+  it('syncs the affected spread when updating or removing an image on a non-current spread', () => {
+    const layout = mockLayout(4);
+    const { result, rerender } = renderHook(
+      ({ s }: { s: number }) => useMultiImageOverlay(layout, s),
+      { initialProps: { s: 0 } },
+    );
+    let onSpread0: { id: string } | undefined;
+    let onSpread1: { id: string } | undefined;
+    act(() => {
+      onSpread0 = result.current.addImage({ x: 10 });
+    });
+    rerender({ s: 1 });
+    act(() => {
+      onSpread1 = result.current.addImage({ x: 20 });
+    });
+    vi.mocked(layout.setImages).mockClear();
+
+    act(() => result.current.updateImage(onSpread0?.id ?? '', { x: 99 }));
+    expect(layout.setImages).toHaveBeenLastCalledWith(0, [expect.objectContaining({ x: 99 })]);
+
+    act(() => result.current.removeImage(onSpread0?.id ?? ''));
+    expect(layout.setImages).toHaveBeenLastCalledWith(0, []);
+    expect(result.current.currentImages).toEqual([onSpread1]);
+  });
+
+  it('gives a replacement layout its images before views derived from it render', () => {
+    const first = mockLayout(4);
+    const second = mockLayout(4);
+    const { result, rerender } = renderHook(
+      ({ layout }: { layout: ChapterLayout }) => {
+        const overlay = useMultiImageOverlay(layout, 0);
+        // A view keyed on the layout and the images, as the readers derive theirs.
+        // biome-ignore lint/correctness/useExhaustiveDependencies: keyed like the readers' views.
+        const appliedWhenDerived = useMemo(
+          () => vi.mocked(layout.setImages).mock.calls.length,
+          [layout, overlay.currentImages],
+        );
+        return { overlay, appliedWhenDerived };
+      },
+      { initialProps: { layout: first } },
+    );
+    act(() => {
+      result.current.overlay.addImage();
+    });
+
+    rerender({ layout: second });
+    expect(second.setImages).toHaveBeenCalledWith(0, [expect.objectContaining({ x: 80 })]);
+    expect(result.current.appliedWhenDerived).toBe(1);
+  });
+
+  it('survives a host that hands over a new layout object on every render', () => {
+    const { result } = renderHook(() => useMultiImageOverlay(mockLayout(4), 0));
+    act(() => {
+      result.current.addImage();
+    });
+    expect(result.current.currentImages).toHaveLength(1);
+  });
+
+  it('keys the image state on the margin the images are applied with', () => {
+    const layout = mockLayout(4);
+    const { result, rerender } = renderHook(
+      ({ margin }: { margin: number }) => useMultiImageOverlay(layout, 0, { margin }),
+      { initialProps: { margin: 4 } },
+    );
+    act(() => {
+      result.current.addImage();
+    });
+    const before = result.current.currentImages;
+
+    rerender({ margin: 12 });
+    expect(layout.setImages).toHaveBeenLastCalledWith(0, [expect.objectContaining({ margin: 12 })]);
+    expect(result.current.currentImages).not.toBe(before);
+  });
+
+  it('re-applies the single overlay exclusion when the margin changes', () => {
+    const layout = mockLayout(4);
+    const { result, rerender } = renderHook(
+      ({ margin }: { margin: number }) => useImageOverlay(layout, 0, vi.fn(), { margin }),
+      { initialProps: { margin: 4 } },
+    );
+    act(() => result.current.toggleImage());
+    vi.mocked(layout.syncImages).mockClear();
+
+    rerender({ margin: 12 });
+    expect(layout.syncImages).toHaveBeenCalledWith(0, [expect.objectContaining({ margin: 12 })]);
+  });
+
+  it.each(['overlay', 'resize'] as const)(
+    'starts no %s drag from a secondary or auxiliary mouse button, on either hook',
+    (handle) => {
+      const layout = mockLayout(4);
+      const multi = renderHook(() => useMultiImageOverlay(layout, 0));
+      const single = renderHook(() => useImageOverlay(layout, 0, vi.fn()));
+      let id = '';
+      act(() => {
+        id = multi.result.current.addImage().id;
+        single.result.current.toggleImage();
+      });
+      const addSpy = vi.spyOn(document, 'addEventListener');
+      try {
+        for (const button of [1, 2]) {
+          const target = Object.assign(document.createElement('div'), {
+            setPointerCapture: vi.fn(),
+          });
+          const event = {
+            pointerType: 'mouse',
+            button,
+            preventDefault: vi.fn(),
+            stopPropagation: vi.fn(),
+            clientX: 0,
+            clientY: 0,
+            currentTarget: target,
+            nativeEvent: { pointerId: 1 },
+          } as never;
+          act(() => {
+            if (handle === 'overlay') {
+              multi.result.current.onOverlayPointerDown(id, event);
+              single.result.current.onOverlayPointerDown(event);
+            } else {
+              multi.result.current.onResizePointerDown(id, event);
+              single.result.current.onResizePointerDown(event);
+            }
+          });
+          expect(target.setPointerCapture).not.toHaveBeenCalled();
+        }
+        expect(addSpy).not.toHaveBeenCalledWith('pointermove', expect.any(Function));
+      } finally {
+        addSpy.mockRestore();
+        multi.unmount();
+        single.unmount();
+      }
+    },
+  );
+});
+
+describe('useSpread (React) — anchors past image-blocked pages', () => {
+  // Spread 0's right page and all of spread 1 are covered by images.
+  function blockedLayout(): ChapterLayout {
+    const layout = mockLayout(8);
+    return Object.assign(layout, {
+      anchorAt: vi.fn((spread: number, side: 'right' | 'left') => {
+        if ((spread === 0 && side === 'right') || spread === 1) return null;
+        return { paragraph: spread, charIndex: side === 'right' ? 0 : 5 };
+      }),
+    });
+  }
+
+  it('takes the anchor from the next page that holds text', () => {
+    const layout = blockedLayout();
+    const { result } = renderHook(() => useSpread(layout, { turnDuration: 0 }));
+    expect(result.current.anchorAt(0)).toEqual({ paragraph: 0, charIndex: 5 });
+    expect(result.current.anchorAt(1)).toEqual({ paragraph: 2, charIndex: 0 });
+    expect(result.current.anchorAt(4)).toBeNull();
+  });
+
+  it('counts pages the same way in single-page mode', () => {
+    const layout = blockedLayout();
+    const { result } = renderHook(() => useSpread(layout, { turnDuration: 0, single: true }));
+    expect(result.current.anchorAt(0)).toEqual({ paragraph: 0, charIndex: 5 });
+    expect(result.current.anchorAt(2)).toEqual({ paragraph: 2, charIndex: 0 });
   });
 });

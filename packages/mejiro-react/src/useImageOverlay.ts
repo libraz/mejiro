@@ -1,6 +1,6 @@
 import type { ImageOverlayRect } from '@libraz/mejiro';
 import type { BookImage, ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { createOverlayDragSession } from '@libraz/mejiro/browser';
+import { createOverlayDragSession, isPrimaryPointerPress } from '@libraz/mejiro/browser';
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
@@ -54,8 +54,9 @@ export interface UseImageOverlayReturn {
  * with automatic text reflow via {@link ChapterLayout.syncImages}.
  *
  * While an overlay is active the exclusion is re-issued whenever `layout` is
- * replaced or `spreadIdx` changes, so a re-layout or a page turn never leaves
- * the overlay drawn without its matching text reflow.
+ * replaced, `spreadIdx` changes or `options.margin` changes, so a re-layout, a
+ * page turn or a new margin never leaves the overlay drawn without its matching
+ * text reflow.
  *
  * @param layout - Current chapter layout (or `null` if not yet loaded).
  * @param spreadIdx - Current spread index.
@@ -115,17 +116,19 @@ export function useImageOverlay(
   );
 
   // Re-apply the exclusion after the layout instance is replaced (resize, font
-  // or option change) and after the reader moves to another spread, so the text
-  // reflow keeps following the overlay. Moving spreads also drops the exclusion
-  // left behind on the spread we came from — only the displayed one carries it.
-  const syncedRef = useRef<{ layout: ChapterLayout | null; spreadIdx: number }>({
-    layout,
-    spreadIdx,
-  });
+  // or option change), after the reader moves to another spread and after the
+  // margin changes, so the text reflow keeps following the overlay. Moving
+  // spreads also drops the exclusion left behind on the spread we came from —
+  // only the displayed one carries it.
+  const syncedRef = useRef<{
+    layout: ChapterLayout | null;
+    spreadIdx: number;
+    margin: number | undefined;
+  }>({ layout, spreadIdx, margin });
   useEffect(() => {
     const prev = syncedRef.current;
-    syncedRef.current = { layout, spreadIdx };
-    if (prev.layout === layout && prev.spreadIdx === spreadIdx) return;
+    syncedRef.current = { layout, spreadIdx, margin };
+    if (prev.layout === layout && prev.spreadIdx === spreadIdx && prev.margin === margin) return;
     if (rectRef.current === null) return;
     if (prev.layout && prev.spreadIdx !== spreadIdx) {
       // Clearing the outgoing spread must not be reported through `onUpdate`:
@@ -133,7 +136,7 @@ export function useImageOverlay(
       prev.layout.syncImages(prev.spreadIdx, undefined);
     }
     syncToLayout(rectRef.current);
-  }, [layout, spreadIdx, syncToLayout]);
+  }, [layout, spreadIdx, margin, syncToLayout]);
 
   const toggleImage = useCallback(() => {
     if (rectRef.current) {
@@ -156,6 +159,7 @@ export function useImageOverlay(
 
   const onOverlayPointerDown = useCallback(
     (e: ReactPointerEvent) => {
+      if (!isPrimaryPointerPress(e)) return;
       e.preventDefault();
       const current = rectRef.current;
       if (!current) return;
@@ -178,6 +182,7 @@ export function useImageOverlay(
 
   const onResizePointerDown = useCallback(
     (e: ReactPointerEvent) => {
+      if (!isPrimaryPointerPress(e)) return;
       e.preventDefault();
       e.stopPropagation();
       const current = rectRef.current;

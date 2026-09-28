@@ -955,3 +955,129 @@ describe('MejiroStats (React)', () => {
     );
   });
 });
+
+describe('MejiroSpread (React) — overlays and pointer sessions', () => {
+  const twoPages = (): SpreadResult => ({
+    right: pageResult('右頁'),
+    left: pageResult('左頁'),
+    totalPages: 2,
+  });
+  const rectAt = (left: number) => () =>
+    ({ left, right: left + 320, top: 0, bottom: 360, width: 320, height: 360 }) as DOMRect;
+
+  it('never turns the page for a sideways drag that starts on an overlay', () => {
+    const onSwipe = vi.fn();
+    const { container } = render(
+      <MejiroSpread
+        spread={twoPages()}
+        pageWidth={320}
+        pageHeight={460}
+        contentHeight={360}
+        images={[{ id: 'img', rect: { x: 80, y: 100, w: 120, h: 160 } }]}
+        onImagePointerDown={vi.fn()}
+        onSwipe={onSwipe}
+      />,
+    );
+    const spreadEl = container.querySelector('.mejiro-reader-spread') as HTMLElement;
+    const overlay = container.querySelector('.mejiro-reader-image-overlay') as HTMLElement;
+    const content = container.querySelector('.mejiro-reader-page-content') as HTMLElement;
+
+    fireEvent.pointerDown(overlay, { clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(spreadEl, { clientX: 200, clientY: 200 });
+    expect(onSwipe).not.toHaveBeenCalled();
+
+    // The same gesture on the text does turn the page.
+    fireEvent.pointerDown(content, { clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(spreadEl, { clientX: 200, clientY: 200 });
+    expect(onSwipe).toHaveBeenCalledWith('next');
+  });
+
+  it('draws only the overlays whose centre lies on the single page shown', () => {
+    const images = [
+      { id: 'on-right', rect: { x: 80, y: 100, w: 120, h: 160 } },
+      { id: 'on-left', rect: { x: -200, y: 100, w: 120, h: 160 } },
+    ];
+    const { container, rerender } = render(
+      <MejiroSpread
+        spread={twoPages()}
+        pageWidth={320}
+        pageHeight={460}
+        contentHeight={360}
+        images={images}
+        singlePage
+        singleSide="left"
+      />,
+    );
+    let overlays = container.querySelectorAll<HTMLElement>('.mejiro-reader-image-overlay');
+    expect(overlays).toHaveLength(1);
+    expect(overlays[0].style.left).toBe('120px');
+
+    rerender(
+      <MejiroSpread
+        spread={twoPages()}
+        pageWidth={320}
+        pageHeight={460}
+        contentHeight={360}
+        images={images}
+        singlePage
+        singleSide="right"
+      />,
+    );
+    overlays = container.querySelectorAll<HTMLElement>('.mejiro-reader-image-overlay');
+    expect(overlays).toHaveLength(1);
+    expect(overlays[0].style.left).toBe('80px');
+  });
+
+  it('resolves a captured drag by coordinates, across to the other page', () => {
+    const anchorAtCoord = vi.fn((x: number) => ({ paragraph: 0, charIndex: x < 0 ? 9 : 1 }));
+    const onSelectionChange = vi.fn();
+    const { container } = render(
+      <MejiroSpread
+        spread={twoPages()}
+        pageWidth={320}
+        pageHeight={460}
+        contentHeight={360}
+        anchorAtCoord={anchorAtCoord}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+    const spreadEl = container.querySelector('.mejiro-reader-spread') as HTMLElement;
+    spreadEl.setPointerCapture = vi.fn();
+    spreadEl.hasPointerCapture = vi.fn(() => false);
+    const [right, left] = container.querySelectorAll<HTMLElement>('.mejiro-reader-page-content');
+    right.getBoundingClientRect = rectAt(320);
+    left.getBoundingClientRect = rectAt(0);
+
+    fireEvent.pointerDown(right, { pointerId: 1, clientX: 600, clientY: 10 });
+    // Once captured, the browser targets every later event at the spread root.
+    fireEvent.pointerMove(spreadEl, { pointerId: 1, clientX: 100, clientY: 20 });
+
+    expect(anchorAtCoord).toHaveBeenLastCalledWith(-220, 20);
+    expect(onSelectionChange).toHaveBeenLastCalledWith({
+      start: { paragraph: 0, charIndex: 1 },
+      end: { paragraph: 0, charIndex: 9 },
+    });
+  });
+});
+
+describe('MejiroImageOverlay (React) — remove button', () => {
+  it('removes on click, once, and not on a bare pointer-down', () => {
+    const onClose = vi.fn();
+    const onOverlayPointerDown = vi.fn();
+    const { container } = render(
+      <MejiroImageOverlay
+        rect={{ x: 0, y: 0, w: 50, h: 50 }}
+        onClose={onClose}
+        onOverlayPointerDown={onOverlayPointerDown}
+      />,
+    );
+    const button = container.querySelector('button') as HTMLButtonElement;
+
+    fireEvent.pointerDown(button);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onOverlayPointerDown).not.toHaveBeenCalled();
+
+    button.click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

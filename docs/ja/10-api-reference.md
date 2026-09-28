@@ -477,8 +477,11 @@
 | エクスポート | シグネチャ |
 |---|---|
 | `createOverlayDragSession` | `(options: OverlayDragSessionOptions) => OverlayDragSession` |
+| `isPrimaryPointerPress` | `(event: Pick<PointerEvent, 'pointerType' \| 'button'>) => boolean` |
 
 画像オーバーレイの移動・リサイズを pointerdown ハンドラから駆動します。document 上で `pointermove` / `pointerup` を購読し、ランタイムが提供する環境では更新をアニメーションフレームにまとめます。各矩形は pointerdown 時点の矩形と累積デルタから毎回作り直すため、ジェスチャ中に丸め誤差が蓄積しません。
+
+セッションを始めるのは `isPrimaryPointerPress` が受け付ける押下、つまりタッチ・ペンの接触かマウスの主ボタンだけにしてください。副ボタンや補助ボタンはコンテキストメニューや自動スクロールを開き、ブラウザがその `pointerup` を届けないことがあります。
 
 コアではなくブラウザ層に置いているのは、ポインタキャプチャと document レベルのリスナを持つから（`document` / `requestAnimationFrame` / `setPointerCapture` を触る）です。処理を委譲している矩形演算（`ImageOverlayRect` に対する `moveImageOverlayRect` / `resizeImageOverlayRect`）は DOM に依存しないので `@libraz/mejiro` に残っています。
 
@@ -921,6 +924,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — 文字列は既定でリテラル検索、`options.regex` が `true` のときは正規表現ソースとして扱います。`RegExp` を渡した場合は `options.regex` の値に関わらず正規表現として検索し、その `i` / `m` / `s` フラグを引き継ぎます（`options.caseSensitive` を明示した場合はそちらが優先）。正規表現は安全ガードを通り、破滅的バックトラックを起こしうる形やパターン長・入力長の上限超過では例外を投げます。**このメソッドは現在の `ChapterLayout` 1 章分のみを検索範囲とします**（章の `paragraphs` を順に走査し、ヒットを `SearchMatch`（= `AnchorLocation` + `length` 等）で返します）。書籍内の他章や、複数作品にまたがるサイト全体検索を実装する場合は、サーバ側で別の全文検索エンジン（Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5 など）にインデックスを保持し、見つかったアンカーを `MejiroReaderHandle.goToAnchor()` に渡して該当箇所へジャンプさせる構成を推奨します。
 - `locateAnchor(anchor: InChapterAnchor): AnchorLocation | null` — アンカーを含む見開き / ページ / 行を求める。範囲外なら `null`
 - `anchorAt(spreadIndex: number, side?: 'right' | 'left'): InChapterAnchor | null` — 見開きのページ先頭文字のアンカー（既定は `'right'`）。見開き番号を、リフロー後も有効な読書位置へ戻すのに使う
+- `endAnchor(): InChapterAnchor | null` — 章の最後の文字の直後を指すアンカー。レイアウトが扱う NFC のコードポイント単位で数える。段落のない章では `null`
 - `coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null` — 読書アンカーを見開き/ページ座標へ変換
 - `anchorAtCoord(spreadIdx: number, x: number, y: number): InChapterAnchor | null` — 座標をアンカーへ変換
 - `selectionRects(range: AnchorRange): AnchorRect[]` — テキスト範囲のハイライト矩形を生成
@@ -997,7 +1001,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 
 **`ManuscriptChapter`** — `MejiroBook.layoutManuscript()` に渡す 1 章分: `id?: string`（返り値のマップのキー）、`title: string`（レイアウト先頭に `h1` 段落として出力される）、`body: string`（生の原稿。空行が段落区切り）。
 
-**`InChapterAnchor` / `ReadingAnchor`** — リフローに強い読書位置。`InChapterAnchor` は `{ paragraph, charIndex }`、`ReadingAnchor` はそれに `chapter: number` を加えた本全体での位置です。`AnchorLocation` / `AnchorRect` / `AnchorRange` / `SearchMatch` は、これらから組み立てるレイアウト側の結果型です。
+**`InChapterAnchor` / `ReadingAnchor`** — リフローに強い読書位置。`InChapterAnchor` は `{ paragraph, charIndex }` で、`charIndex` は段落テキストを NFC 正規化したうえでのコードポイント位置です。`ReadingAnchor` はそれに `chapter: number` を加えた本全体での位置です。`AnchorLocation` / `AnchorRect` / `AnchorRange` / `SearchMatch` は、これらから組み立てるレイアウト側の結果型です。
 
 この subpath は `RubyInputAnnotation`（`InlineRubyAnnotation` の非推奨エイリアス）も再エクスポートします。`mejiro/book` だけを使う利用者が `mejiro/browser` を参照せずに済むようにするためです。
 
@@ -1168,7 +1172,7 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 
 **`MejiroReader` の表示系 props** -- `theme?: MejiroTheme`（リーダー root の `data-mejiro-theme` に反映され、同梱 CSS がパレットを切り替えます）、`mode?: MejiroReaderMode`（既定の `'paginated'` / 章の全ページを縦スクローラに積む `'scroll'`）、`spreadMode?: MejiroSpreadMode`（既定の `'double'` / `'single'` / `'auto'`）、`fit?: MejiroReaderFit`（既定の `'fill'` / `'width'`）、`pageNumbers?: PageNumberDisplay`、UI 文字列用の `locale?: MejiroLocale` と `messages?: Partial<MejiroMessages>`、設定パネルの中身を差し替える `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` があります。
 
-単ページ表示（`'single'`、または縦長の表示面での `'auto'`）では 1 ページずつ表示し、見開きインデックスはすべてページ単位になります。対象は `spreadIdx`・`goToSpread`・`next` / `prev`・`onSpreadIdxChange`・`spreadChanged` イベント・`ReadingPosition.totalSpreads` です。`'auto'` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。この規則は `useSpread` の `single` オプションが実装しており、表示中のページを `firstPage`・`layoutSpreadIdx`・`singleSide` として返します。`MejiroSpread` はこれを `singlePage` / `singleSide` として受け取ります。
+単ページ表示（`'single'`、または縦長の表示面での `'auto'`）では 1 ページずつ表示し、見開きインデックスはすべてページ単位になります。対象は `spreadIdx`・`goToSpread`・`next` / `prev`・`onSpreadIdxChange`・`spreadChanged` イベント・`ReadingPosition.totalSpreads` です。`'auto'` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。この規則は `useSpread` の `single` オプションが実装しており、表示中のページを `firstPage`・`layoutSpreadIdx`・`singleSide` として返します。`MejiroSpread` はこれを `singlePage` / `singleSide` として受け取ります。画像オーバーレイの矩形は右ページ基準のままで、単ページ表示の `MejiroSpread` は中心が表示中のページにあるものだけを描き、リーダーの画像ボタンは新しい画像を表示中のページに置きます。
 
 **`MejiroReader` の `annotations` prop** -- `{ chapter, start, end, color? }` の配列を渡すと、現在の章のものが自動でハイライト rect に変換されて見開きに描画されます。`useAnnotations` と組み合わせるのが基本ですが、自前で配列を組み立てても問題ありません。
 

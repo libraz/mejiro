@@ -14,6 +14,9 @@ import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
 import type { MultiImageItem } from './useMultiImageOverlay.js';
 
+// Shared default, so an omitted `images` never re-reads the pages.
+const NO_IMAGES: MultiImageItem[] = [];
+
 /** Props for {@link MejiroScrollView}. */
 export interface MejiroScrollViewProps {
   /** Layout containing the pages to render. */
@@ -52,7 +55,12 @@ export interface MejiroScrollViewProps {
   selectionRects?: readonly (AnchorRect & { color?: string })[];
   /** Zero-based spread whose right page carries {@link MejiroScrollViewProps.images}. */
   spreadIdx?: number;
-  /** Image overlays on the right page of {@link MejiroScrollViewProps.spreadIdx}. */
+  /**
+   * Image overlays on the right page of {@link MejiroScrollViewProps.spreadIdx}.
+   * The layout reflows in place when its images change, so a new array here is
+   * also what re-reads the pages; `useMultiImageOverlay`'s `currentImages`
+   * provides one on every change.
+   */
   images?: MultiImageItem[];
   /** Pointer-down on an image overlay. */
   onImagePointerDown?: (id: string, e: ReactPointerEvent) => void;
@@ -82,7 +90,7 @@ export function MejiroScrollView({
   pageGap = 24,
   selectionRects,
   spreadIdx,
-  images = [],
+  images = NO_IMAGES,
   onImagePointerDown,
   onImageResizePointerDown,
   onImageClose,
@@ -96,10 +104,12 @@ export function MejiroScrollView({
   const userPageRef = useRef<number | null>(null);
   const imagesPage = spreadIdx != null && images.length > 0 ? spreadIdx * 2 : -1;
 
+  // The layout reflows in place when images change, so `images` keys this too.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: images changes whenever the layout's exclusions do.
   const pages = useMemo(() => {
     const total = layout.totalPages;
     return Array.from({ length: total }, (_, i) => layout.getPage(i));
-  }, [layout]);
+  }, [layout, images]);
   const pageCount = pages.length;
 
   const rectsByPage = useMemo(() => {

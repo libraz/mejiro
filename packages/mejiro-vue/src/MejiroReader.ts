@@ -60,6 +60,21 @@ export type MejiroChapterNavMode = 'select' | 'panel' | 'both' | 'none';
  */
 const OPTIONS_DEBOUNCE_MS = 60;
 
+/** Default image x (px, relative to the right page), as `useMultiImageOverlay` places it. */
+const IMAGE_DEFAULT_X = 80;
+
+/**
+ * Where a new image goes when one page is shown alone: on that page, at the
+ * default x — the default cascade walks leftwards, onto the page not shown.
+ */
+function singlePageImagePlacement(
+  side: 'right' | 'left' | null,
+  pageWidth: number,
+): { x: number } | undefined {
+  if (side == null) return undefined;
+  return { x: side === 'left' ? IMAGE_DEFAULT_X - pageWidth : IMAGE_DEFAULT_X };
+}
+
 /**
  * Content key of a manuscript source: equal chapters give an equal key whatever
  * the array identity, and the key parses back into those chapters.
@@ -263,14 +278,16 @@ export interface MejiroReaderHandle {
    */
   goToAnchor(anchor: ReadingAnchor): Promise<void>;
   /**
-   * Returns the {@link ReadingAnchor} at the start of the current spread,
-   * or `null` if the layout is not ready.
+   * Returns the {@link ReadingAnchor} at the start of the text on the current
+   * spread, or `null` if the layout is not ready. When an image blocks every
+   * page of the spread, the anchor is where the text resumes after it; `null`
+   * again if none follows.
    */
   getAnchor(): ReadingAnchor | null;
   /**
    * Returns the half-open range of {@link ReadingAnchor}s visible on the
-   * current spread. `end` points at the start of the next spread (or the end
-   * of the chapter for the last spread).
+   * current spread. `end` points at the start of the text on the next spread
+   * that has any (or the end of the chapter when none does).
    */
   getVisibleRange(): { start: ReadingAnchor; end: ReadingAnchor } | null;
   /**
@@ -722,6 +739,7 @@ export const MejiroReader = defineComponent({
       },
       onLoad: (b) => {
         if (props.chapter == null) chapter.value = 0;
+        imageCtx.clearImages();
         emit('load', b);
       },
     });
@@ -837,11 +855,14 @@ export const MejiroReader = defineComponent({
     );
 
     const imageCtx = useMultiImageOverlay(layoutCtx.layout, spreadCtx.layoutSpreadIdx, {
+      defaultX: IMAGE_DEFAULT_X,
       onUpdate: () => spreadCtx.refresh(),
     });
 
     const annotationRects = computed(() => {
       const layout = layoutCtx.layout.value;
+      // The layout reflows in place when images change, so the image state keys this too.
+      void imageCtx.currentImages.value;
       const list = props.annotations;
       if (!(list && layout)) return [];
       const result = [];
@@ -921,6 +942,9 @@ export const MejiroReader = defineComponent({
       },
       { immediate: true },
     );
+
+    // Images belong to the chapter they were placed on; another chapter starts bare.
+    watch(activeChapter, () => imageCtx.clearImages());
 
     // Controlled spreadIdx → host-driven navigation: animate to the prop value.
     watch(
@@ -1083,17 +1107,8 @@ export const MejiroReader = defineComponent({
         if (!layout) return null;
         const start = spreadCtx.anchorAt(spreadCtx.spreadIdx.value);
         if (!start) return null;
-        const next = spreadCtx.anchorAt(spreadCtx.spreadIdx.value + 1);
-        let end: { paragraph: number; charIndex: number };
-        if (next) {
-          end = next;
-        } else {
-          const e = epub.epub.value;
-          const ch = e?.chapters[activeChapter.value];
-          const lastP = (ch?.paragraphs.length ?? 1) - 1;
-          const lastText = ch?.paragraphs[lastP]?.text ?? '';
-          end = { paragraph: Math.max(0, lastP), charIndex: [...lastText].length };
-        }
+        const end =
+          spreadCtx.anchorAt(spreadCtx.spreadIdx.value + 1) ?? layout.endAnchor() ?? start;
         return {
           start: { chapter: activeChapter.value, ...start },
           end: { chapter: activeChapter.value, ...end },
@@ -1231,7 +1246,13 @@ export const MejiroReader = defineComponent({
               {
                 type: 'button',
                 class: ['mejiro-reader-btn', { 'is-active': imageCtx.hasImages.value }],
-                onClick: () => imageCtx.addImage(),
+                onClick: () =>
+                  imageCtx.addImage(
+                    singlePageImagePlacement(
+                      props.mode === 'paginated' ? spreadCtx.singleSide.value : null,
+                      layoutCtx.pageWidth.value,
+                    ),
+                  ),
               },
               resolvedMessages.value.imageButton,
             )
