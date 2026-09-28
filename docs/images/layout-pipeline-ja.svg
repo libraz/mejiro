@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 290" width="960" height="290" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">文字列から RenderPage までのレイアウトパイプライン</title>
+  <desc id="dsc">番号付きの 6 ステップを 2 段に並べた図です。toCodepoints は文字列をコードポイントの Uint32Array に、measureAll は Canvas.measureText で送り幅の Float32Array に、computeBreaks は改行位置とぶら下げ量を持つ BreakResult にします。流れは 2 段目に折り返し、buildParagraphMeasures が行数・行送り・前の間隔を持つ ParagraphMeasure を作り、paginate が段落の行範囲をページごとの PageSlice 配列に割り当て、buildRenderPage が段落・行・セグメントからなる RenderPage を組み立てます。computeBreaks からは破線の側枝が getLineRanges へ伸びます。getLineRanges は改行位置を [start, end) の行範囲に変換し、それを内部で呼び出す buildRenderPage へ渡します。</desc>
+
+  <style>
+    .bg    { fill:#f7f5f1 }
+    .grp   { fill:#edeae4 }
+    .chip  { fill:#ffffff; stroke:#d7d4cd }
+    .card  { fill:#ffffff; stroke:#8a6a1f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .seam  { fill:none; stroke:#b8b4ac; stroke-dasharray:6 5 }
+    .rule  { fill:none; stroke:#b8b4ac; stroke-width:1 }
+    .ln    { fill:none; stroke:#8a6a1f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .lnd   { fill:none; stroke:#8a6a1f; stroke-width:1.4; stroke-dasharray:5 4 }
+    .ah    { fill:#8a6a1f }
+    .ah2   { fill:#3f6b8a }
+    .fill1 { fill:#8a6a1f; opacity:.16 }
+    .fill2 { fill:#3f6b8a; opacity:.16 }
+    .warn  { fill:none; stroke:#a3401f; stroke-width:1.6 }
+    .warnt { fill:#a3401f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .hb    { font-size:12.5px; font-weight:600 }
+    .lbl   { font-size:11px; fill:#6e7781; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#6e7781 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#8a6a1f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#d9b45c} .alt{fill:#161b22;stroke:#7fb3d5}
+      .seam{stroke:#484f58} .rule{stroke:#484f58}
+      .ln{stroke:#d9b45c} .ln2{stroke:#7fb3d5} .lnd{stroke:#d9b45c} .ah{fill:#d9b45c} .ah2{fill:#7fb3d5}
+      .fill1{fill:#d9b45c} .fill2{fill:#7fb3d5}
+      .warn{stroke:#e08a68} .warnt{fill:#e08a68} .mono{fill:#d9b45c}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="290" rx="12"/>
+
+  <rect class="card" x="24" y="28" width="216" height="84" rx="6"/>
+  <text class="lbl" x="34" y="48">1</text>
+  <text class="hb" x="48" y="48">toCodepoints()</text>
+  <text class="mono" x="34" y="66">string → Uint32Array</text>
+  <text class="s" x="34" y="83">コードポイントごとに 1 要素</text>
+  <text class="s" x="34" y="97">サロゲートペアは結合</text>
+
+  <rect class="card" x="256" y="28" width="216" height="84" rx="6"/>
+  <text class="lbl" x="266" y="48">2</text>
+  <text class="hb" x="280" y="48">measureAll()</text>
+  <text class="mono" x="266" y="66">→ Float32Array (px)</text>
+  <text class="s" x="266" y="83">Canvas.measureText で送り幅を</text>
+  <text class="s" x="266" y="97">計測し、フォントと文字単位で保持</text>
+
+  <rect class="card" x="488" y="28" width="216" height="84" rx="6"/>
+  <text class="lbl" x="498" y="48">3</text>
+  <text class="hb" x="512" y="48">computeBreaks()</text>
+  <text class="mono" x="498" y="66">→ BreakResult</text>
+  <text class="s" x="498" y="83">breakPoints と hangingAdjustments</text>
+  <text class="s" x="498" y="97">貪欲法 O(n)、禁則のみ後戻り</text>
+
+  <rect class="card" x="24" y="148" width="216" height="84" rx="6"/>
+  <text class="lbl" x="34" y="168">4</text>
+  <text class="hb" x="48" y="168">buildParagraphMeasures()</text>
+  <text class="mono" x="34" y="186">→ ParagraphMeasure[]</text>
+  <text class="s" x="34" y="203">段落ごとの行数・行送り・</text>
+  <text class="s" x="34" y="217">前の段落との間隔</text>
+
+  <rect class="card" x="256" y="148" width="216" height="84" rx="6"/>
+  <text class="lbl" x="266" y="168">5</text>
+  <text class="hb" x="280" y="168">paginate()</text>
+  <text class="mono" x="266" y="186">→ PageSlice[][]</text>
+  <text class="s" x="266" y="203">1 ページ 1 配列。各要素は</text>
+  <text class="s" x="266" y="217">1 段落の行の範囲</text>
+
+  <rect class="card" x="488" y="148" width="216" height="84" rx="6"/>
+  <text class="lbl" x="498" y="168">6</text>
+  <text class="hb" x="512" y="168">buildRenderPage()</text>
+  <text class="mono" x="498" y="186">→ RenderPage</text>
+  <text class="s" x="498" y="203">段落 → 行 → セグメント。</text>
+  <text class="s" x="498" y="217">文字列をここで改めて切り出す</text>
+
+  <rect class="chip" x="720" y="148" width="216" height="84" rx="6"/>
+  <text class="hb" x="730" y="168">getLineRanges()</text>
+  <text class="mono" x="730" y="186">→ [start, end)[]</text>
+  <text class="s" x="730" y="203">buildRenderPage が内部で呼ぶ。</text>
+  <text class="s" x="730" y="217">直接使う場合のために公開</text>
+
+  <path class="ln" d="M 240 70 H 255" marker-end="url(#a)"/>
+  <path class="ln" d="M 240 190 H 255" marker-end="url(#a)"/>
+  <path class="ln" d="M 472 70 H 487" marker-end="url(#a)"/>
+  <path class="ln" d="M 472 190 H 487" marker-end="url(#a)"/>
+  <path class="ln" d="M 596 112 V 130 H 132 V 147" marker-end="url(#a)"/>
+  <path class="lnd" d="M 704 100 H 828 V 147" marker-end="url(#a)"/>
+  <path class="lnd" d="M 720 190 H 705" marker-end="url(#a)"/>
+
+  <text class="lbl" x="736" y="44">側枝</text>
+  <text class="s" x="736" y="60">breakPoints → 行ごとの</text>
+  <text class="s" x="736" y="74">文字範囲 [start, end)</text>
+  <text class="s" x="736" y="88">描画の段階でのみ使用</text>
+
+  <text class="s" x="480" y="268" text-anchor="middle">paginate() は ParagraphMeasure[] だけから計算します。文字範囲が再び必要になるのは buildRenderPage が行を切り出すときです。</text>
+</svg>

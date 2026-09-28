@@ -19,7 +19,7 @@ console.log(book.chapters.length);
 
 The following diagram shows how `parseEpub()` transforms an EPUB file into structured paragraph data:
 
-![parseEpub flow: the EPUB ArrayBuffer is unzipped by JSZip under a limit check into META-INF/container.xml, whose rootfile path leads to the OPF package (metadata, manifest, spine); spine order yields the XHTML content documents, extractRubyContent yields AnnotatedParagraph entries, and chapter grouping yields the EpubBook. A dashed side branch runs from the OPF to the table-of-contents documents, the navigation document and then the EPUB 2 NCX for chapters it does not name, which supply chapter titles to the EpubBook](../assets/epub-parse-flow-en.svg)
+![How parseEpub reads an EPUB in six steps: unzip under the import limits, container.xml, the OPF package, the spine's XHTML documents, extractRubyContent paragraphs and chapter grouping, with the navigation document and NCX as a dashed side branch that only supplies chapter titles](../images/epub-parse-flow.svg)
 
 Steps:
 

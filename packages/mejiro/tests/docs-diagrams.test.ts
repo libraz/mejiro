@@ -2,16 +2,19 @@
  * @vitest-environment happy-dom
  *
  * Pins the documentation figure contract: diagrams are hand-authored SVG under
- * `docs/assets`, every markdown reference resolves to a file that GitHub can
- * render in both colour themes, and the English and Japanese variants of one
- * figure never drift apart structurally -- only their labels differ.
+ * `docs/images` (English under the bare name, other locales with a `-ja`-style
+ * suffix), every markdown reference resolves to a file that GitHub can render
+ * in both colour themes, the locale variants of one figure never drift apart
+ * structurally -- only their labels differ -- and every label fits its box.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const DOCS_DIR = resolve(import.meta.dirname, '../../../docs');
-const ASSETS_DIR = join(DOCS_DIR, 'assets');
+const IMAGES_DIR = join(DOCS_DIR, 'images');
+/** Suffix a non-English variant carries before `.svg`. */
+const LOCALE_SUFFIX = /-(ja)\.svg$/u;
 
 /** Lists every file under a directory, recursively, as an absolute path. */
 function listFiles(dir: string): string[] {
@@ -22,7 +25,7 @@ function listFiles(dir: string): string[] {
 }
 
 const markdownFiles = listFiles(DOCS_DIR).filter((path) => path.endsWith('.md'));
-const svgFiles = listFiles(ASSETS_DIR).filter((path) => path.endsWith('.svg'));
+const svgFiles = listFiles(IMAGES_DIR).filter((path) => path.endsWith('.svg'));
 
 /** One `![alt](target)` reference found in a markdown file. */
 interface ImageReference {
@@ -71,6 +74,48 @@ function structureOf(path: string): string[] {
   const root = parseSvg(path).documentElement;
   if (root) walk(root, 0);
   return shapes;
+}
+
+/** Horizontal room a label keeps from the edge of its box. */
+const TEXT_PADDING = 6;
+
+/** Font metrics a class sets: size in px, letter spacing in em, and whether it is monospace. */
+interface TextStyle {
+  /** Font size in px. */
+  size?: number;
+  /** Letter spacing in em. */
+  spacing?: number;
+  /** Whether the class sets a monospace family. */
+  mono?: boolean;
+}
+
+/** Reads per-class font metrics from the light-theme rules of a figure stylesheet. */
+function classStyles(css: string): Record<string, TextStyle> {
+  const light = css.split('@media')[0];
+  const styles: Record<string, TextStyle> = {};
+  for (const [, name, body] of light.matchAll(/\.([\w-]+)\s*\{([^}]*)\}/gu)) {
+    const size = /font-size:\s*([\d.]+)px/u.exec(body);
+    const spacing = /letter-spacing:\s*([\d.]+)em/u.exec(body);
+    styles[name] = {
+      size: size ? Number(size[1]) : undefined,
+      spacing: spacing ? Number(spacing[1]) : 0,
+      mono: body.includes('monospace'),
+    };
+  }
+  return styles;
+}
+
+/**
+ * Estimates a label's rendered width: a CJK or fullwidth glyph advances about
+ * 1em, a proportional latin glyph about 0.52em and a monospace one 0.6em.
+ */
+function estimateWidth(label: string, { size = 12, spacing = 0, mono = false }: TextStyle): number {
+  let width = 0;
+  for (const char of label) {
+    const wide = /[\u2190-\u21ff\u3000-\u9fff\uff00-\uffef]/u.test(char);
+    width += size * ((wide ? 1 : mono ? 0.6 : 0.52) + spacing);
+  }
+  return width;
 }
 
 describe('documentation diagrams', () => {
@@ -129,25 +174,58 @@ describe('documentation diagrams', () => {
   );
 
   it('keeps the language variants of a figure structurally identical', () => {
-    const englishFiles = svgFiles.filter((path) => path.endsWith('-en.svg'));
+    const variants = svgFiles.filter((path) => LOCALE_SUFFIX.test(path));
 
-    expect(englishFiles.length).toBe(svgFiles.length / 2);
-    for (const englishFile of englishFiles) {
-      const japaneseFile = englishFile.replace(/-en\.svg$/u, '-ja.svg');
+    expect(variants.length).toBe(svgFiles.length / 2);
+    for (const variant of variants) {
+      const englishFile = variant.replace(LOCALE_SUFFIX, '.svg');
 
-      expect(svgFiles, `${relative(DOCS_DIR, japaneseFile)} is missing`).toContain(japaneseFile);
-      expect(structureOf(japaneseFile), `${relative(DOCS_DIR, japaneseFile)} drifted`).toEqual(
+      expect(svgFiles, `${relative(DOCS_DIR, englishFile)} is missing`).toContain(englishFile);
+      expect(structureOf(variant), `${relative(DOCS_DIR, variant)} drifted`).toEqual(
         structureOf(englishFile),
       );
     }
   });
+
+  it.each(svgFiles.map((path) => [relative(DOCS_DIR, path), path] as const))(
+    'fits every label of %s inside its box',
+    (_name, path) => {
+      const root = parseSvg(path).documentElement;
+      const styles = classStyles(root?.getElementsByTagName('style')[0]?.textContent ?? '');
+      const rects = Array.from(root?.getElementsByTagName('rect') ?? [], (rect) => {
+        const [x, y, w, h] = ['x', 'y', 'width', 'height'].map((a) => Number(rect.getAttribute(a)));
+        return { x, y, w, h };
+      });
+      const overflows = Array.from(root?.getElementsByTagName('text') ?? [])
+        .filter((text) => !text.hasAttribute('transform'))
+        .flatMap((text) => {
+          const x = Number(text.getAttribute('x'));
+          const y = Number(text.getAttribute('y'));
+          // The innermost rect around the anchor is the box the label belongs to.
+          const box = rects
+            .filter((r) => r.x <= x && x <= r.x + r.w && r.y <= y && y <= r.y + r.h)
+            .sort((a, b) => a.w * a.h - b.w * b.h)[0];
+          const label = text.textContent ?? '';
+          const width = estimateWidth(label, styles[text.getAttribute('class') ?? ''] ?? {});
+          const anchor = text.getAttribute('text-anchor');
+          const left = anchor === 'middle' ? x - width / 2 : anchor === 'end' ? x - width : x;
+          const fits =
+            box && left >= box.x + TEXT_PADDING && left + width <= box.x + box.w - TEXT_PADDING;
+          return fits ? [] : [`"${label}" (${Math.round(width)} wide at x=${Math.round(left)})`];
+        });
+
+      expect(overflows).toEqual([]);
+    },
+  );
 
   it.each(['en', 'ja'])('names every exported subpath in the %s architecture figure', (locale) => {
     const manifest = JSON.parse(
       readFileSync(resolve(DOCS_DIR, '../packages/mejiro/package.json'), 'utf8'),
     ) as { exports: Record<string, unknown> };
     const labels = Array.from(
-      parseSvg(join(ASSETS_DIR, `architecture-layers-${locale}.svg`)).getElementsByTagName('text'),
+      parseSvg(
+        join(IMAGES_DIR, `architecture-layers${locale === 'en' ? '' : `-${locale}`}.svg`),
+      ).getElementsByTagName('text'),
       (text) => text.textContent ?? '',
     );
     const missing = Object.keys(manifest.exports)

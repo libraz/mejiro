@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 408" width="960" height="408" role="img" aria-labelledby="ttl dsc">
+  <title id="ttl">レイヤー構成と各層の役割</title>
+  <desc id="dsc">アプリケーションは React / Vue のパッケージか DOM を直接操作するコードから、最上段で入ります。左はスタックで、book と epub が横に並んでどちらも render の上に乗り、render は browser の上に、browser は外部依存のないコアの上に乗ります。矢印は各層から利用する層へ向かいます。右側には破線で区切って、EPUB 埋め込み用に画像を準備する image と、suzume を使う任意の TextAnalyzer で BookOptions.analyzer としてブックに渡す analysis を置いています。</desc>
+
+  <style>
+    .bg    { fill:#f7f5f1 }
+    .grp   { fill:#edeae4 }
+    .chip  { fill:#ffffff; stroke:#d7d4cd }
+    .card  { fill:#ffffff; stroke:#8a6a1f }
+    .alt   { fill:#ffffff; stroke:#3f6b8a }
+    .seam  { fill:none; stroke:#b8b4ac; stroke-dasharray:6 5 }
+    .rule  { fill:none; stroke:#b8b4ac; stroke-width:1 }
+    .ln    { fill:none; stroke:#8a6a1f; stroke-width:1.4 }
+    .ln2   { fill:none; stroke:#3f6b8a; stroke-width:1.4 }
+    .lnd   { fill:none; stroke:#8a6a1f; stroke-width:1.4; stroke-dasharray:5 4 }
+    .ah    { fill:#8a6a1f }
+    .ah2   { fill:#3f6b8a }
+    .fill1 { fill:#8a6a1f; opacity:.16 }
+    .fill2 { fill:#3f6b8a; opacity:.16 }
+    .warn  { fill:none; stroke:#a3401f; stroke-width:1.6 }
+    .warnt { fill:#a3401f }
+    text   { font-family:Inter,"Helvetica Neue","Hiragino Sans","Noto Sans JP",Arial,sans-serif; fill:#1f2328 }
+    .h     { font-size:12.5px }
+    .hb    { font-size:12.5px; font-weight:600 }
+    .lbl   { font-size:11px; fill:#6e7781; letter-spacing:.06em }
+    .s     { font-size:10.5px; fill:#6e7781 }
+    .mono  { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:10.5px; fill:#8a6a1f }
+    @media (prefers-color-scheme: dark) {
+      .bg{fill:#0d1117} .grp{fill:#12171d}
+      .chip{fill:#161b22;stroke:#30363d} .card{fill:#161b22;stroke:#d9b45c} .alt{fill:#161b22;stroke:#7fb3d5}
+      .seam{stroke:#484f58} .rule{stroke:#484f58}
+      .ln{stroke:#d9b45c} .ln2{stroke:#7fb3d5} .lnd{stroke:#d9b45c} .ah{fill:#d9b45c} .ah2{fill:#7fb3d5}
+      .fill1{fill:#d9b45c} .fill2{fill:#7fb3d5}
+      .warn{stroke:#e08a68} .warnt{fill:#e08a68} .mono{fill:#d9b45c}
+      text{fill:#e6edf3} .lbl{fill:#8b949e} .s{fill:#8b949e}
+    }
+  </style>
+
+  <defs>
+    <marker id="a" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+    <marker id="b" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path class="ah2" d="M0,0 L9,4.5 L0,9 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="408" rx="12"/>
+
+  <rect class="grp" x="24" y="24" width="912" height="40" rx="8"/>
+  <text class="lbl" x="38" y="48">アプリケーション</text>
+  <rect class="chip" x="170" y="32" width="132" height="24" rx="5"/>
+  <text class="s" x="236.0" y="48" text-anchor="middle">@libraz/mejiro-react</text>
+  <rect class="chip" x="310" y="32" width="122" height="24" rx="5"/>
+  <text class="s" x="371.0" y="48" text-anchor="middle">@libraz/mejiro-vue</text>
+  <rect class="chip" x="440" y="32" width="104" height="24" rx="5"/>
+  <text class="s" x="492.0" y="48" text-anchor="middle">DOM を直接操作</text>
+  <text class="s" x="922" y="48" text-anchor="end">book か epub、またはその下から入る</text>
+
+  <rect class="card" x="24" y="88" width="262" height="64" rx="6"/>
+  <text class="hb" x="36" y="108">ブック</text>
+  <text class="mono" x="274" y="108" text-anchor="end">@libraz/mejiro/book</text>
+  <text class="s" x="36" y="126">MejiroBook → ChapterLayout → 見開き</text>
+  <text class="s" x="36" y="140">計測・改行・ページ分割・回り込み</text>
+
+  <rect class="card" x="302" y="88" width="262" height="64" rx="6"/>
+  <text class="hb" x="314" y="108">EPUB</text>
+  <text class="mono" x="552" y="108" text-anchor="end">@libraz/mejiro/epub</text>
+  <text class="s" x="314" y="126">EPUB 3 の解析・編集・生成</text>
+  <text class="s" x="314" y="140">jszip と、XHTML 用の DOM 実装</text>
+
+  <rect class="card" x="24" y="176" width="540" height="46" rx="6"/>
+  <text class="hb" x="36" y="196">レンダリング</text>
+  <text class="mono" x="552" y="196" text-anchor="end">@libraz/mejiro/render</text>
+  <text class="s" x="36" y="214">レイアウト結果 → フレームワーク非依存の RenderPage と同梱スタイルシート</text>
+
+  <rect class="card" x="24" y="246" width="540" height="46" rx="6"/>
+  <text class="hb" x="36" y="266">ブラウザ</text>
+  <text class="mono" x="552" y="266" text-anchor="end">@libraz/mejiro/browser</text>
+  <text class="s" x="36" y="284">FontFace API でフォント読み込み、Canvas.measureText で送り幅、ルビの字サイズ</text>
+
+  <rect class="card" x="24" y="316" width="540" height="46" rx="6"/>
+  <text class="hb" x="36" y="336">コア</text>
+  <text class="mono" x="552" y="336" text-anchor="end">@libraz/mejiro</text>
+  <text class="s" x="36" y="354">改行・禁則・ぶら下げ・ルビ・回り込み・ページ分割 — 外部依存なし、DOM 不要</text>
+
+  <path class="ln" d="M 155 64 V 86" marker-end="url(#a)"/>
+  <path class="ln" d="M 433 64 V 86" marker-end="url(#a)"/>
+  <path class="ln" d="M 155 152 V 174" marker-end="url(#a)"/>
+  <path class="ln" d="M 433 152 V 174" marker-end="url(#a)"/>
+  <path class="ln" d="M 294 222 V 244" marker-end="url(#a)"/>
+  <path class="ln" d="M 294 292 V 314" marker-end="url(#a)"/>
+
+  <path class="seam" d="M 576 88 V 362"/>
+
+  <rect class="alt" x="588" y="88" width="316" height="98" rx="6"/>
+  <text class="hb" x="600" y="108">画像</text>
+  <text class="mono" x="892" y="108" text-anchor="end">@libraz/mejiro/image</text>
+  <text class="s" x="600" y="128">prepareImage() が画像を縮小・再エンコードし、</text>
+  <text class="s" x="600" y="143">EPUB に埋め込める形に整える</text>
+  <text class="s" x="600" y="158">スタックのどの層にも依存しない</text>
+
+  <rect class="alt" x="588" y="250" width="316" height="112" rx="6"/>
+  <text class="hb" x="600" y="270">形態素解析</text>
+  <text class="mono" x="892" y="270" text-anchor="end">@libraz/mejiro/analysis</text>
+  <text class="s" x="600" y="290">createSuzumeAnalyzer() が作る TextAnalyzer。</text>
+  <text class="s" x="600" y="305">任意の peer 依存 @libraz/suzume を使う</text>
+  <text class="s" x="600" y="320">BookOptions.analyzer としてブックに渡し、</text>
+  <text class="s" x="600" y="335">wordAwareBreaking の指定時だけ参照される</text>
+
+  <path class="ln2" d="M 746 64 V 86" marker-end="url(#b)"/>
+  <path class="ln2" d="M 924 64 V 306 H 906" marker-end="url(#b)"/>
+
+  <text class="s" x="480" y="390" text-anchor="middle">依存は下向きだけです。book と epub は互いを import せず、image と analysis はスタックの外に置かれます。</text>
+</svg>

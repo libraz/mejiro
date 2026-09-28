@@ -6,7 +6,7 @@
 
 mejiro はいくつかのレイヤーに分かれています。上位レイヤーは下位レイヤーを利用しますが、下位レイヤーは上位レイヤーに依存しません。必要な深さの API だけを選んで使えるようにするためです。`book` と `epub` は同じ段にある兄弟で、どちらも `render` の上に乗ります。アプリケーションはどちらからでも入れます。`image` と `analysis` は他のレイヤーから独立しています。
 
-![レイヤー構成: アプリケーションは @libraz/mejiro/book と @libraz/mejiro/epub、独立した @libraz/mejiro/image、および suzume を使う任意の @libraz/mejiro/analysis を使い、book と epub は @libraz/mejiro/render の上に、render は @libraz/mejiro/browser の上に、browser は @libraz/mejiro コアエンジンの上に乗る](../assets/architecture-layers-ja.svg)
+![レイヤー構成: book と epub が横に並んで render の上に乗り、render は browser の上に、browser は外部依存のないコアの上に乗る。独立した image と、suzume を使う任意の analysis は右側に分けて置かれている](../images/architecture-layers-ja.svg)
 
 ### ブック (`@libraz/mejiro/book`)
 
@@ -76,7 +76,7 @@ cps[0];               // 0x20BB7
 
 レイアウト全体の流れは、文字列を表示用のページデータへ変換する 6 つのステップです。
 
-![レイアウトパイプライン: 文字列は toCodepoints でコードポイントの Uint32Array に、measureAll で送り幅の Float32Array に、computeBreaks で BreakResult に、buildParagraphMeasures で ParagraphMeasure に、paginate で PageSlice のページに、buildRenderPage で RenderPage になる。getLineRanges は BreakResult から行範囲へ伸びる破線の側枝で、RenderPage にも合流する](../assets/layout-pipeline-ja.svg)
+![レイアウトの 6 ステップを 2 段に並べた図。toCodepoints、measureAll、computeBreaks から buildParagraphMeasures、paginate、buildRenderPage へ進み、getLineRanges は computeBreaks から buildRenderPage へ合流する破線の側枝になっている](../images/layout-pipeline-ja.svg)
 
 `getLineRanges()` は本流ではなく側枝です。`buildRenderPage()` が行ごとの文字を切り出すために内部で呼び出しており、行範囲を直接必要とする利用者向けに公開されています。`paginate()` は行範囲を受け取らず、`ParagraphMeasure[]` だけから計算します。
 

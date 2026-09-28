@@ -180,7 +180,7 @@ character lists, the conformance table and worked examples.
 ## Architecture
 
 <p align="center">
-  <img src="docs/assets/architecture-layers-en.svg" alt="mejiro layer diagram — book and epub sit over render, which sits over browser and the core engine; image and the optional analysis stand beside them" width="640">
+  <img src="docs/images/architecture-layers.svg" alt="mejiro layer diagram — book and epub sit over render, which sits over browser and the core engine; image and the optional analysis stand beside them">
 </p>
 
 - **Core** — line breaking, kinsoku, hanging, ruby and tate-chu-yoko preprocessing, image exclusion. Zero dependencies, no DOM.

@@ -146,7 +146,7 @@ Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます
 ## アーキテクチャ
 
 <p align="center">
-  <img src="docs/assets/architecture-layers-ja.svg" alt="mejiro のレイヤ構成図 — book / epub が render の上に並び、render は browser とコアエンジンの上に載る。image と任意の analysis はその横に独立して置かれる" width="640">
+  <img src="docs/images/architecture-layers-ja.svg" alt="mejiro のレイヤ構成図 — book / epub が render の上に並び、render は browser とコアエンジンの上に載る。image と任意の analysis はその横に独立して置かれる">
 </p>
 
 - **コア** — 改行、禁則、ぶら下げ、ルビと縦中横の前処理、画像回り込み。外部依存はなく、DOM も使いません。

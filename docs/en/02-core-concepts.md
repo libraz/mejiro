@@ -6,7 +6,7 @@ This document covers the fundamental architecture and design decisions behind me
 
 mejiro is organized into layers, each with a clear responsibility. Higher layers depend on lower layers but never the reverse. `book` and `epub` are siblings -- both sit on `render`, and an application can enter at either one. `image` and `analysis` are independent of the rest.
 
-![Layer stack: the application uses @libraz/mejiro/book, @libraz/mejiro/epub, the independent @libraz/mejiro/image and the optional suzume-backed @libraz/mejiro/analysis; book and epub sit on @libraz/mejiro/render, which sits on @libraz/mejiro/browser, which sits on the @libraz/mejiro core engine](../assets/architecture-layers-en.svg)
+![The layer stack: book and epub side by side over render, render over browser, browser over the dependency-free core, with the independent image and the optional suzume-backed analysis set apart on the right](../images/architecture-layers.svg)
 
 ### Book (`@libraz/mejiro/book`)
 
@@ -76,7 +76,7 @@ The typed array pair (`Uint32Array` for codepoints + `Float32Array` for advances
 
 The full layout pipeline transforms a string into renderable page data in six steps:
 
-![Layout pipeline: a String becomes a Uint32Array of codepoints via toCodepoints, a Float32Array of advances via measureAll, a BreakResult via computeBreaks, ParagraphMeasure entries via buildParagraphMeasures, PageSlice pages via paginate, and a RenderPage via buildRenderPage; getLineRanges is a dashed side branch from BreakResult to line ranges that also feeds the RenderPage](../assets/layout-pipeline-en.svg)
+![The six layout steps in two rows, from toCodepoints, measureAll and computeBreaks to buildParagraphMeasures, paginate and buildRenderPage, with getLineRanges as a dashed side branch from computeBreaks into buildRenderPage](../images/layout-pipeline.svg)
 
 `getLineRanges()` is a side branch: `buildRenderPage()` calls it internally to slice
 characters per line, and it is exposed for consumers that need the ranges directly.
