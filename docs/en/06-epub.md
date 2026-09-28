@@ -25,12 +25,12 @@ Steps:
 
 1. **Unzip** -- The EPUB file is decompressed using JSZip, after the archive is checked against the import limits described below.
 2. **container.xml** -- `META-INF/container.xml` is read to locate the rootfile path (the OPF file).
-3. **OPF parsing** -- The OPF file is parsed to extract metadata (`dc:title`, `dc:creator`), the spine (reading order of content documents), and the navigation document. A manifest map (id to href) is built to resolve spine itemrefs to file paths.
+3. **OPF parsing** -- The OPF file is parsed to extract metadata (`dc:title`, `dc:creator`), the spine (reading order of content documents), and the table-of-contents documents: the EPUB 3 navigation document and the EPUB 2 NCX. A manifest map (id to href) is built to resolve spine itemrefs to file paths.
 4. **XHTML extraction** -- For each spine item, the corresponding XHTML content document is read from the ZIP archive.
 5. **Paragraph extraction** -- `extractRubyContent()` walks the DOM of each XHTML document, collecting base text and ruby annotations into `AnnotatedParagraph[]`.
 6. **Chapter grouping** -- Paragraphs are grouped into `EpubChapter` entries and returned as an `EpubBook` with the title and author from the OPF metadata.
 
-The chapter title comes from the document's own `id="chapter-title"` element if it has one, otherwise from its first `h1`, `h2` or `h3`, and otherwise from the navigation document's table of contents.
+The chapter title comes from the document's own `id="chapter-title"` element if it has one, otherwise from its first `h1`, `h2` or `h3`, and otherwise from the table of contents: the navigation document first, then the NCX `navMap` for chapters the navigation document does not name.
 
 Empty chapters (those with no paragraphs after extraction) are omitted from the result.
 
@@ -111,7 +111,7 @@ The following elements create paragraph boundaries: `p`, `div`, `h1`, `h2`, `h3`
 
 If the XHTML document contains no block-level elements, the entire body is treated as a single paragraph.
 
-When a block element mixes inline content with nested block elements, each inline run becomes its own paragraph, emitted in source order. For example `<div>A<p>B</p>C</div>` yields three paragraphs: `A`, `B`, `C`.
+When an element mixes inline content with block elements nested inside it, each inline run becomes its own paragraph, emitted in source order, whether or not the owning element is itself a block. For example `<div>A<p>B</p>C</div>` yields three paragraphs: `A`, `B`, `C`, and so does `<body>A<p>B</p><span>C</span></body>`.
 
 ### Ruby handling
 
@@ -230,7 +230,7 @@ Editable chapters expose block-level content through `chapter.blocks`, where par
 
 ### Migrating to the v0.5 block-based API
 
-In `v0.5` the canonical chapter content lives in `blocks: EditableBlock[]` — a mixed array of `EditableParagraphBlock` and `EditableImageBlock`. The `paragraphs` / `paragraphRefs` / `images` fields are deprecated read-only projections that are regenerated from `blocks` after every mutation. **All three projections are scheduled for removal in `v0.6`**, so new integrations should use the block-based methods below.
+In `v0.5` the canonical chapter content lives in `blocks: EditableBlock[]` — a mixed array of `EditableParagraphBlock` and `EditableImageBlock`. The `paragraphs` / `paragraphRefs` / `images` fields are deprecated read-only projections that are regenerated from `blocks` after every mutation. Their removal is deferred to a future major release and no removal version is scheduled; new integrations should still use the block-based methods below.
 
 | v0.4 / legacy API | v0.5 recommended API | Notes |
 |-------------------|----------------------|-------|
@@ -239,7 +239,7 @@ In `v0.5` the canonical chapter content lives in `blocks: EditableBlock[]` — a
 | `chapter.paragraphs.splice(i, 1)` | `editor.deleteBlock(chapterIdx, blockId)` | Works for both paragraph and image blocks. Removing the last reference to an image asset also drops it from `imageAssets`. |
 | Split a paragraph at a position | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | Returns `[leftId, rightId]`. Annotations straddling the split are dropped intentionally. |
 | Merge adjacent paragraphs | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` must be immediately after `leftId`. |
-| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | Returns the generated `assetKey`. The legacy `{ href, mediaType, ... }` shape is still accepted but will be removed. |
+| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | Returns the generated `assetKey`. The legacy `{ href, mediaType, ... }` shape is still accepted; its removal is deferred to a future major release. |
 | `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | Identify by either block id or asset key. |
 | Patch image alt / caption / placement | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | |
 | Reorder paragraphs or images | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` is the target index in `blocks`. |
@@ -354,7 +354,7 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 
 ### Filtering inline annotations from imported manuscripts
 
-The legacy `parseManuscriptRuby()` helper is a thin wrapper that returns ruby annotations only. It is scheduled for removal in v0.6. New code should call `parseManuscript()` and narrow on `kind`:
+The legacy `parseManuscriptRuby()` helper is a thin wrapper that returns ruby annotations only. It is deprecated, with removal deferred to a future major release and no removal version scheduled. New code should call `parseManuscript()` and narrow on `kind`:
 
 ```ts
 import { parseManuscript } from '@libraz/mejiro/epub';

@@ -158,3 +158,17 @@ function fastestRun(run: () => unknown): number {
   }
   return best;
 }
+
+describe('parseManuscript normalization', () => {
+  it('keeps CJK compatibility ideographs as written while composing kana', () => {
+    // U+FA10 and U+2F83B are compatibility ideographs NFC would replace.
+    const compat = '\uFA10';
+    const supplement = '\u{2F83B}';
+    const parsed = parseManuscript(`${compat}本《つかもと》と${supplement}とか\u3099`);
+
+    expect(parsed.text).toBe(`${compat}本と${supplement}とが`);
+    expect(parsed.inlineAnnotations).toEqual([
+      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'つかもと', type: 'group' },
+    ]);
+  });
+});

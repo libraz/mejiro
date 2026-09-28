@@ -6,12 +6,14 @@ import {
   parseManuscriptRuby,
 } from '../manuscript.js';
 import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
+import { sanitizeUrl } from '../url.js';
 import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
 import {
   insertManuscriptParagraph,
   manuscriptParagraphs,
   parseInlineImageMarker,
 } from './manuscript-source.js';
+import { mediaTypeFromPath, relativeZipPath, uniqueManifestId } from './package-paths.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
 export { parseManuscript, parseManuscriptRuby };
@@ -387,7 +389,7 @@ export class EpubProject {
         href,
         nonCoverAssets.map((existing) => existing.href),
       ),
-      mediaType: asset.mediaType ?? mediaTypeFromHref(href),
+      mediaType: asset.mediaType ?? mediaTypeFromPath(href),
       properties: 'cover-image',
     };
     this.assets.splice(0, this.assets.length, ...nonCoverAssets, stored);
@@ -414,7 +416,7 @@ export class EpubProject {
         asset.href,
         this.assets.map((existing) => existing.href),
       ),
-      mediaType: asset.mediaType ?? mediaTypeFromHref(asset.href),
+      mediaType: asset.mediaType ?? mediaTypeFromPath(asset.href),
     };
     this.assets.push(stored);
     return stored;
@@ -582,9 +584,25 @@ function firstChapterFrontmatter(project: EpubProject, chapterTitle: string): st
 
 function serializeManuscriptParagraph(text: string, dialect: ManuscriptDialect): string {
   const parsed = parseManuscript(text, { dialect });
-  return buildInlineNodes([...parsed.text], parsed.inlineAnnotations)
-    .map(renderInlineNode)
-    .join('');
+  return renderInlineNodes(buildInlineNodes([...parsed.text], parsed.inlineAnnotations));
+}
+
+/**
+ * Serializes sibling inline nodes, writing each jukugo word as one `<ruby>`
+ * with interleaved `<rt>` so a re-parse recovers the same split points.
+ */
+function renderInlineNodes(nodes: readonly InlineNode[]): string {
+  let out = '';
+  let previousRuby = false;
+  for (const node of nodes) {
+    const rendered = renderInlineNode(node);
+    const joins = node.type === 'ruby' && node.continuesJukugo === true && previousRuby;
+    out = joins
+      ? `${out.slice(0, -'</ruby>'.length)}${rendered.slice('<ruby>'.length)}`
+      : out + rendered;
+    previousRuby = node.type === 'ruby';
+  }
+  return out;
 }
 
 function renderInlineNode(node: InlineNode): string {
@@ -603,10 +621,14 @@ function renderInlineNode(node: InlineNode): string {
       return `<em>${renderInlineChildren(node)}</em>`;
     case 'strong':
       return `<strong>${renderInlineChildren(node)}</strong>`;
-    case 'link':
-      return `<a href="${escapeAttribute(node.href)}"${
+    case 'link': {
+      const href = sanitizeUrl(node.href);
+      // An unsafe scheme drops the anchor, never the content.
+      if (!href) return renderInlineChildren(node);
+      return `<a href="${escapeAttribute(href)}"${
         node.title ? ` title="${escapeAttribute(node.title)}"` : ''
       }>${renderInlineChildren(node)}</a>`;
+    }
     case 'footnote-ref':
       return `<a class="mejiro-footnote-ref" href="#${escapeAttribute(
         node.noteId,
@@ -616,13 +638,16 @@ function renderInlineNode(node: InlineNode): string {
 
 function renderInlineChildren(node: Exclude<InlineNode, { type: 'text' }>): string {
   return node.children.length > 0
-    ? node.children.map(renderInlineNode).join('')
+    ? renderInlineNodes(node.children)
     : escapeTextWithBreaks(node.type === 'ruby' ? node.base : node.text);
 }
 
 /** Builds the manuscript marker for an inline image inserted via `addInlineImage`. */
 function manuscriptImageBlock(asset: EpubProjectAsset & { alt?: string }): string {
-  const src = relativeZipPath('OPS/Text/', asset.href);
+  const relative = relativeZipPath('OPS/Text/', asset.href);
+  // A bare filename reads back as `../Images/<name>`, so a same-directory asset
+  // keeps an explicit `./` to resolve to itself.
+  const src = relative.includes('/') ? relative : `./${relative}`;
   const altPart = asset.alt ? `|${encodeURIComponent(asset.alt)}` : '';
   return `[[mejiro-image:${encodeURIComponent(src)}${altPart}]]`;
 }
@@ -666,7 +691,7 @@ function packageOpf(project: EpubProject): string {
       (asset) =>
         `<item id="${escapeAttribute(asset.id ?? manifestIdFromHref(asset.href))}" href="${escapeAttribute(
           relativeZipPath('OPS/', asset.href),
-        )}" media-type="${escapeAttribute(asset.mediaType ?? mediaTypeFromHref(asset.href))}"${
+        )}" media-type="${escapeAttribute(asset.mediaType ?? mediaTypeFromPath(asset.href))}"${
           asset.properties ? ` properties="${escapeAttribute(asset.properties)}"` : ''
         } />`,
     )
@@ -852,17 +877,6 @@ function chapterFileName(index: number): string {
   return `chapter-${String(index + 1).padStart(3, '0')}.xhtml`;
 }
 
-function mediaTypeFromHref(href: string): string {
-  const lower = href.toLowerCase();
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.svg')) return 'image/svg+xml';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.css')) return 'text/css';
-  return 'application/octet-stream';
-}
-
 function manifestIdFromHref(href: string): string {
   return toManifestId(href);
 }
@@ -941,24 +955,6 @@ function toManifestId(value: string, fallback = 'asset'): string {
   const sanitized = value.replace(/[^a-zA-Z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '');
   const base = sanitized || fallback;
   return /^[a-zA-Z_]/.test(base) ? base : `id-${base}`;
-}
-
-function uniqueManifestId(base: string, existing: readonly (string | undefined)[]): string {
-  const used = new Set(existing.filter((id): id is string => Boolean(id)));
-  if (!used.has(base)) return base;
-  let index = 2;
-  while (used.has(`${base}-${index}`)) index++;
-  return `${base}-${index}`;
-}
-
-function relativeZipPath(fromDir: string, target: string): string {
-  const from = fromDir.split('/').filter(Boolean);
-  const to = target.split('/').filter(Boolean);
-  while (from.length > 0 && to.length > 0 && from[0] === to[0]) {
-    from.shift();
-    to.shift();
-  }
-  return `${'../'.repeat(from.length)}${to.join('/')}`;
 }
 
 /**

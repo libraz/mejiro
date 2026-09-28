@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import type { InlineAnnotation } from '../browser/types.js';
 import { buildInlineNodes, type InlineNode } from '../render/inline-tree.js';
+import { sanitizeUrl } from '../url.js';
 import { cloneEditableBlock } from './clone.js';
 import {
   assertEpubArchiveWithinLimits,
@@ -8,9 +9,10 @@ import {
   type EpubParseOptions,
   resolveEpubParseLimits,
 } from './limits.js';
+import { mediaTypeFromPath, relativeZipPath, uniqueManifestId } from './package-paths.js';
 import {
   assertEpubDomAvailable,
-  collectNavTitles,
+  collectTocTitles,
   extractChapterTitleOrUndefined,
   type OpfManifestItem,
   parseOpfPackage,
@@ -603,9 +605,14 @@ async function parseEditableEpubBook(
   const opfDir = rootfilePath.includes('/')
     ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
     : '';
-  const { title, author, spineHrefs, manifestItems, navHref, pageProgressionDirection } =
+  const { title, author, spineHrefs, manifestItems, navHref, ncxHref, pageProgressionDirection } =
     parseOpfPackage(opfXml, opfDir);
-  const navTitles = navHref ? readNavTitles(files, navHref) : new Map<string, string>();
+  const navTitles = collectTocTitles({
+    navHref,
+    navXhtml: navHref ? readEntryTextOrNull(files, navHref) : null,
+    ncxHref,
+    ncxXml: ncxHref ? readEntryTextOrNull(files, ncxHref) : null,
+  });
 
   const chapters: EditableEpubChapter[] = [];
   for (const href of spineHrefs) {
@@ -647,12 +654,6 @@ async function parseEditableEpubBook(
     ...(pageProgressionDirection ? { pageProgressionDirection } : {}),
     packageData: { rootfilePath, opfDir, opfXml, files },
   };
-}
-
-/** Reads the navigation document out of the already-expanded ZIP entries. */
-function readNavTitles(files: Map<string, Uint8Array>, navHref: string): Map<string, string> {
-  const navXhtml = readEntryTextOrNull(files, navHref);
-  return navXhtml == null ? new Map() : collectNavTitles(navXhtml, navHref);
 }
 
 /**
@@ -802,7 +803,7 @@ export function addEpubChapterImage(
   const assetKey = uniqueAssetKey(requestedFilename, collectImageAssetKeys(book));
   const filename = assetKey;
   const mediaType = isV5
-    ? (image.mediaType ?? mediaTypeFromFilename(requestedFilename))
+    ? (image.mediaType ?? mediaTypeFromPath(requestedFilename))
     : (image as EditableEpubImage).mediaType;
 
   const asset: EditableImageAsset = { filename, mediaType };
@@ -831,15 +832,16 @@ function resolveAddImageInsertIndex(
   chapter: EditableEpubChapter,
   image: AddImageInput | EditableEpubImage,
 ): number {
-  if (isAddImageInput(image) && image.afterBlockId) {
+  // Both input shapes reject a target naming no block; only an absent target appends.
+  if (isAddImageInput(image) && image.afterBlockId !== undefined) {
     const targetIdx = chapter.blocks.findIndex((b) => b.id === image.afterBlockId);
     if (targetIdx < 0) throw new Error(`Missing block: ${image.afterBlockId}`);
     return targetIdx + 1;
   }
   if (!isAddImageInput(image) && image.afterParagraph !== undefined) {
-    const afterParagraph = (image as EditableEpubImage).afterParagraph as number;
-    const paraIdx = nthParagraphBlockIndex(chapter, afterParagraph);
-    if (paraIdx >= 0) return paraIdx + 1;
+    const paraIdx = nthParagraphBlockIndex(chapter, image.afterParagraph);
+    if (paraIdx < 0) throw new Error(`Missing paragraph: ${image.afterParagraph}`);
+    return paraIdx + 1;
   }
   return chapter.blocks.length;
 }
@@ -928,7 +930,7 @@ async function exportEditableEpubBook(
         opfXml,
         asset.manifestId ?? manifestIdFromAssetKey(assetKey),
         asset.manifestHref ?? relativeZipPath(snapshot.packageData.opfDir, assetHref),
-        asset.mediaType ?? mediaTypeFromFilename(asset.filename),
+        asset.mediaType ?? mediaTypeFromPath(asset.filename),
       );
     }
     onProgress?.('serialize', (i + 1) / total);
@@ -1027,9 +1029,17 @@ async function resolveAssetBytes(
     throw new Error(`Image asset "${assetKey}" has neither \`data\` nor \`url\``);
   }
   throwIfAborted(signal);
-  const resolved = resolver
-    ? await resolver({ assetKey, asset, url: asset.url, signal })
-    : await defaultAssetFetch(asset.url, signal);
+  let resolved: Uint8Array | ArrayBuffer;
+  try {
+    resolved = resolver
+      ? await resolver({ assetKey, asset, url: asset.url, signal })
+      : await defaultAssetFetch(asset.url, signal);
+  } catch (err) {
+    // Once aborted, the abort is the outcome whatever the resolver threw.
+    throwIfAborted(signal);
+    throw err;
+  }
+  throwIfAborted(signal);
   return toUint8Array(resolved);
 }
 
@@ -1189,8 +1199,27 @@ function paragraphTagName(block: EditableParagraphBlock): string {
 
 /** Appends a paragraph's text + inline annotations as DOM nodes. */
 function appendInlineContent(doc: Document, parent: Element, block: EditableParagraphBlock): void {
-  for (const node of buildInlineNodes([...block.text], block.inlineAnnotations)) {
-    parent.appendChild(renderInlineNode(doc, node));
+  appendInlineNodes(doc, parent, buildInlineNodes([...block.text], block.inlineAnnotations));
+}
+
+/**
+ * Appends sibling inline nodes, writing each jukugo word as one `<ruby>` with
+ * interleaved `<rt>` so a re-parse recovers the same split points.
+ */
+function appendInlineNodes(doc: Document, parent: Node, nodes: readonly InlineNode[]): void {
+  for (const node of nodes) {
+    const rendered = renderInlineNode(doc, node);
+    const previous = parent.lastChild;
+    if (
+      node.type === 'ruby' &&
+      node.continuesJukugo &&
+      previous?.nodeType === Node.ELEMENT_NODE &&
+      (previous as Element).localName === 'ruby'
+    ) {
+      while (rendered.firstChild) previous.appendChild(rendered.firstChild);
+      continue;
+    }
+    parent.appendChild(rendered);
   }
 }
 
@@ -1198,9 +1227,7 @@ function renderInlineNode(doc: Document, inline: InlineNode): Node {
   if (inline.type === 'text') return doc.createTextNode(inline.text);
   const element = renderInlineElement(doc, inline);
   if (inline.children.length > 0) {
-    for (const child of inline.children) {
-      element.appendChild(renderInlineNode(doc, child));
-    }
+    appendInlineNodes(doc, element, inline.children);
   } else {
     element.appendChild(doc.createTextNode(inline.type === 'ruby' ? inline.base : inline.text));
   }
@@ -1215,7 +1242,7 @@ function renderInlineNode(doc: Document, inline: InlineNode): Node {
 function renderInlineElement(
   doc: Document,
   inline: Exclude<InlineNode, { type: 'text' }>,
-): Element {
+): Element | DocumentFragment {
   switch (inline.type) {
     case 'ruby': {
       return doc.createElementNS(XHTML_NS, 'ruby');
@@ -1238,8 +1265,11 @@ function renderInlineElement(
       return doc.createElementNS(XHTML_NS, 'strong');
     }
     case 'link': {
+      const href = sanitizeUrl(inline.href);
+      // An unsafe scheme drops the anchor, never the content.
+      if (!href) return doc.createDocumentFragment();
       const anchor = doc.createElementNS(XHTML_NS, 'a');
-      anchor.setAttribute('href', inline.href);
+      anchor.setAttribute('href', href);
       if (inline.title) anchor.setAttribute('title', inline.title);
       return anchor;
     }
@@ -1346,8 +1376,11 @@ function extractEditableBlocks(
   const originalImageHrefs = new Set<string>();
   const blocks: EditableBlock[] = [];
 
-  const pushParagraph = (el: Element): void => {
-    const paragraphs = extractRubyContent(wrapXhtml(new XMLSerializer().serializeToString(el)));
+  const pushParagraph = (el: Element, nodes: readonly Node[] = [el]): void => {
+    const serializer = new XMLSerializer();
+    const paragraphs = extractRubyContent(
+      wrapXhtml(nodes.map((node) => serializer.serializeToString(node)).join('')),
+    );
     for (const para of paragraphs) {
       if (!para.text) continue;
       const block: EditableParagraphBlock = {
@@ -1385,7 +1418,7 @@ function extractEditableBlocks(
       manifestId: manifestItem?.id,
       manifestHref: manifestItem?.packageHref,
       data,
-      mediaType: manifestItem?.mediaType ?? mediaTypeFromFilename(filename),
+      mediaType: manifestItem?.mediaType ?? mediaTypeFromPath(filename),
     });
     const block: EditableImageBlock = {
       kind: 'image',
@@ -1398,6 +1431,20 @@ function extractEditableBlocks(
       placement: figure ? imagePlacement(figure.getAttribute('data-placement')) : undefined,
     };
     blocks.push(block);
+  };
+
+  const structureMemo = new Map<Node, boolean>();
+  const containsStructure = (node: Node): boolean => {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const cached = structureMemo.get(node);
+    if (cached !== undefined) return cached;
+    const tag = (node as Element).localName.toLowerCase();
+    const result =
+      EDITABLE_BLOCK_ELEMENTS.has(tag) ||
+      tag === 'img' ||
+      Array.from(node.childNodes).some(containsStructure);
+    structureMemo.set(node, result);
+    return result;
   };
 
   const visit = (el: Element): void => {
@@ -1431,7 +1478,22 @@ function extractEditableBlocks(
       pushParagraph(el);
       return;
     }
-    for (const child of Array.from(el.children)) visit(child);
+    // Runs of loose text and inline markup between structural children are
+    // paragraphs too, whatever element owns them.
+    let run: Node[] = [];
+    const flush = (): void => {
+      if (run.length > 0) pushParagraph(el, run);
+      run = [];
+    };
+    for (const child of Array.from(el.childNodes)) {
+      if (containsStructure(child)) {
+        flush();
+        visit(child as Element);
+      } else {
+        run.push(child);
+      }
+    }
+    flush();
   };
 
   visit(root);
@@ -1626,36 +1688,8 @@ function basename(path: string): string {
   return path.includes('/') ? path.substring(path.lastIndexOf('/') + 1) : path;
 }
 
-function relativeZipPath(fromDir: string, target: string): string {
-  const from = fromDir.split('/').filter(Boolean);
-  const to = target.split('/').filter(Boolean);
-  while (from.length > 0 && to.length > 0 && from[0] === to[0]) {
-    from.shift();
-    to.shift();
-  }
-  return `${'../'.repeat(from.length)}${to.join('/')}`;
-}
-
 function manifestIdFromAssetKey(assetKey: string): string {
   return `img-${assetKey.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
-}
-
-function uniqueManifestId(base: string, existing: readonly (string | undefined)[]): string {
-  const used = new Set(existing.filter((id): id is string => Boolean(id)));
-  if (!used.has(base)) return base;
-  let index = 2;
-  while (used.has(`${base}-${index}`)) index++;
-  return `${base}-${index}`;
-}
-
-function mediaTypeFromFilename(filename: string): string {
-  const lower = filename.toLowerCase();
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.gif')) return 'image/gif';
-  if (lower.endsWith('.svg')) return 'image/svg+xml';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  return 'application/octet-stream';
 }
 
 function encodeText(text: string): Uint8Array {

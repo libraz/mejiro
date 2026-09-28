@@ -91,36 +91,31 @@ interface RubyBaseSegment {
 /**
  * Splits the document into paragraph-sized runs of nodes.
  *
- * A block element without block children contributes one paragraph. When block
- * children are present, each inline run around them becomes a paragraph of its
- * own, so the emitted order follows the source order.
+ * An element with no block inside it contributes one paragraph. Otherwise each
+ * run of siblings between children that are or contain a block becomes a
+ * paragraph of its own, whatever the owning element is, so no text is dropped
+ * and the emitted order follows the source order.
  */
 function collectParagraphSources(root: Element): ParagraphSource[] {
   const sources: ParagraphSource[] = [];
+  const containsBlock = blockContainmentTest();
 
   function visit(el: Element): void {
-    const isBlock = BLOCK_ELEMENTS.has(el.localName.toLowerCase());
     const childNodes = Array.from(el.childNodes);
 
-    if (!childNodes.some(isBlockElementNode)) {
-      if (isBlock) {
-        sources.push({ element: el, nodes: childNodes });
-        return;
-      }
-      for (const child of Array.from(el.children)) {
-        visit(child);
-      }
+    if (!childNodes.some(containsBlock)) {
+      sources.push({ element: el, nodes: childNodes });
       return;
     }
 
     let run: Node[] = [];
     const flush = (): void => {
-      if (isBlock && run.length > 0) sources.push({ element: el, nodes: run });
+      if (run.length > 0) sources.push({ element: el, nodes: run });
       run = [];
     };
 
     for (const child of childNodes) {
-      if (isBlockElementNode(child)) {
+      if (containsBlock(child)) {
         flush();
         visit(child as Element);
         continue;
@@ -131,15 +126,26 @@ function collectParagraphSources(root: Element): ParagraphSource[] {
   }
 
   visit(root);
-  return sources.length > 0 ? sources : [{ element: root, nodes: Array.from(root.childNodes) }];
+  return sources;
 }
 
-/** Reports whether a node is an element that acts as a paragraph boundary. */
-function isBlockElementNode(node: Node): boolean {
-  return (
-    node.nodeType === Node.ELEMENT_NODE &&
-    BLOCK_ELEMENTS.has((node as Element).localName.toLowerCase())
-  );
+/**
+ * Returns a memoized test for whether a node is, or has a descendant that is,
+ * an element acting as a paragraph boundary.
+ */
+function blockContainmentTest(): (node: Node) => boolean {
+  const memo = new Map<Node, boolean>();
+  const test = (node: Node): boolean => {
+    if (node.nodeType !== Node.ELEMENT_NODE) return false;
+    const cached = memo.get(node);
+    if (cached !== undefined) return cached;
+    const result =
+      BLOCK_ELEMENTS.has((node as Element).localName.toLowerCase()) ||
+      Array.from(node.childNodes).some(test);
+    memo.set(node, result);
+    return result;
+  };
+  return test;
 }
 
 /**
@@ -325,6 +331,8 @@ function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
   }
 
   function emitRubySegments(segments: RubyBaseSegment[]): void {
+    // Segments without base text add no characters, so neither the per-segment
+    // annotations nor the jukugo aggregate and its split points may see them.
     const usable = segments.filter((seg) => seg.base.length > 0);
     if (usable.length === 0) return;
 
@@ -349,8 +357,8 @@ function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
       const splitPoints: number[] = [];
       let accBaseLen = 0;
 
-      for (let i = 0; i < segments.length; i++) {
-        const seg = segments[i];
+      for (let i = 0; i < usable.length; i++) {
+        const seg = usable[i];
         const segStart = textCharCount;
         appendRubyBase(seg);
 
@@ -369,16 +377,16 @@ function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
         }
 
         accBaseLen += segLen;
-        if (i < segments.length - 1) {
+        if (i < usable.length - 1) {
           splitPoints.push(accBaseLen);
         }
       }
 
       const overallEnd = textCharCount;
       if (overallEnd - overallStart > 1) {
-        const rubySegments = segments.filter((s) => s.rt.length > 0);
+        const rubySegments = usable.filter((s) => s.rt.length > 0);
         const combinedRubyText = rubySegments.map((s) => s.rt).join('');
-        if (combinedRubyText.length > 0 && rubySegments.length === segments.length) {
+        if (combinedRubyText.length > 0 && rubySegments.length === usable.length) {
           inlineAnnotations.push({
             kind: 'ruby',
             startIndex: overallStart,

@@ -295,6 +295,47 @@ describe('EPUB archive expansion limits', () => {
     );
   });
 
+  it('sums expanded bytes across entries that each fit the total, on both import paths', async () => {
+    const zip = new JSZip();
+    zip.file('META-INF/container.xml', containerXml);
+    zip.file(
+      'OPS/package.opf',
+      opfXml
+        .replace(
+          '</manifest>',
+          '<item id="c2" href="Text/second.xhtml" media-type="application/xhtml+xml" /></manifest>',
+        )
+        .replace('</spine>', '<itemref idref="c2" /></spine>'),
+    );
+    zip.file('OPS/Text/chapter.xhtml', makeChapterXhtml(1.5 * MIB));
+    zip.file('OPS/Text/second.xhtml', makeChapterXhtml(1.5 * MIB));
+    const honest = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+    // The second entry under-reports its size, so the declared sum clears the
+    // metadata check and only the running count of real output can trip.
+    const data = declareUncompressedSize(honest, 'OPS/Text/second.xhtml', declaredBytes);
+    const limits = { maxTotalBytes: 2 * MIB };
+    const loaded = await JSZip.loadAsync(data);
+
+    expect(() =>
+      assertEpubArchiveWithinLimits(data, loaded, resolveEpubParseLimits({ limits })),
+    ).not.toThrow();
+    await expect(parseEpub(data, { limits })).rejects.toThrow(/total expanded size limit/);
+    await expect(EditableEpub.load(data, { limits })).rejects.toThrow(/total expanded size limit/);
+
+    // Control: each entry alone fits the same total, and a total covering the
+    // sum accepts the honest archive on both paths.
+    const single = new JSZip();
+    single.file('META-INF/container.xml', containerXml);
+    single.file('OPS/package.opf', opfXml);
+    single.file('OPS/Text/chapter.xhtml', makeChapterXhtml(1.5 * MIB));
+    const archive = await single.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+    await expect(parseEpub(archive, { limits })).resolves.toBeDefined();
+    await expect(EditableEpub.load(archive, { limits })).resolves.toBeDefined();
+    const roomy = { maxTotalBytes: 4 * MIB };
+    await expect(parseEpub(honest, { limits: roomy })).resolves.toBeDefined();
+    await expect(EditableEpub.load(honest, { limits: roomy })).resolves.toBeDefined();
+  });
+
   it('rejects an entry whose real expansion passes the compression ratio limit', async () => {
     // Declared metadata puts the ratio just under 2:1 while the entry really
     // expands ~250x, so a ratio limit of 20 is only passed by the real output.

@@ -3,6 +3,7 @@
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
+import { EditableEpub } from '../../src/epub/editor.js';
 import { parseEpub } from '../../src/epub/parser.js';
 
 async function makeEpub(files: Record<string, string>): Promise<ArrayBuffer> {
@@ -105,6 +106,57 @@ describe('parseEpub', () => {
 
     expect(book.pageProgressionDirection).toBe('rtl');
     expect(book.chapters[0].title).toBe('第一話');
+  });
+
+  it('takes chapter titles from an EPUB 2 NCX, on both import paths', async () => {
+    const ncx = `<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <navMap>
+    <navPoint id="p1" playOrder="1">
+      <navLabel><text>第一話</text></navLabel>
+      <content src="Text/ch1.xhtml" />
+      <navPoint id="p1-1" playOrder="2">
+        <navLabel><text>小見出し</text></navLabel>
+        <content src="Text/ch1.xhtml#s1" />
+      </navPoint>
+    </navPoint>
+    <navPoint id="p2" playOrder="3">
+      <navLabel><text>第二話</text></navLabel>
+      <content src="Text/ch2.xhtml" />
+    </navPoint>
+  </navMap>
+</ncx>`;
+    const chapter = `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`;
+    const opf = (spineAttrs: string, ncxType: string) => `<?xml version="1.0"?>
+<package version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>NCX</dc:title></metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="${ncxType}" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+    <item id="c2" href="Text/ch2.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine${spineAttrs}><itemref idref="c1" /><itemref idref="c2" /></spine>
+</package>`;
+
+    // Declared through the spine `toc` attribute, and found by media type alone.
+    for (const packageXml of [
+      opf(' toc="ncx"', 'application/octet-stream'),
+      opf('', 'application/x-dtbncx+xml'),
+    ]) {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': packageXml,
+        'OPS/toc.ncx': ncx,
+        'OPS/Text/ch1.xhtml': chapter,
+        'OPS/Text/ch2.xhtml': chapter,
+      });
+      expect((await parseEpub(data)).chapters.map((c) => c.title)).toEqual(['第一話', '第二話']);
+      expect((await EditableEpub.load(data)).chapters.map((c) => c.title)).toEqual([
+        '第一話',
+        '第二話',
+      ]);
+    }
   });
 
   it('keeps the outer toc title for a chapter whose nav entry has nested sections', async () => {

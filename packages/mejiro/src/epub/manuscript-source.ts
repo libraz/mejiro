@@ -174,11 +174,16 @@ export interface ManuscriptImageMarker {
   alt: string;
 }
 
-/** Parses an internal inline-image marker, returning null for ordinary paragraphs. */
+/**
+ * Parses an internal inline-image marker, returning null for ordinary
+ * paragraphs. A marker whose path carries a URL scheme or is absolute does not
+ * name a file inside the archive and is treated as ordinary text.
+ */
 export function parseInlineImageMarker(paragraph: string): ManuscriptImageMarker | null {
   const match = INLINE_IMAGE_MARKER.exec(paragraph.trim());
   if (!match) return null;
   const value = decodeMarkerPart(match[1]);
+  if (value.startsWith('/') || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)) return null;
   const src = value.includes('/') ? value : `../Images/${value}`;
   return { src, alt: match[2] ? decodeMarkerPart(match[2]) : '' };
 }

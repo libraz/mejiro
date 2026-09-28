@@ -51,6 +51,20 @@ describe('manuscriptToEpubBook', () => {
     expect(parseInlineImageMarker(marker)).toEqual({ src: '../Images/fig.png', alt: '挿絵' });
   });
 
+  it('rejects inline image markers whose path leaves the archive', () => {
+    for (const path of [
+      'https%3A%2F%2Fevil.test%2Fx.png',
+      'javascript%3Aa%2Fb',
+      '%2FImages%2Fx.png',
+    ]) {
+      expect(parseInlineImageMarker(`[[mejiro-image:${path}]]`)).toBeNull();
+    }
+    expect(parseInlineImageMarker('[[mejiro-image:.%2Fflat.png]]')).toEqual({
+      src: './flat.png',
+      alt: '',
+    });
+  });
+
   it('skips inline image markers instead of exposing them as preview text', () => {
     const marker = '[[mejiro-image:..%2FImages%2Ffig.png|%E6%8C%BF%E7%B5%B5]]';
     const book = manuscriptToEpubBook([

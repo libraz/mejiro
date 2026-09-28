@@ -12,7 +12,18 @@ import type { InlineAnnotation } from '../browser/types.js';
  */
 export type InlineNode =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; rubyText: string; base: string; children: InlineNode[] }
+  | {
+      type: 'ruby';
+      rubyText: string;
+      base: string;
+      children: InlineNode[];
+      /**
+       * Set on every segment of a jukugo word after the first: the segment
+       * shares one `<ruby>` element with the ruby sibling before it, which is
+       * how a serializer writes the word's split points back.
+       */
+      continuesJukugo?: true;
+    }
   | { type: 'emphasis'; style: 'sesame' | 'dot' | 'circle'; text: string; children: InlineNode[] }
   | { type: 'tcy'; text: string; children: InlineNode[] }
   | { type: 'em'; text: string; children: InlineNode[] }
@@ -48,6 +59,7 @@ export function buildInlineNodes(
     start,
     end,
     serializableAnnotations(annotations, chars.length, start, end),
+    jukugoContinuations(annotations),
   );
 }
 
@@ -116,6 +128,30 @@ function isCoveredJukugo(
 }
 
 /**
+ * Collects the per-segment ruby annotations that continue a covered jukugo
+ * aggregate, i.e. every segment inside it except the one at its start.
+ */
+function jukugoContinuations(
+  inlineAnnotations: readonly InlineAnnotation[],
+): ReadonlySet<InlineAnnotation> {
+  const continuations = new Set<InlineAnnotation>();
+  for (const agg of inlineAnnotations) {
+    if (!isCoveredJukugo(agg, inlineAnnotations)) continue;
+    for (const seg of inlineAnnotations) {
+      if (
+        seg.kind === 'ruby' &&
+        seg.type !== 'jukugo' &&
+        seg.startIndex > agg.startIndex &&
+        seg.endIndex <= agg.endIndex
+      ) {
+        continuations.add(seg);
+      }
+    }
+  }
+  return continuations;
+}
+
+/**
  * Restricts an annotation to `[start, end)`, or returns `undefined` when nothing
  * of it survives. Ruby readings are not repeatable, so a ruby whose base is cut
  * at the head is dropped and its base renders as plain text on that slice.
@@ -159,6 +195,7 @@ function buildRange(
   start: number,
   end: number,
   annotations: readonly InlineAnnotation[],
+  continuations: ReadonlySet<InlineAnnotation>,
 ): InlineNode[] {
   const nodes: InlineNode[] = [];
   let pos = start;
@@ -176,13 +213,17 @@ function buildRange(
         childIndex > i && child.startIndex >= ann.startIndex && child.endIndex <= ann.endIndex,
     );
     const text = chars.slice(ann.startIndex, ann.endIndex).join('');
-    nodes.push(
-      toNode(
-        ann,
-        text,
-        children.length > 0 ? buildRange(chars, ann.startIndex, ann.endIndex, children) : [],
-      ),
+    const node = toNode(
+      ann,
+      text,
+      children.length > 0
+        ? buildRange(chars, ann.startIndex, ann.endIndex, children, continuations)
+        : [],
     );
+    if (node.type === 'ruby' && ann.startIndex > start && continuations.has(ann)) {
+      node.continuesJukugo = true;
+    }
+    nodes.push(node);
     pos = ann.endIndex;
   }
   if (pos < end) {

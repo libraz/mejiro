@@ -21,6 +21,22 @@ function wrapXhtml(body: string): string {
 }
 
 describe('extractRubyContent', () => {
+  it('keeps every run of loose text whatever element owns it', () => {
+    const xhtml = wrapXhtml(
+      '前文<p>段落</p><span>中文</span><aside>脇<p>内側</p>後</aside><span><p>包まれた</p></span>末尾',
+    );
+    expect(extractRubyContent(xhtml).map((p) => p.text)).toEqual([
+      '前文',
+      '段落',
+      '中文',
+      '脇',
+      '内側',
+      '後',
+      '包まれた',
+      '末尾',
+    ]);
+  });
+
   it('extracts plain text without ruby', () => {
     const xhtml = wrapXhtml('<p>吾輩は猫である。</p>');
     const result = extractRubyContent(xhtml);

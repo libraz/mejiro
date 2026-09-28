@@ -9,6 +9,7 @@ import {
   addEpubChapterImage,
   EditableEpub,
   parseEpub,
+  parseManuscript,
 } from '../../src/epub/index.js';
 
 async function makeEpub(files: Record<string, string | Uint8Array>): Promise<ArrayBuffer> {
@@ -265,6 +266,30 @@ describe('EditableEpub', () => {
     ]);
   });
 
+  it('keeps loose text runs as paragraphs, matching parseEpub, through an edit and export', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>前文<p>段落</p><span>中文</span><aside>脇<p>内側</p>後</aside><span><img src="../Images/a.png" alt="図" /></span>末尾</body></html>`,
+      'OPS/Images/a.png': new Uint8Array([1]),
+    });
+    const expected = ['前文', '段落', '中文', '脇', '内側', '後', '末尾'];
+
+    expect((await parseEpub(data)).chapters[0].paragraphs.map((p) => p.text)).toEqual(expected);
+    const editor = await EditableEpub.load(data);
+    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(expected);
+    expect(editor.chapters[0].blocks.some((block) => block.kind === 'image')).toBe(true);
+
+    editor.updateParagraph(0, 1, { text: '編集' });
+    const out = await editor.export();
+    expect((await parseEpub(out)).chapters[0].paragraphs.map((p) => p.text)).toEqual([
+      '前文',
+      '編集',
+      ...expected.slice(2),
+    ]);
+  });
+
   it('writes proofreading and ruby edits back into an EPUB', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
@@ -346,6 +371,94 @@ describe('EditableEpub', () => {
     expect(chapter).toContain(
       '<a href="https://example.test"><ruby>漢字<rt>かんじ</rt></ruby></a>',
     );
+  });
+
+  it('keeps jukugo ruby grouping and split points through an edit, export and re-parse', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+<p>編集前</p>
+<p><ruby><rb>東</rb><rb>京</rb><rt>とう</rt><rt>きょう</rt></ruby>と<ruby>明<rt>あ</rt>日<rt>す</rt></ruby></p>
+<p><ruby><rb>紫</rb><rb></rb><rb>陽花</rb><rt>あ</rt><rt></rt><rt>じさい</rt></ruby>が<ruby><rb>大</rb><rb>人</rb><rb/><rt>おと</rt><rt>な</rt></ruby></p>
+<p><a href="https://example.test"><ruby>海<rt>う</rt>老<rt>み</rt></ruby></a><em><ruby>漢字<rt>かんじ</rt></ruby></em></p>
+</body></html>`,
+    });
+
+    const rubyOf = (paragraphs: readonly AnnotatedParagraph[]) =>
+      paragraphs.map((p) =>
+        p.inlineAnnotations
+          .filter((ann) => ann.kind === 'ruby')
+          .map((ann) => ({ ...ann }))
+          .sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex),
+      );
+
+    const original = (await parseEpub(data)).chapters[0].paragraphs;
+    const originalRuby = rubyOf(original);
+    // Guard against a vacuous pass: every ruby paragraph carries a jukugo word.
+    for (const anns of originalRuby.slice(1)) {
+      expect(anns.some((ann) => ann.kind === 'ruby' && ann.type === 'jukugo')).toBe(true);
+    }
+    expect(originalRuby[2]).toContainEqual(
+      expect.objectContaining({ type: 'jukugo', rubyText: 'あじさい', jukugoSplitPoints: [1] }),
+    );
+    expect(originalRuby[2]).toContainEqual(
+      expect.objectContaining({ type: 'jukugo', rubyText: 'おとな', jukugoSplitPoints: [1] }),
+    );
+
+    const editor = await EditableEpub.load(data);
+    editor.updateParagraph(0, 0, { text: '編集後' });
+    const out = await editor.export();
+
+    const reparsed = (await parseEpub(out)).chapters[0].paragraphs;
+    expect(reparsed.map((p) => p.text)).toEqual([
+      '編集後',
+      ...original.slice(1).map((p) => p.text),
+    ]);
+    expect(rubyOf(reparsed)).toEqual(originalRuby);
+    const reloaded = await EditableEpub.load(out);
+    expect(rubyOf(reloaded.chapters[0].paragraphs)).toEqual(originalRuby);
+  });
+
+  it('never writes a caller-supplied executable href into exported markup', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>ABCD</p><p>漢字</p></body></html>`,
+    });
+
+    const editor = await EditableEpub.load(data);
+    editor.setInlineAnnotations(0, 0, [
+      { kind: 'link', startIndex: 0, endIndex: 1, href: 'javascript:alert(1)' },
+      { kind: 'link', startIndex: 1, endIndex: 2, href: ' VBScript:msgbox(1)' },
+      { kind: 'link', startIndex: 2, endIndex: 3, href: 'data:text/html,<script>' },
+      { kind: 'link', startIndex: 3, endIndex: 4, href: 'https://example.test' },
+    ]);
+    editor.updateParagraph(0, 1, {
+      text: '漢字',
+      inlineAnnotations: [
+        { kind: 'link', startIndex: 0, endIndex: 2, href: 'javascript:void(0)' },
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+      ],
+    });
+
+    const out = await editor.export();
+    const zip = await JSZip.loadAsync(out);
+    const chapter = (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '';
+
+    expect(chapter).not.toMatch(/javascript:|vbscript:|data:/iu);
+    expect(chapter).toContain('<p>ABC<a href="https://example.test">D</a></p>');
+    expect(chapter).toContain('<p><ruby>漢字<rt>かんじ</rt></ruby></p>');
+
+    const reparsed = await EditableEpub.load(out);
+    const [first, second] = reparsed.chapters[0].paragraphs;
+    expect(first.text).toBe('ABCD');
+    expect(first.inlineAnnotations).toEqual([
+      { kind: 'link', startIndex: 3, endIndex: 4, href: 'https://example.test' },
+    ]);
+    expect(second.inlineAnnotations?.map((ann) => ann.kind)).toEqual(['ruby']);
   });
 
   it('rejects exporting edited chapters with unsupported list structure', async () => {
@@ -895,6 +1008,39 @@ describe('EditableEpub', () => {
     expect(chapter).toMatch(/<p>本文1<\/p>[\s\S]*<figure[\s\S]*<\/figure>[\s\S]*<p>本文2<\/p>/u);
   });
 
+  it('rejects an insertion target naming no block identically for both addImage shapes', async () => {
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': opfXml,
+      'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文1</p><p>本文2</p></body></html>`,
+    });
+    const editor = await EditableEpub.load(data);
+    const bytes = new Uint8Array([1]);
+
+    expect(() =>
+      editor.addImage(0, { filename: 'a.png', data: bytes, afterBlockId: 'missing' }),
+    ).toThrow(/Missing block: missing/);
+    expect(() => editor.addImage(0, { filename: 'a.png', data: bytes, afterBlockId: '' })).toThrow(
+      /Missing block/,
+    );
+    for (const afterParagraph of [2, -1, 99]) {
+      expect(() =>
+        editor.addImage(0, {
+          href: 'OPS/Images/legacy.png',
+          mediaType: 'image/png',
+          data: bytes,
+          afterParagraph,
+        }),
+      ).toThrow(`Missing paragraph: ${afterParagraph}`);
+    }
+    expect(editor.chapters[0].blocks.map((block) => block.kind)).toEqual([
+      'paragraph',
+      'paragraph',
+    ]);
+    expect(editor.history.depth).toBe(0);
+  });
+
   it('inserts, splits, merges, moves, and deletes paragraph blocks', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
@@ -1379,7 +1525,72 @@ describe('EditableEpub', () => {
     const editor = await EditableEpub.load(data);
     const controller = new AbortController();
     controller.abort();
-    await expect(editor.export({ signal: controller.signal })).rejects.toThrow();
+    await expect(editor.export({ signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+
+    const reason = new Error('cancelled by caller');
+    await expect(editor.export({ signal: AbortSignal.abort(reason) })).rejects.toBe(reason);
+  });
+
+  describe('abort during export phases', () => {
+    async function loadWithRemoteImage(): Promise<EditableEpub> {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
+      });
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, { filename: 'remote.png', url: 'https://cdn.example.test/remote.png' });
+      return editor;
+    }
+
+    it('rejects with AbortError when aborted while an asset resolves', async () => {
+      const editor = await loadWithRemoteImage();
+      const controller = new AbortController();
+      await expect(
+        editor.export({
+          signal: controller.signal,
+          assetResolver() {
+            controller.abort();
+            return new Uint8Array([1]);
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('rejects with AbortError, not the resolver error, when the resolver fails after abort', async () => {
+      const editor = await loadWithRemoteImage();
+      const controller = new AbortController();
+      await expect(
+        editor.export({
+          signal: controller.signal,
+          async assetResolver() {
+            controller.abort();
+            throw new TypeError('network torn down');
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('rejects with AbortError when aborted during ZIP generation', async () => {
+      const editor = await loadWithRemoteImage();
+      const controller = new AbortController();
+      const phases: string[] = [];
+      await expect(
+        editor.export({
+          signal: controller.signal,
+          assetResolver: () => new Uint8Array([1]),
+          onProgress(phase) {
+            phases.push(phase);
+            if (phase === 'zip') controller.abort();
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(phases).toContain('serialize');
+      expect(phases).toContain('zip');
+    });
   });
 
   it('exports a spec-compatible OCF mimetype entry first and uncompressed', async () => {
@@ -1622,6 +1833,87 @@ describe('EditableEpub', () => {
   });
 
   describe('inline annotation anchoring', () => {
+    describe('astral-plane characters', () => {
+      // Each astral character stands where the BMP twin stands, so offsets must match.
+      const ASTRAL = '𠮷野家🍣です';
+      const BMP = '吉野家寿です';
+
+      async function load(text: string): Promise<EditableEpub> {
+        const chars = [...text];
+        const xhtml = `${chars[0]}<ruby>${chars[0]}${chars[1]}<rt>よしの</rt></ruby>${chars.slice(2).join('')}`;
+        const data = await makeEpub({
+          'META-INF/container.xml': containerXml,
+          'OPS/package.opf': opfXml,
+          'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>${xhtml}</p></body></html>`,
+        });
+        return EditableEpub.load(data);
+      }
+
+      function offsets(paragraph: AnnotatedParagraph): [number, number][] {
+        return paragraph.inlineAnnotations.map((ann) => [ann.startIndex, ann.endIndex]);
+      }
+
+      function bases(paragraph: AnnotatedParagraph): string[] {
+        const chars = [...paragraph.text];
+        return paragraph.inlineAnnotations.map((ann) =>
+          chars.slice(ann.startIndex, ann.endIndex).join(''),
+        );
+      }
+
+      function hasLoneSurrogate(value: string): boolean {
+        return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(
+          value,
+        );
+      }
+
+      async function run(text: string) {
+        const editor = await load(text);
+        const chapter = editor.chapters[0];
+        const loaded = structuredClone(chapter.paragraphs[0]);
+        const [left, right] = editor.splitParagraph(0, chapter.blocks[0].id, 3);
+        const split = structuredClone([chapter.paragraphs[0], chapter.paragraphs[1]]);
+        editor.mergeParagraphs(0, left, right);
+        const merged = structuredClone(chapter.paragraphs[0]);
+        // Replace the leading character outside the ruby with another astral one.
+        const chars = [...merged.text];
+        editor.updateParagraph(0, 0, { text: [chars[4], ...chars.slice(1)].join('') });
+        const reanchored = chapter.paragraphs[0];
+        return { loaded, split, merged, reanchored };
+      }
+
+      it('splits, merges and re-anchors by code point, matching BMP-only text', async () => {
+        const astral = await run(ASTRAL);
+        const bmp = await run(BMP);
+
+        expect(astral.loaded.text).toBe('𠮷𠮷野家🍣です');
+        expect(bases(astral.loaded)).toEqual(['𠮷野']);
+        expect(astral.split.map((p) => p.text)).toEqual(['𠮷𠮷野', '家🍣です']);
+        for (const p of astral.split) expect(hasLoneSurrogate(p.text)).toBe(false);
+        expect(bases(astral.split[0])).toEqual(['𠮷野']);
+        expect(astral.merged.text).toBe(astral.loaded.text);
+        expect(astral.reanchored.text).toBe('🍣𠮷野家🍣です');
+        expect(bases(astral.reanchored)).toEqual(['𠮷野']);
+
+        for (const key of ['loaded', 'merged', 'reanchored'] as const) {
+          expect(offsets(astral[key])).toEqual(offsets(bmp[key]));
+        }
+        expect(astral.split.map(offsets)).toEqual(bmp.split.map(offsets));
+      });
+
+      it('parses manuscript ruby with code point offsets, matching BMP-only text', () => {
+        const astral = parseManuscript('🍣と𠮷野《よしの》家｜🍣《すし》');
+        const bmp = parseManuscript('寿と吉野《よしの》家｜寿《すし》');
+        expect(astral.text).toBe('🍣と𠮷野家🍣');
+        expect(astral.inlineAnnotations.map((ann) => [ann.startIndex, ann.endIndex])).toEqual(
+          bmp.inlineAnnotations.map((ann) => [ann.startIndex, ann.endIndex]),
+        );
+        const chars = [...astral.text];
+        expect(
+          astral.inlineAnnotations.map((ann) => chars.slice(ann.startIndex, ann.endIndex).join('')),
+        ).toEqual(['𠮷野', '🍣']);
+      });
+    });
     async function loadRubyChapter(): Promise<EditableEpub> {
       const data = await makeEpub({
         'META-INF/container.xml': containerXml,

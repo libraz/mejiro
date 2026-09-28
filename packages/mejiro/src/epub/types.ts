@@ -176,7 +176,10 @@ export interface EditableEpubImage {
   data: Uint8Array | ArrayBuffer;
   /** Alternative text for the generated `<img>`. */
   alt?: string;
-  /** Insert after this block index. Defaults to the end of the chapter. */
+  /**
+   * Insert after the paragraph at this index. Defaults to the end of the
+   * chapter; an index no paragraph carries throws.
+   */
   afterParagraph?: number;
 }
 

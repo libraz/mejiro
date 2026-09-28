@@ -54,11 +54,16 @@ export async function parseEpub(
   const opfDir = rootfilePath.includes('/')
     ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
     : '';
-  const { title, author, spineHrefs, navHref, pageProgressionDirection } = parseOpfPackage(
+  const { title, author, spineHrefs, navHref, ncxHref, pageProgressionDirection } = parseOpfPackage(
     opfXml,
     opfDir,
   );
-  const navTitles = navHref ? await readNavTitles(zip, budget, navHref) : new Map<string, string>();
+  const navTitles = collectTocTitles({
+    navHref,
+    navXhtml: navHref ? await readZipTextOrNull(zip, budget, navHref) : null,
+    ncxHref,
+    ncxXml: ncxHref ? await readZipTextOrNull(zip, budget, ncxHref) : null,
+  });
 
   // 3. Extract chapters from spine items
   const chapters: EpubChapter[] = [];
@@ -181,18 +186,66 @@ export function extractChapterTitleOrUndefined(xhtml: string): string | undefine
   }
 }
 
-async function readNavTitles(
-  zip: JSZip,
-  budget: EpubExpansionBudget,
-  navHref: string,
-): Promise<Map<string, string>> {
-  const navXhtml = await readZipTextOrNull(zip, budget, navHref);
-  if (navXhtml == null) return new Map();
-  return collectNavTitles(navXhtml, navHref);
+/**
+ * @internal
+ * Table-of-contents documents of a package, as read from the archive. A
+ * document that is undeclared or missing is `undefined`/`null`.
+ */
+export interface TocSources {
+  /** ZIP path of the EPUB 3 navigation document. */
+  navHref?: string;
+  /** Source of the navigation document. */
+  navXhtml?: string | null;
+  /** ZIP path of the EPUB 2 NCX. */
+  ncxHref?: string;
+  /** Source of the NCX. */
+  ncxXml?: string | null;
 }
 
 /**
  * @internal
+ * Maps chapter ZIP paths to table-of-contents titles from every TOC the
+ * package declares: the EPUB 3 navigation document first, then the EPUB 2 NCX
+ * for chapters the navigation document does not name.
+ */
+export function collectTocTitles(sources: TocSources): Map<string, string> {
+  const titles =
+    sources.navHref && sources.navXhtml != null
+      ? collectNavTitles(sources.navXhtml, sources.navHref)
+      : new Map<string, string>();
+  if (sources.ncxHref && sources.ncxXml != null) {
+    for (const [href, text] of collectNcxTitles(sources.ncxXml, sources.ncxHref)) {
+      if (!titles.has(href)) titles.set(href, text);
+    }
+  }
+  return titles;
+}
+
+/**
+ * Maps chapter ZIP paths to `navMap` labels of an EPUB 2 NCX. The first
+ * `navPoint` in document order wins for a path, so a nested point does not
+ * overwrite the chapter title it belongs to.
+ */
+function collectNcxTitles(ncxXml: string, ncxHref: string): Map<string, string> {
+  const ncxDir = ncxHref.includes('/') ? ncxHref.substring(0, ncxHref.lastIndexOf('/') + 1) : '';
+  const doc = parseXml(ncxXml);
+  const titles = new Map<string, string>();
+  const navMap = firstElementByName(doc, 'navMap');
+  if (!navMap) return titles;
+  for (const point of Array.from(navMap.getElementsByTagName('*'))) {
+    if (point.localName !== 'navPoint' && point.tagName !== 'navPoint') continue;
+    const label = childElementsByName(point, 'navLabel')[0];
+    const text = childElementsByName(label, 'text')[0]?.textContent?.trim();
+    const src = childElementsByName(point, 'content')[0]?.getAttribute('src');
+    if (!(src && text) || src.startsWith('#')) continue;
+    const key = resolveZipPath(ncxDir, src);
+    if (!key || titles.has(key)) continue;
+    titles.set(key, text);
+  }
+  return titles;
+}
+
+/**
  * Maps resolved chapter ZIP paths to the title a reader sees in the table of
  * contents. Only anchors inside the TOC navigation contribute, and the first
  * anchor in document order wins for a given path, so nested `<ol>` sections do
@@ -202,7 +255,7 @@ async function readNavTitles(
  * @param navHref - ZIP path of the navigation document, used to resolve hrefs.
  * @returns Chapter ZIP path → table-of-contents title.
  */
-export function collectNavTitles(navXhtml: string, navHref: string): Map<string, string> {
+function collectNavTitles(navXhtml: string, navHref: string): Map<string, string> {
   const navDir = navHref.includes('/') ? navHref.substring(0, navHref.lastIndexOf('/') + 1) : '';
   const doc = parseXml(stripStylesheetLinks(navXhtml));
   const titles = new Map<string, string>();
@@ -277,6 +330,8 @@ export interface OpfPackage {
   manifestItems: Map<string, OpfManifestItem>;
   /** ZIP path of the navigation document, when the manifest declares one. */
   navHref?: string;
+  /** ZIP path of the EPUB 2 NCX, when the package declares one. */
+  ncxHref?: string;
   /** Spine `page-progression-direction`, when declared. */
   pageProgressionDirection?: 'rtl' | 'ltr' | 'default';
 }
@@ -340,8 +395,25 @@ export function parseOpfPackage(opfXml: string, opfDir: string): OpfPackage {
     if (item && isReadableSpineItem(item)) spineHrefs.push(item.href);
   }
 
-  return { title, author, spineHrefs, manifestItems, navHref, pageProgressionDirection };
+  // EPUB 2 names its NCX through the spine `toc` attribute; fall back to the
+  // manifest media type for packages that omit it.
+  const tocId = spineEl?.getAttribute('toc');
+  const ncxHref =
+    (tocId ? manifestById.get(tocId)?.href : undefined) ??
+    [...manifestItems.values()].find((item) => item.mediaType === NCX_MEDIA_TYPE)?.href;
+
+  return {
+    title,
+    author,
+    spineHrefs,
+    manifestItems,
+    navHref,
+    ncxHref,
+    pageProgressionDirection,
+  };
 }
+
+const NCX_MEDIA_TYPE = 'application/x-dtbncx+xml';
 
 function parsePageProgressionDirection(
   value: string | null | undefined,

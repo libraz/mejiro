@@ -25,12 +25,12 @@ console.log(book.chapters.length);
 
 1. **ZIP 展開** -- 後述の読込上限に照らしてアーカイブを検査したうえで、JSZip で EPUB ファイルを展開します。
 2. **container.xml** -- `META-INF/container.xml` を読み取り、ルートファイルパス（OPFファイル）を特定します。
-3. **OPF 解析** -- OPF ファイルを解析し、メタデータ（`dc:title`、`dc:creator`）、spine（コンテンツ文書の読み順）、ナビゲーション文書を取り出します。manifest の id から href への対応を作り、spine の itemref をファイルパスへ解決します。
+3. **OPF 解析** -- OPF ファイルを解析し、メタデータ（`dc:title`、`dc:creator`）、spine（コンテンツ文書の読み順）、目次文書（EPUB 3 のナビゲーション文書と EPUB 2 の NCX）を取り出します。manifest の id から href への対応を作り、spine の itemref をファイルパスへ解決します。
 4. **XHTML 抽出** -- spine の各項目について、対応する XHTML コンテンツ文書を ZIP から読み取ります。
 5. **段落抽出** -- `extractRubyContent()` が各 XHTML 文書の DOM を走査し、本文テキストとルビ注釈を `AnnotatedParagraph[]` にまとめます。
 6. **章としてまとめる** -- 段落を `EpubChapter` にまとめ、OPF メタデータの書名と著者を添えた `EpubBook` として返します。
 
-章タイトルは、文書内に `id="chapter-title"` の要素があればそれを、なければ最初の `h1`、`h2`、`h3` を、それもなければナビゲーション文書の目次を使います。
+章タイトルは、文書内に `id="chapter-title"` の要素があればそれを、なければ最初の `h1`、`h2`、`h3` を、それもなければ目次を使います。目次はナビゲーション文書を優先し、そこに載っていない章は NCX の `navMap` から補います。
 
 段落が 1 つもない章は結果から除外されます。
 
@@ -111,7 +111,7 @@ const paragraphs = extractRubyContent(xhtml);
 
 XHTML文書にブロックレベル要素が含まれない場合、body全体が単一の段落として扱われます。
 
-ブロック要素の直下にインライン内容と入れ子のブロック要素が混在する場合、各インラインランはそれぞれ独立した段落として原文の順序どおりに出力されます。たとえば `<div>A<p>B</p>C</div>` は `A`、`B`、`C` の3段落になります。
+要素の中にインライン内容と入れ子のブロック要素が混在する場合、各インラインランはそれぞれ独立した段落として原文の順序どおりに出力されます。その要素自体がブロック要素かどうかは問いません。たとえば `<div>A<p>B</p>C</div>` は `A`、`B`、`C` の3段落になり、`<body>A<p>B</p><span>C</span></body>` も同じ3段落になります。
 
 ### ルビの処理
 
@@ -230,7 +230,7 @@ const nextBuffer = await editor.export({
 
 ### v0.5: blocks 主体 API への移行ガイド
 
-`v0.5` で `EditableEpubChapter` の正本は `blocks: EditableBlock[]`（段落ブロック `EditableParagraphBlock` と画像ブロック `EditableImageBlock` の混在配列）になりました。`paragraphs` / `paragraphRefs` / `images` は読み取り互換用の deprecated プロパティで、各ミューテーションの後に `blocks` から自動再生成されます。**`v0.6` でこの3プロパティは削除予定**のため、新規実装では下表のとおり `blocks` ベースの API に置き換えてください。
+`v0.5` で `EditableEpubChapter` の正本は `blocks: EditableBlock[]`（段落ブロック `EditableParagraphBlock` と画像ブロック `EditableImageBlock` の混在配列）になりました。`paragraphs` / `paragraphRefs` / `images` は読み取り互換用の deprecated プロパティで、各ミューテーションの後に `blocks` から自動再生成されます。削除は将来のメジャーリリースに先送りされており、削除バージョンは決まっていません。それでも新規実装では下表のとおり `blocks` ベースの API に置き換えてください。
 
 | v0.4 / 旧 API | v0.5 推奨 API | 備考 |
 |---------------|---------------|------|
@@ -239,7 +239,7 @@ const nextBuffer = await editor.export({
 | `chapter.paragraphs.splice(i, 1)` で削除 | `editor.deleteBlock(chapterIdx, blockId)` | 段落・画像どちらも削除可能。画像の場合、最後の参照が消えれば `imageAssets` も削除されます。 |
 | 段落の途中で分割 | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | 戻り値は `[leftId, rightId]`。境界をまたぐ注釈は破棄されます。 |
 | 隣接段落のマージ | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` は `leftId` の直後でなければなりません。 |
-| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | 戻り値は `assetKey`。v0.4 シェイプ（`{ href, mediaType, ... }`）もしばらく受け付けますが将来削除予定。 |
+| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | 戻り値は `assetKey`。v0.4 シェイプ（`{ href, mediaType, ... }`）も受け付けます。削除は将来のメジャーリリースに先送りされています。 |
 | `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | block id でも asset key でも指定可能。 |
 | 画像 alt / caption の書き換え | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | |
 | 段落/画像の並べ替え | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` は移動先の `blocks` インデックス。 |
@@ -354,7 +354,7 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 
 ### 受信した原稿からインライン注釈だけ取り出す
 
-旧 API の `parseManuscriptRuby()` はルビのみを返す薄いラッパーですが、`v0.6` で削除予定です。新規コードでは `parseManuscript()` の結果から必要な `kind` を絞り込んでください。
+旧 API の `parseManuscriptRuby()` はルビのみを返す薄いラッパーで、非推奨です。削除は将来のメジャーリリースに先送りされており、削除バージョンは決まっていません。新規コードでは `parseManuscript()` の結果から必要な `kind` を絞り込んでください。
 
 ```ts
 import { parseManuscript } from '@libraz/mejiro/epub';

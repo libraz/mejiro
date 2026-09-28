@@ -598,6 +598,62 @@ describe('EpubProject', () => {
     expect(Array.from(image ?? [])).toEqual([4, 5, 6]);
   });
 
+  it('round-trips inline-image markers for assets in any directory', async () => {
+    const hrefs = [
+      'OPS/Text/flat.png',
+      'OPS/Images/a.png',
+      'OPS/Media/b.webp',
+      'OPS/c.png',
+      'OPS/Images/sub/d.png',
+    ];
+    const project = EpubProject.fromManuscript({
+      metadata: { title: '画像', identifier: 'urn:uuid:marker-round-trip' },
+      chapters: [
+        { title: '一', body: '本文' },
+        { title: '二', body: '別章' },
+      ],
+    });
+    hrefs.forEach((href, index) => {
+      project.addInlineImage(0, index + 1, { href, data: new Uint8Array([index]) });
+    });
+
+    const out = await project.export();
+    const zip = await JSZip.loadAsync(out);
+    const xhtml = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+    const srcs = [...xhtml.matchAll(/<img src="([^"]+)"/gu)].map((match) => match[1]);
+    expect(srcs.map((src) => new URL(src, 'https://x/OPS/Text/').pathname.slice(1))).toEqual(hrefs);
+
+    // Editing another chapter scans every marker; all assets stay referenced.
+    project.updateChapter(1, { body: '変更' });
+    expect(project.assets.map((asset) => asset.href)).toEqual(hrefs);
+    // Dropping the markers garbage-collects every one of them.
+    project.updateChapter(0, { body: '本文' });
+    expect(project.assets).toEqual([]);
+  });
+
+  it('never writes an executable link href into exported chapter markup', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'リンク', identifier: 'urn:uuid:unsafe-link-book' },
+      chapters: [
+        {
+          title: '一',
+          body: '[危険](javascript:alert(1))と[安全](https://example.test)と[データ](data:text/html,x)',
+        },
+      ],
+    });
+
+    const out = await project.export();
+    const zip = await JSZip.loadAsync(out);
+    const xhtml = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+    expect(xhtml).not.toMatch(/href="\s*(?:javascript|data):/iu);
+    expect(xhtml).toContain('<a href="https://example.test">安全</a>');
+    const parsed = await parseEpub(out);
+    const links = (parsed.chapters.at(-1)?.paragraphs ?? [])
+      .flatMap((paragraph) => paragraph.inlineAnnotations ?? [])
+      .filter((ann) => ann.kind === 'link');
+    expect(links).toEqual([expect.objectContaining({ href: 'https://example.test' })]);
+  });
+
   it('links inline images to the actual asset href instead of assuming OPS/Images', async () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: '画像配置', identifier: 'urn:uuid:inline-image-path-book' },

@@ -1,4 +1,5 @@
 import type { InlineAnnotation, InlineRubyAnnotation } from './browser/types.js';
+import { normalizeText } from './text.js';
 import { sanitizeUrl } from './url.js';
 
 /**
@@ -90,7 +91,7 @@ export function parseManuscript(
   text: string,
   options: ParseManuscriptOptions = {},
 ): { text: string; inlineAnnotations: InlineAnnotation[] } {
-  text = text.normalize('NFC');
+  text = normalizeText(text);
   const dialect = options.dialect ?? 'mejiro';
   const scanner = createMarkerScanner(text);
   const inlineAnnotations: InlineAnnotation[] = [];
