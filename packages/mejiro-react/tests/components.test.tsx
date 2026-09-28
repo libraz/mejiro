@@ -262,6 +262,80 @@ describe('MejiroToc and MejiroShelf (React)', () => {
   });
 });
 
+describe('MejiroShelf (React) — selection', () => {
+  const shelfVolumes = [
+    { id: 'a', label: 'Book A', meta: { n: 1 } },
+    { id: 'b', label: 'Book B', meta: { n: 2 }, cover: 'https://cdn.example.test/b.jpg' },
+    { id: 'c', label: 'Book C', meta: { n: 3 } },
+  ];
+
+  it('reports the activated card with exactly its volume', () => {
+    const onSelect = vi.fn();
+    const { container } = render(<MejiroShelf volumes={shelfVolumes} onSelect={onSelect} />);
+
+    fireEvent.click(container.querySelectorAll('.mejiro-shelf-card')[1] as HTMLElement);
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(shelfVolumes[1]);
+  });
+
+  it('marks only the card whose id equals currentId as active', () => {
+    const { container, rerender } = render(<MejiroShelf volumes={shelfVolumes} currentId="c" />);
+    const active = () =>
+      [...container.querySelectorAll('.mejiro-shelf-card.is-active')].map((card) =>
+        card.textContent?.trim(),
+      );
+    expect(active()).toEqual(['Book C']);
+
+    rerender(<MejiroShelf volumes={shelfVolumes} currentId="missing" />);
+    expect(active()).toEqual([]);
+  });
+});
+
+describe('MejiroToc (React) — repeated sub-headings', () => {
+  it('renders every repeated sub-heading without a duplicate-key warning', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const epub = fakeEpub();
+    epub.chapters[0] = {
+      title: 'C1',
+      paragraphs: [
+        { text: '＊', inlineAnnotations: [], headingLevel: 2 },
+        { text: 'body', inlineAnnotations: [] },
+        { text: '＊', inlineAnnotations: [], headingLevel: 2 },
+      ],
+    };
+    const { container } = render(<MejiroToc epub={epub} searchable />);
+    fireEvent.change(container.querySelector('input[type="search"]') as HTMLInputElement, {
+      target: { value: 'C1' },
+    });
+
+    expect(container.querySelectorAll('.mejiro-toc-subhead')).toHaveLength(2);
+    expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
+  });
+});
+
+describe('MejiroChapterNav (React) — repeated sub-headings', () => {
+  it('renders every repeated panel sub-heading without a duplicate-key warning', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const epub = fakeEpub();
+    epub.chapters[0] = {
+      title: 'C1',
+      paragraphs: [
+        { text: '＊', inlineAnnotations: [], headingLevel: 2 },
+        { text: '＊', inlineAnnotations: [], headingLevel: 2 },
+      ],
+    };
+    const { container } = render(
+      <MejiroChapterNav epub={epub} chapter={0} onChange={() => {}} variant="panel" />,
+    );
+
+    expect(container.querySelectorAll('.mejiro-reader-chapter-subheads > span')).toHaveLength(2);
+    expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
+  });
+});
+
 describe('MejiroImageOverlay (React)', () => {
   it('uses the i18n catalog for default labels', () => {
     const { container } = render(

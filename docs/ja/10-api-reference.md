@@ -588,6 +588,7 @@
 | `parseEpub` | `(buffer: ArrayBuffer, options?: EpubParseOptions) => Promise<EpubBook>` |
 | `parseEditableEpub` | `(buffer: ArrayBuffer, options?: EpubParseOptions) => Promise<EditableEpub>` |
 | `DEFAULT_EPUB_PARSE_LIMITS` | 未信頼アーカイブに適用されるリソース上限の既定値 |
+| `assertEpubInputSize` | `(byteLength: number, limits?: Partial<EpubParseLimits>) => void`。`byteLength` が解決後の `maxInputBytes` を超えると例外を投げます。`File` の `size` だけで、中身を読む前に弾けます |
 | `EditableEpub` | 段落/画像ブロックを編集して再エクスポートするクラス |
 | `exportEditableEpub` | `(book: EditableEpub \| EditableEpubBook, options?: EpubExportOptions) => Promise<ArrayBuffer>` |
 | `updateEpubParagraph` | 編集可能EPUB内の段落ブロックを更新 |
@@ -1132,6 +1133,8 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 | `useSpread` | `UseSpreadOptions` / `UseSpreadReturn` | — |
 | `useReadingPosition` | `UseReadingPositionOptions` / `UseReadingPositionReturn` | `ReadingPositionStorage`、`ReadingPositionValue` |
 | `useI18n` | `UseI18nOptions` | `MejiroLocale`、`MejiroMessages`、および `enMessages` / `jaMessages` / `resolveMessages` / `format` |
+
+`useLibrary` は、`next` / `prev` / `goTo` が呼ばれるまで、現在の `volumes` に `initialVolumeId` が含まれていればそれを優先します。マウント後に届いたリストでも同じです。現在の巻がリストから消えたときは先頭の巻に戻り、その巻を引数に `onChange` を呼びます。`MejiroShelf` は `MejiroReader` の外でも使えます。`mejiro-reader.css` は単独で置かれた `.mejiro-shelf` にも既定のパレットを宣言しています。
 | `useImageOverlay` | `UseImageOverlayOptions` / `UseImageOverlayReturn` | `ImageOverlayRect`（およびその非推奨エイリアス `ImageRect`） |
 | `useMultiImageOverlay` | `UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn` | `MultiImageItem` |
 
@@ -1159,9 +1162,9 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 
 主なヘッドレス編集APIの戻り値:
 
-- `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport? })` は `editor`、`book`、`previewBook`、`loading`、`exporting`、`error`、`revision`、`history`、`selection`、`selectedParagraph`、`setSelection`、`loadBuffer`、`loadFile`、`loadUrl`、`updateParagraph`、`setInlineAnnotations`、`addImage({ filename, data, ... })`、`undo`、`redo`、`exportEpub(options?)` を返します。
-- `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` は `epub`、`loading`、`error`、`loadBuffer`、`loadFile`、`loadUrl`、`setEpub` を返します。
-- `useEpubProject({ metadata?, chapters?, cover?, assets?, debounceMs?, onPreview?, onExport? })` は `metadata`、`chapters`、`selectedChapter`、`currentChapter`、`cover`、`assets`、`previewBook`、`previewError`、`previewing` と、`setMetadata`、`setChapters`、`setSelectedChapter`、`setCover`、`setAssets`、`addChapter`、`removeChapter`、`patchChapter`、`reorderChapters`、`buildProject`、`exportEpub` を返します。`currentChapter` は選択中の草稿（無ければ `null`）です。`setCover(null)` で表紙を外せ、表紙・アセットの変更はデバウンスされたプレビューと `exportEpub` の双方に反映されます。
+- `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport?, limits?, assetResolver? })` は `editor`、`book`、`previewBook`、`loading`、`exporting`、`error`、`revision`、`history`、`selection`、`selectedParagraph`、`setSelection`、`loadBuffer`、`loadFile`、`loadUrl`、`updateParagraph`、`setInlineAnnotations`、`addImage({ filename, data, ... })`、`undo`、`redo`、`exportEpub(options?)` を返します。`assetResolver` は、自前の `assetResolver` を持たない `exportEpub` 呼び出しすべてに適用されます。
+- `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub?, limits? })` は `epub`、`loading`、`error`、`loadBuffer`、`loadFile`、`loadUrl`、`setEpub` を返します。どちらのフックの `loadFile` も、`limits.maxInputBytes` を超えるファイルは `size` を見て読み込む前に弾きます。
+- `useEpubProject({ metadata?, chapters?, cover?, assets?, assetResolver?, debounceMs?, onPreview?, onExport?, defaultChapterTitle?, defaultChapterBody? })` は `metadata`、`chapters`、`selectedChapter`、`currentChapter`、`cover`、`assets`、`previewBook`、`previewError`、`previewing` と、`setMetadata`、`setChapters`、`setSelectedChapter`、`setCover`、`setAssets`、`addChapter`、`removeChapter`、`patchChapter`、`reorderChapters`、`buildProject`、`exportEpub` を返します。`currentChapter` は選択中の草稿（無ければ `null`）です。`setCover(null)` で表紙を外せ、表紙・アセットの変更は、同じティック内で直前に行ったものも含めて、デバウンスされたプレビューと `exportEpub` の双方に反映されます。プレビューも URL だけのアセットを `assetResolver` で解決し、新しい編集で置き換えられたときやコンポーネントのアンマウント時には、その処理をリクエストの `signal` で中断します。`metadata.identifier` を渡さなかった場合は一度だけ生成するので、同じプロジェクトのプレビューとエクスポートはすべて同じ識別子を共有します。
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` は原稿章状態と追加/削除/並べ替え/更新ヘルパーを返します。
 - `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition? })` は選択中の章をレイアウトし、サーフェスのリサイズ時にレイアウトし直す hook。`{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }` を返します。再レイアウトでは book が導出済みの改行ヒントを再利用するため、アナライザーは再実行されません。リフローをまたぐ読書位置の扱いは [リフローをまたいで読書位置を保つ](./08-react-and-vue.md#リフローをまたいで読書位置を保つ) を参照。
 - `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition? })` は単一の原稿章を直接レイアウトする hook。`useChapterLayout` と同じ形の値を返します。EPUB を経由しないライブプレビュー用。
@@ -1247,11 +1250,13 @@ peer dependency: `vue >= 3.3`。
 
 React と違い `MejiroReaderProps` は判別可能な共用体ではなく単一のオブジェクト型なので、ソース系の prop は型の上では排他になりません。実行時は `epub` が `epubUrl` に優先し、`manuscript` はどちらとも併用できません。`MejiroReaderCommonProps` / `MejiroReaderControlledProps` / `MejiroReaderUrlProps` / `MejiroReaderFileProps` / `MejiroReaderManuscriptProps` は React パッケージにのみ存在します。
 
+Vue の `MejiroShelf` はジェネリックではありません。`defineComponent` は `h()` や `.ts` のレンダー関数に型引数を渡せないため、`volumes` の型は `readonly VolumeInfo[]`、`select` の引数は `VolumeInfo<unknown>` になります。React の `MejiroShelf<T>` なら推論される `meta` は、ハンドラ内で絞り込んでください。
+
 ### composables
 
 Vue の composables は React hooks と同じ操作を公開し、オプション / 戻り値の型名も共通です。`useEpub`（`UseEpubOptions` / `UseEpubReturn`）、`useEditableEpub`（`UseEditableEpubOptions` / `UseEditableEpubReturn`、`EditableEpubSelection`）、`useEpubProject`（`UseEpubProjectOptions` / `UseEpubProjectReturn`、`EpubProjectChapterDraft`）、`useLibrary`（`UseLibraryOptions` / `UseLibraryReturn`、`VolumeInfo`）、`useManuscriptDraft`（`UseManuscriptDraftOptions` / `UseManuscriptDraftReturn`）、`useManuscriptLayout`（`UseManuscriptLayoutOptions` / `UseManuscriptLayoutReturn`、`ManuscriptPageDimensions`、`ManuscriptRecomputeOptions`）、`useAnnotations`（`UseAnnotationsOptions` / `UseAnnotationsReturn`、`Annotation`、`AnnotationsStorage`）、`useMejiroBook`（`UseMejiroBookOptions` / `UseMejiroBookReturn`）、`useChapterLayout`（`UseChapterLayoutOptions` / `UseChapterLayoutReturn`、`PageDimensions`、`RecomputeOptions`）、`useSpread`（`UseSpreadOptions` / `UseSpreadReturn`）、`useReadingPosition`（`UseReadingPositionOptions` / `UseReadingPositionReturn`、`ReadingPositionStorage`）、`useI18n`（`UseI18nOptions`、および `enMessages` / `jaMessages` / `resolveMessages` / `format`）、`useImageOverlay`（`UseImageOverlayOptions` / `UseImageOverlayReturn`）、`useMultiImageOverlay`（`UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn`、`MultiImageItem`）です。
 
-リアクティブな状態は `Ref` / `ComputedRef` として返り、レイアウトや添字を受け取る composable は素の値ではなく ref を受け取ります。
+リアクティブな状態は `Ref` / `ComputedRef` として返り、レイアウトや添字を受け取る composable は素の値ではなく ref を受け取ります。`useLibrary` は、リアクティブな `volumes` 配列の再代入だけでなく、配列をその場で変更した場合にも現在の巻を解決し直します。
 
 ### `MejiroReader` の表示系 props
 

@@ -73,4 +73,35 @@ describe('useLibrary (React)', () => {
     expect(result.current.currentIndex).toBe(0);
     expect(onChange).toHaveBeenLastCalledWith(volumes[0]);
   });
+
+  it('opens initialVolumeId once a list arriving after mount contains it', () => {
+    const onChange = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ list }) => useLibrary({ volumes: list, initialVolumeId: 'c', onChange }),
+      { initialProps: { list: [] as typeof volumes } },
+    );
+    expect(result.current.current).toBeNull();
+
+    rerender({ list: volumes });
+
+    expect(result.current.current?.id).toBe('c');
+    expect(result.current.currentIndex).toBe(2);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(volumes[2]);
+  });
+
+  it('switches to initialVolumeId when a later list adds it, until the user navigates', () => {
+    const { result, rerender } = renderHook(
+      ({ list }) => useLibrary({ volumes: list, initialVolumeId: 'c' }),
+      { initialProps: { list: [volumes[0], volumes[1]] } },
+    );
+    expect(result.current.current?.id).toBe('a');
+
+    rerender({ list: volumes });
+    expect(result.current.current?.id).toBe('c');
+
+    act(() => result.current.goTo('a'));
+    rerender({ list: [...volumes] });
+    expect(result.current.current?.id).toBe('a');
+  });
 });

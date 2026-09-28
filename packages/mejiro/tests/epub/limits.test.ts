@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { EditableEpub } from '../../src/epub/editor.js';
 import {
   assertEpubArchiveWithinLimits,
+  assertEpubInputSize,
   DEFAULT_EPUB_PARSE_LIMITS,
   resolveEpubParseLimits,
 } from '../../src/epub/limits.js';
@@ -160,6 +161,22 @@ describe('resolveEpubParseLimits', () => {
     for (const name of names) {
       expect(resolveEpubParseLimits({ limits: { [name]: 1 } })[name]).toBe(1);
     }
+  });
+});
+
+describe('assertEpubInputSize', () => {
+  it('rejects a size past maxInputBytes with the message both import paths use', () => {
+    expect(() => assertEpubInputSize(5, { maxInputBytes: 4 })).toThrow(
+      'EPUB exceeds the compressed input limit (4 bytes)',
+    );
+  });
+
+  it('accepts a size at the limit and applies the default when none is given', () => {
+    expect(() => assertEpubInputSize(4, { maxInputBytes: 4 })).not.toThrow();
+    expect(() => assertEpubInputSize(DEFAULT_EPUB_PARSE_LIMITS.maxInputBytes)).not.toThrow();
+    expect(() => assertEpubInputSize(DEFAULT_EPUB_PARSE_LIMITS.maxInputBytes + 1)).toThrow(
+      /compressed input limit/u,
+    );
   });
 });
 

@@ -391,3 +391,21 @@ describe('useManuscriptDraft (React)', () => {
     }
   });
 });
+
+describe('useManuscriptDraft (React) — generated chapter ids', () => {
+  it('never reuses an id still in the list within one millisecond', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1);
+    const { result } = renderHook(() => useManuscriptDraft());
+
+    act(() => {
+      result.current.addChapter();
+      result.current.removeChapter(0);
+      result.current.addChapter();
+    });
+
+    const ids = result.current.chapters.map((chapter) => chapter.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    now.mockRestore();
+  });
+});

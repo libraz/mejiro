@@ -1,7 +1,12 @@
 import { onScopeDispose, type Ref, ref, watch } from 'vue';
 import { toError } from './errors.js';
 import type { ManuscriptEditorChapter } from './MejiroManuscriptEditor.js';
-import { createDraftChangeTracker, flushOnPageHide, snapshotChapters } from './persistence.js';
+import {
+  createDraftChangeTracker,
+  flushOnPageHide,
+  snapshotChapters,
+  uniqueChapterId,
+} from './persistence.js';
 
 /** Options for {@link useManuscriptDraft}. */
 export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]> {
@@ -54,11 +59,12 @@ export interface UseManuscriptDraftReturn {
 const DEFAULT_DELAY = 800;
 
 function defaultChapter(
-  index: number,
+  existing: readonly ManuscriptEditorChapter[],
   titleFor: (index: number) => string = (i) => `第${i + 1}話`,
   bodyFor: (index: number) => string = () => '',
 ): ManuscriptEditorChapter {
-  return { id: `chapter-${Date.now()}-${index}`, title: titleFor(index), body: bodyFor(index) };
+  const index = existing.length;
+  return { id: uniqueChapterId(existing), title: titleFor(index), body: bodyFor(index) };
 }
 
 function unwrapKey(key: Ref<string> | string | undefined): string {
@@ -78,7 +84,7 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   const chapters = ref<ManuscriptEditorChapter[]>(
     options.initialChapters?.length
       ? [...options.initialChapters]
-      : [defaultChapter(0, titleFor, bodyFor)],
+      : [defaultChapter([], titleFor, bodyFor)],
   );
   const selected = ref(0);
   const autosaveError = ref<Error | null>(null);
@@ -143,7 +149,7 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
 
   function setChapters(next: ManuscriptEditorChapter[]): void {
     const selectedId = chapters.value[selected.value]?.id;
-    chapters.value = next.length ? next : [defaultChapter(0, titleFor, bodyFor)];
+    chapters.value = next.length ? next : [defaultChapter([], titleFor, bodyFor)];
     const nextIndex = selectedId
       ? chapters.value.findIndex((chapter) => chapter.id === selectedId)
       : -1;
@@ -159,7 +165,7 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     );
   }
   function addChapter(chapter: Partial<ManuscriptEditorChapter> = {}): void {
-    const generated = defaultChapter(chapters.value.length, titleFor, bodyFor);
+    const generated = defaultChapter(chapters.value, titleFor, bodyFor);
     chapters.value = [
       ...chapters.value,
       {

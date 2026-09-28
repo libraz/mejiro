@@ -10,7 +10,7 @@ export interface MejiroShelfProps<T = unknown> {
   currentId?: string;
   /** Called when the user picks a volume. */
   onSelect?: (volume: VolumeInfo<T>) => void;
-  /** Heading shown above the grid. @defaultValue 'Library' */
+  /** Heading shown above the grid. Defaults to the active message catalog's `shelfTitle`. */
   title?: string;
 }
 

@@ -445,3 +445,26 @@ describe('MejiroEditor (React) — exportPolicy.watermark', () => {
     fetchSpy.mockRestore();
   });
 });
+
+describe('MejiroEditor (React) — dropped file size', () => {
+  it('rejects a file over maxInputBytes without reading it', async () => {
+    const onError = vi.fn();
+    const { container } = render(<MejiroEditor limits={{ maxInputBytes: 4 }} onError={onError} />);
+    const file = new File([new Uint8Array(8)], 'book.epub');
+    const read = vi.fn(() => Promise.resolve(new ArrayBuffer(8)));
+    Object.defineProperty(file, 'arrayBuffer', { value: read });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+
+    fireEvent.change(input);
+
+    await waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: 'EPUB exceeds the compressed input limit (4 bytes)',
+        }),
+      ),
+    );
+    expect(read).not.toHaveBeenCalled();
+  });
+});

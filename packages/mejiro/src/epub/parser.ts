@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import {
   assertEpubArchiveWithinLimits,
+  assertEpubInputSize,
   EpubExpansionBudget,
   type EpubParseOptions,
   resolveEpubParseLimits,
@@ -29,9 +30,7 @@ export async function parseEpub(
   options: EpubParseOptions = {},
 ): Promise<EpubBook> {
   const limits = resolveEpubParseLimits(options);
-  if (data.byteLength > limits.maxInputBytes) {
-    throw new Error(`EPUB exceeds the compressed input limit (${limits.maxInputBytes} bytes)`);
-  }
+  assertEpubInputSize(data.byteLength, limits);
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(data);

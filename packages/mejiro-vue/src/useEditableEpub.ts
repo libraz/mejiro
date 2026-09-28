@@ -2,6 +2,7 @@ import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import {
   type AddImageInput,
   type AnnotatedParagraph,
+  type AssetResolver,
   clampEditableEpubSelection,
   cloneEditableEpubBook,
   EditableEpub,
@@ -22,7 +23,7 @@ import {
   type WatchStopHandle,
   watch,
 } from 'vue';
-import { fetchEpubBuffer, toError } from './errors.js';
+import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
@@ -42,6 +43,11 @@ export interface UseEditableEpubOptions {
    * fields keep their `DEFAULT_EPUB_PARSE_LIMITS` value.
    */
   limits?: Partial<EpubParseLimits>;
+  /**
+   * Resolves URL-only images into bytes when {@link UseEditableEpubReturn.exportEpub}
+   * packages the book. An `assetResolver` passed to `exportEpub` itself wins.
+   */
+  assetResolver?: AssetResolver;
 }
 
 /** Return value of {@link useEditableEpub}. */
@@ -155,7 +161,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     loading.value = true;
     error.value = null;
     try {
-      return await loadBufferWithRequest(await file.arrayBuffer(), currentRequest);
+      return await loadBufferWithRequest(await readEpubFile(file, options.limits), currentRequest);
     } catch (err) {
       if (currentRequest === requestId) {
         error.value = toError(err);
@@ -244,7 +250,9 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     if (!editor.value) return null;
     exporting.value = true;
     try {
-      const buffer = await editor.value.export(exportOptions);
+      const buffer = await editor.value.export(
+        withAssetResolver(exportOptions, options.assetResolver),
+      );
       options.onExport?.(buffer);
       return buffer;
     } finally {
@@ -274,4 +282,13 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     redo,
     exportEpub,
   };
+}
+
+/** Applies the composable-level `resolver` unless the per-call options carry their own. */
+function withAssetResolver(
+  options: EpubExportOptions | undefined,
+  resolver: AssetResolver | undefined,
+): EpubExportOptions | undefined {
+  if (!resolver || options?.assetResolver) return options;
+  return { ...options, assetResolver: resolver };
 }

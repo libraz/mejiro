@@ -320,3 +320,19 @@ describe('useManuscriptDraft (Vue)', () => {
     vi.useRealTimers();
   });
 });
+
+describe('useManuscriptDraft (Vue) — generated chapter ids', () => {
+  it('never reuses an id still in the list within one millisecond', () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1);
+    const { result } = harness(() => useManuscriptDraft());
+
+    result.current.addChapter();
+    result.current.removeChapter(0);
+    result.current.addChapter();
+
+    const ids = result.current.chapters.value.map((chapter) => chapter.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    now.mockRestore();
+  });
+});

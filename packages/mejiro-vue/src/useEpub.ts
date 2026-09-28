@@ -1,7 +1,7 @@
 import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { onBeforeUnmount, onMounted, type Ref, shallowRef, type WatchStopHandle, watch } from 'vue';
-import { fetchEpubBuffer, toError } from './errors.js';
+import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
 
 /** Options for {@link useEpub}. */
 export interface UseEpubOptions {
@@ -88,7 +88,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   }
 
   function loadFile(file: File): Promise<EpubBook | null> {
-    return load(() => file.arrayBuffer());
+    return load(() => readEpubFile(file, options.limits));
   }
 
   function loadUrl(url: string): Promise<EpubBook | null> {

@@ -17,7 +17,7 @@ import {
   shallowRef,
   watch,
 } from 'vue';
-import { fetchEpubBuffer, toError, withErrorReporting } from './errors.js';
+import { fetchEpubBuffer, readEpubFile, toError, withErrorReporting } from './errors.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
 import { MejiroReader, type MejiroReaderHandle } from './MejiroReader.js';
@@ -159,7 +159,7 @@ export const MejiroEditor = defineComponent({
       loading.value = true;
       error.value = null;
       try {
-        await loadBufferForRequest(await file.arrayBuffer(), requestId);
+        await loadBufferForRequest(await readEpubFile(file, props.limits), requestId);
       } catch (err) {
         if (requestId === loadRequestId) {
           reportError(toError(err));

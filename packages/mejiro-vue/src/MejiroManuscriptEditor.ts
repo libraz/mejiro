@@ -304,13 +304,16 @@ export const MejiroManuscriptEditor = defineComponent({
       });
     }
 
+    // One package identifier per editor instance, so re-exports stay one publication.
+    const identifier = `urn:uuid:${crypto.randomUUID()}`;
+
     // Every way an export can fail — cover bytes, asset resolution, packaging —
     // reports through the same channel the panel already uses for autosave.
     async function exportEpub(): Promise<void> {
       await withErrorReporting(
         async () => {
           const project = EpubProject.fromManuscript({
-            metadata: { title: title.value, author: author.value || undefined },
+            metadata: { title: title.value, author: author.value || undefined, identifier },
             dialect: props.dialect,
             chapters: chapters.value.map((chapter) => ({
               id: chapter.id,

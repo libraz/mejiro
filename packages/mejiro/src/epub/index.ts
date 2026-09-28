@@ -19,7 +19,7 @@ export {
   updateEpubParagraph,
 } from './editor.js';
 export type { EpubParseLimits, EpubParseOptions } from './limits.js';
-export { DEFAULT_EPUB_PARSE_LIMITS } from './limits.js';
+export { assertEpubInputSize, DEFAULT_EPUB_PARSE_LIMITS } from './limits.js';
 export type {
   ManuscriptSourceChapter,
   ManuscriptToEpubBookOptions,

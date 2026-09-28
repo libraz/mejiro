@@ -134,6 +134,27 @@ describe('render CSS', () => {
     );
   });
 
+  it('declares every token the shelf rules read on a shelf mounted outside a reader', () => {
+    const css = readCss('mejiro-reader.css');
+    const standalone = '.mejiro-shelf:not(.mejiro-reader .mejiro-shelf)';
+    const declared = new Set<string>();
+    const used = new Set<string>();
+    for (const [, rawSelector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/gu)) {
+      const selectors = rawSelector
+        .replace(/\/\*[\s\S]*?\*\//gu, '')
+        .split(',')
+        .map((selector) => selector.trim());
+      if (selectors.includes(standalone)) {
+        for (const [, name] of body.matchAll(/(--[\w-]+)\s*:/gu)) declared.add(name as string);
+      }
+      if (selectors.every((selector) => selector.startsWith('.mejiro-shelf'))) {
+        for (const [, name] of body.matchAll(/var\(\s*(--[\w-]+)/gu)) used.add(name as string);
+      }
+    }
+    expect(used.size).toBeGreaterThan(0);
+    expect([...used].filter((name) => !declared.has(name))).toEqual([]);
+  });
+
   it('consumes every custom property the editor CSS declares', () => {
     const css = readCss('mejiro-editor.css');
     const declared = [...css.matchAll(/^\s*(--[\w-]+)\s*:/gmu)].map((m) => m[1] as string);

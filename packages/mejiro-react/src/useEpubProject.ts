@@ -1,6 +1,7 @@
 import {
   type AssetResolver,
   type EpubBook,
+  type EpubExportOptions,
   EpubProject,
   type EpubProjectAsset,
   type EpubProjectMetadata,
@@ -8,7 +9,7 @@ import {
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toError } from './errors.js';
-import { mergeDefined } from './persistence.js';
+import { mergeDefined, uniqueChapterId } from './persistence.js';
 
 /** One chapter of the manuscript draft the hook keeps in React state. */
 export interface EpubProjectChapterDraft {
@@ -118,13 +119,10 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   const defaultTitle = options.defaultChapterTitle;
   const defaultBody = options.defaultChapterBody;
   const [metadata, setMetadataState] = useState<EpubProjectMetadata>(() =>
-    mergeDefined<EpubProjectMetadata>(
-      { title: '新しい作品', language: 'ja' },
-      options.metadata ?? {},
-    ),
+    initialMetadata(options.metadata),
   );
-  const [chapters, setChaptersState] = useState<EpubProjectChapterDraft[]>(
-    options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
+  const [chapters, setChaptersState] = useState<EpubProjectChapterDraft[]>(() =>
+    options.chapters?.length ? options.chapters : [defaultChapter([], defaultTitle, defaultBody)],
   );
   const [selectedChapter, setSelectedChapterState] = useState(0);
   const [cover, setCoverState] = useState<EpubProjectAsset | null>(options.cover ?? null);
@@ -138,36 +136,55 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   const onExportRef = useRef(options.onExport);
   onPreviewRef.current = options.onPreview;
   onExportRef.current = options.onExport;
+  const assetResolverRef = useRef(options.assetResolver);
+  assetResolverRef.current = options.assetResolver;
+
+  // Every action reads project state through these refs, which each setter
+  // updates synchronously, so a call in the same tick as a setter sees its value.
+  const metadataRef = useRef(metadata);
+  metadataRef.current = metadata;
+  const chaptersRef = useRef(chapters);
+  chaptersRef.current = chapters;
+  const selectedRef = useRef(selectedChapter);
+  selectedRef.current = selectedChapter;
+  const coverRef = useRef(cover);
+  coverRef.current = cover;
+  const assetsRef = useRef(assets);
+  assetsRef.current = assets;
 
   const buildProject = useCallback(() => {
+    const currentCover = coverRef.current;
     const project = EpubProject.fromManuscript({
-      metadata,
+      metadata: metadataRef.current,
       includeTitlePage: false,
       includeTitleInFirstChapter: true,
-      chapters: chapters.map((chapter) => ({
+      chapters: chaptersRef.current.map((chapter) => ({
         id: chapter.id,
         title: chapter.title || 'Untitled',
         body: chapter.body,
       })),
-      ...(cover ? { cover } : {}),
+      ...(currentCover ? { cover: currentCover } : {}),
     });
-    for (const asset of assets) project.addAsset(asset);
+    for (const asset of assetsRef.current) project.addAsset(asset);
     return project;
-  }, [assets, chapters, cover, metadata]);
+  }, []);
 
-  const assetResolverRef = useRef(options.assetResolver);
-  assetResolverRef.current = options.assetResolver;
+  const exportOptions = useCallback((signal?: AbortSignal): EpubExportOptions => {
+    const resolver = assetResolverRef.current;
+    return { ...(resolver ? { assetResolver: resolver } : {}), ...(signal ? { signal } : {}) };
+  }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the project state is read through refs; these values are what schedule a rebuild
   useEffect(() => {
     const requestId = ++previewRequestIdRef.current;
+    const controller = new AbortController();
     let cancelled = false;
     setPreviewing(true);
     const timer = setTimeout(() => {
       void (async () => {
         try {
-          const resolver = assetResolverRef.current;
           const book = await parseEpub(
-            await buildProject().export(resolver ? { assetResolver: resolver } : undefined),
+            await buildProject().export(exportOptions(controller.signal)),
           );
           if (cancelled || requestId !== previewRequestIdRef.current) return;
           setPreviewBook(book);
@@ -186,23 +203,21 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       cancelled = true;
       previewRequestIdRef.current++;
       clearTimeout(timer);
+      controller.abort();
     };
-  }, [buildProject, options.debounceMs]);
+  }, [assets, buildProject, chapters, cover, exportOptions, metadata, options.debounceMs]);
 
   const currentChapter = chapters[selectedChapter] ?? chapters[0] ?? null;
 
+  // Mutators derive the next state from the refs and set it with plain values:
+  // nesting one state update inside another's updater would apply the inner
+  // relative update once per updater evaluation, which React is free to repeat
+  // (StrictMode, discarded renders).
   const setMetadata = useCallback((patch: Partial<EpubProjectMetadata>) => {
-    setMetadataState((current) => ({ ...current, ...patch }));
+    const next = { ...metadataRef.current, ...patch };
+    metadataRef.current = next;
+    setMetadataState(next);
   }, []);
-
-  // Mutators derive the next chapters / selection from these refs and set both
-  // states with plain values: nesting one state update inside another's updater
-  // would apply the inner relative update once per updater evaluation, which
-  // React is free to repeat (StrictMode, discarded renders).
-  const chaptersRef = useRef(chapters);
-  chaptersRef.current = chapters;
-  const selectedRef = useRef(selectedChapter);
-  selectedRef.current = selectedChapter;
 
   const commit = useCallback((nextChapters: EpubProjectChapterDraft[], nextSelected: number) => {
     chaptersRef.current = nextChapters;
@@ -213,7 +228,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
 
   const setChapters = useCallback(
     (next: EpubProjectChapterDraft[]) => {
-      const normalized = next.length ? next : [defaultChapter(0, defaultTitle, defaultBody)];
+      const normalized = next.length ? next : [defaultChapter([], defaultTitle, defaultBody)];
       const prev = selectedRef.current;
       const selectedId = chaptersRef.current[prev]?.id;
       const nextIndex = selectedId
@@ -228,10 +243,12 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   );
 
   const setCover = useCallback((asset: EpubProjectAsset | null) => {
+    coverRef.current = asset;
     setCoverState(asset);
   }, []);
 
   const setAssets = useCallback((next: EpubProjectAsset[]) => {
+    assetsRef.current = next;
     setAssetsState(next);
   }, []);
 
@@ -252,7 +269,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   const addChapter = useCallback(
     (chapter: Partial<EpubProjectChapterDraft> = {}) => {
       const current = chaptersRef.current;
-      const generated = defaultChapter(current.length, defaultTitle, defaultBody);
+      const generated = defaultChapter(current, defaultTitle, defaultBody);
       const next = [
         ...current,
         {
@@ -300,11 +317,10 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   );
 
   const exportEpub = useCallback(async (): Promise<ArrayBuffer> => {
-    const resolver = assetResolverRef.current;
-    const buffer = await buildProject().export(resolver ? { assetResolver: resolver } : undefined);
+    const buffer = await buildProject().export(exportOptions());
     onExportRef.current?.(buffer);
     return buffer;
-  }, [buildProject]);
+  }, [buildProject, exportOptions]);
 
   return useMemo(
     () => ({
@@ -354,15 +370,22 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   );
 }
 
+/** Seeds the metadata with an identifier, so every build of one project shares it. */
+function initialMetadata(patch: Partial<EpubProjectMetadata> = {}): EpubProjectMetadata {
+  const metadata = mergeDefined<EpubProjectMetadata>(
+    { title: '新しい作品', language: 'ja' },
+    patch,
+  );
+  if (!metadata.identifier?.trim()) metadata.identifier = `urn:uuid:${crypto.randomUUID()}`;
+  return metadata;
+}
+
 function defaultChapter(
-  index: number,
+  existing: readonly EpubProjectChapterDraft[],
   titleFor: (index: number) => string = (i) => (i === 0 ? '第一話' : `第${i + 1}話`),
   bodyFor: (index: number) => string = (i) =>
     i === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
 ): EpubProjectChapterDraft {
-  return {
-    id: `chapter-${Date.now()}-${index}`,
-    title: titleFor(index),
-    body: bodyFor(index),
-  };
+  const index = existing.length;
+  return { id: uniqueChapterId(existing), title: titleFor(index), body: bodyFor(index) };
 }

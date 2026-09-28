@@ -1,7 +1,7 @@
 import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchEpubBuffer, toError } from './errors.js';
+import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
 
 /** Options for {@link useEpub}. */
 export interface UseEpubOptions {
@@ -94,7 +94,10 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
 
   const loadBuffer = useCallback((buffer: ArrayBuffer) => load(async () => buffer), [load]);
 
-  const loadFile = useCallback((file: File) => load(() => file.arrayBuffer()), [load]);
+  const loadFile = useCallback(
+    (file: File) => load(() => readEpubFile(file, limitsRef.current)),
+    [load],
+  );
 
   const loadUrl = useCallback(
     (url: string) =>

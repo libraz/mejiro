@@ -44,7 +44,7 @@ const book = await parseEpub(data, {
 });
 ```
 
-`DEFAULT_EPUB_PARSE_LIMITS` と `EpubParseLimits` / `EpubParseOptions` は `@libraz/mejiro/epub` から export されます。
+`DEFAULT_EPUB_PARSE_LIMITS` と `EpubParseLimits` / `EpubParseOptions` は `@libraz/mejiro/epub` から export されます。`assertEpubInputSize(file.size, limits)` を使うと、`File` を読み込む前に `maxInputBytes` の検査ができます。`useEpub`、`useEditableEpub`、`MejiroEditor` の `loadFile` はこの検査を済ませてから読み込みます。
 
 ## データモデル
 

@@ -11,9 +11,9 @@ export interface MejiroTocProps {
   currentAnchor?: ReadingAnchor | null;
   /** Show a search input that filters chapter titles. @defaultValue false */
   searchable?: boolean;
-  /** Heading displayed above the list. @defaultValue 'Contents' */
+  /** Heading displayed above the list. Defaults to the active message catalog's `tocTitle`. */
   title?: string;
-  /** Placeholder shown in the search input. @defaultValue 'Search chapters…' */
+  /** Placeholder shown in the search input. Defaults to the active message catalog's `tocSearchPlaceholder`. */
   searchPlaceholder?: string;
   /** Called when the user picks a chapter. */
   onSelect?: (chapter: number) => void;
@@ -22,15 +22,17 @@ export interface MejiroTocProps {
 interface ChapterEntry {
   index: number;
   title: string;
-  headings: string[];
+  /** Sub-headings, keyed by paragraph index so repeated heading text stays distinct. */
+  headings: { paragraph: number; text: string }[];
 }
 
 function buildEntries(epub: EpubBook, messages: MejiroMessages): ChapterEntry[] {
   return epub.chapters.map((ch, i) => {
     const title = ch.title ?? format(messages.chapterN, { n: i + 1 });
-    const headings = ch.paragraphs
-      .filter((p) => p.headingLevel && p.text.trim() && p.text.trim() !== title)
-      .map((p) => p.text.trim());
+    const headings = ch.paragraphs.flatMap((p, paragraph) => {
+      const text = p.text.trim();
+      return p.headingLevel && text && text !== title ? [{ paragraph, text }] : [];
+    });
     return { index: i, title, headings };
   });
 }
@@ -59,7 +61,7 @@ export function MejiroToc({
     return entries.filter(
       (e) =>
         e.title.toLowerCase().includes(needle) ||
-        e.headings.some((h) => h.toLowerCase().includes(needle)),
+        e.headings.some((h) => h.text.toLowerCase().includes(needle)),
     );
   }, [entries, query]);
   const activeIndex = currentAnchor?.chapter ?? -1;
@@ -96,8 +98,8 @@ export function MejiroToc({
             {entry.headings.length > 0 && (
               <ul className="mejiro-toc-subheads">
                 {entry.headings.slice(0, 5).map((h) => (
-                  <li key={h} className="mejiro-toc-subhead">
-                    {h}
+                  <li key={h.paragraph} className="mejiro-toc-subhead">
+                    {h.text}
                   </li>
                 ))}
               </ul>

@@ -44,7 +44,7 @@ const book = await parseEpub(data, {
 });
 ```
 
-`DEFAULT_EPUB_PARSE_LIMITS` and the `EpubParseLimits` / `EpubParseOptions` types are exported from `@libraz/mejiro/epub`.
+`DEFAULT_EPUB_PARSE_LIMITS` and the `EpubParseLimits` / `EpubParseOptions` types are exported from `@libraz/mejiro/epub`. `assertEpubInputSize(file.size, limits)` applies the `maxInputBytes` check to a `File` before any of it is read; the `loadFile` of `useEpub`, `useEditableEpub` and `MejiroEditor` already does.
 
 ## Data Model
 

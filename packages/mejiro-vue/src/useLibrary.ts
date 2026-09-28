@@ -49,34 +49,46 @@ function readVolumes<T>(
 }
 
 /**
+ * Picks the active volume id: `preferredId` when the list holds it, else
+ * `currentId` while it is still listed, else the first entry.
+ */
+function resolveCurrentId(
+  volumes: readonly VolumeInfo<unknown>[],
+  currentId: string | null,
+  preferredId: string | undefined,
+): string | null {
+  if (volumes.length === 0) return null;
+  if (preferredId != null && volumes.some((v) => v.id === preferredId)) return preferredId;
+  if (currentId != null && volumes.some((v) => v.id === currentId)) return currentId;
+  return volumes[0]?.id ?? null;
+}
+
+/**
  * Headless composable for managing a multi-volume reading session.
  * Pair with {@link MejiroReader} (driving its `epub` / `epubUrl` prop) or
  * {@link MejiroShelf} (visual picker).
  */
 export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibraryReturn<T> {
   const list = computed<readonly VolumeInfo<T>[]>(() => readVolumes(options.volumes));
-  const initialIndex =
-    options.initialVolumeId != null
-      ? Math.max(
-          0,
-          list.value.findIndex((v) => v.id === options.initialVolumeId),
-        )
-      : 0;
-  const currentId = ref<string | null>(
-    list.value.length > 0 ? (list.value[initialIndex]?.id ?? list.value[0]?.id ?? null) : null,
-  );
+  const currentId = ref<string | null>(resolveCurrentId(list.value, null, options.initialVolumeId));
+  // initialVolumeId keeps winning, even for a list that fills in later, until
+  // the user navigates.
+  let navigated = false;
 
+  // The spread copy tracks the array's contents, so an in-place mutation of a
+  // reactive array re-resolves the current volume as a reassignment does.
   watch(
-    list,
+    () => [...readVolumes(options.volumes)],
     (next) => {
-      if (next.length === 0) {
-        currentId.value = null;
-        return;
-      }
-      if (currentId.value != null && next.some((v) => v.id === currentId.value)) return;
-      const fallback = next[0] ?? null;
-      currentId.value = fallback?.id ?? null;
-      if (fallback) options.onChange?.(fallback);
+      const resolved = resolveCurrentId(
+        next,
+        currentId.value,
+        navigated ? undefined : options.initialVolumeId,
+      );
+      if (resolved === currentId.value) return;
+      currentId.value = resolved;
+      const volume = next.find((v) => v.id === resolved);
+      if (volume) options.onChange?.(volume);
     },
     { flush: 'sync' },
   );
@@ -95,32 +107,28 @@ export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibra
     return i >= 0 && i < arr.length ? arr[i] : null;
   });
 
-  function fire(i: number): void {
+  function activate(i: number): void {
     const v = list.value[i];
-    if (v) options.onChange?.(v);
+    if (!v) return;
+    navigated = true;
+    currentId.value = v.id;
+    options.onChange?.(v);
   }
 
   function next(): void {
     if (currentIndex.value < 0) return;
     const ni = Math.min(list.value.length - 1, currentIndex.value + 1);
-    if (ni !== currentIndex.value) {
-      currentId.value = list.value[ni]?.id ?? null;
-      fire(ni);
-    }
+    if (ni !== currentIndex.value) activate(ni);
   }
   function prev(): void {
     if (currentIndex.value < 0) return;
     const ni = Math.max(0, currentIndex.value - 1);
-    if (ni !== currentIndex.value) {
-      currentId.value = list.value[ni]?.id ?? null;
-      fire(ni);
-    }
+    if (ni !== currentIndex.value) activate(ni);
   }
   function goTo(id: string): void {
     const ni = list.value.findIndex((v) => v.id === id);
     if (ni < 0 || ni === currentIndex.value) return;
-    currentId.value = id;
-    fire(ni);
+    activate(ni);
   }
 
   return {

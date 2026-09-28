@@ -57,8 +57,13 @@ export function MejiroChapterNav({
               .map((p) => p.text)
               .join('|')
               .slice(0, 120)}`;
+            // Keyed by paragraph index: heading text can repeat within a chapter.
             const headings = ch.paragraphs
-              .filter((p) => p.headingLevel && p.text.trim() && p.text.trim() !== title)
+              .flatMap((p, paragraph) =>
+                p.headingLevel && p.text.trim() && p.text.trim() !== title
+                  ? [{ paragraph, text: p.text }]
+                  : [],
+              )
               .slice(0, 3);
             return (
               <li key={chapterKey} className="mejiro-reader-chapter-list-item">
@@ -79,7 +84,7 @@ export function MejiroChapterNav({
                     {headings.length > 0 && (
                       <span className="mejiro-reader-chapter-subheads">
                         {headings.map((heading) => (
-                          <span key={heading.text}>{textPreview(heading.text, 30)}</span>
+                          <span key={heading.paragraph}>{textPreview(heading.text, 30)}</span>
                         ))}
                       </span>
                     )}

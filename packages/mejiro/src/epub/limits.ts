@@ -53,6 +53,21 @@ export function resolveEpubParseLimits(options: EpubParseOptions = {}): EpubPars
 }
 
 /**
+ * Throws when an EPUB of `byteLength` compressed bytes exceeds the resolved
+ * `maxInputBytes`. Lets a caller holding a `File` reject it by `file.size`
+ * before reading any of its bytes into memory.
+ */
+export function assertEpubInputSize(
+  byteLength: number,
+  limits: Partial<EpubParseLimits> = {},
+): void {
+  const { maxInputBytes } = resolveEpubParseLimits({ limits });
+  if (byteLength > maxInputBytes) {
+    throw new Error(`EPUB exceeds the compressed input limit (${maxInputBytes} bytes)`);
+  }
+}
+
+/**
  * Checks ZIP metadata before any entry contents are decompressed.
  *
  * The sizes read here are self-declared by the archive and may under-report the
@@ -65,9 +80,7 @@ export function assertEpubArchiveWithinLimits(
   zip: JSZip,
   limits: EpubParseLimits,
 ): void {
-  if (input.byteLength > limits.maxInputBytes) {
-    throw new Error(`EPUB exceeds the compressed input limit (${limits.maxInputBytes} bytes)`);
-  }
+  assertEpubInputSize(input.byteLength, limits);
 
   const entries = Object.values(zip.files).filter((entry) => !entry.dir) as ZipObjectWithSizes[];
   if (entries.length > limits.maxEntries) {

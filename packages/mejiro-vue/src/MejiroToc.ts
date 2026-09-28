@@ -6,15 +6,17 @@ import { format, type MejiroMessages, useI18n } from './i18n.js';
 interface ChapterEntry {
   index: number;
   title: string;
-  headings: string[];
+  /** Sub-headings, keyed by paragraph index so repeated heading text stays distinct. */
+  headings: { paragraph: number; text: string }[];
 }
 
 function buildEntries(epub: EpubBook, messages: MejiroMessages): ChapterEntry[] {
   return epub.chapters.map((ch, i) => {
     const title = ch.title ?? format(messages.chapterN, { n: i + 1 });
-    const headings = ch.paragraphs
-      .filter((p) => p.headingLevel && p.text.trim() && p.text.trim() !== title)
-      .map((p) => p.text.trim());
+    const headings = ch.paragraphs.flatMap((p, paragraph) => {
+      const text = p.text.trim();
+      return p.headingLevel && text && text !== title ? [{ paragraph, text }] : [];
+    });
     return { index: i, title, headings };
   });
 }
@@ -48,7 +50,7 @@ export const MejiroToc = defineComponent({
       return entries.value.filter(
         (e) =>
           e.title.toLowerCase().includes(needle) ||
-          e.headings.some((heading) => heading.toLowerCase().includes(needle)),
+          e.headings.some((heading) => heading.text.toLowerCase().includes(needle)),
       );
     });
     const activeIndex = computed(() => props.currentAnchor?.chapter ?? -1);
@@ -101,7 +103,11 @@ export const MejiroToc = defineComponent({
                     entry.headings
                       .slice(0, 5)
                       .map((heading) =>
-                        h('li', { key: heading, class: 'mejiro-toc-subhead' }, heading),
+                        h(
+                          'li',
+                          { key: heading.paragraph, class: 'mejiro-toc-subhead' },
+                          heading.text,
+                        ),
                       ),
                   )
                 : null,

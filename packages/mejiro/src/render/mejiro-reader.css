@@ -15,8 +15,10 @@
 @layer mejiro.base, mejiro.chrome, mejiro.print;
 
 @layer mejiro.chrome {
-  .mejiro-reader {
-    /* Default palette = "light" theme. Override per theme below. */
+  /* Default palette = "light" theme. Override per theme below. A shelf mounted
+     outside a reader declares the same defaults, so it styles on its own. */
+  .mejiro-reader,
+  .mejiro-shelf:not(.mejiro-reader .mejiro-shelf) {
     --mejiro-bg-deep: #1c1915;
     --mejiro-bg-paper: #f5f0e4;
     /* Surround (the "desk" behind the pages) and header chrome. Exposed as
@@ -45,7 +47,9 @@
     --mejiro-page-pad-x: 52px;
     --mejiro-page-pad-y: 56px;
     --mejiro-page-pad-bottom: 40px;
+  }
 
+  .mejiro-reader {
     display: flex;
     flex-direction: column;
     height: 100%;

@@ -1424,3 +1424,93 @@ describe('image overlays (Vue) — sync and gestures', () => {
     },
   );
 });
+
+/** A `File` whose `arrayBuffer` is spied on, to prove an oversized file is never read. */
+function spiedEpubFile(bytes: number): { file: File; read: ReturnType<typeof vi.fn> } {
+  const file = new File([new Uint8Array(bytes)], 'book.epub', { type: 'application/epub+zip' });
+  const read = vi.fn(() => Promise.resolve(new ArrayBuffer(bytes)));
+  Object.defineProperty(file, 'arrayBuffer', { value: read });
+  return { file, read };
+}
+
+describe('EPUB file loaders (Vue) — input size', () => {
+  it('useEpub rejects a file over maxInputBytes without reading it', async () => {
+    const onError = vi.fn();
+    const { result, unmount } = withSetup(() => useEpub({ limits: { maxInputBytes: 4 }, onError }));
+    const { file, read } = spiedEpubFile(8);
+
+    expect(await result.loadFile(file)).toBeNull();
+
+    expect(read).not.toHaveBeenCalled();
+    expect(result.error.value?.message).toBe('EPUB exceeds the compressed input limit (4 bytes)');
+    expect(onError).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('useEditableEpub rejects a file over maxInputBytes without reading it', async () => {
+    const onError = vi.fn();
+    const { result, unmount } = withSetup(() =>
+      useEditableEpub({ limits: { maxInputBytes: 4 }, onError }),
+    );
+    const { file, read } = spiedEpubFile(8);
+
+    expect(await result.loadFile(file)).toBeNull();
+
+    expect(read).not.toHaveBeenCalled();
+    expect(result.error.value?.message).toBe('EPUB exceeds the compressed input limit (4 bytes)');
+    expect(result.loading.value).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it('reads a file within the limit', async () => {
+    const { result, unmount } = withSetup(() => useEpub({ limits: { maxInputBytes: 8 } }));
+    const { file, read } = spiedEpubFile(8);
+
+    await result.loadFile(file);
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.error.value).toBeNull();
+    unmount();
+  });
+});
+
+describe('useEditableEpub (Vue) — same-tick actions', () => {
+  it('edits the paragraph selected earlier in the same tick', async () => {
+    const { result, unmount } = withSetup(() => useEditableEpub());
+    await result.loadBuffer(new ArrayBuffer(8));
+    const editor = result.editor.value as unknown as {
+      updateParagraph: ReturnType<typeof vi.fn>;
+      setInlineAnnotations: ReturnType<typeof vi.fn>;
+    };
+
+    result.setSelection({ chapter: 0, paragraph: 1 });
+    result.updateParagraph('replaced');
+    result.setInlineAnnotations([]);
+
+    expect(editor.updateParagraph).toHaveBeenCalledWith(0, 1, {
+      text: 'replaced',
+      inlineAnnotations: undefined,
+    });
+    expect(editor.setInlineAnnotations).toHaveBeenCalledWith(0, 1, []);
+    unmount();
+  });
+});
+
+describe('useEditableEpub (Vue) — assetResolver option', () => {
+  it('forwards the composable-level resolver to export, letting a per-call one win', async () => {
+    const assetResolver = vi.fn(() => new Uint8Array([1]));
+    const perCall = vi.fn(() => new Uint8Array([2]));
+    const { result, unmount } = withSetup(() => useEditableEpub({ assetResolver }));
+    await result.loadBuffer(new ArrayBuffer(8));
+    const exportSpy = (result.editor.value as unknown as { export: ReturnType<typeof vi.fn> })
+      .export;
+
+    await result.exportEpub();
+    await result.exportEpub({ assetResolver: perCall });
+
+    expect(exportSpy).toHaveBeenNthCalledWith(1, { assetResolver });
+    expect(exportSpy).toHaveBeenNthCalledWith(2, { assetResolver: perCall });
+    unmount();
+  });
+});

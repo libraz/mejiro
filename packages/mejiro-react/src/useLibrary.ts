@@ -41,50 +41,59 @@ export interface UseLibraryReturn<T = unknown> {
 }
 
 /**
+ * Picks the active volume id: `preferredId` when the list holds it, else
+ * `currentId` while it is still listed, else the first entry.
+ */
+function resolveCurrentId(
+  volumes: readonly VolumeInfo<unknown>[],
+  currentId: string | null,
+  preferredId: string | undefined,
+): string | null {
+  if (volumes.length === 0) return null;
+  if (preferredId != null && volumes.some((v) => v.id === preferredId)) return preferredId;
+  if (currentId != null && volumes.some((v) => v.id === currentId)) return currentId;
+  return volumes[0]?.id ?? null;
+}
+
+/**
  * Headless hook for managing a multi-volume reading session. Pair it with
  * {@link MejiroReader} (driving its `epub` / `epubUrl` prop) or
  * {@link MejiroShelf} (visual picker).
  */
 export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibraryReturn<T> {
   const { volumes, initialVolumeId, onChange } = options;
-  const initialIndex =
-    initialVolumeId != null
-      ? Math.max(
-          0,
-          volumes.findIndex((v) => v.id === initialVolumeId),
-        )
-      : 0;
-  const [currentId, setCurrentId] = useState<string | null>(
-    volumes.length > 0 ? (volumes[initialIndex]?.id ?? volumes[0]?.id ?? null) : null,
+  const [currentId, setCurrentId] = useState<string | null>(() =>
+    resolveCurrentId(volumes, null, initialVolumeId),
   );
+  // initialVolumeId keeps winning, even for a list that fills in later, until
+  // the user navigates.
+  const [navigated, setNavigated] = useState(false);
+  const resolvedId = resolveCurrentId(volumes, currentId, navigated ? undefined : initialVolumeId);
 
   useEffect(() => {
-    if (volumes.length === 0) {
-      if (currentId !== null) setCurrentId(null);
-      return;
-    }
-    if (currentId != null && volumes.some((v) => v.id === currentId)) return;
-    const fallback = volumes[0] ?? null;
-    setCurrentId(fallback?.id ?? null);
-    if (fallback) onChange?.(fallback);
-  }, [currentId, volumes, onChange]);
+    if (resolvedId === currentId) return;
+    setCurrentId(resolvedId);
+    const volume = volumes.find((v) => v.id === resolvedId);
+    if (volume) onChange?.(volume);
+  }, [currentId, resolvedId, volumes, onChange]);
 
-  const index = useMemo(() => {
-    if (volumes.length === 0) return -1;
-    if (currentId == null) return 0;
-    const found = volumes.findIndex((v) => v.id === currentId);
-    return found >= 0 ? found : 0;
-  }, [currentId, volumes]);
+  const index = useMemo(
+    () => (resolvedId == null ? -1 : volumes.findIndex((v) => v.id === resolvedId)),
+    [resolvedId, volumes],
+  );
 
   const current = useMemo<VolumeInfo<T> | null>(
     () => (index >= 0 && index < volumes.length ? volumes[index] : null),
     [index, volumes],
   );
 
-  const fire = useCallback(
+  const activate = useCallback(
     (i: number) => {
       const v = volumes[i];
-      if (v) onChange?.(v);
+      if (!v) return;
+      setNavigated(true);
+      setCurrentId(v.id);
+      onChange?.(v);
     },
     [volumes, onChange],
   );
@@ -92,31 +101,22 @@ export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibra
   const next = useCallback(() => {
     if (index < 0) return;
     const ni = Math.min(volumes.length - 1, index + 1);
-    if (ni !== index) {
-      setCurrentId(volumes[ni]?.id ?? null);
-      fire(ni);
-    }
-  }, [index, volumes, fire]);
+    if (ni !== index) activate(ni);
+  }, [index, activate, volumes.length]);
 
   const prev = useCallback(() => {
     if (index < 0) return;
     const ni = Math.max(0, index - 1);
-    if (ni !== index) {
-      setCurrentId(volumes[ni]?.id ?? null);
-      fire(ni);
-    }
-  }, [index, volumes, fire]);
+    if (ni !== index) activate(ni);
+  }, [index, activate]);
 
   const goTo = useCallback(
     (id: string) => {
       const ni = volumes.findIndex((v) => v.id === id);
       if (ni < 0) return;
-      if (ni !== index) {
-        setCurrentId(id);
-        fire(ni);
-      }
+      if (ni !== index) activate(ni);
     },
-    [index, volumes, fire],
+    [index, volumes, activate],
   );
 
   return { list: volumes, current, currentIndex: index, next, prev, goTo };

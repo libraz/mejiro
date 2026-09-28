@@ -2,6 +2,7 @@
 /** @jsxImportSource react */
 
 import { fireEvent, render, waitFor } from '@testing-library/react';
+import JSZip from 'jszip';
 import { describe, expect, it, vi } from 'vitest';
 import { MejiroManuscriptEditor } from '../src/MejiroManuscriptEditor.js';
 
@@ -57,6 +58,40 @@ describe('MejiroManuscriptEditor asset resolution (React)', () => {
       // plain bytes), and getting it there took no resolver call.
       expect(zipEntryNames(onExport.mock.calls[0][0])).toContain('OPS/Images/cover.jpg');
       expect(assetResolver).not.toHaveBeenCalled();
+    } finally {
+      click.mockRestore();
+      revokeObjectURL.mockRestore();
+      createObjectURL.mockRestore();
+    }
+  });
+});
+
+/** The `dc:identifier` text of an exported package. */
+async function packageIdentifier(buffer: ArrayBuffer): Promise<string | undefined> {
+  const zip = await JSZip.loadAsync(buffer);
+  const opf = Object.keys(zip.files).find((name) => name.endsWith('.opf'));
+  const xml = opf ? await zip.file(opf)?.async('string') : undefined;
+  return xml?.match(/<dc:identifier[^>]*>([^<]+)<\/dc:identifier>/u)?.[1];
+}
+
+describe('MejiroManuscriptEditor package identifier (React)', () => {
+  it('stamps every export of one editor with the same identifier', async () => {
+    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob://stub');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const onExport = vi.fn();
+
+    try {
+      const { container } = render(<MejiroManuscriptEditor onExport={onExport} />);
+      const button = container.querySelector('.mejiro-editor-export') as HTMLButtonElement;
+      fireEvent.click(button);
+      await waitFor(() => expect(onExport).toHaveBeenCalledTimes(1));
+      fireEvent.click(button);
+      await waitFor(() => expect(onExport).toHaveBeenCalledTimes(2));
+
+      const first = await packageIdentifier(onExport.mock.calls[0][0]);
+      expect(first).toMatch(/^urn:uuid:/u);
+      expect(await packageIdentifier(onExport.mock.calls[1][0])).toBe(first);
     } finally {
       click.mockRestore();
       revokeObjectURL.mockRestore();

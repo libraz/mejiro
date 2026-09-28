@@ -365,6 +365,62 @@ describe('MejiroToc and MejiroShelf (Vue)', () => {
   });
 });
 
+describe('MejiroShelf (Vue) — selection', () => {
+  const shelfVolumes = [
+    { id: 'a', label: 'Book A', meta: { n: 1 } },
+    { id: 'b', label: 'Book B', meta: { n: 2 }, cover: 'https://cdn.example.test/b.jpg' },
+    { id: 'c', label: 'Book C', meta: { n: 3 } },
+  ];
+
+  it('emits select with exactly the activated card volume', async () => {
+    const { container, emitted } = render(MejiroShelf, { props: { volumes: shelfVolumes } });
+
+    (container.querySelectorAll('.mejiro-shelf-card')[1] as HTMLElement).click();
+
+    expect(emitted().select).toEqual([[shelfVolumes[1]]]);
+  });
+
+  it('marks only the card whose id equals currentId as active', async () => {
+    const { container, rerender } = render(MejiroShelf, {
+      props: { volumes: shelfVolumes, currentId: 'c' },
+    });
+    const active = () =>
+      [...container.querySelectorAll('.mejiro-shelf-card.is-active')].map((card) =>
+        card.textContent?.trim(),
+      );
+    expect(active()).toEqual(['Book C']);
+
+    await rerender({ volumes: shelfVolumes, currentId: 'missing' });
+    expect(active()).toEqual([]);
+  });
+});
+
+describe('MejiroToc (Vue) — repeated sub-headings', () => {
+  function withHeadings(...texts: string[]): EpubBook {
+    const epub = fakeEpub();
+    epub.chapters[0] = {
+      title: 'C1',
+      paragraphs: texts.map((text) => ({ text, inlineAnnotations: [], headingLevel: 2 })),
+    };
+    return epub;
+  }
+
+  it('renders every repeated sub-heading without a duplicate-key warning', async () => {
+    const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { container, rerender } = render(MejiroToc, { props: { epub: withHeadings('p', 'q') } });
+
+    await rerender({ epub: withHeadings('＊', 'x', '＊') });
+
+    expect(
+      [...container.querySelectorAll('.mejiro-toc-subhead')].map((item) => item.textContent),
+    ).toEqual(['＊', 'x', '＊']);
+    expect(warnings.mock.calls.some((call) => String(call[0]).includes('Duplicate keys'))).toBe(
+      false,
+    );
+    warnings.mockRestore();
+  });
+});
+
 describe('MejiroImageOverlay (Vue)', () => {
   it('uses the i18n catalog for default labels', () => {
     const Wrapped = defineComponent({

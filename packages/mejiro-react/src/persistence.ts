@@ -44,6 +44,18 @@ export function removeStorage(storage: MejiroStorage | null, key: string): void 
   }
 }
 
+/**
+ * Returns a generated chapter id no chapter in `existing` carries, however
+ * many chapters were added or removed within the same millisecond.
+ */
+export function uniqueChapterId(existing: readonly { id: string }[]): string {
+  const taken = new Set(existing.map((chapter) => chapter.id));
+  const stamp = Date.now();
+  let n = existing.length;
+  while (taken.has(`chapter-${stamp}-${n}`)) n++;
+  return `chapter-${stamp}-${n}`;
+}
+
 /** Returns `base` with only the `patch` keys whose value is not `undefined` applied. */
 export function mergeDefined<T extends object>(base: T, patch: Partial<T>): T {
   const next = { ...base };

@@ -8,7 +8,7 @@ import {
   exportEditableEpub,
 } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchEpubBuffer, toError, withErrorReporting } from './errors.js';
+import { fetchEpubBuffer, readEpubFile, toError, withErrorReporting } from './errors.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
 import { MejiroReader, type MejiroReaderHandle } from './MejiroReader.js';
@@ -243,7 +243,7 @@ export function MejiroEditor({
     setLoading(true);
     setError(null);
     try {
-      await loadBufferForRequest(await file.arrayBuffer(), requestId);
+      await loadBufferForRequest(await readEpubFile(file, limitsRef.current), requestId);
     } catch (err) {
       if (requestId === loadRequestIdRef.current) {
         reportError(toError(err));

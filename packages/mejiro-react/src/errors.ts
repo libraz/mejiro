@@ -3,6 +3,8 @@
 // `Error`, handed to a single report callback, and never left as an unhandled
 // rejection. The React and Vue packages carry identical copies.
 
+import { assertEpubInputSize, type EpubParseLimits } from '@libraz/mejiro/epub';
+
 /** Normalizes a thrown value to an `Error`. */
 export function toError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
@@ -16,6 +18,18 @@ export async function fetchEpubBuffer(url: string, init?: RequestInit): Promise<
   const res = init ? await fetch(url, init) : await fetch(url);
   if (!res.ok) throw new Error(`Failed to load EPUB: ${res.status}`);
   return res.arrayBuffer();
+}
+
+/**
+ * Reads `file` as an `ArrayBuffer`, rejecting it by `file.size` before any
+ * byte is read when it exceeds the resolved `maxInputBytes`.
+ */
+export async function readEpubFile(
+  file: File,
+  limits?: Partial<EpubParseLimits>,
+): Promise<ArrayBuffer> {
+  assertEpubInputSize(file.size, limits);
+  return file.arrayBuffer();
 }
 
 /**

@@ -1,6 +1,7 @@
 import {
   type AssetResolver,
   type EpubBook,
+  type EpubExportOptions,
   EpubProject,
   type EpubProjectAsset,
   type EpubProjectMetadata,
@@ -8,7 +9,7 @@ import {
 } from '@libraz/mejiro/epub';
 import { type ComputedRef, computed, type Ref, ref, shallowRef, watch } from 'vue';
 import { toError } from './errors.js';
-import { mergeDefined } from './persistence.js';
+import { mergeDefined, uniqueChapterId } from './persistence.js';
 
 /** One chapter of the manuscript draft the composable keeps in reactive state. */
 export interface EpubProjectChapterDraft {
@@ -113,14 +114,9 @@ export interface UseEpubProjectReturn {
 export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProjectReturn {
   const defaultTitle = options.defaultChapterTitle;
   const defaultBody = options.defaultChapterBody;
-  const metadata = ref<EpubProjectMetadata>(
-    mergeDefined<EpubProjectMetadata>(
-      { title: '新しい作品', language: 'ja' },
-      options.metadata ?? {},
-    ),
-  );
+  const metadata = ref<EpubProjectMetadata>(initialMetadata(options.metadata));
   const chapters = ref<EpubProjectChapterDraft[]>(
-    options.chapters?.length ? options.chapters : [defaultChapter(0, defaultTitle, defaultBody)],
+    options.chapters?.length ? options.chapters : [defaultChapter([], defaultTitle, defaultBody)],
   );
   const selectedChapter = ref(0);
   // Assets carry binary payloads and are always replaced wholesale, so they are
@@ -151,6 +147,11 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     return project;
   }
 
+  function exportOptions(signal?: AbortSignal): EpubExportOptions {
+    const resolver = options.assetResolver;
+    return { ...(resolver ? { assetResolver: resolver } : {}), ...(signal ? { signal } : {}) };
+  }
+
   // Asset changes rebuild the preview through this counter rather than through
   // the deep watch below, which would otherwise walk the asset bytes on every
   // keystroke.
@@ -161,13 +162,13 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     [metadata, chapters, assetGeneration],
     (_values, _oldValues, onCleanup) => {
       const requestId = ++previewRequestId;
+      const controller = new AbortController();
       previewing.value = true;
       const timer = setTimeout(() => {
         void (async () => {
           try {
-            const resolver = options.assetResolver;
             const book = await parseEpub(
-              await buildProject().export(resolver ? { assetResolver: resolver } : undefined),
+              await buildProject().export(exportOptions(controller.signal)),
             );
             if (requestId !== previewRequestId) return;
             previewBook.value = book;
@@ -185,6 +186,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       onCleanup(() => {
         previewRequestId++;
         clearTimeout(timer);
+        controller.abort();
       });
     },
     { deep: true, immediate: true },
@@ -196,7 +198,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
 
   function setChapters(next: EpubProjectChapterDraft[]): void {
     const selectedId = chapters.value[selectedChapter.value]?.id;
-    chapters.value = next.length ? next : [defaultChapter(0, defaultTitle, defaultBody)];
+    chapters.value = next.length ? next : [defaultChapter([], defaultTitle, defaultBody)];
     const nextIndex = selectedId
       ? chapters.value.findIndex((chapter) => chapter.id === selectedId)
       : -1;
@@ -225,7 +227,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   }
 
   function addChapter(chapter: Partial<EpubProjectChapterDraft> = {}): void {
-    const generated = defaultChapter(chapters.value.length, defaultTitle, defaultBody);
+    const generated = defaultChapter(chapters.value, defaultTitle, defaultBody);
     chapters.value = [
       ...chapters.value,
       {
@@ -269,8 +271,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   }
 
   async function exportEpub(): Promise<ArrayBuffer> {
-    const resolver = options.assetResolver;
-    const buffer = await buildProject().export(resolver ? { assetResolver: resolver } : undefined);
+    const buffer = await buildProject().export(exportOptions());
     options.onExport?.(buffer);
     return buffer;
   }
@@ -299,15 +300,22 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   };
 }
 
+/** Seeds the metadata with an identifier, so every build of one project shares it. */
+function initialMetadata(patch: Partial<EpubProjectMetadata> = {}): EpubProjectMetadata {
+  const metadata = mergeDefined<EpubProjectMetadata>(
+    { title: '新しい作品', language: 'ja' },
+    patch,
+  );
+  if (!metadata.identifier?.trim()) metadata.identifier = `urn:uuid:${crypto.randomUUID()}`;
+  return metadata;
+}
+
 function defaultChapter(
-  index: number,
+  existing: readonly EpubProjectChapterDraft[],
   titleFor: (index: number) => string = (i) => (i === 0 ? '第一話' : `第${i + 1}話`),
   bodyFor: (index: number) => string = (i) =>
     i === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
 ): EpubProjectChapterDraft {
-  return {
-    id: `chapter-${Date.now()}-${index}`,
-    title: titleFor(index),
-    body: bodyFor(index),
-  };
+  const index = existing.length;
+  return { id: uniqueChapterId(existing), title: titleFor(index), body: bodyFor(index) };
 }

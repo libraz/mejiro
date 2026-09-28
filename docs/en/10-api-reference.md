@@ -598,6 +598,7 @@ Both default to `Infinity`, which switches LRU bookkeeping off entirely rather t
 | `parseEpub` | `(buffer: ArrayBuffer, options?: EpubParseOptions) => Promise<EpubBook>` |
 | `parseEditableEpub` | `(buffer: ArrayBuffer, options?: EpubParseOptions) => Promise<EditableEpub>` |
 | `DEFAULT_EPUB_PARSE_LIMITS` | Default resource limits applied to untrusted archives |
+| `assertEpubInputSize` | `(byteLength: number, limits?: Partial<EpubParseLimits>) => void`. Throws when `byteLength` exceeds the resolved `maxInputBytes`, so a `File` can be rejected by its `size` before its bytes are read |
 | `EditableEpub` | Class for block-level paragraph/image editing and export |
 | `exportEditableEpub` | `(book: EditableEpub \| EditableEpubBook, options?: EpubExportOptions) => Promise<ArrayBuffer>` |
 | `updateEpubParagraph` | Update a paragraph block in an editable EPUB book |
@@ -1162,6 +1163,8 @@ Every component exports a matching props type; `MejiroSettingsPanel` additionall
 | `useSpread` | `UseSpreadOptions` / `UseSpreadReturn` | — |
 | `useReadingPosition` | `UseReadingPositionOptions` / `UseReadingPositionReturn` | `ReadingPositionStorage`, `ReadingPositionValue` |
 | `useI18n` | `UseI18nOptions` | `MejiroLocale`, `MejiroMessages`; `enMessages`, `jaMessages`, `resolveMessages`, `format` |
+
+`useLibrary` prefers `initialVolumeId` whenever the current `volumes` list contains it, including a list that arrives after mount, until `next` / `prev` / `goTo` is called. A list change that drops the current volume falls back to the first entry and calls `onChange` with it. `MejiroShelf` also works outside `MejiroReader`: `mejiro-reader.css` declares the default palette on a standalone `.mejiro-shelf`.
 | `useImageOverlay` | `UseImageOverlayOptions` / `UseImageOverlayReturn` | `ImageOverlayRect` (and its deprecated alias `ImageRect`) |
 | `useMultiImageOverlay` | `UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn` | `MultiImageItem` |
 
@@ -1189,9 +1192,9 @@ Every component exports a matching props type; `MejiroSettingsPanel` additionall
 
 Common headless editor returns:
 
-- `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport? })` returns `editor`, `book`, `previewBook`, `loading`, `exporting`, `error`, `revision`, `history`, `selection`, `selectedParagraph`, `setSelection`, `loadBuffer`, `loadFile`, `loadUrl`, `updateParagraph`, `setInlineAnnotations`, `addImage({ filename, data, ... })`, `undo`, `redo`, and `exportEpub(options?)`.
-- `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub? })` returns `epub`, `loading`, `error`, `loadBuffer`, `loadFile`, `loadUrl`, and `setEpub`.
-- `useEpubProject({ metadata?, chapters?, cover?, assets?, debounceMs?, onPreview?, onExport? })` returns `metadata`, `chapters`, `selectedChapter`, `currentChapter`, `cover`, `assets`, `previewBook`, `previewError`, `previewing`, plus `setMetadata`, `setChapters`, `setSelectedChapter`, `setCover`, `setAssets`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `buildProject`, and `exportEpub`. `currentChapter` is the selected draft (or `null`); `setCover(null)` drops the cover, and both the debounced preview and `exportEpub` reflect cover/asset changes.
+- `useEditableEpub({ defaultUrl?, onLoad?, onError?, onExport?, limits?, assetResolver? })` returns `editor`, `book`, `previewBook`, `loading`, `exporting`, `error`, `revision`, `history`, `selection`, `selectedParagraph`, `setSelection`, `loadBuffer`, `loadFile`, `loadUrl`, `updateParagraph`, `setInlineAnnotations`, `addImage({ filename, data, ... })`, `undo`, `redo`, and `exportEpub(options?)`. `assetResolver` is applied to every `exportEpub` call whose options carry none of their own.
+- `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub?, limits? })` returns `epub`, `loading`, `error`, `loadBuffer`, `loadFile`, `loadUrl`, and `setEpub`. `loadFile` on both hooks rejects a file larger than `limits.maxInputBytes` by its `size`, before reading it.
+- `useEpubProject({ metadata?, chapters?, cover?, assets?, assetResolver?, debounceMs?, onPreview?, onExport?, defaultChapterTitle?, defaultChapterBody? })` returns `metadata`, `chapters`, `selectedChapter`, `currentChapter`, `cover`, `assets`, `previewBook`, `previewError`, `previewing`, plus `setMetadata`, `setChapters`, `setSelectedChapter`, `setCover`, `setAssets`, `addChapter`, `removeChapter`, `patchChapter`, `reorderChapters`, `buildProject`, and `exportEpub`. `currentChapter` is the selected draft (or `null`); `setCover(null)` drops the cover, and both the debounced preview and `exportEpub` reflect cover/asset changes, including ones made earlier in the same tick. The preview resolves URL-only assets through `assetResolver` too, and aborts that work through the request `signal` when a newer edit supersedes it or the component unmounts. A `metadata.identifier` is generated once when none is given, so every preview and export of one project shares it.
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` returns draft chapter state plus add/remove/reorder/patch helpers.
 - `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition? })` lays out the selected chapter and lays it out again when the surface resizes. Returns `{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }`. A re-layout replays the line-breaking hints the book already derived, so it never re-runs the analyzer. For the reading position across a re-flow, see [Keeping the reading position across a re-flow](./08-react-and-vue.md#keeping-the-reading-position-across-a-re-flow).
 - `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition? })` lays out a single manuscript chapter directly, with no EPUB ZIP round-trip. Returns the same shape as `useChapterLayout`. Designed for live preview surfaces.
@@ -1277,11 +1280,13 @@ The component set matches the React package. Each component exports a props alia
 
 Unlike React, `MejiroReaderProps` is a single object type rather than a discriminated union, so the source props are not mutually exclusive at the type level: `epub` wins over `epubUrl`, and `manuscript` cannot be combined with either. `MejiroReaderCommonProps` / `MejiroReaderControlledProps` / `MejiroReaderUrlProps` / `MejiroReaderFileProps` / `MejiroReaderManuscriptProps` exist only in the React package.
 
+The Vue `MejiroShelf` is not generic: `defineComponent` cannot carry a type parameter into `h()` or `.ts` render functions, so `volumes` is typed `readonly VolumeInfo[]` and the `select` payload is `VolumeInfo<unknown>`. Narrow `meta` in the handler where the React `MejiroShelf<T>` would infer it.
+
 ### Composables
 
 The Vue composables expose the same operations as the React hooks and share the option / return type names: `useEpub` (`UseEpubOptions` / `UseEpubReturn`), `useEditableEpub` (`UseEditableEpubOptions` / `UseEditableEpubReturn`, `EditableEpubSelection`), `useEpubProject` (`UseEpubProjectOptions` / `UseEpubProjectReturn`, `EpubProjectChapterDraft`), `useLibrary` (`UseLibraryOptions` / `UseLibraryReturn`, `VolumeInfo`), `useManuscriptDraft` (`UseManuscriptDraftOptions` / `UseManuscriptDraftReturn`), `useManuscriptLayout` (`UseManuscriptLayoutOptions` / `UseManuscriptLayoutReturn`, `ManuscriptPageDimensions`, `ManuscriptRecomputeOptions`), `useAnnotations` (`UseAnnotationsOptions` / `UseAnnotationsReturn`, `Annotation`, `AnnotationsStorage`), `useMejiroBook` (`UseMejiroBookOptions` / `UseMejiroBookReturn`), `useChapterLayout` (`UseChapterLayoutOptions` / `UseChapterLayoutReturn`, `PageDimensions`, `RecomputeOptions`), `useSpread` (`UseSpreadOptions` / `UseSpreadReturn`), `useReadingPosition` (`UseReadingPositionOptions` / `UseReadingPositionReturn`, `ReadingPositionStorage`), `useI18n` (`UseI18nOptions`, plus `enMessages` / `jaMessages` / `resolveMessages` / `format`), `useImageOverlay` (`UseImageOverlayOptions` / `UseImageOverlayReturn`) and `useMultiImageOverlay` (`UseMultiImageOverlayOptions` / `UseMultiImageOverlayReturn`, `MultiImageItem`).
 
-Reactive state is returned as `Ref` / `ComputedRef` values, and composables that take a layout or index accept refs rather than plain values.
+Reactive state is returned as `Ref` / `ComputedRef` values, and composables that take a layout or index accept refs rather than plain values. `useLibrary` re-resolves the current volume on an in-place mutation of a reactive `volumes` array as well as on reassignment.
 
 ### `MejiroReader` presentation props
 

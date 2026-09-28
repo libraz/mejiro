@@ -1510,3 +1510,117 @@ describe('useSpread (React) — anchors past image-blocked pages', () => {
     expect(result.current.anchorAt(2)).toEqual({ paragraph: 2, charIndex: 0 });
   });
 });
+
+/** A `File` whose `arrayBuffer` is spied on, to prove an oversized file is never read. */
+function spiedEpubFile(bytes: number): { file: File; read: ReturnType<typeof vi.fn> } {
+  const file = new File([new Uint8Array(bytes)], 'book.epub', { type: 'application/epub+zip' });
+  const read = vi.fn(() => Promise.resolve(new ArrayBuffer(bytes)));
+  Object.defineProperty(file, 'arrayBuffer', { value: read });
+  return { file, read };
+}
+
+describe('EPUB file loaders (React) — input size', () => {
+  it('useEpub rejects a file over maxInputBytes without reading it', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() => useEpub({ limits: { maxInputBytes: 4 }, onError }));
+    const { file, read } = spiedEpubFile(8);
+
+    await act(async () => {
+      expect(await result.current.loadFile(file)).toBeNull();
+    });
+
+    expect(read).not.toHaveBeenCalled();
+    expect(result.current.error?.message).toBe('EPUB exceeds the compressed input limit (4 bytes)');
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('useEditableEpub rejects a file over maxInputBytes without reading it', async () => {
+    const onError = vi.fn();
+    const { result } = renderHook(() => useEditableEpub({ limits: { maxInputBytes: 4 }, onError }));
+    const { file, read } = spiedEpubFile(8);
+
+    await act(async () => {
+      expect(await result.current.loadFile(file)).toBeNull();
+    });
+
+    expect(read).not.toHaveBeenCalled();
+    expect(result.current.error?.message).toBe('EPUB exceeds the compressed input limit (4 bytes)');
+    expect(result.current.loading).toBe(false);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads a file within the limit', async () => {
+    const { result } = renderHook(() => useEpub({ limits: { maxInputBytes: 8 } }));
+    const { file, read } = spiedEpubFile(8);
+
+    await act(async () => {
+      await result.current.loadFile(file);
+    });
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBeNull();
+  });
+});
+
+describe('useEditableEpub (React) — same-tick actions', () => {
+  type EditorStub = {
+    updateParagraph: ReturnType<typeof vi.fn>;
+    addImage: ReturnType<typeof vi.fn>;
+  };
+
+  it('edits the paragraph selected earlier in the same tick', async () => {
+    const { result } = renderHook(() => useEditableEpub());
+    await act(async () => {
+      await result.current.loadBuffer(new ArrayBuffer(8));
+    });
+    const editor = result.current.editor as unknown as EditorStub;
+
+    act(() => {
+      result.current.setSelection({ chapter: 0, paragraph: 1 });
+      result.current.updateParagraph('replaced');
+      result.current.setInlineAnnotations([]);
+    });
+
+    expect(editor.updateParagraph).toHaveBeenCalledWith(0, 1, {
+      text: 'replaced',
+      inlineAnnotations: undefined,
+    });
+    expect(
+      (result.current.editor as unknown as { setInlineAnnotations: ReturnType<typeof vi.fn> })
+        .setInlineAnnotations,
+    ).toHaveBeenCalledWith(0, 1, []);
+  });
+
+  it('edits the editor whose load completed earlier in the same task', async () => {
+    const { result } = renderHook(() => useEditableEpub());
+    let loaded: EditableEpub | null = null;
+
+    await act(async () => {
+      loaded = await result.current.loadBuffer(new ArrayBuffer(8));
+      result.current.addImage({ filename: 'figure.png', data: new Uint8Array([1]) });
+    });
+
+    expect((loaded as unknown as EditorStub).addImage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useEditableEpub (React) — assetResolver option', () => {
+  it('forwards the hook-level resolver to export, letting a per-call one win', async () => {
+    const assetResolver = vi.fn(() => new Uint8Array([1]));
+    const perCall = vi.fn(() => new Uint8Array([2]));
+    const { result } = renderHook(() => useEditableEpub({ assetResolver }));
+    await act(async () => {
+      await result.current.loadBuffer(new ArrayBuffer(8));
+    });
+    const exportSpy = (result.current.editor as unknown as { export: ReturnType<typeof vi.fn> })
+      .export;
+
+    await act(async () => {
+      await result.current.exportEpub();
+      await result.current.exportEpub({ assetResolver: perCall });
+    });
+
+    expect(exportSpy).toHaveBeenNthCalledWith(1, { assetResolver });
+    expect(exportSpy).toHaveBeenNthCalledWith(2, { assetResolver: perCall });
+  });
+});

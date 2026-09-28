@@ -2,6 +2,7 @@ import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import {
   type AddImageInput,
   type AnnotatedParagraph,
+  type AssetResolver,
   clampEditableEpubSelection,
   cloneEditableEpubBook,
   EditableEpub,
@@ -12,7 +13,7 @@ import {
   type EpubParseLimits,
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchEpubBuffer, toError } from './errors.js';
+import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
@@ -32,6 +33,11 @@ export interface UseEditableEpubOptions {
    * fields keep their `DEFAULT_EPUB_PARSE_LIMITS` value.
    */
   limits?: Partial<EpubParseLimits>;
+  /**
+   * Resolves URL-only images into bytes when {@link UseEditableEpubReturn.exportEpub}
+   * packages the book. An `assetResolver` passed to `exportEpub` itself wins.
+   */
+  assetResolver?: AssetResolver;
 }
 
 /** Return value of {@link useEditableEpub}. */
@@ -95,10 +101,19 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   const onErrorRef = useRef(options.onError);
   const onExportRef = useRef(options.onExport);
   const limitsRef = useRef(options.limits);
+  const assetResolverRef = useRef(options.assetResolver);
   onLoadRef.current = options.onLoad;
   onErrorRef.current = options.onError;
   onExportRef.current = options.onExport;
   limitsRef.current = options.limits;
+  assetResolverRef.current = options.assetResolver;
+
+  // Actions read the editor and selection through these refs, which loads and
+  // setSelection update synchronously, so a call in the same tick sees them.
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
 
   const loadBufferWithRequest = useCallback(
     async (buffer: ArrayBuffer, requestId: number): Promise<EditableEpub | null> => {
@@ -107,8 +122,11 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       try {
         const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
         if (requestId !== requestIdRef.current) return null;
+        const firstParagraph = { chapter: 0, paragraph: 0 };
+        editorRef.current = next;
+        selectionRef.current = firstParagraph;
         setEditor(next);
-        setSelectionState({ chapter: 0, paragraph: 0 });
+        setSelectionState(firstParagraph);
         setRevision((value) => value + 1);
         onLoadRef.current?.(next);
         return next;
@@ -140,7 +158,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       setLoading(true);
       setError(null);
       try {
-        return await loadBufferWithRequest(await file.arrayBuffer(), requestId);
+        return await loadBufferWithRequest(await readEpubFile(file, limitsRef.current), requestId);
       } catch (err) {
         if (requestId === requestIdRef.current) {
           const nextError = toError(err);
@@ -187,70 +205,70 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   }, [book, revision]);
   const history = editor?.history ?? null;
 
-  const setSelection = useCallback(
-    (nextSelection: EditableEpubSelection) => {
-      setSelectionState(clampEditableEpubSelection(book, nextSelection));
-    },
-    [book],
-  );
+  const setSelection = useCallback((nextSelection: EditableEpubSelection) => {
+    const next = clampEditableEpubSelection(editorRef.current?.book ?? null, nextSelection);
+    selectionRef.current = next;
+    setSelectionState(next);
+  }, []);
 
   const updateParagraph = useCallback(
     (text: string, inlineAnnotations?: readonly InlineAnnotation[]) => {
-      if (!editor) return;
-      editor.updateParagraph(selection.chapter, selection.paragraph, {
-        text,
-        inlineAnnotations,
-      });
+      const current = editorRef.current;
+      if (!current) return;
+      const { chapter, paragraph } = selectionRef.current;
+      current.updateParagraph(chapter, paragraph, { text, inlineAnnotations });
       setRevision((value) => value + 1);
     },
-    [editor, selection.chapter, selection.paragraph],
+    [],
   );
 
-  const setInlineAnnotations = useCallback(
-    (inlineAnnotations: readonly InlineAnnotation[]) => {
-      if (!editor) return;
-      editor.setInlineAnnotations(selection.chapter, selection.paragraph, inlineAnnotations);
-      setRevision((value) => value + 1);
-    },
-    [editor, selection.chapter, selection.paragraph],
-  );
+  const setInlineAnnotations = useCallback((inlineAnnotations: readonly InlineAnnotation[]) => {
+    const current = editorRef.current;
+    if (!current) return;
+    const { chapter, paragraph } = selectionRef.current;
+    current.setInlineAnnotations(chapter, paragraph, inlineAnnotations);
+    setRevision((value) => value + 1);
+  }, []);
 
-  const addImage = useCallback(
-    (image: AddImageInput | EditableEpubImage) => {
-      if (!editor) return;
-      editor.addImage(selection.chapter, image);
-      setRevision((value) => value + 1);
-    },
-    [editor, selection.chapter],
-  );
+  const addImage = useCallback((image: AddImageInput | EditableEpubImage) => {
+    const current = editorRef.current;
+    if (!current) return;
+    current.addImage(selectionRef.current.chapter, image);
+    setRevision((value) => value + 1);
+  }, []);
 
   const undo = useCallback((): boolean => {
-    if (!editor) return false;
-    const changed = editor.undo();
+    const current = editorRef.current;
+    if (!current) return false;
+    const changed = current.undo();
     if (changed) setRevision((value) => value + 1);
     return changed;
-  }, [editor]);
+  }, []);
 
   const redo = useCallback((): boolean => {
-    if (!editor) return false;
-    const changed = editor.redo();
+    const current = editorRef.current;
+    if (!current) return false;
+    const changed = current.redo();
     if (changed) setRevision((value) => value + 1);
     return changed;
-  }, [editor]);
+  }, []);
 
   const exportEpub = useCallback(
-    async (options?: EpubExportOptions): Promise<ArrayBuffer | null> => {
-      if (!editor) return null;
+    async (exportOptions?: EpubExportOptions): Promise<ArrayBuffer | null> => {
+      const current = editorRef.current;
+      if (!current) return null;
       setExporting(true);
       try {
-        const buffer = await editor.export(options);
+        const buffer = await current.export(
+          withAssetResolver(exportOptions, assetResolverRef.current),
+        );
         onExportRef.current?.(buffer);
         return buffer;
       } finally {
         setExporting(false);
       }
     },
-    [editor],
+    [],
   );
 
   return {
@@ -275,4 +293,13 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     redo,
     exportEpub,
   };
+}
+
+/** Applies the hook-level `resolver` unless the per-call options carry their own. */
+function withAssetResolver(
+  options: EpubExportOptions | undefined,
+  resolver: AssetResolver | undefined,
+): EpubExportOptions | undefined {
+  if (!resolver || options?.assetResolver) return options;
+  return { ...options, assetResolver: resolver };
 }

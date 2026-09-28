@@ -5,6 +5,7 @@ import { sanitizeUrl } from '../url.js';
 import { cloneEditableBlock } from './clone.js';
 import {
   assertEpubArchiveWithinLimits,
+  assertEpubInputSize,
   EpubExpansionBudget,
   type EpubParseOptions,
   resolveEpubParseLimits,
@@ -577,9 +578,7 @@ async function parseEditableEpubBook(
   options: EpubParseOptions,
 ): Promise<EditableEpubBook> {
   const limits = resolveEpubParseLimits(options);
-  if (data.byteLength > limits.maxInputBytes) {
-    throw new Error(`EPUB exceeds the compressed input limit (${limits.maxInputBytes} bytes)`);
-  }
+  assertEpubInputSize(data.byteLength, limits);
   let zip: JSZip;
   try {
     zip = await JSZip.loadAsync(data);

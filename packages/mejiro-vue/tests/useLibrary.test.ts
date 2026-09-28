@@ -84,4 +84,58 @@ describe('useLibrary (Vue)', () => {
     expect(result.current.currentIndex.value).toBe(0);
     expect(onChange).toHaveBeenLastCalledWith(volumes[0]);
   });
+
+  it('opens initialVolumeId once a list arriving after mount contains it', () => {
+    const list = ref<typeof volumes>([]);
+    const onChange = vi.fn();
+    const { result } = harness(() => useLibrary({ volumes: list, initialVolumeId: 'c', onChange }));
+    expect(result.current.current.value).toBeNull();
+
+    list.value = volumes;
+
+    expect(result.current.current.value?.id).toBe('c');
+    expect(result.current.currentIndex.value).toBe(2);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(volumes[2]);
+  });
+
+  it('switches to initialVolumeId when a later list adds it, until the user navigates', () => {
+    const list = ref([volumes[0], volumes[1]]);
+    const { result } = harness(() => useLibrary({ volumes: list, initialVolumeId: 'c' }));
+    expect(result.current.current.value?.id).toBe('a');
+
+    list.value = volumes;
+    expect(result.current.current.value?.id).toBe('c');
+
+    result.current.goTo('a');
+    list.value = [...volumes];
+    expect(result.current.current.value?.id).toBe('a');
+  });
+
+  it('re-resolves the current volume when a reactive array is mutated in place', () => {
+    const list = ref([...volumes]);
+    const onChange = vi.fn();
+    const { result } = harness(() => useLibrary({ volumes: list, onChange }));
+    result.current.goTo('b');
+    onChange.mockClear();
+
+    list.value.splice(1, 1);
+
+    expect(result.current.current.value?.id).toBe('a');
+    expect(result.current.currentIndex.value).toBe(0);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(volumes[0]);
+
+    result.current.next();
+    expect(result.current.current.value?.id).toBe('c');
+  });
+
+  it('opens initialVolumeId pushed into a reactive array after mount', () => {
+    const list = ref<typeof volumes>([]);
+    const { result } = harness(() => useLibrary({ volumes: list, initialVolumeId: 'b' }));
+
+    list.value.push(...volumes);
+
+    expect(result.current.current.value?.id).toBe('b');
+  });
 });
