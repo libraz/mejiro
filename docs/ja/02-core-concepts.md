@@ -4,7 +4,7 @@
 
 ## 1. アーキテクチャ概要
 
-mejiro はいくつかのレイヤーに分かれています。上位レイヤーは下位レイヤーを利用しますが、下位レイヤーは上位レイヤーに依存しません。必要な深さの API だけを選んで使えるようにするためです。`book` と `epub` は同じ段にある兄弟で、どちらも `render` の上に乗ります。アプリケーションはどちらからでも入れます。`image` は他のレイヤーから独立しています。
+mejiro はいくつかのレイヤーに分かれています。上位レイヤーは下位レイヤーを利用しますが、下位レイヤーは上位レイヤーに依存しません。必要な深さの API だけを選んで使えるようにするためです。`book` と `epub` は同じ段にある兄弟で、どちらも `render` の上に乗ります。アプリケーションはどちらからでも入れます。`image` と `analysis` は他のレイヤーから独立しています。
 
 ![レイヤー構成: アプリケーションは @libraz/mejiro/book と @libraz/mejiro/epub、および独立した @libraz/mejiro/image を使い、book と epub は @libraz/mejiro/render の上に、render は @libraz/mejiro/browser の上に、browser は @libraz/mejiro コアエンジンの上に乗る](../assets/architecture-layers-ja.svg)
 
@@ -36,6 +36,10 @@ EPUB ファイルを解析し、本文とインライン注釈を取り出しま
 ### 画像 (`@libraz/mejiro/image`)
 
 他のレイヤーから独立した、ブラウザ向けの補助レイヤーです。`prepareImage()` は画像ファイルをデコードし、指定のピクセル上限に収まるよう縮小し、バイト数の上限内に収まるよう再エンコードします。EPUB に埋め込む前処理として使います。
+
+### 形態素解析 (`@libraz/mejiro/analysis`)
+
+レイヤー構成の外にある任意の補助機能です。`createSuzumeAnalyzer()` は、任意の peer 依存である `@libraz/suzume` を使う `TextAnalyzer` を作ります。これを `BookOptions.analyzer` に渡し、`wordAwareBreaking` を `'off'` 以外にすると、解析結果が改行位置のヒントとして使われます。使わない場合は、文字種の規則だけで改行を決めます。
 
 ## 2. TypedArrayベースAPI
 
@@ -89,8 +93,8 @@ JavaScript文字列をUnicodeコードポイントの`Uint32Array`に変換し�
 コアの改行アルゴリズムです。`LayoutInput`（コードポイント、送り幅、行幅、およびオプション設定）を受け取り、以下を含む`BreakResult`を生成します:
 
 - `breakPoints` (`Uint32Array`) -- 行が折り返されるインデックス
-- `hangingAdjustments` (`Float32Array`) -- 行ごとのぶら下げ組みによるはみ出し量
-- `effectiveAdvances` (`Float32Array`) -- ルビの幅分配後の文字ごとの送り幅（ルビ注釈が指定された場合のみ存在）
+- `hangingAdjustments` (`Float32Array`) -- ぶら下げ組みによるはみ出し量。最終行を含め、行ごとに 1 要素
+- `effectiveAdvances` (`Float32Array`) -- 縦中横による幅の圧縮とルビの幅分配を反映した文字ごとの送り幅（ルビ注釈または縦中横注釈が指定された場合に存在）
 
 アルゴリズムは禁則処理の解決に限定されたバックトラッキングを伴う**貪欲法O(n)**です。詳細は[改行処理](03-line-breaking.md)を参照してください。
 

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
@@ -7,22 +8,33 @@ import { describe, expect, it } from 'vitest';
  * "Every exported function, class, interface and type alias carries JSDoc."
  *
  * Coverage is measured against the symbols a consumer can actually reach, so the
- * scan starts from the barrels behind the `exports` map in `package.json` rather
- * than from the file tree — a helper that no barrel re-exports is internal and
+ * scan starts from the barrels behind the `exports` map of every published
+ * package (core, React, Vue) rather than from the file tree — a helper that no barrel re-exports is internal and
  * is deliberately not required to carry docs.
  */
 
-const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
+const PACKAGES_DIR = fileURLToPath(new URL('../..', import.meta.url));
 
-/** Barrels backing the public subpaths declared in `package.json#exports`. */
-const BARRELS = [
-  'src/index.ts',
-  'src/browser/index.ts',
-  'src/epub/index.ts',
-  'src/render/index.ts',
-  'src/book/index.ts',
-  'src/image/index.ts',
-];
+/** Published packages whose `package.json#exports` define the public surface. */
+const PUBLISHED_PACKAGES = ['mejiro', 'mejiro-react', 'mejiro-vue'];
+
+/**
+ * Source barrels behind every `types` entry of each published package's
+ * `exports` map, relative to `packages/`. Derived rather than listed, so a new
+ * subpath is covered the moment it ships.
+ */
+const BARRELS = PUBLISHED_PACKAGES.flatMap((pkg) => {
+  const manifest = JSON.parse(readFileSync(`${PACKAGES_DIR}${pkg}/package.json`, 'utf8')) as {
+    exports: Record<string, string | { types?: string }>;
+  };
+  return Object.values(manifest.exports).flatMap((entry) => {
+    const types = typeof entry === 'string' ? undefined : entry.types;
+    const match = types?.match(/^\.\/dist\/(.+)\.d\.ts$/u);
+    if (!match) return [];
+    const base = `${pkg}/src/${match[1]}`;
+    return [existsSync(`${PACKAGES_DIR}${base}.tsx`) ? `${base}.tsx` : `${base}.ts`];
+  });
+});
 
 /**
  * Modules whose exports are documented down to individual interface fields and
@@ -32,26 +44,26 @@ const BARRELS = [
  * below, which is the point: these modules stay at full coverage.
  */
 const FULLY_DOCUMENTED_MODULES = [
-  'src/book/mejiro-book.ts',
-  'src/book/snapshot.ts',
-  'src/browser/measure.ts',
-  'src/browser/types.ts',
-  'src/cluster.ts',
-  'src/epub/editor.ts',
-  'src/epub/project.ts',
-  'src/epub/types.ts',
-  'src/exclusion.ts',
-  'src/hanging.ts',
-  'src/i18n.ts',
-  'src/manuscript-tokens.ts',
-  'src/manuscript.ts',
-  'src/overlay.ts',
-  'src/paginate.ts',
-  'src/persistence.ts',
-  'src/render/inline-tree.ts',
-  'src/render/segment-descriptor.ts',
-  'src/text.ts',
-  'src/url.ts',
+  'mejiro/src/book/mejiro-book.ts',
+  'mejiro/src/book/snapshot.ts',
+  'mejiro/src/browser/measure.ts',
+  'mejiro/src/browser/types.ts',
+  'mejiro/src/cluster.ts',
+  'mejiro/src/epub/editor.ts',
+  'mejiro/src/epub/project.ts',
+  'mejiro/src/epub/types.ts',
+  'mejiro/src/exclusion.ts',
+  'mejiro/src/hanging.ts',
+  'mejiro/src/i18n.ts',
+  'mejiro/src/manuscript-tokens.ts',
+  'mejiro/src/manuscript.ts',
+  'mejiro/src/overlay.ts',
+  'mejiro/src/paginate.ts',
+  'mejiro/src/persistence.ts',
+  'mejiro/src/render/inline-tree.ts',
+  'mejiro/src/render/segment-descriptor.ts',
+  'mejiro/src/text.ts',
+  'mejiro/src/url.ts',
 ];
 
 /**
@@ -66,12 +78,17 @@ const FULLY_DOCUMENTED_MODULES = [
 const UNDOCUMENTED_DECLARATIONS: string[] = [];
 
 interface Gap {
-  /** `<module>:<symbol>` key, e.g. `src/i18n.ts:formatMessage`. */
+  /** `<module>:<symbol>` key, e.g. `mejiro/src/i18n.ts:formatMessage`. */
   key: string;
-  /** Module path relative to the package root. */
+  /** Module path relative to `packages/`. */
   module: string;
   /** Source line of the declaration, for the failure message only. */
   line: number;
+}
+
+/** True for a source file of a published package (not a dependency or a build output). */
+function isPublishedSource(fileName: string): boolean {
+  return PUBLISHED_PACKAGES.some((pkg) => fileName.startsWith(`${PACKAGES_DIR}${pkg}/src/`));
 }
 
 let cachedProgram: { program: ts.Program; checker: ts.TypeChecker } | undefined;
@@ -86,12 +103,13 @@ let cachedProgram: { program: ts.Program; checker: ts.TypeChecker } | undefined;
 function createProgram(): { program: ts.Program; checker: ts.TypeChecker } {
   if (cachedProgram) return cachedProgram;
   const program = ts.createProgram(
-    BARRELS.map((barrel) => `${PACKAGE_ROOT}${barrel}`),
+    BARRELS.map((barrel) => `${PACKAGES_DIR}${barrel}`),
     {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
       moduleResolution: ts.ModuleResolutionKind.Bundler,
       skipLibCheck: true,
+      jsx: ts.JsxEmit.ReactJSX,
     },
   );
   // Creating the checker binds the program. Without it `getJSDocCommentsAndTags`
@@ -133,6 +151,23 @@ function isHidden(member: ts.ClassElement | ts.TypeElement): boolean {
   return member.name !== undefined && ts.isPrivateIdentifier(member.name);
 }
 
+/** True for the body-carrying implementation behind a set of overload signatures. */
+function isOverloadImplementation(declaration: ts.Declaration, symbol: ts.Symbol): boolean {
+  return (
+    ts.isFunctionDeclaration(declaration) &&
+    declaration.body !== undefined &&
+    (symbol.getDeclarations()?.length ?? 0) > 1
+  );
+}
+
+/**
+ * True for an optional `never` field, which only forbids combining variants of
+ * a discriminated union and is documented on the variant itself.
+ */
+function isExclusionMarker(member: ts.ClassElement | ts.TypeElement): boolean {
+  return ts.isPropertySignature(member) && member.type?.kind === ts.SyntaxKind.NeverKeyword;
+}
+
 const gapCache = new Map<boolean, Gap[]>();
 
 /**
@@ -163,7 +198,7 @@ function scanGaps(includeMembers: boolean): Gap[] {
   };
 
   for (const barrel of BARRELS) {
-    const sourceFile = program.getSourceFile(`${PACKAGE_ROOT}${barrel}`);
+    const sourceFile = program.getSourceFile(`${PACKAGES_DIR}${barrel}`);
     expect(sourceFile, `barrel not found: ${barrel}`).toBeDefined();
     const moduleSymbol = checker.getSymbolAtLocation(sourceFile as ts.SourceFile);
     expect(moduleSymbol, `barrel exports nothing: ${barrel}`).toBeDefined();
@@ -175,9 +210,12 @@ function scanGaps(includeMembers: boolean): Gap[] {
 
       for (const declaration of symbol.getDeclarations() ?? []) {
         const declFile = declaration.getSourceFile();
-        if (!declFile.fileName.startsWith(PACKAGE_ROOT)) continue;
-        const module = declFile.fileName.slice(PACKAGE_ROOT.length);
+        if (!isPublishedSource(declFile.fileName)) continue;
+        const module = declFile.fileName.slice(PACKAGES_DIR.length);
 
+        // An overload's implementation signature is not callable by consumers;
+        // the overload signatures carry the docs.
+        if (isOverloadImplementation(declaration, symbol)) continue;
         // A `const` carries its docs on the enclosing statement, not the declarator.
         const documented = ts.isVariableDeclaration(declaration)
           ? declaration.parent.parent
@@ -186,7 +224,7 @@ function scanGaps(includeMembers: boolean): Gap[] {
         if (!includeMembers) continue;
 
         for (const member of publicMembers(declaration)) {
-          if (isHidden(member)) continue;
+          if (isHidden(member) || isExclusionMarker(member)) continue;
           const isCtor = ts.isConstructorDeclaration(member);
           if (!isCtor && member.name === undefined) continue;
           const memberName = isCtor ? 'constructor' : member.name.getText(declFile);
@@ -200,6 +238,18 @@ function scanGaps(includeMembers: boolean): Gap[] {
 }
 
 describe('JSDoc coverage of public exports', () => {
+  it('scans a source barrel for every published subpath, including the framework packages', () => {
+    expect(BARRELS).toEqual(
+      expect.arrayContaining([
+        'mejiro/src/index.ts',
+        'mejiro/src/analysis/index.ts',
+        'mejiro-react/src/index.ts',
+        'mejiro-vue/src/index.ts',
+      ]),
+    );
+    expect(BARRELS.filter((barrel) => !existsSync(`${PACKAGES_DIR}${barrel}`))).toEqual([]);
+  });
+
   it('documents every declaration reachable from a public barrel', () => {
     const unexpected = findGaps(false)
       .filter((gap) => !UNDOCUMENTED_DECLARATIONS.includes(gap.key))
@@ -220,18 +270,26 @@ describe('JSDoc coverage of public exports', () => {
     expect(gaps).toEqual([]);
   });
 
+  it('documents every export and member of the React package', () => {
+    const gaps = findGaps(true)
+      .filter((gap) => gap.module.startsWith('mejiro-react/'))
+      .map((gap) => `${gap.module}:${gap.line} ${gap.key.split(':')[1]}`);
+
+    expect(gaps).toEqual([]);
+  });
+
   it('keeps every strictly checked module reachable from a public barrel', () => {
     const reachable = new Set<string>();
     const { program, checker } = createProgram();
     for (const barrel of BARRELS) {
-      const sourceFile = program.getSourceFile(`${PACKAGE_ROOT}${barrel}`) as ts.SourceFile;
+      const sourceFile = program.getSourceFile(`${PACKAGES_DIR}${barrel}`) as ts.SourceFile;
       const moduleSymbol = checker.getSymbolAtLocation(sourceFile) as ts.Symbol;
       for (const exported of checker.getExportsOfModule(moduleSymbol)) {
         const symbol =
           exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
         for (const declaration of symbol.getDeclarations() ?? []) {
           const fileName = declaration.getSourceFile().fileName;
-          if (fileName.startsWith(PACKAGE_ROOT)) reachable.add(fileName.slice(PACKAGE_ROOT.length));
+          if (isPublishedSource(fileName)) reachable.add(fileName.slice(PACKAGES_DIR.length));
         }
       }
     }

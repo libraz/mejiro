@@ -91,6 +91,8 @@ Lifecycle events available via `subscribe`:
 | `turnEnd` | `{ to }` | When a turn animation completes. |
 | `chapterFinished` | `{ chapter }` | When the reader reaches the last spread of a chapter. Mirrors the `onChapterCompleted` prop. |
 
+In single-page mode (`spreadMode="single"`, or `"auto"` on a portrait surface) the reader shows one page at a time, and every spread index above counts pages instead: `goToSpread`, `next` / `prev`, `spreadIdx` / `totalSpreads`, the `spreadChanged` payload and `onSpreadIdxChange`. `getAnchor` and `getVisibleRange` then cover the current page. When `"auto"` switches mode, the index is converted so the page on screen stays visible.
+
 #### Persisting the reading position
 
 `useReadingPosition` stores positions as a `ReadingAnchor` (`{ chapter, paragraph, charIndex }`). Unlike a spread index, anchors survive font-size changes and viewport resizes because they reference logical content, so they round-trip cleanly through any reflow.
@@ -110,10 +112,11 @@ const { position, save } = useReadingPosition({
   // pass a custom { getItem, setItem, removeItem } implementation.
 });
 
-// Restore the saved anchor once after mount.
+// Restore the saved anchor once, on mount. Depending on `position` would re-run
+// after every save() below and pull the reader back on each page turn.
 useEffect(() => {
   if (position) reader.current?.goToAnchor(position);
-}, [position]);
+}, []);
 
 <MejiroReader
   ref={reader}
@@ -387,7 +390,32 @@ function jump(): void {
 
 Source props mirror the React package: `epub-url`, `epub`, `manuscript` (with the optional `dialect` prop), or none of them (the reader renders its own drop zone). `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
 
-Persisting the reading position uses the `useReadingPosition` composable together with the controlled props (`:spread-idx` + `@spread-idx-change`).
+Persist the reading position the same way as in React: `useReadingPosition` stores a `ReadingAnchor`, restored through the handle's `goToAnchor` and captured with `getAnchor`. A spread index (`:spread-idx`) does not survive reflow, so it is not a persistence format.
+
+```vue
+<script setup lang="ts">
+import { onMounted, ref } from 'vue';
+import { MejiroReader, type MejiroReaderHandle, useReadingPosition } from '@libraz/mejiro-vue';
+
+const props = defineProps<{ bookId: string; url: string }>();
+const reader = ref<MejiroReaderHandle | null>(null);
+const { position, save } = useReadingPosition({ key: `mejiro:position:${props.bookId}` });
+
+// Restore once, on mount. Watching `position` would re-fire after every save().
+onMounted(() => {
+  if (position.value) void reader.value?.goToAnchor(position.value);
+});
+
+function onSpreadChange(): void {
+  const anchor = reader.value?.getAnchor();
+  if (anchor) save(anchor);
+}
+</script>
+
+<template>
+  <MejiroReader ref="reader" :epub-url="url" @spread-change="onSpreadChange" />
+</template>
+```
 
 ### MejiroPageView (Recommended)
 
@@ -408,7 +436,7 @@ A full component using `MejiroBook`, spread navigation, and image overlay:
 
 ```vue
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
@@ -423,8 +451,8 @@ const book = new MejiroBook({
 });
 
 const containerRef = ref<HTMLElement | null>(null);
-const layout = ref<ChapterLayout | null>(null);
-const spread = ref<SpreadResult | null>(null);
+const layout = shallowRef<ChapterLayout | null>(null);
+const spread = shallowRef<SpreadResult | null>(null);
 const spreadIdx = ref(0);
 const pageSize = ref({ w: 0, h: 0 });
 

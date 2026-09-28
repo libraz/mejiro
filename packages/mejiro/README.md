@@ -42,6 +42,7 @@ const spread = layout.getSpread(0);
 | `@libraz/mejiro/render` | Layout → `RenderPage` data, `paragraphClassName`, static HTML (`renderEpubStatic`), stylesheets |
 | `@libraz/mejiro/book` | High-level `MejiroBook` / `ChapterLayout`: pagination, full-text search (`findText`), reading anchors, layout snapshots, `estimateReadingTime` |
 | `@libraz/mejiro/image` | Browser-side image decode / downscale helpers (`prepareImage`) |
+| `@libraz/mejiro/analysis` | Optional morphological analyzer for analysis-driven line breaking (`createSuzumeAnalyzer`, backed by the optional peer `@libraz/suzume`) |
 
 ## Stylesheets
 

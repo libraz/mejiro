@@ -19,7 +19,7 @@ export default function App() {
   //   theme="dark"                                       // 'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'
   //   mode="scroll"                                       // continuous vertical scroll
   //   spreadMode="auto"                                   // collapse to single page on portrait
-  //   locale="en"                                         // 'ja' (default) | 'en'
+  //   locale="ja"                                         // 'en' (default) | 'ja'
   //   fetchOptions={{ headers: { Authorization: '…' } }}  // authenticated EPUB fetch
   //   fallback={<p>Loading…</p>}                          // shown until client layout is ready
   return <MejiroReader epubUrl="/neko.epub" subtitle="React Example" />;

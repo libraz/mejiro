@@ -62,7 +62,7 @@ implementation.
 ## Installation
 
 ```bash
-npm install @libraz/mejiro                     # core, browser, EPUB, render, book, image
+npm install @libraz/mejiro                     # core, browser, EPUB, render, book, image, analysis
 npm install @libraz/mejiro-react react react-dom   # React components (experimental)
 npm install @libraz/mejiro-vue vue                 # Vue components (experimental)
 ```
@@ -72,7 +72,7 @@ npm install @libraz/mejiro-vue vue                 # Vue components (experimenta
 ### Core layout
 
 ```ts
-import { getLineRanges, paginate } from '@libraz/mejiro';
+import { getLineRanges, paginate, toCodepoints } from '@libraz/mejiro';
 import { MejiroBrowser } from '@libraz/mejiro/browser';
 
 const mejiro = new MejiroBrowser({
@@ -88,8 +88,8 @@ const result = await mejiro.layout({
   lineWidth: mejiro.verticalLineWidth(600), // effective line width from container height
 });
 
-// 2. Get line ranges → [[start, end), ...]
-const lines = getLineRanges(result.breakPoints, text.length);
+// 2. Get line ranges → [[start, end), ...] (break points count NFC codepoints)
+const lines = getLineRanges(result.breakPoints, toCodepoints(text).length);
 
 // 3. Paginate into pages of 400px width
 const pages = paginate(400, [
@@ -135,7 +135,8 @@ const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
 import { MejiroReader } from '@libraz/mejiro-react';
 import '@libraz/mejiro/render/mejiro-reader.css';
 
-<MejiroReader file={epubFile} theme="sepia" />;
+// Fetches and opens the book; pass `epub={parsedBook}` to render one you parsed yourself
+<MejiroReader epubUrl="/book.epub" theme="sepia" />;
 ```
 
 Vue exposes the same component under `@libraz/mejiro-vue`. See the

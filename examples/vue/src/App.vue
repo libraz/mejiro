@@ -25,7 +25,7 @@ import { MejiroReader } from '@libraz/mejiro-vue';
  *   theme="dark"                                         'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'
  *   mode="scroll"                                        continuous vertical scroll
  *   spread-mode="auto"                                   collapse to single page on portrait
- *   locale="en"                                          'ja' (default) | 'en'
+ *   locale="ja"                                          'en' (default) | 'ja'
  *   :fetch-options="{ headers: { Authorization: '…' } }" authenticated EPUB fetch
  *   <template #fallback><p>Loading…</p></template>       shown until client layout is ready
  */

@@ -97,6 +97,8 @@ const result = await mejiro.layout({
 | `enableHanging` | `boolean` | `true` | ぶら下げ組みを有効にする。 |
 | `inlineAnnotations` | `InlineAnnotation[]` | `[]` | 文字列ベースのインデックスを使用したルビ・圏点・縦中横・リンク等の注釈。 |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | 改行改善のためのトークン境界インデックス。 |
+| `hints` | `TypographyHints` | `undefined` | `deriveTypographyHints()` で作った改行ヒント。オフセットは NFC 正規化後のテキストを指す。 |
+| `breakCost` | `BreakCostOptions` | `undefined` | ペナルティ探索の重み。`hints` に改行ペナルティが含まれていなければ効果はない。 |
 
 ## 5. layoutChapter() -- 複数段落
 
@@ -133,6 +135,7 @@ const result = await mejiro.layoutChapter({
 | `lineWidth` | `number` | (必須) | 行幅（px単位）。 |
 | `mode` | `'strict' \| 'loose'` | `'strict'` | 禁則処理モード。 |
 | `enableHanging` | `boolean` | `true` | ぶら下げ組みを有効にする。 |
+| `breakCost` | `BreakCostOptions` | `undefined` | ペナルティ探索の重み。全段落に適用される。段落の `hints` に改行ペナルティが含まれていなければ効果はない。 |
 
 ### ParagraphInput
 
@@ -143,6 +146,7 @@ const result = await mejiro.layoutChapter({
 | `fontFamily` | `string` | (継承) | この段落のベースフォントファミリーを上書きする。 |
 | `fontSize` | `number` | (継承) | この段落のベースフォントサイズを上書きする。 |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | トークン境界インデックス。 |
+| `hints` | `TypographyHints` | `undefined` | `deriveTypographyHints()` で作った改行ヒント。オフセットはこの段落の NFC 正規化後のテキストを指す。 |
 
 ## 6. verticalLineWidth()
 

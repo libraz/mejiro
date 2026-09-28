@@ -171,7 +171,7 @@
 - `clearImages(): void` — 全画像を削除
 - `getImages(): readonly ImageRect[]` — 現在の画像一覧を取得
 - `imageCount: number` — 画像数（getter）
-- `compute(): { slots: ColumnSlot[]; lineWidths: Float32Array }` — 列ごとのスロットと行幅を計算
+- `compute(): { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean }` — 列ごとのスロットと行幅を計算。`affected` は、どれかの列のスロットの割り当てが画像なしのとき（1 列につき全高のスロット 1 つ）と異なる場合に true。列全体がふさがれた場合も含む
 
 **`SpreadExclusionEngine`** — 見開き 2 ページにわたる回り込み領域の管理:
 
@@ -189,7 +189,7 @@
 
 | エクスポート | シグネチャ |
 |---|---|
-| `computeExclusionSlots` | `(options: ExclusionPageGeometry & { images: readonly ImageRect[] }) => { slots: ColumnSlot[]; lineWidths: Float32Array }` |
+| `computeExclusionSlots` | `(options: ExclusionPageGeometry & { images: readonly ImageRect[] }) => { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean }` |
 
 便利関数。`ExclusionEngine` を作成し、全画像を追加して `compute()` を呼ぶのと等価。
 
@@ -400,6 +400,8 @@
 - `leftSlots: ColumnSlot[]` — 左ページのスロット
 - `lineWidths: Float32Array` — 結合された行幅（右+左）、`computeBreaks()` 用
 - `rightSlotCount: number` — 右ページのスロット数
+- `rightAffected: boolean` — 右ページのどれかの列のスロットの割り当てが画像なしのときと異なるか。列全体がふさがれた場合も含む
+- `leftAffected: boolean` — 左ページについての `rightAffected`
 
 **`MejiroStorage`** — 永続化フックが受け取るストレージのインターフェース:
 
@@ -866,7 +868,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 |---|---|
 | `DEFAULT_HEADING_STYLES` | レベル1–6のデフォルト見出しスタイル（`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`） |
 | `DEFAULT_BOOK_OPTIONS` | フォント、行間、禁則、見出しのデフォルト |
-| `DEFAULT_PAGE_GEOMETRY` | コンテナ計測前のデフォルトページサイズ/行幅 |
+| `DEFAULT_PAGE_GEOMETRY` | `computePageSize()` がページ寸法を決めるときの既定値。縦横比 `aspect`（高さ / 幅）、`minWidth` / `minHeight` / `maxHeight`、コンテナ側で確保するヘッダー分（`headerOffset`）と見開きの溝（`gutterOffset`）。長さの単位はピクセル |
 | `DEFAULT_PAGE_PADDING` | デフォルトのページパディング値（px）（`{ x: 52, y: 56, bottom: 40 }`） |
 
 ### MejiroBook
@@ -1144,6 +1146,8 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 
 **`MejiroReader` の表示系 props** -- `theme?: MejiroTheme`（リーダー root の `data-mejiro-theme` に反映され、同梱 CSS がパレットを切り替えます）、`mode?: MejiroReaderMode`（既定の `'paginated'` / 章の全ページを縦スクローラに積む `'scroll'`）、`spreadMode?: MejiroSpreadMode`（既定の `'double'` / `'single'` / `'auto'`）、`fit?: MejiroReaderFit`（既定の `'fill'` / `'width'`）、`pageNumbers?: PageNumberDisplay`、UI 文字列用の `locale?: MejiroLocale` と `messages?: Partial<MejiroMessages>`、設定パネルの中身を差し替える `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` があります。
 
+単ページ表示（`'single'`、または縦長の表示面での `'auto'`）では 1 ページずつ表示し、見開きインデックスはすべてページ単位になります。対象は `spreadIdx`・`goToSpread`・`next` / `prev`・`onSpreadIdxChange`・`spreadChanged` イベント・`ReadingPosition.totalSpreads` です。`'auto'` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。この規則は `useSpread` の `single` オプションが実装しており、表示中のページを `firstPage`・`layoutSpreadIdx`・`singleSide` として返します。`MejiroSpread` はこれを `singlePage` / `singleSide` として受け取ります。
+
 **`MejiroReader` の `annotations` prop** -- `{ chapter, start, end, color? }` の配列を渡すと、現在の章のものが自動でハイライト rect に変換されて見開きに描画されます。`useAnnotations` と組み合わせるのが基本ですが、自前で配列を組み立てても問題ありません。
 
 **`MejiroNotationHighlighter`** -- 原稿記法 (ルビ / 圏点 / 縦中横 / em / strong / link / footnote) を textarea 背後のオーバーレイで色分け表示するコンポーネント。`{ value, onChange, dialect?, wrapperClassName?, ... }` を受け取り、textarea プロパティはそのまま透過します。色は `.mejiro-notation-token[data-token="ruby"]` などの CSS で上書き可能。
@@ -1225,11 +1229,11 @@ Vue の composables は React hooks と同じ操作を公開し、オプショ�
 
 ### `MejiroReader` の表示系 props
 
-React と同じ一式を Vue の props として宣言しています。
+React と同じ一式を Vue の props として宣言しています。ただし `fallbackHtml` は Vue 版だけにあります。
 
 - `theme?: MejiroTheme`（既定 `'light'`）— リーダーのルートに `data-mejiro-theme` として反映され、同梱 CSS がこれを読んでパレットを切り替える。`MejiroThemeName` は `'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'`。オブジェクト形 `{ name, override }` はプリセットの上に CSS 変数を重ねる
 - `mode?: MejiroReaderMode`（既定 `'paginated'`）— `'scroll'` は章の全ページを縦スクロールに積む
-- `spreadMode?: MejiroSpreadMode`（既定 `'double'`）— `'single'` は右ページのみ、`'auto'` は縦長ビューポートで single に切り替える（`ResizeObserver` で監視）
+- `spreadMode?: MejiroSpreadMode`（既定 `'double'`）— `'single'` は 1 ページずつ表示し、`spreadIdx`・`goToSpread`・`spread-idx-change`・`spreadChanged` イベントはページ単位で数える。`'auto'` は縦長ビューポートで single に切り替え（`ResizeObserver` で監視）、表示中のページが見えたままになるようインデックスを換算する
 - `fit?: MejiroReaderFit`（既定 `'fill'`）— `'width'` は幅とページ比から自身の高さを決め、確保していた `gutterOffset` / `headerOffset` の既定を 0 にして見開きを端まで広げる
 - `pageNumbers?: PageNumberDisplay`（既定 `'both'`）— 見開きのどちら側の柱にノンブルを出すか。「n / 総数」の表示は独立
 - `chapterNavMode?: MejiroChapterNavMode`（既定 `'select'`）— 組み込みの章ナビゲーションをどこに出すか
@@ -1237,7 +1241,7 @@ React と同じ一式を Vue の props として宣言しています。
 - `title` / `subtitle` — ヘッダのロゴ文言
 - `bare?: boolean`（既定 `false`）— `enableHeader` / `enableChapterNav` / `enableSettings` / `enableStats` / `enablePageIndicator` の既定を `false` に反転する。明示的に渡した `enable*` が優先される
 - `enableHeader` / `enableChapterNav` / `enableSettings` / `enableStats` / `enablePageIndicator`（既定 `!bare`）、`enableDropZone` / `enableImageOverlay`（既定 `false`）、`enableKeyboard` / `enableSurfaceTap`（既定 `true`）
-- `fallbackHtml?: string` — ハイドレーション前の静的フォールバック。通常は `renderEpubStatic` の出力
+- `fallbackHtml?: string` — **Vue 版のみ。** ハイドレーション前の静的フォールバックで、HTML として挿入される。通常は `renderEpubStatic` の出力を渡す。React 版にこの prop はなく、代わりに `fallback` ノード（`fallback?: ReactNode`）を使う。Vue 版は `fallback` スロットも受け付ける
 - `fetchOptions?: RequestInit`、`limits?: EpubParseLimits`、`fetchEpub?: (url: string) => Promise<ArrayBuffer>` — URL モードでの EPUB 読み込み
 - `annotations?` — `{ chapter, start, end, color? }` の配列。`ChapterLayout.selectionRects` でハイライト矩形に変換される
 

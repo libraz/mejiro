@@ -89,6 +89,8 @@ reader.current?.goToSpread(12);
 | `turnEnd` | `{ to }` | めくりアニメーション完了時。 |
 | `chapterFinished` | `{ chapter }` | 章の最終見開きに到達したとき。`onChapterCompleted` プロップと同等。 |
 
+単ページ表示（`spreadMode="single"`、または縦長の表示面での `"auto"`）では 1 ページずつ表示し、上記の見開きインデックスはすべてページ単位になります。対象は `goToSpread`・`next` / `prev`・`spreadIdx` / `totalSpreads`・`spreadChanged` のペイロード・`onSpreadIdxChange` です。`getAnchor` と `getVisibleRange` も現在のページを対象にします。`"auto"` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。
+
 #### 読書位置の永続化
 
 `useReadingPosition` は `ReadingAnchor`（`{ chapter, paragraph, charIndex }`）形式で位置を保存します。スプレッド番号と違い、フォントサイズ変更や画面リサイズで再ページネーションされてもアンカーは保持されるため、リフロー耐性のある永続化に向いています。
@@ -108,10 +110,11 @@ const { position, save } = useReadingPosition({
   // サーバ保存にする場合は { getItem, setItem, removeItem } を実装して渡す。
 });
 
-// マウント後に保存されたアンカーへ復帰
+// 保存されたアンカーへの復帰はマウント時に 1 回だけ行う。依存配列に position を
+// 入れると下の save() のたびに再実行され、ページをめくるたびに引き戻される。
 useEffect(() => {
   if (position) reader.current?.goToAnchor(position);
-}, [position]);
+}, []);
 
 <MejiroReader
   ref={reader}
@@ -385,7 +388,32 @@ function jump(): void {
 
 ソース指定は React 版と同じ4通り（`epub-url` / `epub` / `manuscript`（任意で `dialect`）/ 未指定で drop-zone）です。`MejiroReaderHandle` は React 版と同じシグネチャを公開しているため、メソッド一覧は [React 側の表](#mejiroreader-の-imperative-handle) を参照してください。Vue 版では `ref` の `.value` 経由で呼び出します。
 
-読書位置の永続化は `useReadingPosition` composable と controlled モード（`:spread-idx` + `@spread-idx-change`）の組み合わせで実装できます。
+読書位置の永続化は React 版と同じ方法で行います。`useReadingPosition` は `ReadingAnchor` を保存し、ハンドルの `getAnchor` で取得して `goToAnchor` で復帰します。見開き番号（`:spread-idx`）はリフローで変わるため、保存形式には使えません。
+
+```vue
+<script setup lang="ts">
+import { onMounted, ref } from 'vue';
+import { MejiroReader, type MejiroReaderHandle, useReadingPosition } from '@libraz/mejiro-vue';
+
+const props = defineProps<{ bookId: string; url: string }>();
+const reader = ref<MejiroReaderHandle | null>(null);
+const { position, save } = useReadingPosition({ key: `mejiro:position:${props.bookId}` });
+
+// 復帰はマウント時に 1 回だけ。position を watch すると save() のたびに再実行される。
+onMounted(() => {
+  if (position.value) void reader.value?.goToAnchor(position.value);
+});
+
+function onSpreadChange(): void {
+  const anchor = reader.value?.getAnchor();
+  if (anchor) save(anchor);
+}
+</script>
+
+<template>
+  <MejiroReader ref="reader" :epub-url="url" @spread-change="onSpreadChange" />
+</template>
+```
 
 ### MejiroPageView（推奨）
 
@@ -406,7 +434,7 @@ Props:
 
 ```vue
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
 import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
@@ -421,8 +449,8 @@ const book = new MejiroBook({
 });
 
 const containerRef = ref<HTMLElement | null>(null);
-const layout = ref<ChapterLayout | null>(null);
-const spread = ref<SpreadResult | null>(null);
+const layout = shallowRef<ChapterLayout | null>(null);
+const spread = shallowRef<SpreadResult | null>(null);
 const spreadIdx = ref(0);
 const pageSize = ref({ w: 0, h: 0 });
 

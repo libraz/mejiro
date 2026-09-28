@@ -171,7 +171,7 @@ Combines two cluster ID arrays over the same text into their transitive closure,
 - `clearImages(): void` — Remove all images
 - `getImages(): readonly ImageRect[]` — Get current images
 - `imageCount: number` — Number of images (getter)
-- `compute(): { slots: ColumnSlot[]; lineWidths: Float32Array }` — Compute per-column slots and line widths
+- `compute(): { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean }` — Compute per-column slots and line widths. `affected` is true when any column's slot coverage differs from the unobstructed layout (one full-height slot per column), including a column blocked entirely
 
 **`SpreadExclusionEngine`** — Manages image exclusion across a two-page spread:
 
@@ -189,7 +189,7 @@ Handles gutter (page padding) coordinate conversion automatically. Text flows co
 
 | Export | Signature |
 |---|---|
-| `computeExclusionSlots` | `(options: ExclusionPageGeometry & { images: readonly ImageRect[] }) => { slots: ColumnSlot[]; lineWidths: Float32Array }` |
+| `computeExclusionSlots` | `(options: ExclusionPageGeometry & { images: readonly ImageRect[] }) => { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean }` |
 
 Convenience function. Equivalent to creating an `ExclusionEngine`, adding all images, and calling `compute()`.
 
@@ -410,6 +410,8 @@ Slots come out in reading order, and a column may contribute several slots or no
 - `leftSlots: ColumnSlot[]` — Slots for left page
 - `lineWidths: Float32Array` — Combined line widths (right + left) for `computeBreaks()`
 - `rightSlotCount: number` — Number of slots for right page
+- `rightAffected: boolean` — Whether any right-page column's slot coverage differs from the unobstructed layout, including a column blocked entirely
+- `leftAffected: boolean` — Same as `rightAffected`, for the left page
 
 **`MejiroStorage`** — Storage interface accepted by the persistence hooks:
 
@@ -891,7 +893,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 |---|---|
 | `DEFAULT_HEADING_STYLES` | Default heading style overrides for levels 1–6 (`{ 1: { scale: 1.6, gapAfterEm: 1.4 }, ... 6: { scale: 1.0, gapAfterEm: 0.6 } }`) |
 | `DEFAULT_BOOK_OPTIONS` | Default font, spacing, kinsoku, and heading options |
-| `DEFAULT_PAGE_GEOMETRY` | Default page size/line width before container measurement |
+| `DEFAULT_PAGE_GEOMETRY` | Defaults `computePageSize()` fits pages with: the `aspect` ratio (height / width), `minWidth` / `minHeight` / `maxHeight`, and the container space reserved for the header (`headerOffset`) and spread gutter (`gutterOffset`); lengths in pixels |
 | `DEFAULT_PAGE_PADDING` | Default page padding values in pixels (`{ x: 52, y: 56, bottom: 40 }`) |
 
 ### MejiroBook
@@ -1169,6 +1171,8 @@ Common headless editor returns:
 
 **`MejiroReader` presentation props** -- `theme?: MejiroTheme` (reflected as `data-mejiro-theme` on the reader root, which the bundled CSS reads to swap palettes), `mode?: MejiroReaderMode` (`'paginated'` default / `'scroll'` stacks every page in a vertical scroller), `spreadMode?: MejiroSpreadMode` (`'double'` default / `'single'` / `'auto'`), `fit?: MejiroReaderFit` (`'fill'` default / `'width'`), `pageNumbers?: PageNumberDisplay`, `locale?: MejiroLocale` and `messages?: Partial<MejiroMessages>` for UI strings, and `renderSettings?: (slot: MejiroReaderSettingsSlot) => ReactNode` to replace the settings panel body with a custom form.
 
+In single-page mode (`'single'`, or `'auto'` on a portrait surface) the reader shows one page at a time, and every spread index counts pages: `spreadIdx`, `goToSpread`, `next` / `prev`, `onSpreadIdxChange`, the `spreadChanged` event and `ReadingPosition.totalSpreads`. When `'auto'` switches mode, the index is converted so the page on screen stays visible. `useSpread` implements this rule through its `single` option and reports the page shown as `firstPage`, `layoutSpreadIdx` and `singleSide`, which `MejiroSpread` takes as `singlePage` / `singleSide`.
+
 **`MejiroReader` `annotations` prop** -- Pass an array of `{ chapter, start, end, color? }` and the Reader converts entries on the current chapter into highlight rectangles via `ChapterLayout.selectionRects`, forwarding them to `MejiroSpread`. Typically paired with `useAnnotations`, but any shape that satisfies the structural type works.
 
 **`MejiroNotationHighlighter`** -- Textarea wrapped with an overlay that tints notation tokens (ruby, emphasis, TCY, em, strong, link, footnote). Props: `{ value, onChange, dialect?, wrapperClassName?, ... }` plus textarea attributes (forwarded). Override per-token colors via CSS on `.mejiro-notation-token[data-token="…"]`.
@@ -1250,11 +1254,11 @@ Reactive state is returned as `Ref` / `ComputedRef` values, and composables that
 
 ### `MejiroReader` presentation props
 
-The same set as React, declared as Vue props:
+The same set as React, declared as Vue props, except `fallbackHtml`, which is Vue-only:
 
 - `theme?: MejiroTheme` (default `'light'`) — reflected as `data-mejiro-theme` on the reader root, which the bundled CSS reads to swap palettes. `MejiroThemeName` is `'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'`; the object form `{ name, override }` layers custom CSS variables on a preset
 - `mode?: MejiroReaderMode` (default `'paginated'`) — `'scroll'` stacks every page of the chapter in a vertical scroller
-- `spreadMode?: MejiroSpreadMode` (default `'double'`) — `'single'` renders only the right page; `'auto'` flips to single for portrait viewports, observed with a `ResizeObserver`
+- `spreadMode?: MejiroSpreadMode` (default `'double'`) — `'single'` shows one page at a time, and `spreadIdx`, `goToSpread`, `spread-idx-change` and the `spreadChanged` event then count pages; `'auto'` switches to single for portrait viewports, observed with a `ResizeObserver`, and converts the index so the page on screen stays visible
 - `fit?: MejiroReaderFit` (default `'fill'`) — `'width'` makes the reader self-size from its width and the page aspect, and defaults the reserved `gutterOffset` / `headerOffset` to 0 so the spread fills edge-to-edge
 - `pageNumbers?: PageNumberDisplay` (default `'both'`) — which page of a spread shows its number in the running head; the "n / total" indicator is independent
 - `chapterNavMode?: MejiroChapterNavMode` (default `'select'`) — where the built-in chapter navigation renders
@@ -1262,7 +1266,7 @@ The same set as React, declared as Vue props:
 - `title` / `subtitle` — header logo text
 - `bare?: boolean` (default `false`) — flips the defaults of `enableHeader`, `enableChapterNav`, `enableSettings`, `enableStats` and `enablePageIndicator` to `false`; explicitly passed `enable*` props still win
 - `enableHeader` / `enableChapterNav` / `enableSettings` / `enableStats` / `enablePageIndicator` (default `!bare`), `enableDropZone` / `enableImageOverlay` (default `false`), `enableKeyboard` / `enableSurfaceTap` (default `true`)
-- `fallbackHtml?: string` — static hydration fallback, typically the output of `renderEpubStatic`
+- `fallbackHtml?: string` — **Vue only.** Static hydration fallback, typically the output of `renderEpubStatic`, injected as HTML. React has no such prop; its equivalent is the `fallback` node (`fallback?: ReactNode`), and Vue also accepts a `fallback` slot
 - `fetchOptions?: RequestInit`, `limits?: EpubParseLimits`, `fetchEpub?: (url: string) => Promise<ArrayBuffer>` — EPUB loading in URL mode
 - `annotations?` — `{ chapter, start, end, color? }` entries converted to highlight rectangles via `ChapterLayout.selectionRects`
 

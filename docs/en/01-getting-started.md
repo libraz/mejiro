@@ -212,7 +212,7 @@ The `@libraz/mejiro-vue` package provides an equivalent `MejiroPageView` compone
 
 ```vue
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted, ref, shallowRef } from 'vue';
 import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { SpreadResult } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
@@ -227,7 +227,7 @@ const book = new MejiroBook({
 });
 
 const surfaceEl = ref<HTMLDivElement | null>(null);
-const spread = ref<SpreadResult | null>(null);
+const spread = shallowRef<SpreadResult | null>(null);
 const pageW = ref(0);
 const pageH = ref(0);
 

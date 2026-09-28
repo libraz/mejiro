@@ -16,7 +16,8 @@ type Token = readonly [surface: string, extendedPos: string];
  * under test is analyzer-agnostic, and the rules have to be pinned to the POS
  * codes and character classes they claim to read, not to a dictionary. Searching
  * forward for each surface lets a fixture leave gaps, which is how text with
- * spaces between morphemes is expressed.
+ * spaces between morphemes is expressed. A surface that does not occur in the
+ * remaining text throws, so a typo cannot become an out-of-range morpheme.
  */
 function analyze(text: string, tokens: readonly Token[]): TextAnalysis {
   const codepoints = [...text];
@@ -30,6 +31,9 @@ function analyze(text: string, tokens: readonly Token[]): TextAnalysis {
       codepoints.slice(cursor, cursor + length).join('') !== surface
     ) {
       cursor++;
+    }
+    if (codepoints.slice(cursor, cursor + length).join('') !== surface) {
+      throw new Error(`fixture surface "${surface}" not found in "${text}" after offset ${cursor}`);
     }
     morphemes.push({
       surface,
@@ -69,6 +73,17 @@ function penaltiesOf(
   const hints = deriveTypographyHints(text, analyze(text, tokens), { ...options, penalties: true });
   return [...(hints.breakPenalties as Uint8Array)];
 }
+
+describe('fixture analysis', () => {
+  it('throws when a surface does not occur in the remaining text', () => {
+    expect(() =>
+      analyze('第1章', [
+        ['第', 'PREFIX'],
+        ['2', 'NOUN_NUMBER'],
+      ]),
+    ).toThrow(/fixture surface "2" not found/);
+  });
+});
 
 describe('deriveTypographyHints — hard clusters', () => {
   it('binds a numeral to the counter that follows it', () => {

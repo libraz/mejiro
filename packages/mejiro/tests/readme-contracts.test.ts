@@ -36,6 +36,29 @@ describe('readme contracts', () => {
     }
   });
 
+  it('lists every module subpath in each subpath listing', async () => {
+    const pkg = JSON.parse(await read('packages/mejiro/package.json')) as {
+      exports: Record<string, unknown>;
+    };
+    const subpaths = Object.keys(pkg.exports)
+      .filter((subpath) => !(subpath.endsWith('.css') || subpath.endsWith('.json')))
+      .map((subpath) => `@libraz/mejiro${subpath.slice(1)}`);
+    expect(subpaths).toContain('@libraz/mejiro/analysis');
+
+    const listings = [
+      'README.md',
+      'packages/mejiro/README.md',
+      'docs/en/02-core-concepts.md',
+      'docs/ja/02-core-concepts.md',
+    ];
+    for (const path of listings) {
+      const text = await read(path);
+      for (const subpath of subpaths) {
+        expect(text, `${subpath} is missing from ${path}`).toContain(`\`${subpath}\``);
+      }
+    }
+  });
+
   it('keeps package versions out of the published READMEs', async () => {
     for (const path of publishedReadmes) {
       const readme = await read(path);

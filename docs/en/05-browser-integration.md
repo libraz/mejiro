@@ -97,6 +97,8 @@ const result = await mejiro.layout({
 | `enableHanging` | `boolean` | `true` | Enable hanging punctuation. |
 | `inlineAnnotations` | `InlineAnnotation[]` | `[]` | Inline ruby / emphasis / tcy / link annotations using string-based indices. |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | Token boundary indices for improved line breaking. |
+| `hints` | `TypographyHints` | `undefined` | Line breaking hints from `deriveTypographyHints()`; offsets address the NFC form of the text. |
+| `breakCost` | `BreakCostOptions` | `undefined` | Weights for the penalty search. No effect unless `hints` carries break penalties. |
 
 ## 5. layoutChapter() -- Multiple Paragraphs
 
@@ -133,6 +135,7 @@ const result = await mejiro.layoutChapter({
 | `lineWidth` | `number` | (required) | Line width in px. |
 | `mode` | `'strict' \| 'loose'` | `'strict'` | Kinsoku processing mode. |
 | `enableHanging` | `boolean` | `true` | Enable hanging punctuation. |
+| `breakCost` | `BreakCostOptions` | `undefined` | Weights for the penalty search, applied to every paragraph. No effect unless a paragraph's `hints` carries break penalties. |
 
 ### ParagraphInput
 
@@ -143,6 +146,7 @@ const result = await mejiro.layoutChapter({
 | `fontFamily` | `string` | (inherited) | Override the base font family for this paragraph. |
 | `fontSize` | `number` | (inherited) | Override the base font size for this paragraph. |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | Token boundary indices. |
+| `hints` | `TypographyHints` | `undefined` | Line breaking hints from `deriveTypographyHints()`; offsets address the NFC form of this paragraph's text. |
 
 ## 6. verticalLineWidth()
 

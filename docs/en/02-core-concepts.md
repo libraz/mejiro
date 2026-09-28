@@ -4,7 +4,7 @@ This document covers the fundamental architecture and design decisions behind me
 
 ## 1. Architecture Overview
 
-mejiro is organized into layers, each with a clear responsibility. Higher layers depend on lower layers but never the reverse. `book` and `epub` are siblings -- both sit on `render`, and an application can enter at either one. `image` is independent of the rest.
+mejiro is organized into layers, each with a clear responsibility. Higher layers depend on lower layers but never the reverse. `book` and `epub` are siblings -- both sit on `render`, and an application can enter at either one. `image` and `analysis` are independent of the rest.
 
 ![Layer stack: the application uses @libraz/mejiro/book, @libraz/mejiro/epub and the independent @libraz/mejiro/image; book and epub sit on @libraz/mejiro/render, which sits on @libraz/mejiro/browser, which sits on the @libraz/mejiro core engine](../assets/architecture-layers-en.svg)
 
@@ -36,6 +36,10 @@ Converts layout results into a framework-agnostic `RenderPage` data structure. T
 ### Image (`@libraz/mejiro/image`)
 
 A standalone browser helper, independent of the other layers. `prepareImage()` decodes an image file, downscales it to fit pixel bounds, and re-encodes it under a byte budget so it is safe to embed in an EPUB.
+
+### Analysis (`@libraz/mejiro/analysis`)
+
+An optional helper outside the layer stack. `createSuzumeAnalyzer()` builds a `TextAnalyzer` backed by `@libraz/suzume`, an optional peer dependency, and passing it as `BookOptions.analyzer` (with `wordAwareBreaking` set above `'off'`) turns its findings into line-breaking hints. Without it, layout runs on the character-class rules alone.
 
 ## 2. TypedArray-Based API
 
@@ -91,8 +95,8 @@ Measures each codepoint's advance width using the browser's `Canvas.measureText`
 The core line breaking algorithm. Takes a `LayoutInput` (codepoints, advances, line width, and optional settings) and produces a `BreakResult` containing:
 
 - `breakPoints` (`Uint32Array`) -- indices where lines break
-- `hangingAdjustments` (`Float32Array`) -- per-line overhang amount for hanging punctuation
-- `effectiveAdvances` (`Float32Array`) -- per-character advances after ruby width distribution (present only when ruby annotations are provided)
+- `hangingAdjustments` (`Float32Array`) -- overhang amount for hanging punctuation, one entry per line including the last
+- `effectiveAdvances` (`Float32Array`) -- per-character advances after tate-chu-yoko collapsing and ruby width distribution (present when ruby or tate-chu-yoko annotations are provided)
 
 The algorithm is **greedy O(n)** with backtracking limited to kinsoku rule resolution. See [Line Breaking](03-line-breaking.md) for details.
 
