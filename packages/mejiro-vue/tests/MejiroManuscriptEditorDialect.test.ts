@@ -17,6 +17,7 @@ vi.mock('../src/MejiroReader.js', () => ({
   },
 }));
 
+import { enMessages } from '../src/i18n.js';
 import { MejiroManuscriptEditor } from '../src/MejiroManuscriptEditor.js';
 
 const chapters = [{ id: 'c1', title: 'Chapter', body: '**強調**' }];
@@ -55,6 +56,39 @@ describe('MejiroManuscriptEditor dialect (Vue)', () => {
     expect(
       mejiro.container.querySelector('.mejiro-notation-overlay [data-token="strong"]')?.textContent,
     ).toBe('**強調**');
+  });
+
+  it('offers only notation buttons whose markup the dialect parses', async () => {
+    const tokenOf: Record<string, string> = {
+      [enMessages.manuscriptEmphasisDots]: 'emphasis',
+      [enMessages.manuscriptTcy]: 'tcy',
+      [enMessages.manuscriptEm]: 'em',
+      [enMessages.manuscriptStrong]: 'strong',
+    };
+    const body = [{ id: 'c1', title: 'Chapter', body: '20' }];
+    for (const dialect of ['mejiro', 'narou', 'kakuyomu'] as const) {
+      const probe = render(MejiroManuscriptEditor, { props: { chapters: body, dialect } });
+      const labels = Array.from(
+        probe.container.querySelectorAll('.mejiro-editor-notation button'),
+      ).map((button) => button.textContent ?? '');
+      probe.unmount();
+      expect(labels.length, dialect).toBe(dialect === 'mejiro' ? 4 : 0);
+      for (const label of labels) {
+        const view = render(MejiroManuscriptEditor, { props: { chapters: body, dialect } });
+        const textarea = view.container.querySelector('textarea') as HTMLTextAreaElement;
+        textarea.setSelectionRange(0, 2);
+        const button = Array.from(
+          view.container.querySelectorAll('.mejiro-editor-notation button'),
+        ).find((b) => b.textContent === label) as HTMLButtonElement;
+        await fireEvent.click(button);
+        const kind = tokenOf[label];
+        expect(
+          view.container.querySelector(`.mejiro-notation-overlay [data-token="${kind}"]`),
+          `${dialect}: ${label}`,
+        ).not.toBeNull();
+        view.unmount();
+      }
+    }
   });
 
   it('applies the dialect to the live preview reader', () => {

@@ -14,6 +14,7 @@ import {
 import { withErrorReporting } from './errors.js';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
+import { downloadEpub } from './MejiroEditor.js';
 import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
 import { MejiroReader, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
@@ -332,7 +333,7 @@ export const MejiroManuscriptEditor = defineComponent({
           const buffer = await project.export(resolver ? { assetResolver: resolver } : undefined);
           exportError.value = null;
           emit('export', buffer);
-          downloadEpub(buffer, title.value);
+          downloadEpub(buffer, `${title.value || 'book'}.epub`);
         },
         (error) => {
           exportError.value = error;
@@ -496,28 +497,31 @@ export const MejiroManuscriptEditor = defineComponent({
                     });
                   },
                 }),
-                h('div', { class: 'mejiro-editor-grid mejiro-editor-notation' }, [
-                  h(
-                    'button',
-                    { type: 'button', onClick: () => wrapSelection('《《', '》》') },
-                    messages.value.manuscriptEmphasisDots,
-                  ),
-                  h(
-                    'button',
-                    { type: 'button', onClick: () => wrapSelection('〔', '〕') },
-                    messages.value.manuscriptTcy,
-                  ),
-                  h(
-                    'button',
-                    { type: 'button', onClick: () => wrapSelection('*', '*') },
-                    messages.value.manuscriptEm,
-                  ),
-                  h(
-                    'button',
-                    { type: 'button', onClick: () => wrapSelection('**', '**') },
-                    messages.value.manuscriptStrong,
-                  ),
-                ]),
+                // These markers are recognized by the 'mejiro' dialect only.
+                props.dialect === 'mejiro'
+                  ? h('div', { class: 'mejiro-editor-grid mejiro-editor-notation' }, [
+                      h(
+                        'button',
+                        { type: 'button', onClick: () => wrapSelection('《《', '》》') },
+                        messages.value.manuscriptEmphasisDots,
+                      ),
+                      h(
+                        'button',
+                        { type: 'button', onClick: () => wrapSelection('〔', '〕') },
+                        messages.value.manuscriptTcy,
+                      ),
+                      h(
+                        'button',
+                        { type: 'button', onClick: () => wrapSelection('*', '*') },
+                        messages.value.manuscriptEm,
+                      ),
+                      h(
+                        'button',
+                        { type: 'button', onClick: () => wrapSelection('**', '**') },
+                        messages.value.manuscriptStrong,
+                      ),
+                    ])
+                  : null,
                 h(MejiroNotationHighlighter, {
                   ref: (el: unknown) => {
                     highlighterRef.value = el as ComponentPublicInstance | null;
@@ -550,15 +554,6 @@ function defaultChapter(messages: MejiroMessages): ManuscriptEditorChapter {
     title: format(messages.manuscriptDefaultChapterTitle, { n: 1 }),
     body: messages.manuscriptDefaultBody,
   };
-}
-
-function downloadEpub(buffer: ArrayBuffer, title: string): void {
-  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title || 'book'}.epub`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 function coverExtension(mediaType: string): string {

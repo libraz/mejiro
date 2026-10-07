@@ -4,6 +4,7 @@ import {
   cloneEditableEpubBook,
   EditableEpub,
   type EditableEpubBook,
+  type EditableParagraphBlock,
   type EpubParseLimits,
   exportEditableEpub,
 } from '@libraz/mejiro/epub';
@@ -111,6 +112,87 @@ type Selection = {
   paragraph: number;
 };
 
+/** A ruby to add on commit, as a codepoint range into the proofread buffer. */
+type PendingRuby = { start: number; end: number; rubyText: string };
+
+/**
+ * Clamps a ruby base range to a paragraph of `length` codepoints, resolving a
+ * caret at the end of the text to the last character. Returns `null` when the
+ * paragraph is empty and has no base character.
+ */
+function clampRubyRange(
+  start: number,
+  end: number,
+  length: number,
+): { start: number; end: number } | null {
+  if (length <= 0) return null;
+  const from = Math.max(0, Math.min(start, length - 1));
+  return { start: from, end: Math.max(from + 1, Math.min(end, length)) };
+}
+
+/**
+ * Commits the editor's pending edit to one paragraph: the proofread buffer
+ * first, re-anchoring existing annotations onto it, then `ruby` clamped onto
+ * the committed text. A new ruby replaces only the ruby it overlaps. Returns
+ * whether the document changed.
+ */
+function commitPendingEdit(
+  editor: EditableEpub,
+  chapterIndex: number,
+  paragraphIndex: number,
+  text: string,
+  ruby?: PendingRuby,
+): boolean {
+  const paragraphs = editor.book.chapters[chapterIndex]?.paragraphs;
+  if (!paragraphs?.[paragraphIndex]) return false;
+  const textChanged = text !== paragraphs[paragraphIndex].text;
+  const rubyText = ruby?.rubyText.trim();
+  const range = ruby ? clampRubyRange(ruby.start, ruby.end, [...text].length) : null;
+  if (!(rubyText && range)) {
+    if (textChanged) editor.updateParagraph(chapterIndex, paragraphIndex, { text });
+    return textChanged;
+  }
+  editor.transaction(() => {
+    if (textChanged) editor.updateParagraph(chapterIndex, paragraphIndex, { text });
+    const committed = editor.book.chapters[chapterIndex].paragraphs[paragraphIndex];
+    const newRuby: InlineAnnotation = {
+      kind: 'ruby',
+      startIndex: range.start,
+      endIndex: range.end,
+      rubyText,
+      type: range.end - range.start === 1 ? 'mono' : 'group',
+    };
+    const inlineAnnotations = [
+      ...committed.inlineAnnotations.filter(
+        (ann) => ann.kind !== 'ruby' || ann.endIndex <= range.start || ann.startIndex >= range.end,
+      ),
+      newRuby,
+    ].sort((a, b) => a.startIndex - b.startIndex);
+    editor.updateParagraph(chapterIndex, paragraphIndex, { inlineAnnotations });
+  });
+  return true;
+}
+
+/**
+ * Offers `buffer` as a browser download named `filename`. The object URL is
+ * revoked on the next task, after the browser has started consuming it, and
+ * exactly once even when `click()` throws.
+ */
+export function downloadEpub(buffer: ArrayBuffer, filename: string): void {
+  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.hidden = true;
+  document.body.append(a);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
 /** Maps a UTF-16 code-unit offset to a codepoint offset. */
 function utf16ToCodepoint(text: string, utf16Offset: number): number {
   let cp = 0;
@@ -198,7 +280,11 @@ export function MejiroEditor({
   const book = editor?.book ?? null;
   const chapter = book?.chapters[selection.chapter] ?? null;
   const paragraph = chapter?.paragraphs[selection.paragraph] ?? null;
-  const textDirty = paragraph ? text !== paragraph.text : false;
+  // A scene break exports as a bare divider, so it carries no editable text.
+  const sceneBreak = chapter
+    ? paragraphBlock(chapter, selection.paragraph)?.paragraphKind === 'sceneBreak'
+    : false;
+  const rubyRange = clampRubyRange(rubyStart, rubyEnd, [...text].length);
   const previewBook = useMemo(() => {
     void revision;
     return book ? cloneEditableEpubBook(book) : null;
@@ -311,7 +397,7 @@ export function MejiroEditor({
    */
   function selectParagraph(chapterIndex: number, paragraphIndex: number): void {
     if (chapterIndex === selection.chapter && paragraphIndex === selection.paragraph) return;
-    if (textDirty) applyText();
+    commitEdit();
     setSelection({ chapter: chapterIndex, paragraph: paragraphIndex });
   }
 
@@ -331,43 +417,25 @@ export function MejiroEditor({
     setRubyEnd(Math.max(start + 1, end));
   }
 
-  function applyText(): void {
+  /** Flushes the proofread buffer, plus `ruby` when given, into the document. */
+  function commitEdit(ruby?: PendingRuby): void {
     if (!editor) return;
-    editor.updateParagraph(selection.chapter, selection.paragraph, { text });
-    setRevision((value) => value + 1);
+    if (commitPendingEdit(editor, selection.chapter, selection.paragraph, text, ruby)) {
+      setRevision((value) => value + 1);
+    }
   }
 
   function applyRuby(): void {
-    if (!(editor && paragraph && rubyText.trim()) || textDirty) return;
-    const len = [...text].length;
-    const start = Math.max(0, Math.min(rubyStart, len));
-    const end = Math.max(start + 1, Math.min(rubyEnd, len));
-    const newRuby: InlineAnnotation = {
-      kind: 'ruby',
-      startIndex: start,
-      endIndex: end,
-      rubyText: rubyText.trim(),
-      type: end - start === 1 ? 'mono' : 'group',
-    };
-    const nextInline: InlineAnnotation[] = [
-      ...paragraph.inlineAnnotations.filter(
-        (ann) => ann.endIndex <= start || ann.startIndex >= end,
-      ),
-      newRuby,
-    ].sort((a, b) => a.startIndex - b.startIndex);
-    editor.updateParagraph(selection.chapter, selection.paragraph, {
-      text,
-      inlineAnnotations: nextInline,
-    });
+    if (!(rubyRange && rubyText.trim())) return;
+    commitEdit({ start: rubyStart, end: rubyEnd, rubyText });
     setRubyText('');
-    setRevision((value) => value + 1);
   }
 
   async function addImage(file: File): Promise<void> {
     await withErrorReporting(async () => {
       if (!(editor && chapter)) return;
       const chapterIndex = selection.chapter;
-      const afterBlockId = paragraphBlockId(chapter, selection.paragraph);
+      const afterBlockId = paragraphBlock(chapter, selection.paragraph)?.id;
       const data = await file.arrayBuffer();
       editor.addImage(chapterIndex, {
         filename: file.name,
@@ -383,6 +451,7 @@ export function MejiroEditor({
   async function exportEpub(): Promise<void> {
     await withErrorReporting(async () => {
       if (!editor) return;
+      commitEdit();
       const watermark = exportPolicy?.watermark;
       const source = watermark ? watermarkedBook(editor.book, watermark) : editor.book;
       let buffer = await exportEditableEpub(source, assetResolver ? { assetResolver } : undefined);
@@ -394,12 +463,7 @@ export function MejiroEditor({
         ? exportPolicy.allowDownload !== false
         : decision !== false;
       if (!allowDownload) return;
-      const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${editor.title || 'edited'}.epub`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadEpub(buffer, `${editor.title || 'edited'}.epub`);
     }, reportError);
   }
 
@@ -460,10 +524,16 @@ export function MejiroEditor({
                 <textarea
                   ref={textareaRef}
                   value={text}
+                  readOnly={sceneBreak}
                   onChange={(event) => setText(event.target.value)}
                   onSelect={captureRubyRange}
                 />
-                <button type="button" className="mejiro-editor-primary" onClick={applyText}>
+                <button
+                  type="button"
+                  className="mejiro-editor-primary"
+                  disabled={sceneBreak}
+                  onClick={() => commitEdit()}
+                >
                   {messages.editorApplyText}
                 </button>
               </div>
@@ -474,9 +544,9 @@ export function MejiroEditor({
                 <p className="mejiro-editor-hint">{messages.editorRubyHint}</p>
                 <p className="mejiro-editor-range">
                   {format(messages.editorRubyRange, {
-                    start: rubyStart,
-                    end: rubyEnd,
-                    count: Math.max(0, rubyEnd - rubyStart),
+                    start: rubyRange?.start ?? 0,
+                    end: rubyRange?.end ?? 0,
+                    count: rubyRange ? rubyRange.end - rubyRange.start : 0,
                   })}
                 </p>
                 <input
@@ -487,7 +557,7 @@ export function MejiroEditor({
                 <button
                   type="button"
                   className="mejiro-editor-primary"
-                  disabled={textDirty || !rubyText.trim()}
+                  disabled={!(rubyRange && rubyText.trim())}
                   onClick={applyRuby}
                 >
                   {messages.editorApplyRuby}
@@ -528,14 +598,14 @@ export function MejiroEditor({
   );
 }
 
-function paragraphBlockId(
+function paragraphBlock(
   chapter: EditableEpubBook['chapters'][number],
   paragraphIndex: number,
-): string | undefined {
+): EditableParagraphBlock | undefined {
   let current = 0;
   for (const block of chapter.blocks) {
     if (block.kind !== 'paragraph') continue;
-    if (current === paragraphIndex) return block.id;
+    if (current === paragraphIndex) return block;
     current++;
   }
   return undefined;

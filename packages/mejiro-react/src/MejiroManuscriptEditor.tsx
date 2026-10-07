@@ -4,6 +4,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { withErrorReporting } from './errors.js';
 import type { MejiroMessages } from './i18n.js';
 import { format, useI18n } from './i18n.js';
+import { downloadEpub } from './MejiroEditor.js';
 import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
 import { MejiroReader, type MejiroReaderSettingsSlot, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
@@ -144,15 +145,6 @@ export interface MejiroManuscriptEditorProps {
    * @defaultValue 'right'
    */
   panelSide?: 'left' | 'right';
-}
-
-function downloadEpub(buffer: ArrayBuffer, title: string): void {
-  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${title || 'book'}.epub`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 function coverExtension(mediaType: string): string {
@@ -326,7 +318,7 @@ export function MejiroManuscriptEditor({
         const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
         setExportError(null);
         onExport?.(buffer);
-        downloadEpub(buffer, title);
+        downloadEpub(buffer, `${title || 'book'}.epub`);
       },
       (error) => {
         setExportError(error);
@@ -463,20 +455,23 @@ export function MejiroManuscriptEditor({
               value={current.title}
               onChange={(event) => patchChapter(selected, { title: event.target.value })}
             />
-            <div className="mejiro-editor-grid mejiro-editor-notation">
-              <button type="button" onClick={() => wrapSelection('《《', '》》')}>
-                {messages.manuscriptEmphasisDots}
-              </button>
-              <button type="button" onClick={() => wrapSelection('〔', '〕')}>
-                {messages.manuscriptTcy}
-              </button>
-              <button type="button" onClick={() => wrapSelection('*', '*')}>
-                {messages.manuscriptEm}
-              </button>
-              <button type="button" onClick={() => wrapSelection('**', '**')}>
-                {messages.manuscriptStrong}
-              </button>
-            </div>
+            {/* These markers are recognized by the 'mejiro' dialect only. */}
+            {dialect === 'mejiro' && (
+              <div className="mejiro-editor-grid mejiro-editor-notation">
+                <button type="button" onClick={() => wrapSelection('《《', '》》')}>
+                  {messages.manuscriptEmphasisDots}
+                </button>
+                <button type="button" onClick={() => wrapSelection('〔', '〕')}>
+                  {messages.manuscriptTcy}
+                </button>
+                <button type="button" onClick={() => wrapSelection('*', '*')}>
+                  {messages.manuscriptEm}
+                </button>
+                <button type="button" onClick={() => wrapSelection('**', '**')}>
+                  {messages.manuscriptStrong}
+                </button>
+              </div>
+            )}
             <MejiroNotationHighlighter
               ref={bodyTextareaRef}
               className="mejiro-editor-manuscript"

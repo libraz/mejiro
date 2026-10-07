@@ -202,35 +202,6 @@ describe('MejiroEditor (Vue) — section toggles', () => {
     fetchSpy.mockRestore();
   });
 
-  it('disables ruby application while proofread text is dirty', async () => {
-    let loaded: EditableEpub | undefined;
-    const { container, fetchSpy } = await renderLoaded({
-      onLoad: (editor: EditableEpub) => {
-        loaded = editor;
-      },
-    });
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
-    const rubyInput = Array.from(container.querySelectorAll('input')).find(
-      (input) => input.placeholder === 'furigana',
-    ) as HTMLInputElement;
-    const applyRuby = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Apply ruby',
-    ) as HTMLButtonElement;
-
-    await fireEvent.update(rubyInput, 'reading');
-    expect(applyRuby.disabled).toBe(false);
-
-    await fireEvent.update(textarea, 'changed text');
-    expect(applyRuby.disabled).toBe(true);
-
-    // Even when the disabled attribute is bypassed, the handler must not commit
-    // ruby offsets that were computed against the unsaved buffer.
-    applyRuby.disabled = false;
-    await fireEvent.click(applyRuby);
-    expect((loaded as EditableEpub).updateParagraph).not.toHaveBeenCalled();
-    fetchSpy.mockRestore();
-  });
-
   it('commits pending proofread text before switching paragraphs', async () => {
     const stub = twoParagraphEditor();
     const { container, restore } = await renderWithEditor(stub);

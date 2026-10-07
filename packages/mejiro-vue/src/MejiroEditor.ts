@@ -4,6 +4,7 @@ import {
   cloneEditableEpubBook,
   EditableEpub,
   type EditableEpubBook,
+  type EditableParagraphBlock,
   type EpubParseLimits,
   exportEditableEpub,
 } from '@libraz/mejiro/epub';
@@ -122,8 +123,15 @@ export const MejiroEditor = defineComponent({
       void revision.value;
       return chapter.value?.paragraphs[paragraphIndex.value] ?? null;
     });
-    const textDirty = computed(() =>
-      paragraph.value ? text.value !== paragraph.value.text : false,
+    // A scene break exports as a bare divider, so it carries no editable text.
+    const sceneBreak = computed(() => {
+      void revision.value;
+      return chapter.value
+        ? paragraphBlock(chapter.value, paragraphIndex.value)?.paragraphKind === 'sceneBreak'
+        : false;
+    });
+    const rubyRange = computed(() =>
+      clampRubyRange(rubyStart.value, rubyEnd.value, [...text.value].length),
     );
     const previewBook = computed(() => {
       void revision.value;
@@ -243,15 +251,19 @@ export const MejiroEditor = defineComponent({
      */
     function selectParagraph(ci: number, pi: number): void {
       if (ci === chapterIndex.value && pi === paragraphIndex.value) return;
-      if (textDirty.value) applyText();
+      commitEdit();
       chapterIndex.value = ci;
       paragraphIndex.value = pi;
     }
 
-    function applyText(): void {
+    /** Flushes the proofread buffer, plus `ruby` when given, into the document. */
+    function commitEdit(ruby?: PendingRuby): void {
       if (!editor.value) return;
-      editor.value.updateParagraph(chapterIndex.value, paragraphIndex.value, { text: text.value });
-      revision.value++;
+      if (
+        commitPendingEdit(editor.value, chapterIndex.value, paragraphIndex.value, text.value, ruby)
+      ) {
+        revision.value++;
+      }
     }
 
     function captureRubyRange(): void {
@@ -266,31 +278,9 @@ export const MejiroEditor = defineComponent({
     }
 
     function applyRuby(): void {
-      // Ruby offsets are computed against the proofread buffer, so they may only
-      // be committed while that buffer still matches the saved paragraph text.
-      if (!(editor.value && paragraph.value && rubyText.value.trim()) || textDirty.value) return;
-      const len = [...text.value].length;
-      const start = Math.max(0, Math.min(rubyStart.value, len));
-      const end = Math.max(start + 1, Math.min(rubyEnd.value, len));
-      const newRuby: InlineAnnotation = {
-        kind: 'ruby',
-        startIndex: start,
-        endIndex: end,
-        rubyText: rubyText.value.trim(),
-        type: end - start === 1 ? 'mono' : 'group',
-      };
-      const nextInline: InlineAnnotation[] = [
-        ...paragraph.value.inlineAnnotations.filter(
-          (ann) => ann.endIndex <= start || ann.startIndex >= end,
-        ),
-        newRuby,
-      ].sort((a, b) => a.startIndex - b.startIndex);
-      editor.value.updateParagraph(chapterIndex.value, paragraphIndex.value, {
-        text: text.value,
-        inlineAnnotations: nextInline,
-      });
+      if (!(rubyRange.value && rubyText.value.trim())) return;
+      commitEdit({ start: rubyStart.value, end: rubyEnd.value, rubyText: rubyText.value });
       rubyText.value = '';
-      revision.value++;
     }
 
     async function addImage(file: File): Promise<void> {
@@ -298,7 +288,7 @@ export const MejiroEditor = defineComponent({
         const target = editor.value;
         if (!(target && chapter.value)) return;
         const ci = chapterIndex.value;
-        const afterBlockId = paragraphBlockId(chapter.value, paragraphIndex.value);
+        const afterBlockId = paragraphBlock(chapter.value, paragraphIndex.value)?.id;
         const data = await file.arrayBuffer();
         target.addImage(ci, {
           filename: file.name,
@@ -315,6 +305,7 @@ export const MejiroEditor = defineComponent({
       await withErrorReporting(async () => {
         const target = editor.value;
         if (!target) return;
+        commitEdit();
         const policy = props.exportPolicy;
         const source = policy?.watermark
           ? watermarkedBook(target.book, policy.watermark)
@@ -330,12 +321,7 @@ export const MejiroEditor = defineComponent({
         // An export policy supersedes onBeforeExport for download control.
         const allowDownload = policy ? policy.allowDownload !== false : decision !== false;
         if (!allowDownload) return;
-        const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${target.title || 'edited'}.epub`;
-        a.click();
-        URL.revokeObjectURL(url);
+        downloadEpub(buffer, `${target.title || 'edited'}.epub`);
       }, reportError);
     }
 
@@ -412,6 +398,7 @@ export const MejiroEditor = defineComponent({
                   textareaEl.value = el as HTMLTextAreaElement | null;
                 },
                 value: text.value,
+                readOnly: sceneBreak.value,
                 onInput: (event: Event) => {
                   text.value = (event.target as HTMLTextAreaElement).value;
                 },
@@ -419,7 +406,12 @@ export const MejiroEditor = defineComponent({
               }),
               h(
                 'button',
-                { type: 'button', class: 'mejiro-editor-primary', onClick: applyText },
+                {
+                  type: 'button',
+                  class: 'mejiro-editor-primary',
+                  disabled: sceneBreak.value,
+                  onClick: () => commitEdit(),
+                },
                 messages.value.editorApplyText,
               ),
             ])
@@ -432,9 +424,9 @@ export const MejiroEditor = defineComponent({
                 'p',
                 { class: 'mejiro-editor-range' },
                 format(messages.value.editorRubyRange, {
-                  start: rubyStart.value,
-                  end: rubyEnd.value,
-                  count: Math.max(0, rubyEnd.value - rubyStart.value),
+                  start: rubyRange.value?.start ?? 0,
+                  end: rubyRange.value?.end ?? 0,
+                  count: rubyRange.value ? rubyRange.value.end - rubyRange.value.start : 0,
                 }),
               ),
               h('input', {
@@ -449,7 +441,7 @@ export const MejiroEditor = defineComponent({
                 {
                   type: 'button',
                   class: 'mejiro-editor-primary',
-                  disabled: textDirty.value || !rubyText.value.trim(),
+                  disabled: !(rubyRange.value && rubyText.value.trim()),
                   onClick: applyRuby,
                 },
                 messages.value.editorApplyRuby,
@@ -519,6 +511,87 @@ export interface MejiroExportPolicy {
   watermark?: { text: string };
 }
 
+/** A ruby to add on commit, as a codepoint range into the proofread buffer. */
+type PendingRuby = { start: number; end: number; rubyText: string };
+
+/**
+ * Clamps a ruby base range to a paragraph of `length` codepoints, resolving a
+ * caret at the end of the text to the last character. Returns `null` when the
+ * paragraph is empty and has no base character.
+ */
+function clampRubyRange(
+  start: number,
+  end: number,
+  length: number,
+): { start: number; end: number } | null {
+  if (length <= 0) return null;
+  const from = Math.max(0, Math.min(start, length - 1));
+  return { start: from, end: Math.max(from + 1, Math.min(end, length)) };
+}
+
+/**
+ * Commits the editor's pending edit to one paragraph: the proofread buffer
+ * first, re-anchoring existing annotations onto it, then `ruby` clamped onto
+ * the committed text. A new ruby replaces only the ruby it overlaps. Returns
+ * whether the document changed.
+ */
+function commitPendingEdit(
+  editor: EditableEpub,
+  chapterIndex: number,
+  paragraphIndex: number,
+  text: string,
+  ruby?: PendingRuby,
+): boolean {
+  const paragraphs = editor.book.chapters[chapterIndex]?.paragraphs;
+  if (!paragraphs?.[paragraphIndex]) return false;
+  const textChanged = text !== paragraphs[paragraphIndex].text;
+  const rubyText = ruby?.rubyText.trim();
+  const range = ruby ? clampRubyRange(ruby.start, ruby.end, [...text].length) : null;
+  if (!(rubyText && range)) {
+    if (textChanged) editor.updateParagraph(chapterIndex, paragraphIndex, { text });
+    return textChanged;
+  }
+  editor.transaction(() => {
+    if (textChanged) editor.updateParagraph(chapterIndex, paragraphIndex, { text });
+    const committed = editor.book.chapters[chapterIndex].paragraphs[paragraphIndex];
+    const newRuby: InlineAnnotation = {
+      kind: 'ruby',
+      startIndex: range.start,
+      endIndex: range.end,
+      rubyText,
+      type: range.end - range.start === 1 ? 'mono' : 'group',
+    };
+    const inlineAnnotations = [
+      ...committed.inlineAnnotations.filter(
+        (ann) => ann.kind !== 'ruby' || ann.endIndex <= range.start || ann.startIndex >= range.end,
+      ),
+      newRuby,
+    ].sort((a, b) => a.startIndex - b.startIndex);
+    editor.updateParagraph(chapterIndex, paragraphIndex, { inlineAnnotations });
+  });
+  return true;
+}
+
+/**
+ * Offers `buffer` as a browser download named `filename`. The object URL is
+ * revoked on the next task, after the browser has started consuming it, and
+ * exactly once even when `click()` throws.
+ */
+export function downloadEpub(buffer: ArrayBuffer, filename: string): void {
+  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.hidden = true;
+  document.body.append(a);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
 function utf16ToCodepoint(text: string, utf16Offset: number): number {
   let cp = 0;
   let i = 0;
@@ -567,14 +640,14 @@ function watermarkBlockId(chapter: EditableEpubBook['chapters'][number]): string
   return id;
 }
 
-function paragraphBlockId(
+function paragraphBlock(
   chapter: EditableEpubBook['chapters'][number],
   paragraphIndex: number,
-): string | undefined {
+): EditableParagraphBlock | undefined {
   let current = 0;
   for (const block of chapter.blocks) {
     if (block.kind !== 'paragraph') continue;
-    if (current === paragraphIndex) return block.id;
+    if (current === paragraphIndex) return block;
     current++;
   }
   return undefined;
