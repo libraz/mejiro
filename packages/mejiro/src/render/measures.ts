@@ -93,6 +93,10 @@ export function isHeadingParagraph(p: HeadingFields): boolean {
 /**
  * Resolves the heading classification a {@link RenderParagraph} carries.
  *
+ * A heading flagged only by the legacy `isHeading` gets `kind: 'heading'`, so
+ * a renderer deriving its class from `kind` and `headingLevel` alone styles it
+ * as the heading it was measured as.
+ *
  * @returns The paragraph's `isHeading`, `headingLevel` and `kind`, as every
  *   page builder emits them.
  */
@@ -101,7 +105,9 @@ export function paragraphHeading(p: HeadingFields): {
   headingLevel?: number;
   kind?: ParagraphKind;
 } {
-  return { isHeading: isHeadingParagraph(p), headingLevel: p.headingLevel, kind: p.kind };
+  const isHeading = isHeadingParagraph(p);
+  const kind = p.kind ?? (isHeading && p.headingLevel == null ? 'heading' : undefined);
+  return { isHeading, headingLevel: p.headingLevel, kind };
 }
 
 /**

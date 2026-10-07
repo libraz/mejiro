@@ -50,20 +50,30 @@ function overlapsRange(start: number, end: number, rangeStart: number, rangeEnd:
  * @param baseLineWidth - Default line width in pixels.
  * @param lineCount - Number of lines to generate widths for.
  * @param exclusions - Exclusion zones that reduce available line width.
- * @returns A `Float32Array` of per-line widths, every entry strictly positive.
- * @throws RangeError if a zone's `blockStart` or `blockEnd` is NaN.
+ * @returns A `Float32Array` of per-line widths, every entry finite and at least 1px.
+ * @throws RangeError if `baseLineWidth` is not a finite number of at least 1px,
+ *   a zone's `blockStart` or `blockEnd` is NaN, or a zone's `inlineSize` is not
+ *   a finite non-negative number.
  */
 export function computeLineWidths(
   baseLineWidth: number,
   lineCount: number,
   exclusions: readonly ExclusionZone[],
 ): Float32Array {
+  if (!Number.isFinite(baseLineWidth) || baseLineWidth < MIN_EXCLUSION_LINE_WIDTH) {
+    throw new RangeError(
+      `computeLineWidths: baseLineWidth must be a finite number of at least ${MIN_EXCLUSION_LINE_WIDTH}px`,
+    );
+  }
   const widths = new Float32Array(lineCount);
   widths.fill(baseLineWidth);
 
   for (const zone of exclusions) {
     if (Number.isNaN(zone.blockStart) || Number.isNaN(zone.blockEnd)) {
       throw new RangeError('computeLineWidths: blockStart and blockEnd must be numbers, not NaN');
+    }
+    if (!Number.isFinite(zone.inlineSize) || zone.inlineSize < 0) {
+      throw new RangeError('computeLineWidths: inlineSize must be a finite non-negative number');
     }
     const start = Math.max(0, Math.floor(zone.blockStart));
     const end = Math.min(lineCount, Math.ceil(zone.blockEnd));

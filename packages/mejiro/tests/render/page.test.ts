@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PageSlice } from '../../src/paginate.js';
 import { buildRenderPage } from '../../src/render/page.js';
+import { paragraphClassName } from '../../src/render/static.js';
 import type { RenderEntry } from '../../src/render/types.js';
 
 function makeEntry(
@@ -66,6 +67,34 @@ describe('buildRenderPage', () => {
 
     expect(page.paragraphs[0].isHeading).toBe(true);
     expect(page.paragraphs[0].headingLevel).toBeUndefined();
+  });
+
+  it('gives every heading a class from kind and headingLevel alone', () => {
+    const entries: RenderEntry[] = [
+      makeEntry('見出し', [], true),
+      makeEntry('章', [], false, [], 1),
+      { ...makeEntry('節', [], false), kind: 'heading' },
+      makeEntry('本文', [], false),
+    ];
+    const slices: PageSlice[] = entries.map((_, paragraphIndex) => ({
+      paragraphIndex,
+      lineStart: 0,
+      lineEnd: 1,
+    }));
+
+    const page = buildRenderPage(slices, entries);
+
+    // A renderer reading only kind/headingLevel styles each paragraph as it was measured.
+    expect(page.paragraphs.map((p) => paragraphClassName(p.kind, p.headingLevel))).toEqual([
+      'mejiro-paragraph mejiro-paragraph--heading',
+      'mejiro-paragraph mejiro-paragraph--h1',
+      'mejiro-paragraph mejiro-paragraph--heading',
+      'mejiro-paragraph',
+    ]);
+    for (const p of page.paragraphs.slice(0, 3)) {
+      expect(p.isHeading).toBe(true);
+      expect(p.kind === 'heading' || p.headingLevel != null).toBe(true);
+    }
   });
 
   it('handles ruby annotations', () => {

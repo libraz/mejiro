@@ -6,11 +6,14 @@
  * Vue packages re-export this type rather than declaring their own. Feeding an
  * overlay to the layout is a separate step: the exclusion rectangle `ImageRect`
  * carries the same geometry plus the margins reserved around the image.
+ *
+ * Coordinates use the `BookImage` frame that `useImageOverlay` and
+ * `ChapterLayout.syncImages` apply: relative to the right page's top-left corner.
  */
 export interface ImageOverlayRect {
-  /** Horizontal offset from the left edge of the content area (px). */
+  /** Horizontal offset from the left edge of the right page (px); negative reaches the left page. */
   x: number;
-  /** Vertical offset from the top of the content area (px). */
+  /** Vertical offset from the top of the right page (px). */
   y: number;
   /** Width in the block direction (px). */
   w: number;

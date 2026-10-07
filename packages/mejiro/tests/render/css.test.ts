@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_HEADING_STYLES } from '../../src/book/constants.js';
+import { resizeImageOverlayRect } from '../../src/overlay.js';
 import { buildParagraphMeasures } from '../../src/render/measures.js';
 import type { RenderEntry } from '../../src/render/types.js';
 
@@ -168,6 +169,21 @@ describe('render CSS', () => {
     const css = readCss('mejiro-editor.css');
     expect(css).toContain('.mejiro-editor[data-panel-side="left"]');
     expect(css).not.toContain('--mejiro-editor-panel-side');
+  });
+
+  it('puts the overlay resize handle on the corner the resize arithmetic moves', () => {
+    // Growing by (+dx, +dy) keeps x and y: the top-left is fixed, so the grabbed corner is bottom-right.
+    const grown = resizeImageOverlayRect({ x: 10, y: 20, w: 100, h: 80 }, 30, 15);
+    expect(grown).toEqual({ x: 10, y: 20, w: 130, h: 95 });
+
+    const rules = cssRules(readCss('mejiro-reader.css'), '.mejiro-reader-image-overlay-resize');
+    for (const name of ['', '::before']) {
+      const rule = rules.get(name);
+      expect(rule?.get('right'), name).toBe('0');
+      expect(rule?.get('bottom'), name).toBe('0');
+      expect(rule?.has('left'), name).toBe(false);
+      expect(rule?.has('top'), name).toBe(false);
+    }
   });
 
   it('styles structural paragraph kind classes in page and reader CSS', () => {

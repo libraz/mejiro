@@ -22,6 +22,27 @@ describe('computeLineWidths', () => {
     ).toThrow(RangeError);
   });
 
+  it('rejects an inline size or base width that cannot yield finite positive widths', () => {
+    const zone = { blockStart: 0, blockEnd: 2 };
+    for (const inlineSize of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      -10,
+    ]) {
+      expect(
+        () => computeLineWidths(100, 3, [{ ...zone, inlineSize }]),
+        String(inlineSize),
+      ).toThrow(RangeError);
+    }
+    for (const base of [Number.NaN, Number.POSITIVE_INFINITY, 0, -100]) {
+      expect(() => computeLineWidths(base, 3, []), String(base)).toThrow(RangeError);
+    }
+    // Every accepted call returns finite widths of at least 1px.
+    const widths = computeLineWidths(100, 3, [{ ...zone, inlineSize: 500 }]);
+    expect([...widths].every((w) => Number.isFinite(w) && w >= 1)).toBe(true);
+  });
+
   it('returns uniform widths when no exclusions', () => {
     const widths = computeLineWidths(100, 5, []);
     expect([...widths]).toEqual([100, 100, 100, 100, 100]);
