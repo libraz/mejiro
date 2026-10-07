@@ -22,13 +22,15 @@ export interface ParseManuscriptOptions {
 /**
  * Aozora-style auto ruby (`漢字《かんじ》`), matched sticky at a walk position.
  *
- * The leading lookbehind restricts matches to the first character of a base
- * run. Inside a run a match would imply a match at the run start, which a
- * position-by-position walk has already tried, so nothing is missed — and base
- * runs that carry no ruby are rejected in constant time instead of being
- * re-scanned from every position.
+ * A base run is a sequence of Han/々〆ヶ characters, each with any variation
+ * selectors (standardized or IVS) that follow it. The leading lookahead and
+ * lookbehind restrict matches to the first character of a run: inside a run a
+ * match would imply one at the run start, which the walk has already tried, so
+ * nothing is missed and runs without ruby are not re-scanned from every
+ * position.
  */
-export const AUTO_RUBY = /(?<![\p{Script=Han}々〆ヶ])([\p{Script=Han}々〆ヶ]+)《([^《》]+)》/uy;
+export const AUTO_RUBY =
+  /(?=[\p{Script=Han}々〆ヶ])(?<![\p{Script=Han}々〆ヶ][\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]*)((?:[\p{Script=Han}々〆ヶ][\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]*)+)《([^《》]+)》/uy;
 const TCY_BODY = /^[A-Za-z0-9!?]+$/;
 
 /** Locates manuscript markers ahead of a forward-only walk over one source string. */
@@ -96,9 +98,15 @@ export function parseManuscript(
   const scanner = createMarkerScanner(text);
   const inlineAnnotations: InlineAnnotation[] = [];
   let out = '';
+  // Codepoint length of `out`, kept incrementally so annotation offsets cost
+  // only the text they cover.
+  let outLength = 0;
   let i = 0;
 
-  const charCount = (str: string): number => [...str].length;
+  const emit = (str: string): void => {
+    out += str;
+    outLength += [...str].length;
+  };
 
   while (i < text.length) {
     if (text[i] === '｜' || text[i] === '|') {
@@ -116,12 +124,12 @@ export function parseManuscript(
       const close = scanner.find('》》', i + 2);
       if (close > i + 2) {
         const body = text.slice(i + 2, close);
-        const startIndex = charCount(out);
-        out += body;
+        const startIndex = outLength;
+        emit(body);
         inlineAnnotations.push({
           kind: 'emphasis',
           startIndex,
-          endIndex: charCount(out),
+          endIndex: outLength,
           style: 'sesame',
         });
         i = close + 2;
@@ -143,12 +151,12 @@ export function parseManuscript(
         if (close > i && close - i <= 6) {
           const body = text.slice(i + 1, close);
           if (TCY_BODY.test(body)) {
-            const startIndex = charCount(out);
-            out += body;
+            const startIndex = outLength;
+            emit(body);
             inlineAnnotations.push({
               kind: 'tcy',
               startIndex,
-              endIndex: charCount(out),
+              endIndex: outLength,
             });
             i = close + 1;
             continue;
@@ -160,12 +168,12 @@ export function parseManuscript(
         const close = scanner.find(']]', i + 3);
         if (close > i + 3) {
           const id = text.slice(i + 3, close);
-          const startIndex = charCount(out);
-          out += `*${id}`;
+          const startIndex = outLength;
+          emit(`*${id}`);
           inlineAnnotations.push({
             kind: 'footnote',
             startIndex,
-            endIndex: charCount(out),
+            endIndex: outLength,
             noteId: id,
           });
           i = close + 2;
@@ -182,12 +190,12 @@ export function parseManuscript(
             const target = parseLinkTarget(text.slice(openTarget + 1, closeTarget));
             if (target) {
               const body = text.slice(i + 1, closeLabel);
-              const startIndex = charCount(out);
-              out += body;
+              const startIndex = outLength;
+              emit(body);
               inlineAnnotations.push({
                 kind: 'link',
                 startIndex,
-                endIndex: charCount(out),
+                endIndex: outLength,
                 href: target.href,
                 ...(target.title ? { title: target.title } : {}),
               });
@@ -202,12 +210,12 @@ export function parseManuscript(
         const close = scanner.find('**', i + 2);
         if (close > i && close - i > 2) {
           const body = text.slice(i + 2, close);
-          const startIndex = charCount(out);
-          out += body;
+          const startIndex = outLength;
+          emit(body);
           inlineAnnotations.push({
             kind: 'strong',
             startIndex,
-            endIndex: charCount(out),
+            endIndex: outLength,
           });
           i = close + 2;
           continue;
@@ -219,12 +227,12 @@ export function parseManuscript(
         if (close > i && close - i > 1) {
           const body = text.slice(i + 1, close);
           if (!body.includes('*')) {
-            const startIndex = charCount(out);
-            out += body;
+            const startIndex = outLength;
+            emit(body);
             inlineAnnotations.push({
               kind: 'em',
               startIndex,
-              endIndex: charCount(out),
+              endIndex: outLength,
             });
             i = close + 1;
             continue;
@@ -233,16 +241,19 @@ export function parseManuscript(
       }
     }
 
-    out += text[i];
-    i++;
+    // Whole code points, so `outLength` never counts half a surrogate pair.
+    const ch = String.fromCodePoint(text.codePointAt(i) ?? 0);
+    out += ch;
+    outLength++;
+    i += ch.length;
   }
 
   return { text: out, inlineAnnotations };
 
   function addRuby(base: string, rubyText: string): void {
-    const startIndex = charCount(out);
-    out += base;
-    const endIndex = charCount(out);
+    const startIndex = outLength;
+    emit(base);
+    const endIndex = outLength;
     inlineAnnotations.push({
       kind: 'ruby',
       startIndex,

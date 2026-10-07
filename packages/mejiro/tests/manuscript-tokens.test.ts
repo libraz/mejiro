@@ -172,3 +172,97 @@ describe('parseManuscript normalization', () => {
     ]);
   });
 });
+
+describe('auto ruby with variation selectors', () => {
+  const ivs = '\u{E0100}';
+
+  it('keeps an IVS or standardized variation selector inside the base run', () => {
+    const cases: Array<{
+      source: string;
+      text: string;
+      start: number;
+      end: number;
+      token: string;
+    }> = [
+      // Selector inside the run.
+      {
+        source: `葛${ivs}城《かつらぎ》`,
+        text: `葛${ivs}城`,
+        start: 0,
+        end: 3,
+        token: `葛${ivs}城《かつらぎ》`,
+      },
+      // Run ending in an IVS-qualified kanji directly before the reading.
+      {
+        source: `あ辻${ivs}《つじ》`,
+        text: `あ辻${ivs}`,
+        start: 1,
+        end: 3,
+        token: `辻${ivs}《つじ》`,
+      },
+      {
+        source: '神\uFE00社《じんじゃ》',
+        text: '神\uFE00社',
+        start: 0,
+        end: 3,
+        token: '神\uFE00社《じんじゃ》',
+      },
+      // A selector on a preceding non-Han character does not join the run.
+      {
+        source: '❤\uFE0F漢字《かんじ》',
+        text: '❤\uFE0F漢字',
+        start: 2,
+        end: 4,
+        token: '漢字《かんじ》',
+      },
+    ];
+    for (const { source, text, start, end, token } of cases) {
+      const parsed = parseManuscript(source);
+      expect(parsed.text, source).toBe(text);
+      expect(parsed.inlineAnnotations, source).toEqual([
+        expect.objectContaining({ kind: 'ruby', startIndex: start, endIndex: end, type: 'group' }),
+      ]);
+      const tokens = tokenizeManuscriptSource(source);
+      expect(
+        tokens.map((t) => source.slice(t.start, t.end)),
+        source,
+      ).toEqual([token]);
+    }
+  });
+
+  it('scans a long base run of IVS-qualified kanji without ruby in linear time', () => {
+    const text = `${`漢${ivs}`.repeat(2_000)}\n`.repeat(80);
+    const elapsed = fastestRun(() => tokenizeManuscriptSource(text));
+    expect(tokenizeManuscriptSource(text)).toEqual([]);
+    expectElapsedUnder(elapsed, 500);
+  });
+});
+
+describe('parseManuscript cost and offsets', () => {
+  it('keeps code point offsets across astral characters and dense annotations', () => {
+    const parsed = parseManuscript('𠮟*強*〔12〕𩸽《ほっけ》');
+    expect(parsed.text).toBe('𠮟強12𩸽');
+    expect(parsed.inlineAnnotations).toEqual([
+      { kind: 'em', startIndex: 1, endIndex: 2 },
+      { kind: 'tcy', startIndex: 2, endIndex: 4 },
+      { kind: 'ruby', startIndex: 4, endIndex: 5, rubyText: 'ほっけ', type: 'mono' },
+    ]);
+  });
+
+  it('parses an annotation-dense paragraph in time linear in its length', () => {
+    const half = '𠮟*強調*本文《ほんぶん》'.repeat(20_000);
+    const full = half + half;
+
+    const halfElapsed = fastestRun(() => parseManuscript(half));
+    const fullElapsed = fastestRun(() => parseManuscript(full));
+
+    const parsed = parseManuscript(full);
+    expect(parsed.inlineAnnotations).toHaveLength(80_000);
+    expect(parsed.inlineAnnotations.at(-1)).toMatchObject({
+      startIndex: [...parsed.text].length - 2,
+      endIndex: [...parsed.text].length,
+    });
+    // Recounting the output per annotation would roughly quadruple here.
+    expectElapsedUnder(fullElapsed, halfElapsed * 3 + 5);
+  });
+});
