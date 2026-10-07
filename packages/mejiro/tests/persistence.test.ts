@@ -105,6 +105,43 @@ describe('parseAnnotations', () => {
     expect(parseAnnotations(JSON.stringify([annotation, {}, null, 3]))).toEqual([annotation]);
   });
 
+  it('keeps the first entry per id and drops empty ids and reversed ranges, in both shapes', () => {
+    const duplicate = { ...annotation, color: 'red' };
+    const reversed = {
+      ...annotation,
+      id: 'reversed',
+      start: { paragraph: 2, charIndex: 0 },
+      end: { paragraph: 1, charIndex: 9 },
+    };
+    const reversedInParagraph = {
+      ...annotation,
+      id: 'reversed-2',
+      start: { paragraph: 1, charIndex: 5 },
+      end: { paragraph: 1, charIndex: 4 },
+    };
+    const collapsed = { ...annotation, id: 'collapsed', end: annotation.start };
+    const spanning = {
+      ...annotation,
+      id: 'spanning',
+      start: { paragraph: 1, charIndex: 9 },
+      end: { paragraph: 3, charIndex: 0 },
+    };
+    const entries = [
+      reversed,
+      annotation,
+      duplicate,
+      { ...annotation, id: '' },
+      reversedInParagraph,
+      collapsed,
+      spanning,
+    ];
+    const expected = [annotation, collapsed, spanning];
+    expect(parseAnnotations(JSON.stringify(entries))).toEqual(expected);
+    expect(parseAnnotations(JSON.stringify({ version: 1, annotations: entries }))).toEqual(
+      expected,
+    );
+  });
+
   it('returns an empty list for malformed payloads', () => {
     expect(parseAnnotations(null)).toEqual([]);
     expect(parseAnnotations('not json')).toEqual([]);

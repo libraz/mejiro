@@ -130,6 +130,9 @@ describe('useAnnotations (Vue) — onChange', () => {
           7,
           { ...valid('bad-range', 1), end: { paragraph: 0, charIndex: 'x' } },
           valid('good-2', 2),
+          valid('good-1', 3),
+          valid('', 1),
+          { ...valid('reversed', 1), start: { paragraph: 1, charIndex: 0 } },
         ],
       }),
     );
