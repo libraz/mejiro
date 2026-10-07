@@ -69,7 +69,10 @@ export const MejiroDropZone = defineComponent({
       openPicker();
     }
     function onChange(e: Event): void {
-      const file = (e.target as HTMLInputElement).files?.[0];
+      const target = e.target as HTMLInputElement;
+      const file = target.files?.[0];
+      // Cleared so picking the same file again still fires `change`.
+      target.value = '';
       if (file && isValid(file)) emit('file', file);
     }
     function onDragOver(e: DragEvent): void {

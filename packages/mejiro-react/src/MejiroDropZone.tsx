@@ -102,6 +102,8 @@ export function MejiroDropZone({
         hidden
         onChange={(e) => {
           const file = e.target.files?.[0];
+          // Cleared so picking the same file again still fires `change`.
+          e.target.value = '';
           if (file && isValid(file)) onFile(file);
         }}
       />
