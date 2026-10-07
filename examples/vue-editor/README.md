@@ -35,7 +35,7 @@ the right-hand panel, edit the text or ruby, then click **Export EPUB**.
 ```bash
 npx degit libraz/mejiro/examples/vue-editor my-editor
 cd my-editor
-node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.9.1\"'));"
+node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.9.2\"'));"
 npm install
 npm run dev
 ```
