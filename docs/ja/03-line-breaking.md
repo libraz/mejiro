@@ -69,6 +69,7 @@ interface LayoutInput {
 
 ### 最小限の使用例
 
+<!-- doc-example: 03-basic.ts#basic -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -81,12 +82,13 @@ const result = computeBreaks({
 
 ### 全オプション指定の使用例
 
+<!-- doc-example: 03-options.ts#options -->
 ```ts
-import { computeBreaks, toCodepoints, buildKinsokuRules } from '@libraz/mejiro';
+import { buildKinsokuRules, computeBreaks, toCodepoints } from '@libraz/mejiro';
 
 const customRules = buildKinsokuRules({
   lineStartProhibited: [0x3001, 0x3002], // 、。
-  lineEndProhibited: [0x300c],           // 「
+  lineEndProhibited: [0x300c], // 「
 });
 
 const result = computeBreaks({
@@ -198,6 +200,7 @@ function canBreakAt(
 
 テキスト「あいうえおっかきくけこ」（11文字）を、各文字16px幅、行幅80px（5文字分）で改行する場合を考えます。
 
+<!-- doc-example: 03-modes.ts#modes -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -222,12 +225,13 @@ const loose = computeBreaks({ text, advances, lineWidth: 80, mode: 'loose' });
 
 `buildKinsokuRules()` を使用して、事前計算されたルックアップセットを持つカスタムルールを作成できます:
 
+<!-- doc-example: 03-custom-rules.ts#custom-rules -->
 ```ts
 import { buildKinsokuRules, computeBreaks, toCodepoints } from '@libraz/mejiro';
 
 const rules = buildKinsokuRules({
   lineStartProhibited: [0x3001, 0x3002, 0xff0c, 0xff0e], // 、。，．
-  lineEndProhibited: [0x300c, 0x300e],                     // 「『
+  lineEndProhibited: [0x300c, 0x300e], // 「『
 });
 
 const result = computeBreaks({
@@ -263,6 +267,7 @@ const result = computeBreaks({
 
 ### ぶら下げ有効時の例（デフォルト）
 
+<!-- doc-example: 03-hanging.ts#hanging -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -281,6 +286,7 @@ const result = computeBreaks({
 
 ### ぶら下げ無効時の例
 
+<!-- doc-example: 03-hanging.ts#no-hanging -->
 ```ts
 const result = computeBreaks({
   text: toCodepoints('あいうえお、かきくけこ'),
@@ -310,6 +316,7 @@ const result = computeBreaks({
 
 ### 使用例
 
+<!-- doc-example: 03-clusters.ts#clusters -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -342,6 +349,7 @@ const result = computeBreaks({
 
 `getLineRanges` ユーティリティは、コンパクトな `breakPoints` 配列を各行の明示的な `[start, end)` インデックスペアに変換します。
 
+<!-- doc-example: 03-line-ranges.ts#line-ranges -->
 ```ts
 import { computeBreaks, getLineRanges, toCodepoints } from '@libraz/mejiro';
 
@@ -408,6 +416,7 @@ for (const [start, end] of lines) {
 
 クラスタのヒントは既存の `clusterIds` 入力から `computeBreaks()` に入ります。つまり第6節の仕組みそのままで、配列を手書きする代わりに解析から得るだけです。ルビや縦中横のクラスタと併用する場合は `mergeClusterIds()` でまとめてください。
 
+<!-- doc-example: 03-hint-clusters.ts#hint-clusters -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -458,6 +467,7 @@ penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)
 
 `今日 / は / 良い / 天気 / です / ね` という分割に対して、規則は次に書き出した罰則を与えます。
 
+<!-- doc-example: 03-break-penalties.ts#break-penalties -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 

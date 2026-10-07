@@ -155,7 +155,7 @@
 | `formatDialogueLineBreaks` | `(text: string) => string` |
 | `tokenizeManuscriptSource` | `(text: string, dialect?: ManuscriptDialect) => ManuscriptToken[]` |
 
-`formatDialogueLineBreaks` は原稿テキスト内の日本語会話括弧の前後に自然な改行を入れ、余分な空行を作らないよう正規化します。
+`formatDialogueLineBreaks` は原稿テキスト内の日本語会話括弧の前後に自然な改行を入れ、余分な空行を作らないよう正規化します。禁則に反する改行は入れません。行頭禁則文字（`、`、`）` など）が行頭に来る位置や、行末禁則文字（`（` など）が行末に来る位置には改行を入れません。
 
 `tokenizeManuscriptSource` は原稿記法 (ルビ / 圏点 / TCY / em / strong / link / footnote) のトークン位置を **source 文字列上**で返します（`parseManuscript` がレンダー後位置を返すのと対照的）。`MejiroNotationHighlighter` の内部実装と同じです。
 
@@ -197,7 +197,7 @@
 |---|---|
 | `computeLineWidths` | `(baseLineWidth: number, lineCount: number, exclusions: readonly ExclusionZone[]) => Float32Array` |
 
-低レベルAPI。除外ゾーンを基準幅から差し引いて行ごとの幅を計算する。
+低レベルAPI。除外ゾーンを基準幅から差し引いて行ごとの幅を計算する。どの幅も有限で 1px 以上です。`baseLineWidth` が有限でないか 1px 未満のとき、ゾーンの `blockStart` または `blockEnd` が `NaN` のとき、ゾーンの `inlineSize` が有限でないか負のときは `RangeError` を投げます。
 
 ### オーバーレイ補助
 
@@ -368,7 +368,7 @@
 
 **`ImageOverlayRect`** — UIオーバーレイ矩形:
 
-- `x: number` / `y: number` — オーバーレイ位置（px）
+- `x: number` / `y: number` — オーバーレイ位置（px）。右ページの左上隅を原点とします。これは `useImageOverlay` と `ChapterLayout.syncImages` が使う座標系です。負の `x` は左ページに及びます
 - `w: number` / `h: number` — オーバーレイサイズ（px）
 
 オーバーレイ矩形の型はパッケージ family 全体でこの `ImageOverlayRect` 1 つだけです。`@libraz/mejiro-react` と `@libraz/mejiro-vue` はこれを再エクスポートしており、両者の `ImageRect` はその非推奨エイリアスです。上のレイアウト側 `ImageRect` は余白フィールドを持つ別の型です。
@@ -441,7 +441,7 @@
 - `verticalLineWidth(containerHeight: number, fontSize?: number): number` -- 有効な行幅を計算
 - `clearCache(fontKey?: string): void` -- 幅キャッシュをクリア
 - `cacheStats(): { fonts: number; codepoints: number }` -- 現在の幅キャッシュの大きさ
-- `dispose(): void` -- `document.fonts` の購読を解除し、使わなくなったインスタンスを幅キャッシュごと回収できるようにする。解除後も使え、次のレイアウトで再び購読する。何度呼んでもよい
+- `dispose(): void` -- `document.fonts` の購読を解除し、使わなくなったインスタンスを幅キャッシュごと回収できるようにする。解除後も使え、次のレイアウトで再び購読する。購読していない間にフォントが読み込まれた可能性があるため、その再利用時に幅を一度更新する。何度呼んでもよい
 
 | エクスポート | シグネチャ |
 |---|---|
@@ -470,7 +470,7 @@
 - `ensureLoaded(fontSpec: string, text?: string): Promise<void>` -- `text` が含む文字範囲についてフォントを読み込む。同じ指定の同時呼び出しは 1 つのリクエストを共有する。フォントが使える状態にならなければ reject するが、`MejiroBrowser` はこれを捕まえ、`strictFontCheck` のときだけ reject する
 - `isLoaded(fontSpec: string, text?: string): boolean` -- その文字範囲について `ensureLoaded` が読み込みを確認済みかどうか
 - `isAvailable(fontSpec: string, text?: string): boolean` -- その文字範囲をホストがそのフォントで描画できるかどうか
-- `dispose(): void` -- `loadingdone` の購読を解除し、読み込み状態の記録をすべて破棄する。解除後も使え、次の `ensureLoaded` で再び購読する。何度呼んでもよい
+- `dispose(): void` -- `loadingdone` の購読を解除し、読み込み状態の記録をすべて破棄する。解除後も使え、次の `ensureLoaded` で再び購読する。その再利用時に `onFontsLoaded` を一度実行し、購読していない間に計測した幅をホストが更新できるようにする。何度呼んでもよい
 
 ### オーバーレイのドラッグセッション
 
@@ -705,7 +705,7 @@ XHTMLドキュメント文字列から段落とルビ注釈を抽出します。
 - `url?: string` — エクスポート時に `EpubExportOptions.assetResolver` で解決される取得元
 - `mediaType?: string` / `href?: string` / `manifestId?: string` / `manifestHref?: string` — エクスポート時に解決される
 
-**`AddImageInput`** — `EditableEpub.addImage()` の v0.5 入力。`AddImageInputBytes`（`data` あり `url` なし）と `AddImageInputUrl`（`url` あり `data` なし）の共用体で、どちらも **`AddImageInputCommon`**（`filename: string`、`mediaType?: string`、`alt?: string`、`caption?: string`、`placement?: 'inline' | 'fullspread'`、`afterBlockId?: string`）を継承します。**`EditableEpubImage`** は非推奨の v0.4 形状（`href`、`mediaType`、`data`、`alt?`、`afterParagraph?`）で、`addImage` は今も受け付けます。
+**`AddImageInput`** — `EditableEpub.addImage()` の v0.5 入力。`AddImageInputBytes`（`data` あり `url` なし）と `AddImageInputUrl`（`url` あり `data` なし）の共用体で、どちらも次の **`AddImageInputCommon`** を継承します: `filename: string`、`mediaType?: string`、`alt?: string`、`caption?: string`、`placement?: 'inline' | 'fullspread'`、`afterBlockId?: string`。**`EditableEpubImage`** は非推奨の v0.4 形状（`href`、`mediaType`、`data`、`alt?`、`afterParagraph?`）で、`addImage` は今も受け付けます。
 
 **`EditableEpubSelection`** — `{ chapter: number; paragraph: number }`。エディタ UI が現在対象にしている段落。
 
@@ -740,7 +740,7 @@ XHTMLドキュメント文字列から段落とルビ注釈を抽出します。
 
 **`EpubProjectAsset`** — 章と一緒にパッケージされるバイナリファイル:
 
-- `href: string` — ZIP パス。アーカイブ内の相対パスであること
+- `href: string` — ZIP パス。アーカイブ内の相対パスであること。そのままのファイル名として扱われ、`%` もエスケープではなく名前の一部です。マニフェストや `src` 属性に書き出すときにパーセントエンコードされます
 - `id?: string` / `mediaType?: string` — 省略時は `href` から導出される
 - `data?: Uint8Array | ArrayBuffer` / `url?: string` — インラインのバイト列、またはエクスポート時に取得する取得元
 - `properties?: string` — マニフェストの properties。`setCover()` は `'cover-image'` を設定する
@@ -905,10 +905,10 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — コンテナ要素からページサイズを自動計算し`setPageSize`を内部で呼び出す。アスペクト比1.45、最小280×400、最大高さ780、デフォルトpadding、上書き可能なヘッダー/ガター予約を使用。
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — 章をレイアウト（`EpubChapter`と互換）
 - `layoutManuscript(options: LayoutManuscriptOptions): Promise<Map<string, ChapterLayout>>` — 原稿の章を EPUB の ZIP を経由せず直接レイアウト。各本文は空行で段落に分割し `parseManuscript()` を通す。返る Map のキーは `chapter.id`（未指定の場合は `chapter-<n>`）
-- `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — 計測なしでレイアウトスナップショットを復元
+- `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — 計測なしでレイアウトスナップショットを復元。復元したレイアウトはスナップショットの設定とページ寸法を使い、その advance はこのブックのフォントファミリーで計測されたものとみなします（スナップショットはフォントファミリーを記録しません）。スナップショットのフォントサイズや見出し倍率がブックと異なる場合、次の `setOptions` で計測し直します。未対応のフォーマットバージョンや不正なスナップショット（advance 配列の長さが段落のコードポイント数と一致しない、改行位置が段落内で狭義単調増加でない、注釈範囲が段落外にある、フィールドが欠けているか有限でない）では例外を投げます
 - `clearCache(fontKey?: string): void` — 文字幅計測キャッシュをクリア
 - `cacheStats(): { fonts: number; codepoints: number }` — 現在の計測キャッシュ量。長時間の読書セッションでの使用量監視に使う
-- `dispose(): void` — ブックの `document.fonts` 購読を解除し、ホストが手放したブック・幅キャッシュ・レイアウトを回収できるようにする。解除後も使え、次のレイアウトやフォント変更で再び購読する。何度呼んでもよい。`useMejiroBook` はアンマウント時にこれを呼ぶ
+- `dispose(): void` — ブックの `document.fonts` 購読を解除し、ホストが手放したブック・幅キャッシュ・レイアウトを回収できるようにする。解除後も使え、次のレイアウトやフォント変更で再び購読し、その再利用時に幅を一度計測し直す。何度呼んでもよい。`useMejiroBook` はアンマウント時にこれを呼ぶ
 
 ### ChapterLayout
 
@@ -922,7 +922,7 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 - `syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult` — スプレッドの画像を設定し、`images` が空/未指定の場合はそのスプレッドの画像を削除して、更新済みスプレッドを返す
 - `getSpread(spreadIndex: number): SpreadResult` — 見開きのレイアウトデータを取得
 - `getPage(pageIndex: number): PageResult` — 単一ページのレイアウトデータを取得
-- `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — 文字列は既定でリテラル検索、`options.regex` が `true` のときは正規表現ソースとして扱います。`RegExp` を渡した場合は `options.regex` の値に関わらず正規表現として検索し、その `i` / `m` / `s` フラグを引き継ぎます（`options.caseSensitive` を明示した場合はそちらが優先）。正規表現は安全ガードを通り、破滅的バックトラックを起こしうる形やパターン長・入力長の上限超過では例外を投げます。**このメソッドは現在の `ChapterLayout` 1 章分のみを検索範囲とします**（章の `paragraphs` を順に走査し、ヒットを `SearchMatch`（= `AnchorLocation` + `length` 等）で返します）。書籍内の他章や、複数作品にまたがるサイト全体検索を実装する場合は、サーバ側で別の全文検索エンジン（Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5 など）にインデックスを保持し、見つかったアンカーを `MejiroReaderHandle.goToAnchor()` に渡して該当箇所へジャンプさせる構成を推奨します。
+- `findText(query: string | RegExp, options?: FindTextOptions): SearchMatch[]` — 文字列は既定でリテラル検索、`options.regex` が `true` のときは正規表現ソースとして扱います。リテラル検索の文字列はレイアウトのテキストと同じ正規化を受けるため、分解形の `か\u3099` でも `が` が見つかります。正規表現ソースは書かれたまま使います。`options.maxResults` はヒット数の上限で、`0` なら結果なし、小数は切り捨て、負の値や `NaN` は `RangeError` を投げます。`RegExp` を渡した場合は `options.regex` の値に関わらず正規表現として検索し、その `i` / `m` / `s` フラグを引き継ぎます（`options.caseSensitive` を明示した場合はそちらが優先）。正規表現は安全ガードを通り、破滅的バックトラックを起こしうる形やパターン長・入力長の上限超過では例外を投げます。**このメソッドは現在の `ChapterLayout` 1 章分のみを検索範囲とします**（章の `paragraphs` を順に走査し、ヒットを `SearchMatch`（= `AnchorLocation` + `length` 等）で返します）。書籍内の他章や、複数作品にまたがるサイト全体検索を実装する場合は、サーバ側で別の全文検索エンジン（Meilisearch / Elasticsearch / pg_trgm / SQLite FTS5 など）にインデックスを保持し、見つかったアンカーを `MejiroReaderHandle.goToAnchor()` に渡して該当箇所へジャンプさせる構成を推奨します。
 - `locateAnchor(anchor: InChapterAnchor): AnchorLocation | null` — アンカーを含む見開き / ページ / 行を求める。範囲外なら `null`
 - `anchorAt(spreadIndex: number, side?: 'right' | 'left'): InChapterAnchor | null` — 見開きのページ先頭文字のアンカー（既定は `'right'`）。見開き番号を、リフロー後も有効な読書位置へ戻すのに使う
 - `endAnchor(): InChapterAnchor | null` — 章の最後の文字の直後を指すアンカー。レイアウトが扱う NFC のコードポイント単位で数える。段落のない章では `null`
@@ -1008,8 +1008,8 @@ import '@libraz/mejiro/render/mejiro-fonts.css';
 
 **`ChapterLayoutSnapshot`** — `ChapterLayout.snapshot()` が返し `MejiroBook.layoutFromSnapshot()` が受け取る直列化済みレイアウト。構成要素もエクスポートされているので、ホスト側で保存できます。
 
-- **`ChapterLayoutSnapshotConfig`** — レイアウト設定の直列化可能な部分集合: `fontSize`、`lineSpacing`、`headingScale`、`mode`、`enableHanging`、`headingStyles?`
-- **`ParagraphSnapshot`** — 段落ごとのエントリ: `text`、`advances: number[]`、`breakPoints: number[]`、`inlineAnnotations`、`isHeading?`、`headingLevel?`、`kind?`、`layoutRubyAnnotations?`、`layoutTcyAnnotations?`
+- **`ChapterLayoutSnapshotConfig`** — レイアウト設定の直列化可能な部分集合: `fontSize`、`lineSpacing`、`headingScale`、`mode`、`enableHanging`、`headingStyles?`、`breakCost?`、`analyzer?`
+- **`ParagraphSnapshot`** — 段落ごとのエントリ: `text`、`advances: number[]`、`breakPoints: number[]`、`inlineAnnotations`、`isHeading?`、`headingLevel?`、`kind?`、`layoutRubyAnnotations?`、`layoutTcyAnnotations?`、`hintClusterIds?`、`hintBreakPenalties?`
 - **`LayoutRubySnapshot`** — `RubyAnnotation` の TypedArray を素の `number[]` に広げた形。`JSON.stringify` を通せるようにするため
 - **`SpreadImagesSnapshot`** — `{ spreadIndex: number; images: BookImage[] }`。1 つの見開きの画像回り込み
 
@@ -1142,7 +1142,8 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 
 ### MejiroReader の型
 
-- **`MejiroReaderProps`** — 4 つのソースモードの判別可能な共用体なので、TypeScript が複数のソースの同時指定を拒否します。`MejiroReaderControlledProps`（`epub: EpubBook | null`）、`MejiroReaderUrlProps`（`epubUrl: string`）、`MejiroReaderFileProps`（ソース指定なし。リーダー自身がドロップ領域 / ファイル選択を出す）、`MejiroReaderManuscriptProps`（`manuscript: readonly ManuscriptChapter[]`、`dialect?: ManuscriptDialect`）の 4 つで、いずれも **`MejiroReaderCommonProps`** を継承し、残りの prop はそちらが持ちます。
+- **`MejiroReaderProps`** — 4 つのソースモードの判別可能な共用体なので、TypeScript が複数のソースの同時指定を拒否します。`MejiroReaderControlledProps`（`epub: EpubBook | null`）、`MejiroReaderUrlProps`（`epubUrl: string`）、`MejiroReaderFileProps`（ソース指定なし。リーダー自身がドロップ領域 / ファイル選択を出す）、`MejiroReaderManuscriptProps`（`manuscript: readonly ManuscriptChapter[]`、`dialect?: ManuscriptDialect`）の 4 つで、いずれも **`MejiroReaderCommonProps`** を継承し、残りの prop はそちらが持ちます。制御されたソース（`epub` または `manuscript`）を渡すと book はホスト側の持ち物になるため、`enableDropZone` を指定していてもドロップ領域、Open ボタン、Vue の `dropZone` スロットは表示されません。
+- **`MejiroReaderCommonProps.options`** — `Partial<MejiroBookOptions>`。book の初期オプションで、指定しないフィールドは `DEFAULT_BOOK_OPTIONS` の値になります。`strictFontCheck` はリーダーのマウント時に一度だけ読まれます。
 - **`MejiroReaderHandle`** — `ref` から取れる命令的ハンドル: `goToSpread`、`next`、`prev`、`goToChapter`、`getReadingPosition(): ReadingPosition`、`goToAnchor(): Promise<void>`、`getAnchor()`、`getVisibleRange()`、`setOptions(): Promise<void>`、`subscribe()`。
 - **`MejiroReaderEventMap`** — `subscribe` のペイロード: `spreadChanged({ chapter, spreadIdx })`、`turnStart({ from })`、`turnEnd({ to })`、`chapterFinished({ chapter })`。
 - **`ReadingPosition`** — `getReadingPosition()` が返す `{ chapter, spreadIdx, totalPages, totalSpreads }`。
@@ -1166,8 +1167,9 @@ peer dependency: `react >= 18`。TypeScript プロジェクトでは、利用す
 - `useEpub({ defaultUrl?, onLoad?, onError?, fetchOptions?, fetchEpub?, limits? })` は `epub`、`loading`、`error`、`loadBuffer`、`loadFile`、`loadUrl`、`setEpub` を返します。どちらのフックの `loadFile` も、`limits.maxInputBytes` を超えるファイルは `size` を見て読み込む前に弾きます。
 - `useEpubProject({ metadata?, chapters?, cover?, assets?, assetResolver?, debounceMs?, onPreview?, onExport?, defaultChapterTitle?, defaultChapterBody? })` は `metadata`、`chapters`、`selectedChapter`、`currentChapter`、`cover`、`assets`、`previewBook`、`previewError`、`previewing` と、`setMetadata`、`setChapters`、`setSelectedChapter`、`setCover`、`setAssets`、`addChapter`、`removeChapter`、`patchChapter`、`reorderChapters`、`buildProject`、`exportEpub` を返します。`currentChapter` は選択中の草稿（無ければ `null`）です。`setCover(null)` で表紙を外せ、表紙・アセットの変更は、同じティック内で直前に行ったものも含めて、デバウンスされたプレビューと `exportEpub` の双方に反映されます。プレビューも URL だけのアセットを `assetResolver` で解決し、新しい編集で置き換えられたときやコンポーネントのアンマウント時には、その処理をリクエストの `signal` で中断します。`metadata.identifier` を渡さなかった場合は一度だけ生成するので、同じプロジェクトのプレビューとエクスポートはすべて同じ識別子を共有します。
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` は原稿章状態と追加/削除/並べ替え/更新ヘルパーを返します。
-- `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition? })` は選択中の章をレイアウトし、サーフェスのリサイズ時にレイアウトし直す hook。`{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }` を返します。再レイアウトでは book が導出済みの改行ヒントを再利用するため、アナライザーは再実行されません。リフローをまたぐ読書位置の扱いは [リフローをまたいで読書位置を保つ](./08-react-and-vue.md#リフローをまたいで読書位置を保つ) を参照。
-- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition? })` は単一の原稿章を直接レイアウトする hook。`useChapterLayout` と同じ形の値を返します。EPUB を経由しないライブプレビュー用。
+- `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition?, onError? })` は選択中の章をレイアウトし、サーフェスのリサイズ時にレイアウトし直す hook。現在のレイアウトを計測したときと同じボックスを報告するリサイズ通知ではリフローしません。`{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }` を返します。再レイアウトでは book が導出済みの改行ヒントを再利用するため、アナライザーは再実行されません。リフローをまたぐ読書位置の扱いは [リフローをまたいで読書位置を保つ](./08-react-and-vue.md#リフローをまたいで読書位置を保つ) を参照。`onError(error)` は、現在のリクエストのレイアウトが失敗したとき、起点（ソースの変更、リサイズ、`recompute`）にかかわらず一度だけ呼ばれます。後続のリクエストに置き換えられたレイアウトの失敗は報告されません。`onError` を渡すと `recompute` は resolve します。渡さない場合、await した `recompute` は reject し、hook 自身が起動したレイアウトの失敗は捨てられます。
+- `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition?, onError? })` は単一の原稿章を直接レイアウトする hook。`useChapterLayout` と同じ形の値を返し、失敗も同じように `onError` へ報告します。EPUB を経由しないライブプレビュー用。
+- `useMejiroBook(initial, { debounceMs?, onError? })` は `MejiroBook` を 1 つ保持し、`{ book, options, setOptions }` を返します。`setOptions` は `options` スナップショットを同期的に更新し、最新の変更が確定するとスナップショットは book が適用したオプションに戻ります。そのため拒否された変更は巻き戻ります。`onError` を渡すと、適用の失敗はそこへ報告され、`setOptions` は reject せずに resolve します。
 - `useAnnotations({ key, storage?, throttleMs?, onChange? })` はハイライト / しおり / コメントを永続化する hook。`{ annotations, add, remove, update, clear }` を返します。`storage` は `useReadingPosition` と同じ interface (`getItem` / `setItem` / `removeItem`)。`onChange(next)` は `add` / `remove` / `update` / `clear` の直後に同期的に発火（初回ハイドレートと no-op 時は呼ばれません）。サーバ同期のフックポイントに使えます。
 - `useReadingPosition({ key, storage?, throttleMs?, onChange? })` の `onChange(next | null)` も同様に `save` / `clear` 直後に発火。
 
@@ -1277,7 +1279,8 @@ React と同じ一式を Vue の props として宣言しています。ただ�
 - `bare?: boolean`（既定 `false`）— `enableHeader` / `enableChapterNav` / `enableSettings` / `enableStats` / `enablePageIndicator` の既定を `false` に反転する。明示的に渡した `enable*` が優先される
 - `enableHeader` / `enableChapterNav` / `enableSettings` / `enableStats` / `enablePageIndicator`（既定 `!bare`）、`enableDropZone` / `enableImageOverlay`（既定 `false`）、`enableKeyboard` / `enableSurfaceTap`（既定 `true`）
 - `fallbackHtml?: string` — **Vue 版のみ。** ハイドレーション前の静的フォールバックで、HTML として挿入される。通常は `renderEpubStatic` の出力を渡す。React 版にこの prop はなく、代わりに `fallback` ノード（`fallback?: ReactNode`）を使う。Vue 版は `fallback` スロットも受け付ける
-- `fetchOptions?: RequestInit`、`limits?: EpubParseLimits`、`fetchEpub?: (url: string) => Promise<ArrayBuffer>` — URL モードでの EPUB 読み込み
+- `fetchOptions?: RequestInit`、`fetchEpub?: (url: string) => Promise<ArrayBuffer>` — URL モードでの EPUB 読み込み
+- `limits?: Partial<EpubParseLimits>` — リーダー自身が読み込むすべての EPUB（URL モード、ドロップゾーン、ファイルピッカー）に適用するリソース上限。省略したキーは既定値のままです
 - `annotations?` — `{ chapter, start, end, color? }` の配列。`ChapterLayout.selectionRects` でハイライト矩形に変換される
 
 React が `renderSettings` render prop を取るところは、Vue ではスロットです。`settings`（`MejiroReaderSettingsSlot` と同じ文脈を受け取る）に加えて `header`、`logo`、`dropZone`、`fallback`、`loading` があります。

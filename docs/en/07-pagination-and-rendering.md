@@ -15,13 +15,14 @@ This document covers steps 1--3 and vanilla DOM rendering. For React and Vue com
 
 `RenderEntry` is the bridge between layout results and the rendering pipeline. Build one per paragraph from the output of `layoutChapter()`:
 
+<!-- doc-example: 07-walkthrough.ts#entries -->
 ```ts
 import type { RenderEntry } from '@libraz/mejiro/render';
 
 const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  inlineAnnotations: p.inlineAnnotations,
+  inlineAnnotations: p.inlineAnnotations ?? [],
   kind: p.kind,
   headingLevel: p.headingLevel,
 }));
@@ -40,6 +41,7 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 
 Converts render entries into `ParagraphMeasure[]` for use with `paginate()`. Computes line pitch (font size x line spacing) and inter-paragraph gaps based on whether each paragraph is a heading or body text.
 
+<!-- doc-example: 07-walkthrough.ts#measures -->
 ```ts
 import { buildParagraphMeasures } from '@libraz/mejiro/render';
 
@@ -77,10 +79,12 @@ Each returned `ParagraphMeasure` contains:
 
 Distributes paragraph lines across pages of fixed block size, splitting paragraphs at page boundaries when necessary.
 
+<!-- doc-example: 07-walkthrough.ts#paginate -->
 ```ts
 import { paginate } from '@libraz/mejiro';
 
 const pages = paginate(400, measures);
+
 // pages[0] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 5 }, ...]
 // pages[1] = [...]
 ```
@@ -110,6 +114,7 @@ A paragraph that spans a page boundary will produce two `PageSlice` entries -- o
 
 Converts page slices and render entries into a framework-agnostic `RenderPage` data structure ready for rendering.
 
+<!-- doc-example: 07-walkthrough.ts#render-page -->
 ```ts
 import { buildRenderPage } from '@libraz/mejiro/render';
 
@@ -186,11 +191,12 @@ Rendering a `RenderPage` to DOM without a framework. `paragraphClassName()` is t
 single source of the `mejiro-paragraph--*` modifiers, so the client renderer and
 `renderEpubStatic()` agree on the class list:
 
+<!-- doc-example: 07-render-dom.ts#render-page -->
 ```ts
-import { paragraphClassName } from '@libraz/mejiro/render';
+import { paragraphClassName, type RenderPage } from '@libraz/mejiro/render';
 
 function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
-  container.innerHTML = '';
+  container.replaceChildren();
   container.classList.add('mejiro-page');
 
   for (const paragraph of page.paragraphs) {
@@ -217,9 +223,9 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
 `RenderSegment` variant — including nested `children` and unsafe link URLs, which lose
 only their anchor — into a small, framework-agnostic element description:
 
+<!-- doc-example: 07-render-dom.ts#inline-node -->
 ```ts
-import { segmentToInlineNode } from '@libraz/mejiro/render';
-import type { InlineRenderNode } from '@libraz/mejiro/render';
+import { type InlineRenderNode, segmentToInlineNode } from '@libraz/mejiro/render';
 
 function appendInlineNode(parent: Node, node: InlineRenderNode): void {
   if (node.type === 'text') {
@@ -256,23 +262,27 @@ emphasis, tate-chu-yoko, links and footnote references.
 
 Full pipeline from text to rendered pages:
 
+<!-- doc-example: 07-pipeline.ts#pipeline -->
 ```ts
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
 import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderEntry } from '@libraz/mejiro/render';
+import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { MejiroBrowser } from '@libraz/mejiro/browser';
+import { buildParagraphMeasures, buildRenderPage, type RenderEntry } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
 
 // 1. Create a MejiroBrowser instance
+const fontSize = 16;
 const mejiro = new MejiroBrowser({
   fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fixedFontSize: fontSize,
 });
 
-// 2. Lay out a chapter
+// 2. Lay out a chapter. The level-1 heading is broken at the size
+// buildParagraphMeasures() measures it at: its scale, rounded to whole pixels.
+const headingSize = Math.round(fontSize * (DEFAULT_HEADING_STYLES[1].scale ?? 1));
 const result = await mejiro.layoutChapter({
   paragraphs: [
-    { text: '第一章' },
+    { text: '第一章', fontSize: headingSize },
     { text: '吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。' },
   ],
   lineWidth: mejiro.verticalLineWidth(600),
@@ -297,17 +307,21 @@ const entries: RenderEntry[] = [
 
 // 4. Build measures and paginate
 const measures = buildParagraphMeasures(entries, {
-  fontSize: 16,
+  fontSize,
   lineSpacing: 1.8,
 });
 const pages = paginate(400, measures);
 
-// 5. Render each page
+// 5. Render each page, drawing the heading at the size it was broken at
 const container = document.getElementById('reader')!;
 for (let i = 0; i < pages.length; i++) {
   const pageDiv = document.createElement('div');
   const renderPage = buildRenderPage(pages[i], entries);
-  renderPageToDOM(pageDiv, renderPage);
+  renderPageToDOM(pageDiv, {
+    paragraphs: renderPage.paragraphs.map((p) =>
+      p.headingLevel != null ? { ...p, scale: headingSize / fontSize } : p,
+    ),
+  });
   container.appendChild(pageDiv);
 }
 ```

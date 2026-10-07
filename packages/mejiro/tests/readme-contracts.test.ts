@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { access, copyFile, mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 
@@ -83,6 +83,86 @@ describe('readme contracts', () => {
         `examples/${template} does not exist`,
       ).resolves.toBeUndefined();
     }
+  });
+});
+
+/** GitHub's heading anchor: lowercased, punctuation dropped, spaces to hyphens. */
+function headingSlug(heading: string): string {
+  return heading
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M} _-]/gu, '')
+    .replace(/ /gu, '-');
+}
+
+/** Anchors a markdown file offers, with GitHub's `-1`, `-2` suffixes on repeats. */
+async function headingAnchors(path: string): Promise<Set<string>> {
+  const text = (await read(path)).replace(/```[\s\S]*?```/gu, '');
+  const anchors = new Set<string>();
+  const seen = new Map<string, number>();
+  for (const match of text.matchAll(/^#{1,6}\s+(.+)$/gmu)) {
+    const slug = headingSlug(match[1]);
+    const count = seen.get(slug) ?? 0;
+    seen.set(slug, count + 1);
+    anchors.add(count === 0 ? slug : `${slug}-${count}`);
+  }
+  return anchors;
+}
+
+/** Markdown files a reader follows links through. */
+async function linkedMarkdown(): Promise<string[]> {
+  const paths = ['README.md', 'README_ja.md', ...publishedReadmes.slice(1)];
+  for (const dir of ['docs/en', 'docs/ja']) {
+    for (const name of await readdir(resolve(repoRoot, dir))) {
+      if (name.endsWith('.md')) paths.push(`${dir}/${name}`);
+    }
+  }
+  for (const entry of await readdir(resolve(repoRoot, 'examples'), { withFileTypes: true })) {
+    const path = `examples/${entry.name}/README.md`;
+    if (entry.isDirectory() && (await exists(path))) paths.push(path);
+  }
+  return paths;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(resolve(repoRoot, path));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+describe('repository links', () => {
+  it('resolves every link into the repository to an existing file and heading', async () => {
+    const broken: string[] = [];
+    for (const path of await linkedMarkdown()) {
+      // Code fences and inline code show link syntax without linking.
+      const text = (await read(path)).replace(/```[\s\S]*?```/gu, '').replace(/`[^`\n]*`/gu, '');
+      for (const match of text.matchAll(/\]\(([^)\s]+)\)/gu)) {
+        const url = match[1];
+        const github = url.match(
+          /^https:\/\/github\.com\/libraz\/mejiro\/(?:tree|blob)\/main\/(.*)$/u,
+        );
+        if (!github && /^[a-z]+:/iu.test(url)) continue;
+        const [target, anchor] = (github ? github[1] : url).split('#');
+        let file = github ? target : target ? resolve('/', dirname(path), target).slice(1) : path;
+        if (!(await exists(file))) {
+          broken.push(`${path}: ${url} (no such file)`);
+          continue;
+        }
+        if (!file.endsWith('.md') && (await exists(`${file}/README.md`)))
+          file = `${file}/README.md`;
+        if (
+          anchor &&
+          file.endsWith('.md') &&
+          !(await headingAnchors(file)).has(decodeURIComponent(anchor))
+        ) {
+          broken.push(`${path}: ${url} (no heading #${anchor})`);
+        }
+      }
+    }
+    expect(broken).toEqual([]);
   });
 });
 

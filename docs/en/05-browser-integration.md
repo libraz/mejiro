@@ -76,11 +76,12 @@ mejiro.clearCache('16px "Noto Serif JP"');    // Clear a specific font only
 
 `layout()` lays out a single paragraph of text. It loads the font (if not already loaded), measures character widths, and computes line break positions.
 
+<!-- doc-example: 05-browser-layout.ts#layout -->
 ```ts
 const result = await mejiro.layout({
   text: '吾輩は猫である。名前はまだ無い。',
-  fontFamily: '"Noto Serif JP"',  // Optional if fixedFontFamily is set
-  fontSize: 16,                    // Optional if fixedFontSize is set
+  fontFamily: '"Noto Serif JP"', // Optional if fixedFontFamily is set
+  fontSize: 16, // Optional if fixedFontSize is set
   lineWidth: verticalLineWidth(600, 16),
   mode: 'strict',
   enableHanging: true,
@@ -109,6 +110,7 @@ const result = await mejiro.layout({
 
 `layoutChapter()` lays out an entire chapter as a sequence of paragraphs. Each paragraph can override the base font family and font size, which is useful for headings or other stylistic variations.
 
+<!-- doc-example: 05-browser-layout.ts#layout-chapter -->
 ```ts
 const result = await mejiro.layoutChapter({
   paragraphs: [
@@ -116,7 +118,10 @@ const result = await mejiro.layoutChapter({
     { text: '吾輩は猫である。名前はまだ無い。' },
     {
       text: '漢字を読む',
-      inlineAnnotations: [{ kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' }],
+      // A ruby over more than one base character names its type.
+      inlineAnnotations: [
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+      ],
     },
   ],
   fontFamily: '"Noto Serif JP"',

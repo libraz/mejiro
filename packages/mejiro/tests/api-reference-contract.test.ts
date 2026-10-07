@@ -3,8 +3,8 @@
  * guide against the exported TypeScript declarations they describe.
  *
  * Coverage of export names lives in `docs-api-reference.test.ts`; this file
- * goes one level down. Every `**`Name`** …:` block of bullets, every guide
- * table under a type-named heading, every object-literal return type in a
+ * goes one level down. Every `**`Name`** …:` block of bullets, every inline
+ * `**`Name`** — …: `a`, `b?`` list, every guide table under a type-named heading, every object-literal return type in a
  * signature and every field list of an object constant is compared with the
  * declaration: a documented member must exist, a public member must be
  * documented, and a property's `?` must match.
@@ -255,10 +255,33 @@ function memberOf(span: string): (DocumentedMember & { signature: string }) | nu
   return { name: match[1], optional, signature: text };
 }
 
+/** Separator-joined backticked spans filling the rest of a line: `a`, `b?: T`. */
+const INLINE_MEMBER_LIST = /^\s*(`[^`]+`(?:\s*(?:,|、)\s*`[^`]+`)+)[.。]?\s*$/u;
+
+/**
+ * Members of an inline listing such as `**`Name`** — Summary: `a`, `b?``: the
+ * spans after the first colon outside backticks, when every one of them names
+ * a member and they run to the end of the line.
+ */
+function inlineMembers(rest: string): DocumentedMember[] | null {
+  let inCode = false;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === '`') inCode = !inCode;
+    if (inCode || (ch !== ':' && ch !== '：')) continue;
+    const list = rest.slice(i + 1).match(INLINE_MEMBER_LIST);
+    if (!list) continue;
+    const members = (list[1].match(/`[^`]+`/gu) ?? []).map((span) => memberOf(span.slice(1, -1)));
+    if (members.some((member) => member === null)) return null;
+    return (members as DocumentedMember[]).map(({ name, optional }) => ({ name, optional }));
+  }
+  return null;
+}
+
 /**
  * Listings of `docs/<locale>/10-api-reference.md`: `**`Name`** …:` blocks of
- * backticked bullets, object-literal returns in signatures, and the fields an
- * object constant's row names.
+ * backticked bullets, `**`Name`** — …: `a`, `b?`` inline lists, object-literal
+ * returns in signatures, and the fields an object constant's row names.
  */
 function referenceShapes(locale: string): DocumentedShape[] {
   const file = `docs/${locale}/10-api-reference.md`;
@@ -298,6 +321,18 @@ function referenceShapes(locale: string): DocumentedShape[] {
           });
         }
       }
+
+      // A line may hold several listings, each running to the next bold name.
+      const names =
+        /^(?:- )?\*\*`/u.test(line) && !header
+          ? [...line.matchAll(/\*\*`([A-Za-z_$][\w$]*)`\*\*/gu)]
+          : [];
+      names.forEach((match, k) => {
+        const start = (match.index ?? 0) + match[0].length;
+        const end = names[k + 1]?.index ?? line.length;
+        const members = inlineMembers(line.slice(start, end));
+        if (members) shapes.push({ where: `${file}:${lineNo}`, subpath, name: match[1], members });
+      });
 
       const row = line.match(/^\|\s*`([A-Za-z_$][\w$]*)`\s*\|\s*`(.+)`\s*\|\s*$/u);
       const returned = row ? returnText(row[2].replace(/\\\|/gu, '|')) : null;

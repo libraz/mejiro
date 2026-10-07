@@ -12,8 +12,14 @@ You can override the default line break prohibition rules by providing a `Kinsok
 
 Use `getDefaultKinsokuRules()` to get a copy of the built-in strict rules, then modify them:
 
+<!-- doc-example: 09-kinsoku.ts#kinsoku -->
 ```ts
-import { buildKinsokuRules, getDefaultKinsokuRules, computeBreaks, toCodepoints } from '@libraz/mejiro';
+import {
+  buildKinsokuRules,
+  computeBreaks,
+  getDefaultKinsokuRules,
+  toCodepoints,
+} from '@libraz/mejiro';
 
 // Get defaults and customize
 const defaults = getDefaultKinsokuRules();
@@ -68,8 +74,9 @@ The `tokenBoundaries` option lets you integrate a morphological analyzer or toke
 
 ### Basic Usage
 
+<!-- doc-example: 09-tokens.ts#tokens -->
 ```ts
-import { tokenLengthsToBoundaries, computeBreaks, toCodepoints } from '@libraz/mejiro';
+import { computeBreaks, toCodepoints, tokenLengthsToBoundaries } from '@libraz/mejiro';
 
 // Input: "新しいプログラミング言語" tokenized as:
 // ["新しい" (3), "プログラミング" (7), "言語" (2)]
@@ -95,6 +102,7 @@ const result = computeBreaks({
 
 You can also pass a plain `number[]` instead of a `Uint32Array`:
 
+<!-- doc-example: 09-tokens.ts#token-array -->
 ```ts
 computeBreaks({
   text,
@@ -145,9 +153,10 @@ yarn bench  # Runs benchmarks
 ### Tips
 
 - **Reuse a single `MejiroBrowser` instance** across layouts to benefit from the width cache.
-- **Use `layoutChapter()`** instead of calling `layout()` in a loop -- it shares font loading and measurement across paragraphs.
+- **Use `layoutChapter()`** when you need each paragraph's characters alongside its breaks. It lays the paragraphs out one at a time, as a `layout()` loop on the same instance would, and shares nothing beyond the instance's width cache; what it adds is `chars` in the NFC form the break points and annotations address, and per-paragraph font overrides.
 - **Pre-measure fonts with `preloadFont()`** before the first layout to improve perceived performance:
 
+<!-- doc-example: 09-preload.ts#preload -->
 ```ts
 const mejiro = new MejiroBrowser({
   fixedFontFamily: '"Noto Serif JP"',
@@ -167,8 +176,9 @@ const result = await mejiro.layout({ text, lineWidth: 400 });
 
 The core module (`@libraz/mejiro`) has zero DOM dependencies and works in any JavaScript runtime (Node.js, Deno, Bun, edge workers).
 
+<!-- doc-example: 09-headless.ts#headless -->
 ```ts
-import { computeBreaks, toCodepoints, getLineRanges, paginate } from '@libraz/mejiro';
+import { computeBreaks, getLineRanges, paginate, toCodepoints } from '@libraz/mejiro';
 
 // You must provide advance widths yourself (no Canvas available)
 const text = toCodepoints('吾輩は猫である。名前はまだ無い。');
@@ -176,9 +186,7 @@ const advances = new Float32Array(text.length).fill(16); // Fixed-width assumpti
 
 const result = computeBreaks({ text, advances, lineWidth: 128 });
 const lines = getLineRanges(result.breakPoints, text.length);
-const pages = paginate(400, [
-  { lineCount: lines.length, linePitch: 16 * 1.8, gapBefore: 0 },
-]);
+const pages = paginate(400, [{ lineCount: lines.length, linePitch: 16 * 1.8, gapBefore: 0 }]);
 ```
 
 Since `Canvas.measureText()` is not available on the server, options for obtaining advance widths include:
@@ -291,14 +299,15 @@ mejiro supports flowing text around arbitrary rectangular obstacles (images, fig
 
 ### Basic Usage
 
+<!-- doc-example: 09-exclusion.ts#exclusion -->
 ```ts
-import { ExclusionEngine, computeBreaks, toCodepoints } from '@libraz/mejiro';
+import { computeBreaks, ExclusionEngine, toCodepoints } from '@libraz/mejiro';
 
 const engine = new ExclusionEngine({
-  lineWidth: 600,     // Column height (px)
-  lineCount: 12,      // Number of columns
-  linePitch: 30.4,    // fontSize × lineHeight
-  contentWidth: 380,  // Available width for columns (px)
+  lineWidth: 600, // Column height (px)
+  lineCount: 12, // Number of columns
+  linePitch: 30.4, // fontSize × lineHeight
+  contentWidth: 380, // Available width for columns (px)
 });
 
 // Add images (content-area coordinates)
@@ -315,7 +324,7 @@ const result = computeBreaks({
   text,
   advances,
   lineWidth: 600,
-  lineWidths,   // Per-column widths from ExclusionEngine
+  lineWidths, // Per-column widths from ExclusionEngine
 });
 
 // Render each column at slots[i].xPos, slots[i].yStart
@@ -367,12 +376,13 @@ engine.removeImage(img);
 
 For book-style layouts where text flows across a two-page spread, use `SpreadExclusionEngine`. It handles gutter (spine padding) coordinate conversion automatically:
 
+<!-- doc-example: 09-spread-exclusion.ts#spread -->
 ```ts
-import { SpreadExclusionEngine, computeBreaks } from '@libraz/mejiro';
+import { computeBreaks, SpreadExclusionEngine } from '@libraz/mejiro';
 
 const spread = new SpreadExclusionEngine({
   pageWidth: 537,
-  pagePaddingX: 52,    // Inner + outer padding
+  pagePaddingX: 52, // Inner + outer padding
   pagePaddingY: 56,
   lineWidth: 676,
   linePitch: 30.4,
@@ -520,12 +530,15 @@ globalThis.XMLSerializer = window.XMLSerializer;
 globalThis.Node = window.Node;
 ```
 
+<!-- doc-example: 09-ssr/page.tsx#server -->
 ```tsx
-// Next.js App Router — server component
+// app/works/[slug]/page.tsx — server component
 import { parseEpub } from '@libraz/mejiro/epub';
 import { renderEpubStatic } from '@libraz/mejiro/render';
+import { ReaderClient } from './ReaderClient';
 
 export default async function ReaderPage({ params }: { params: { slug: string } }) {
+  // fetchEpubBuffer() stands for however your server loads the EPUB bytes.
   const buf = await fetchEpubBuffer(params.slug);
   const book = await parseEpub(buf);
   // renderEpubStatic() output is built from parseEpub() results with text and
@@ -533,9 +546,13 @@ export default async function ReaderPage({ params }: { params: { slug: string } 
   const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
   return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
 }
+```
 
-// Client component
+<!-- doc-example: 09-ssr/ReaderClient.tsx#client -->
+```tsx
+// app/works/[slug]/ReaderClient.tsx — client component
 'use client';
+
 import { MejiroReader } from '@libraz/mejiro-react';
 
 // `initialHtml` must come from a trusted source (your own server, via
@@ -543,6 +560,11 @@ import { MejiroReader } from '@libraz/mejiro-react';
 // before passing it into the fallback wrapper below.
 function StaticFallback({ html }: { html: string }) {
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+interface Props {
+  slug: string;
+  initialHtml: string;
 }
 
 export function ReaderClient({ slug, initialHtml }: Props) {

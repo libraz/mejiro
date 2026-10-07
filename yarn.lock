@@ -599,6 +599,7 @@ __metadata:
     "@libraz/mejiro": "workspace:^"
     "@testing-library/vue": "npm:^8.1.0"
     "@vue/compiler-dom": "npm:^3.5.43"
+    "@vue/compiler-sfc": "npm:^3.5.43"
     "@vue/test-utils": "npm:^2.5.1"
     vue: "npm:^3.5.43"
   peerDependencies:
@@ -1450,7 +1451,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@vue/compiler-sfc@npm:3.5.43":
+"@vue/compiler-sfc@npm:3.5.43, @vue/compiler-sfc@npm:^3.5.43":
   version: 3.5.43
   resolution: "@vue/compiler-sfc@npm:3.5.43"
   dependencies:

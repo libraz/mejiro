@@ -126,7 +126,7 @@ import '@libraz/mejiro/render/mejiro-reader.css';
 <MejiroReader epubUrl="/book.epub" theme="sepia" />;
 ```
 
-Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます。props、テーマ、controlled な使い方、SSR は [React / Vue ガイド](docs/ja/08-react-and-vue.md) を参照してください。
+Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます。props、テーマ、controlled な使い方は [React / Vue ガイド](docs/ja/08-react-and-vue.md)、SSR は [高度な使い方 §7.2.2](docs/ja/09-advanced.md#722-ssr-でのファーストペイント) を参照してください。
 
 ## 日本語組版
 

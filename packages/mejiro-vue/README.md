@@ -65,7 +65,9 @@ one-liner that rewrites them to the matching published release — run it before
 
 ## Documentation
 
-- [React / Vue guide](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md) — components, composables, props, theming, SSR
+- [React / Vue guide](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md) — components, composables, props, theming
+- [API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-vue--vue-component) — every component prop and composable
+- [SSR first paint](https://github.com/libraz/mejiro/tree/main/docs/en/09-advanced.md#722-first-paint-under-ssr) — a `renderEpubStatic` fallback until the reader hydrates
 - [Project README](https://github.com/libraz/mejiro)
 - 日本語ドキュメント: [docs/ja/08-react-and-vue.md](https://github.com/libraz/mejiro/tree/main/docs/ja/08-react-and-vue.md)
 

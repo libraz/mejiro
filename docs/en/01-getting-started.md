@@ -38,9 +38,11 @@ For Vue, the peer dependency is `vue >= 3.3`.
 
 This example uses `MejiroBook` to load an EPUB file, lay out a chapter with heading styles, and render a two-page spread. This is the simplest way to get started with mejiro.
 
+<!-- doc-example: 01-quick-start.ts#dom -->
 ```ts
-import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
+import { paragraphClassName } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
 
 // 1. Create a MejiroBook instance
@@ -71,18 +73,22 @@ const spread = layout.getSpread(0);
 
 // 6. Render with DOM (example for the right page)
 const pageEl = document.createElement('div');
+pageEl.className = 'mejiro-page';
 pageEl.style.width = `${pageWidth}px`;
 pageEl.style.height = `${pageHeight}px`;
-pageEl.style.writingMode = 'vertical-rl';
 pageEl.style.fontFamily = '"Noto Serif JP", serif';
 pageEl.style.fontSize = '16px';
 pageEl.style.lineHeight = '1.8';
 
 for (const para of spread.right.page.paragraphs) {
-  const p = document.createElement('p');
-  if (para.isHeading) p.style.fontWeight = '700';
-  for (const line of para.lines) {
-    for (const seg of line.segments) {
+  const p = document.createElement('div');
+  // The class and scale draw each heading at the size the layout measured.
+  p.className = paragraphClassName(para.kind, para.headingLevel);
+  if (para.scale != null) p.style.setProperty('--mejiro-paragraph-scale', String(para.scale));
+  for (let i = 0; i < para.lines.length; i++) {
+    // Each RenderLine is one column: a <br> ends the previous one.
+    if (i > 0) p.appendChild(document.createElement('br'));
+    for (const seg of para.lines[i].segments) {
       // Resolves every segment type: ruby, emphasis, tate-chu-yoko, em, strong,
       // links and footnote references, including nested annotations.
       appendInlineNode(p, segmentToInlineNode(seg));
@@ -97,9 +103,9 @@ container.appendChild(pageEl);
 `segmentToInlineNode()` comes from `@libraz/mejiro/render` and returns a small
 framework-agnostic element description; turning that into DOM takes a dozen lines:
 
+<!-- doc-example: 07-render-dom.ts#inline-node -->
 ```ts
-import { segmentToInlineNode } from '@libraz/mejiro/render';
-import type { InlineRenderNode } from '@libraz/mejiro/render';
+import { type InlineRenderNode, segmentToInlineNode } from '@libraz/mejiro/render';
 
 function appendInlineNode(parent: Node, node: InlineRenderNode): void {
   if (node.type === 'text') {
@@ -122,6 +128,7 @@ branch would render as `<ruby>undefined<rt>undefined</rt></ruby>`. See
 
 You can also lay out plain text paragraphs without an EPUB file:
 
+<!-- doc-example: 01-plain-paragraphs.ts#paragraphs -->
 ```ts
 const layout = await book.layoutChapter({
   paragraphs: [
@@ -147,12 +154,13 @@ const layout = await book.layoutChapter({
 
 The `@libraz/mejiro-react` package provides a `MejiroPageView` component that renders a `PageResult` from the high-level API.
 
+<!-- doc-example: 01-react-reader.tsx#reader -->
 ```tsx
-import { useEffect, useRef, useState } from 'react';
-import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
-import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import type { SpreadResult } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-react';
+import { useEffect, useRef, useState } from 'react';
 
 // Create once outside the component so the cache persists across renders
 const book = new MejiroBook({
@@ -197,8 +205,18 @@ function Reader() {
 
   return (
     <div ref={surfaceRef} style={{ display: 'flex', justifyContent: 'center' }}>
-      <MejiroPageView result={spread.right} style={style} fontFamily='"Noto Serif JP", serif' lineSpacing={1.8} />
-      <MejiroPageView result={spread.left} style={style} fontFamily='"Noto Serif JP", serif' lineSpacing={1.8} />
+      <MejiroPageView
+        result={spread.right}
+        style={style}
+        fontFamily='"Noto Serif JP", serif'
+        lineSpacing={1.8}
+      />
+      <MejiroPageView
+        result={spread.left}
+        style={style}
+        fontFamily='"Noto Serif JP", serif'
+        lineSpacing={1.8}
+      />
     </div>
   );
 }
@@ -210,13 +228,14 @@ function Reader() {
 
 The `@libraz/mejiro-vue` package provides an equivalent `MejiroPageView` component for Vue 3.
 
+<!-- doc-example: 01-vue-reader.vue -->
 ```vue
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from 'vue';
-import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { SpreadResult } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
+import { onMounted, ref, shallowRef } from 'vue';
 
 // Create once so the cache persists
 const book = new MejiroBook({
@@ -276,8 +295,9 @@ const lineSpacing = 1.8;
 
 If you do not need browser-based font measurement (for example, in a Node.js script or when you already have character advance widths), you can use the core module directly. It has zero external dependencies and does not require any browser APIs.
 
+<!-- doc-example: 01-headless.ts#headless -->
 ```ts
-import { computeBreaks, toCodepoints, getLineRanges } from '@libraz/mejiro';
+import { computeBreaks, getLineRanges, toCodepoints } from '@libraz/mejiro';
 
 const text = toCodepoints('吾輩は猫である。名前はまだ無い。');
 const advances = new Float32Array(text.length).fill(16); // 16px per character

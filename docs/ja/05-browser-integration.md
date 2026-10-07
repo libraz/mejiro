@@ -76,11 +76,12 @@ mejiro.clearCache('16px "Noto Serif JP"');    // 特定のフォントのみク�
 
 `layout()`は単一の段落テキストをレイアウトします。フォントを読み込み（まだ読み込まれていない場合）、文字幅を計測し、改行位置を計算します。
 
+<!-- doc-example: 05-browser-layout.ts#layout -->
 ```ts
 const result = await mejiro.layout({
   text: '吾輩は猫である。名前はまだ無い。',
-  fontFamily: '"Noto Serif JP"',  // fixedFontFamilyが設定済みなら省略可
-  fontSize: 16,                    // fixedFontSizeが設定済みなら省略可
+  fontFamily: '"Noto Serif JP"', // fixedFontFamilyが設定済みなら省略可
+  fontSize: 16, // fixedFontSizeが設定済みなら省略可
   lineWidth: verticalLineWidth(600, 16),
   mode: 'strict',
   enableHanging: true,
@@ -109,6 +110,7 @@ const result = await mejiro.layout({
 
 `layoutChapter()`は章全体を段落の列としてレイアウトします。各段落はベースのフォントファミリーとフォントサイズを上書きでき、見出しやその他のスタイルバリエーションに便利です。
 
+<!-- doc-example: 05-browser-layout.ts#layout-chapter -->
 ```ts
 const result = await mejiro.layoutChapter({
   paragraphs: [
@@ -116,7 +118,10 @@ const result = await mejiro.layoutChapter({
     { text: '吾輩は猫である。名前はまだ無い。' },
     {
       text: '漢字を読む',
-      inlineAnnotations: [{ kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' }],
+      // 複数の親文字にかかるルビは type を指定する
+      inlineAnnotations: [
+        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+      ],
     },
   ],
   fontFamily: '"Noto Serif JP"',

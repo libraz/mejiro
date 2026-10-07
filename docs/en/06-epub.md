@@ -167,26 +167,33 @@ const book = await parseEpub(buffer);
 
 Complete example showing the full pipeline from EPUB parsing through layout to render-ready page data:
 
+<!-- doc-example: 06-epub-layout.ts#pipeline -->
 ```ts
-import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
 import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderEntry } from '@libraz/mejiro/render';
+import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { MejiroBrowser } from '@libraz/mejiro/browser';
+import { parseEpub } from '@libraz/mejiro/epub';
+import { buildParagraphMeasures, buildRenderPage, type RenderEntry } from '@libraz/mejiro/render';
 
+const fontSize = 16;
 const mejiro = new MejiroBrowser({
   fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fixedFontSize: fontSize,
 });
 
 const book = await parseEpub(buffer);
 const chapter = book.chapters[0];
 
+// Break a heading at the size buildParagraphMeasures() measures it at: the level's
+// DEFAULT_HEADING_STYLES scale, rounded to whole pixels.
+const headingSize = (level: number) =>
+  Math.round(fontSize * (DEFAULT_HEADING_STYLES[level]?.scale ?? 1));
+
 const result = await mejiro.layoutChapter({
   paragraphs: chapter.paragraphs.map((p) => ({
     text: p.text,
     inlineAnnotations: p.inlineAnnotations,
-    fontSize: p.headingLevel ? 22 : undefined,
+    fontSize: p.headingLevel ? headingSize(p.headingLevel) : undefined,
   })),
   lineWidth: mejiro.verticalLineWidth(600),
 });
@@ -195,10 +202,10 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
   inlineAnnotations: p.inlineAnnotations,
-  isHeading: !!p.headingLevel,
+  headingLevel: p.headingLevel,
 }));
 
-const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
+const measures = buildParagraphMeasures(entries, { fontSize, lineSpacing: 1.8 });
 const pages = paginate(400, measures);
 const renderPage = buildRenderPage(pages[0], entries);
 ```
@@ -207,6 +214,7 @@ const renderPage = buildRenderPage(pages[0], entries);
 
 Use `parseEditableEpub()` / `EditableEpub` when you need to patch an existing package and export it again:
 
+<!-- doc-example: 06-epub-editing.ts#update -->
 ```ts
 import { parseEditableEpub } from '@libraz/mejiro/epub';
 
@@ -215,7 +223,8 @@ const editor = await parseEditableEpub(buffer);
 editor.updateParagraph(0, 2, {
   text: '差し替え後の本文',
   inlineAnnotations: [
-    { kind: 'ruby', startIndex: 5, endIndex: 7, rubyText: 'ほんぶん', type: 'group' },
+    // 本文 sits at indices 6 and 7: startIndex is inclusive, endIndex exclusive.
+    { kind: 'ruby', startIndex: 6, endIndex: 8, rubyText: 'ほんぶん', type: 'group' },
   ],
 });
 
@@ -234,14 +243,14 @@ In `v0.5` the canonical chapter content lives in `blocks: EditableBlock[]` — a
 
 | v0.4 / legacy API | v0.5 recommended API | Notes |
 |-------------------|----------------------|-------|
-| Mutate `chapter.paragraphs[i]` directly | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` indexes the paragraph projection (image blocks skipped). |
-| `chapter.paragraphs.splice(i, 0, p)` | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` indexes `chapter.blocks`. Append with `chapter.blocks.length`. |
+| Mutate `chapter.paragraphs[i]` directly | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` indexes the paragraph projection (image blocks skipped). A `sceneBreak` cannot carry text: a patch that gives it text throws, unless it also sets `headingLevel`, which turns the block into a heading. |
+| `chapter.paragraphs.splice(i, 0, p)` | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` indexes `chapter.blocks`. Append with `chapter.blocks.length`. Inserting a `sceneBreak` with text throws. |
 | `chapter.paragraphs.splice(i, 1)` | `editor.deleteBlock(chapterIdx, blockId)` | Works for both paragraph and image blocks. Removing the last reference to an image asset also drops it from `imageAssets`. |
 | Split a paragraph at a position | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | Returns `[leftId, rightId]`. Annotations straddling the split are dropped intentionally. |
-| Merge adjacent paragraphs | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` must be immediately after `leftId`. |
+| Merge adjacent paragraphs | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` must be immediately after `leftId`. Throws when the merge would give a `sceneBreak` text. |
 | `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | Returns the generated `assetKey`. The legacy `{ href, mediaType, ... }` shape is still accepted; its removal is deferred to a future major release. |
 | `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | Identify by either block id or asset key. |
-| Patch image alt / caption / placement | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | |
+| Patch image alt / caption / placement | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | A field passed as `undefined` is removed; a field left out of the patch is untouched. `setImageCaption(chapterIdx, blockId, undefined)` removes the caption. |
 | Reorder paragraphs or images | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` is the target index in `blocks`. |
 | Inspect `paragraphRefs[i].tagName` | (removed) | The source XHTML tag is no longer tracked. The exported tag is derived from `paragraphKind` / `headingLevel`. |
 
@@ -249,13 +258,18 @@ In `v0.5` the canonical chapter content lives in `blocks: EditableBlock[]` — a
 
 `updateParagraph` / `setInlineAnnotations` accept paragraph-only indices, whereas `insertParagraph` / `moveBlock` accept block indices that include images. For operations that interleave the two, walk `chapter.blocks` directly:
 
+<!-- doc-example: 06-epub-editing.ts#walk-blocks -->
 ```ts
-for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
-  if (block.kind === 'paragraph' && block.text.includes(query)) {
-    editor.updateParagraph(0, paragraphIndexOf(editor.book.chapters[0], index), {
+// updateParagraph() takes a paragraph index, which skips image blocks.
+let paragraphIndex = 0;
+for (const block of editor.book.chapters[0].blocks) {
+  if (block.kind !== 'paragraph') continue;
+  if (block.text.includes(query)) {
+    editor.updateParagraph(0, paragraphIndex, {
       text: block.text.replaceAll(query, replacement),
     });
   }
+  paragraphIndex++;
 }
 ```
 
@@ -263,7 +277,7 @@ for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
 
 `v0.5` groups multiple operations through `editor.transaction(fn)` and exposes history via `editor.undo()` / `editor.redo()` / `editor.history`. `editor.export({ onProgress, signal })` also accepts a progress callback and an `AbortSignal`, so large EPUB writes can report status and be cancelled from the host UI.
 
-Unedited chapters are written back from their original XHTML so stylesheet links, list wrappers, tables, and other source structure stay intact. Edited chapters preserve the document shell (`html`, `head`, `body`, and stylesheet links), but list and table containers (`ul`, `ol`, `dl`, `table`) are not rewritten safely yet; exporting an edited chapter that contains those structures throws instead of silently flattening the XHTML.
+Unedited chapters are written back from their original XHTML so stylesheet links, list wrappers, tables, and other source structure stay intact. Edited chapters preserve the document shell (`html`, `head`, `body`, and stylesheet links), any whole-chapter wrapper (`section`, `article`, `main` or `div` around the content, with its attributes) and the chapter-title element (`id="chapter-title"`, rewritten from `chapter.title`); the blocks are rebuilt inside them. An image inside a paragraph is imported as an image block of its own, splitting the paragraph around it. Exporting an edited chapter throws instead of silently losing content when its source carries list or table containers (`ul`, `ol`, `dl`, `table`, `thead`, `tbody`), embedded content (`svg`, `math`, `video`, `audio`, `iframe`, `object`, `embed`, `canvas`), an element `id` other than the chapter-title one, or text inside a hidden or non-rendered element such as `script` or `style`.
 
 #### URL-only image registration (assetResolver)
 
@@ -325,7 +339,7 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'narou' });
 parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 ```
 
-`EpubProject.fromManuscript()` and `<MejiroManuscriptEditor>` / `useManuscriptDraft()` call `parseManuscript()` internally, so passing `dialect` to those APIs switches interpretation for the whole manuscript.
+`EpubProject.fromManuscript()` and `<MejiroManuscriptEditor>` call `parseManuscript()` internally, so passing `dialect` to those APIs switches interpretation for the whole manuscript. `useManuscriptDraft()` only stores the chapter text and `useEpubProject()` always parses with the `mejiro` dialect.
 
 ### Marker support per dialect
 

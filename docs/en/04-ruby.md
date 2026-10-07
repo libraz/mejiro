@@ -22,6 +22,8 @@ Example: 字 with ruby じ.
 
 Mono ruby allows line breaks between annotated characters since each annotation is self-contained.
 
+`'mono'` is the default `type`, and a mono annotation covers exactly one base character. An annotation over two or more characters that leaves `type` unset is rejected with a `RangeError` by `preprocessRuby()` and by the `MejiroBrowser.layout()` / `layoutChapter()` calls that run it; give such a span `type: 'group'` or `'jukugo'`.
+
 ### Group Ruby
 
 Multiple base characters share a single ruby annotation that cannot be split. The annotation must stay together with all of its base characters.
@@ -94,6 +96,7 @@ no order.
 
 In practice, you rarely call `preprocessRuby()` directly. When you pass core-level `rubyAnnotations` in a `LayoutInput` to `computeBreaks()`, the function calls `preprocessRuby()` internally and uses the resulting effective advances and cluster IDs during line breaking.
 
+<!-- doc-example: 04-ruby-breaks.ts#breaks -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -104,13 +107,15 @@ const result = computeBreaks({
   text,
   advances,
   lineWidth: 48,
-  rubyAnnotations: [{
-    startIndex: 0,
-    endIndex: 2,
-    rubyText: toCodepoints('かんじ'),
-    rubyAdvances: new Float32Array([8, 8, 8]),
-    type: 'group',
-  }],
+  rubyAnnotations: [
+    {
+      startIndex: 0,
+      endIndex: 2,
+      rubyText: toCodepoints('かんじ'),
+      rubyAdvances: new Float32Array([8, 8, 8]),
+      type: 'group',
+    },
+  ],
 });
 // Line breaks respect group clustering: indices 0 and 1 will not be split.
 ```
@@ -139,6 +144,7 @@ When you call `MejiroBrowser.layout()` or `layoutChapter()` with `inlineAnnotati
 3. Derives the ruby font size (typically 50% of the base font size).
 4. Constructs core-level `RubyAnnotation[]` and passes them to `computeBreaks()`.
 
+<!-- doc-example: 04-ruby-browser.ts#layout -->
 ```ts
 import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
 
@@ -149,30 +155,35 @@ const result = await mejiro.layout({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineWidth: 200,
-  inlineAnnotations: [{
-    kind: 'ruby',
-    startIndex: 0,
-    endIndex: 2,
-    rubyText: 'かんじ',
-    type: 'group',
-  }],
+  inlineAnnotations: [
+    {
+      kind: 'ruby',
+      startIndex: 0,
+      endIndex: 2,
+      rubyText: 'かんじ',
+      type: 'group',
+    },
+  ],
 });
 ```
 
 For chapter-level layout with multiple paragraphs, use `layoutChapter()`:
 
+<!-- doc-example: 04-ruby-browser.ts#chapter -->
 ```ts
 const chapterResult = await mejiro.layoutChapter({
   paragraphs: [
     {
       text: '漢字を読む',
-      inlineAnnotations: [{
-        kind: 'ruby',
-        startIndex: 0,
-        endIndex: 2,
-        rubyText: 'かんじ',
-        type: 'group',
-      }],
+      inlineAnnotations: [
+        {
+          kind: 'ruby',
+          startIndex: 0,
+          endIndex: 2,
+          rubyText: 'かんじ',
+          type: 'group',
+        },
+      ],
     },
     {
       text: '名前はまだ無い',
@@ -211,11 +222,13 @@ For multiple base-rt pairs, the extractor creates individual annotations for eac
 
 `buildRenderPage()` produces `RenderSegment` entries that distinguish between plain text and ruby-annotated text:
 
+<!-- doc-example: 04-render-segments.ts#segments -->
 ```ts
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
 import { paginate } from '@libraz/mejiro';
+import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
 
-// After layout...
+// After layout, with one RenderEntry per paragraph...
+const measures = buildParagraphMeasures(entries, { fontSize: 16, lineSpacing: 1.8 });
 const pages = paginate(400, measures);
 const page = buildRenderPage(pages[0], entries);
 
@@ -240,6 +253,7 @@ for (const para of page.paragraphs) {
 ruby still has to handle the rest. `segmentToInlineNode()` resolves all of them —
 including a ruby whose base carries nested annotations:
 
+<!-- doc-example: 04-inline-node.ts#inline-node -->
 ```ts
 import { segmentToInlineNode } from '@libraz/mejiro/render';
 

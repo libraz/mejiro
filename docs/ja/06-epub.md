@@ -167,26 +167,33 @@ const book = await parseEpub(buffer);
 
 EPUB の解析からレイアウト、表示用ページデータの生成までをつなげた例です。
 
+<!-- doc-example: 06-epub-layout.ts#pipeline -->
 ```ts
-import { parseEpub } from '@libraz/mejiro/epub';
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
 import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderEntry } from '@libraz/mejiro/render';
+import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { MejiroBrowser } from '@libraz/mejiro/browser';
+import { parseEpub } from '@libraz/mejiro/epub';
+import { buildParagraphMeasures, buildRenderPage, type RenderEntry } from '@libraz/mejiro/render';
 
+const fontSize = 16;
 const mejiro = new MejiroBrowser({
   fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fixedFontSize: fontSize,
 });
 
 const book = await parseEpub(buffer);
 const chapter = book.chapters[0];
 
+// 見出しは buildParagraphMeasures() が計測するサイズ（レベルごとの
+// DEFAULT_HEADING_STYLES の倍率を整数ピクセルに丸めたもの）で改行する
+const headingSize = (level: number) =>
+  Math.round(fontSize * (DEFAULT_HEADING_STYLES[level]?.scale ?? 1));
+
 const result = await mejiro.layoutChapter({
   paragraphs: chapter.paragraphs.map((p) => ({
     text: p.text,
     inlineAnnotations: p.inlineAnnotations,
-    fontSize: p.headingLevel ? 22 : undefined,
+    fontSize: p.headingLevel ? headingSize(p.headingLevel) : undefined,
   })),
   lineWidth: mejiro.verticalLineWidth(600),
 });
@@ -195,10 +202,10 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
   inlineAnnotations: p.inlineAnnotations,
-  isHeading: !!p.headingLevel,
+  headingLevel: p.headingLevel,
 }));
 
-const measures = buildParagraphMeasures(entries, { fontSize: 16, lineHeight: 1.8 });
+const measures = buildParagraphMeasures(entries, { fontSize, lineSpacing: 1.8 });
 const pages = paginate(400, measures);
 const renderPage = buildRenderPage(pages[0], entries);
 ```
@@ -207,6 +214,7 @@ const renderPage = buildRenderPage(pages[0], entries);
 
 既存パッケージを変更して再エクスポートする場合は、`parseEditableEpub()` / `EditableEpub` を使います。
 
+<!-- doc-example: 06-epub-editing.ts#update -->
 ```ts
 import { parseEditableEpub } from '@libraz/mejiro/epub';
 
@@ -215,7 +223,8 @@ const editor = await parseEditableEpub(buffer);
 editor.updateParagraph(0, 2, {
   text: '差し替え後の本文',
   inlineAnnotations: [
-    { kind: 'ruby', startIndex: 5, endIndex: 7, rubyText: 'ほんぶん', type: 'group' },
+    // 「本文」はインデックス 6 と 7。startIndex は含み、endIndex は含まない
+    { kind: 'ruby', startIndex: 6, endIndex: 8, rubyText: 'ほんぶん', type: 'group' },
   ],
 });
 
@@ -234,14 +243,14 @@ const nextBuffer = await editor.export({
 
 | v0.4 / 旧 API | v0.5 推奨 API | 備考 |
 |---------------|---------------|------|
-| `chapter.paragraphs[i]` の直接書き換え | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` は画像ブロックを除いた段落投影のインデックス。 |
-| `chapter.paragraphs.splice(i, 0, p)` で挿入 | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` は `chapter.blocks` のインデックス。末尾は `chapter.blocks.length`。 |
+| `chapter.paragraphs[i]` の直接書き換え | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` は画像ブロックを除いた段落投影のインデックス。`sceneBreak` はテキストを持てないため、テキストを与える patch は例外を投げます。ただし `headingLevel` も指定した場合はブロックが見出しになり、テキストを持てます。 |
+| `chapter.paragraphs.splice(i, 0, p)` で挿入 | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` は `chapter.blocks` のインデックス。末尾は `chapter.blocks.length`。テキスト付きの `sceneBreak` を挿入すると例外を投げます。 |
 | `chapter.paragraphs.splice(i, 1)` で削除 | `editor.deleteBlock(chapterIdx, blockId)` | 段落・画像どちらも削除可能。画像の場合、最後の参照が消えれば `imageAssets` も削除されます。 |
 | 段落の途中で分割 | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | 戻り値は `[leftId, rightId]`。境界をまたぐ注釈は破棄されます。 |
-| 隣接段落のマージ | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` は `leftId` の直後でなければなりません。 |
+| 隣接段落のマージ | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` は `leftId` の直後でなければなりません。マージで `sceneBreak` がテキストを持つことになる場合は例外を投げます。 |
 | `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | 戻り値は `assetKey`。v0.4 シェイプ（`{ href, mediaType, ... }`）も受け付けます。削除は将来のメジャーリリースに先送りされています。 |
 | `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | block id でも asset key でも指定可能。 |
-| 画像 alt / caption の書き換え | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | |
+| 画像 alt / caption の書き換え | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | `undefined` を渡したフィールドは削除され、patch に含めないフィールドはそのままです。`setImageCaption(chapterIdx, blockId, undefined)` はキャプションを削除します。 |
 | 段落/画像の並べ替え | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` は移動先の `blocks` インデックス。 |
 | `paragraphRefs[i].tagName` 参照 | （廃止） | 元 XHTML タグの追跡は廃止。書き戻し時のタグは `paragraphKind` / `headingLevel` から決定されます。 |
 
@@ -249,13 +258,18 @@ const nextBuffer = await editor.export({
 
 `updateParagraph` / `setInlineAnnotations` は「段落のみを数えた連番」を受け取ります。一方 `insertParagraph` / `moveBlock` などは「画像も含めた `blocks` 配列のインデックス」を受け取ります。両者が混在する操作では `chapter.blocks` を直接走査するのが確実です。
 
+<!-- doc-example: 06-epub-editing.ts#walk-blocks -->
 ```ts
-for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
-  if (block.kind === 'paragraph' && block.text.includes(query)) {
-    editor.updateParagraph(0, paragraphIndexOf(editor.book.chapters[0], index), {
+// updateParagraph() は画像ブロックを数えない段落インデックスを受け取る
+let paragraphIndex = 0;
+for (const block of editor.book.chapters[0].blocks) {
+  if (block.kind !== 'paragraph') continue;
+  if (block.text.includes(query)) {
+    editor.updateParagraph(0, paragraphIndex, {
       text: block.text.replaceAll(query, replacement),
     });
   }
+  paragraphIndex++;
 }
 ```
 
@@ -263,7 +277,7 @@ for (const [index, block] of editor.book.chapters[0].blocks.entries()) {
 
 `v0.5` では `editor.transaction(fn)` で複数操作を1ステップとしてまとめ、`editor.undo()` / `editor.redo()` / `editor.history` で履歴を扱えます。`editor.export({ onProgress, signal })` は進捗コールバックと `AbortSignal` を受け付けるため、ブラウザ上で大きな EPUB を書き出す際の UX 改善や中断にそのまま使えます。
 
-未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link を保持したうえで本文を再生成しますが、`ul` / `ol` / `dl` / `table` を含む章はまだ安全に往復できないため、黙って平坦化せず export 時にエラーとして拒否します。
+未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link、章全体を包むラッパー（本文を囲む `section` / `article` / `main` / `div` とその属性）、章タイトル要素（`id="chapter-title"`。`chapter.title` から書き直します）を保持し、その内側でブロックを再生成します。段落内の画像は独立した画像ブロックとして取り込まれ、段落はその前後で分割されます。元の XHTML にリスト・テーブル（`ul` / `ol` / `dl` / `table` / `thead` / `tbody`）、埋め込みコンテンツ（`svg` / `math` / `video` / `audio` / `iframe` / `object` / `embed` / `canvas`）、章タイトル以外の要素 `id`、非表示要素や描画されない要素（`script`、`style` など）内のテキストがある章は、内容を黙って失わないよう export 時に例外を投げます。
 
 #### URL ベースの画像登録（assetResolver）
 
@@ -325,7 +339,7 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'narou' });
 parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 ```
 
-`EpubProject.fromManuscript()` および `<MejiroManuscriptEditor>` / `useManuscriptDraft()` は内部で `parseManuscript()` を呼び出すため、これらに `dialect` を渡すと原稿全体の解釈を切り替えられます。
+`EpubProject.fromManuscript()` および `<MejiroManuscriptEditor>` は内部で `parseManuscript()` を呼び出すため、これらに `dialect` を渡すと原稿全体の解釈を切り替えられます。`useManuscriptDraft()` は章テキストを保持するだけで、`useEpubProject()` は常に `mejiro` 方言で解釈します。
 
 ### 方言別の対応表
 

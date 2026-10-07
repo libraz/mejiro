@@ -30,6 +30,7 @@ const REACT_18_TYPES = `
 export interface RefObject<T> { readonly current: T | null }
 export interface MutableRefObject<T> { current: T }
 export function useRef<T>(initialValue: T): MutableRefObject<T>;
+export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T;
 export function useState<S>(initial: S | (() => S)): [S, (value: S | ((prev: S) => S)) => void];
 export function useCallback<T extends Function>(fn: T, deps: readonly unknown[]): T;
 export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void;
@@ -45,6 +46,8 @@ export type ManuscriptChapter = any;
 export type MejiroBook = any;
 export type EpubBook = any;
 export type ManuscriptDialect = any;
+export type EpubParseLimits = any;
+export function assertEpubInputSize(...args: any[]): void;
 `;
 
 /** Hooks that expose a writable `pendingRestore` ref, and their return types. */
@@ -52,6 +55,9 @@ const hooks = [
   { file: 'useChapterLayout.ts', type: 'UseChapterLayoutReturn' },
   { file: 'useManuscriptLayout.ts', type: 'UseManuscriptLayoutReturn' },
 ];
+
+/** Local modules the hooks import, copied alongside them so the probe compiles whole. */
+const supportFiles = ['useSurfaceLayout.ts', 'errors.ts'];
 
 describe('pendingRestore recipe under @types/react@18', () => {
   it('accepts assignment to pendingRestore.current', async () => {
@@ -65,10 +71,10 @@ describe('pendingRestore recipe under @types/react@18', () => {
     await writeFile(resolve(root, 'core-stub.d.ts'), CORE_STUB);
 
     await mkdir(resolve(root, 'src'), { recursive: true });
-    for (const hook of hooks) {
+    for (const file of [...hooks.map((hook) => hook.file), ...supportFiles]) {
       await copyFile(
-        resolve(repoRoot, 'packages/mejiro-react/src', hook.file),
-        resolve(root, 'src', hook.file),
+        resolve(repoRoot, 'packages/mejiro-react/src', file),
+        resolve(root, 'src', file),
       );
     }
 
@@ -120,12 +126,13 @@ describe('pendingRestore recipe under @types/react@18', () => {
       output = String((error as { stdout?: string }).stdout ?? error);
     }
 
-    // Only the read-only-ref diagnostic is fatal: unrelated diagnostics can come
-    // from the deliberately loose stubs above and say nothing about the recipe.
     const readOnly = output
       .split('\n')
       .filter((line) => line.includes('TS2540') || line.includes('read-only property'));
     expect(readOnly, `pendingRestore is read-only under @types/react@18:\n${output}`).toEqual([]);
+    // Any other diagnostic means the probe no longer compiles the hooks whole
+    // (a new local import or React hook the stubs lack), which would mask TS2540.
+    expect(output.trim(), `probe does not compile cleanly:\n${output}`).toBe('');
   }, 60_000);
 
   it('rejects the recipe when the ref is declared read-only', async () => {

@@ -15,13 +15,14 @@
 
 `RenderEntry` は、レイアウト結果をレンダリング処理へ渡すための中間データです。`layoutChapter()` の出力から段落ごとに 1 つ作ります。
 
+<!-- doc-example: 07-walkthrough.ts#entries -->
 ```ts
 import type { RenderEntry } from '@libraz/mejiro/render';
 
 const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
   chars: result.paragraphs[i].chars,
   breakPoints: result.paragraphs[i].breakResult.breakPoints,
-  inlineAnnotations: p.inlineAnnotations,
+  inlineAnnotations: p.inlineAnnotations ?? [],
   kind: p.kind,
   headingLevel: p.headingLevel,
 }));
@@ -40,6 +41,7 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 
 `RenderEntry` を、`paginate()` に渡す `ParagraphMeasure[]` へ変換します。見出しと本文の違いを考慮して、行送り（フォントサイズ x 行間倍率）と段落間の間隔を計算します。
 
+<!-- doc-example: 07-walkthrough.ts#measures -->
 ```ts
 import { buildParagraphMeasures } from '@libraz/mejiro/render';
 
@@ -77,10 +79,12 @@ const measures = buildParagraphMeasures(entries, {
 
 固定サイズのページへ段落の行を割り当てます。ページ境界では、必要に応じて段落を途中で分割します。
 
+<!-- doc-example: 07-walkthrough.ts#paginate -->
 ```ts
 import { paginate } from '@libraz/mejiro';
 
 const pages = paginate(400, measures);
+
 // pages[0] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 5 }, ...]
 // pages[1] = [...]
 ```
@@ -110,6 +114,7 @@ interface PageSlice {
 
 ページスライスと `RenderEntry` を、フレームワークに依存しない `RenderPage` データ構造へ変換します。React、Vue、vanilla DOM などからそのまま表示に使えます。
 
+<!-- doc-example: 07-walkthrough.ts#render-page -->
 ```ts
 import { buildRenderPage } from '@libraz/mejiro/render';
 
@@ -181,11 +186,12 @@ import '@libraz/mejiro/render/mejiro.css';
 
 フレームワークを使わずに、`RenderPage` を DOM へ描画する例です。`mejiro-paragraph--*` 修飾子の出所は `paragraphClassName()` に一本化されているので、これを使えばクライアント描画と `renderEpubStatic()` のクラス列が一致します。
 
+<!-- doc-example: 07-render-dom.ts#render-page -->
 ```ts
-import { paragraphClassName } from '@libraz/mejiro/render';
+import { paragraphClassName, type RenderPage } from '@libraz/mejiro/render';
 
 function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
-  container.innerHTML = '';
+  container.replaceChildren();
   container.classList.add('mejiro-page');
 
   for (const paragraph of page.paragraphs) {
@@ -210,9 +216,9 @@ function renderPageToDOM(container: HTMLElement, page: RenderPage): void {
 
 `segmentToInlineNode()`（`@libraz/mejiro/render` から export）は、`RenderSegment` の全バリアントを、入れ子の `children` や安全でないリンク URL（アンカーだけを外します）まで含めて解決し、フレームワーク非依存の小さな要素記述に変換します。
 
+<!-- doc-example: 07-render-dom.ts#inline-node -->
 ```ts
-import { segmentToInlineNode } from '@libraz/mejiro/render';
-import type { InlineRenderNode } from '@libraz/mejiro/render';
+import { type InlineRenderNode, segmentToInlineNode } from '@libraz/mejiro/render';
 
 function appendInlineNode(parent: Node, node: InlineRenderNode): void {
   if (node.type === 'text') {
@@ -247,23 +253,27 @@ function appendInlineNode(parent: Node, node: InlineRenderNode): void {
 
 テキストから表示用ページを作るまでの一連の流れです。
 
+<!-- doc-example: 07-pipeline.ts#pipeline -->
 ```ts
-import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
 import { paginate } from '@libraz/mejiro';
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
-import type { RenderEntry } from '@libraz/mejiro/render';
+import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { MejiroBrowser } from '@libraz/mejiro/browser';
+import { buildParagraphMeasures, buildRenderPage, type RenderEntry } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
 
 // 1. MejiroBrowserインスタンスを作成
+const fontSize = 16;
 const mejiro = new MejiroBrowser({
   fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fixedFontSize: fontSize,
 });
 
-// 2. チャプターをレイアウト
+// 2. 章をレイアウト。レベル 1 の見出しは buildParagraphMeasures() が計測する
+// サイズ（倍率を整数ピクセルに丸めたもの）で改行する
+const headingSize = Math.round(fontSize * (DEFAULT_HEADING_STYLES[1].scale ?? 1));
 const result = await mejiro.layoutChapter({
   paragraphs: [
-    { text: '第一章' },
+    { text: '第一章', fontSize: headingSize },
     { text: '吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。' },
   ],
   lineWidth: mejiro.verticalLineWidth(600),
@@ -288,17 +298,21 @@ const entries: RenderEntry[] = [
 
 // 4. 段落メジャーを作り、ページ分割する
 const measures = buildParagraphMeasures(entries, {
-  fontSize: 16,
+  fontSize,
   lineSpacing: 1.8,
 });
 const pages = paginate(400, measures);
 
-// 5. 各ページをレンダリング
+// 5. 各ページを描画。見出しは改行したときのサイズで描く
 const container = document.getElementById('reader')!;
 for (let i = 0; i < pages.length; i++) {
   const pageDiv = document.createElement('div');
   const renderPage = buildRenderPage(pages[i], entries);
-  renderPageToDOM(pageDiv, renderPage);
+  renderPageToDOM(pageDiv, {
+    paragraphs: renderPage.paragraphs.map((p) =>
+      p.headingLevel != null ? { ...p, scale: headingSize / fontSize } : p,
+    ),
+  });
   container.appendChild(pageDiv);
 }
 ```

@@ -12,8 +12,14 @@
 
 `getDefaultKinsokuRules()` で組み込みの厳密ルールのコピーを取得し、それを変更します:
 
+<!-- doc-example: 09-kinsoku.ts#kinsoku -->
 ```ts
-import { buildKinsokuRules, getDefaultKinsokuRules, computeBreaks, toCodepoints } from '@libraz/mejiro';
+import {
+  buildKinsokuRules,
+  computeBreaks,
+  getDefaultKinsokuRules,
+  toCodepoints,
+} from '@libraz/mejiro';
 
 // デフォルトを取得してカスタマイズ
 const defaults = getDefaultKinsokuRules();
@@ -68,8 +74,9 @@ interface KinsokuRules {
 
 ### 基本的な使い方
 
+<!-- doc-example: 09-tokens.ts#tokens -->
 ```ts
-import { tokenLengthsToBoundaries, computeBreaks, toCodepoints } from '@libraz/mejiro';
+import { computeBreaks, toCodepoints, tokenLengthsToBoundaries } from '@libraz/mejiro';
 
 // 入力: "新しいプログラミング言語" を以下のようにトークン化:
 // ["新しい" (3), "プログラミング" (7), "言語" (2)]
@@ -95,6 +102,7 @@ const result = computeBreaks({
 
 `Uint32Array` の代わりにプレーンな `number[]` を渡すこともできます:
 
+<!-- doc-example: 09-tokens.ts#token-array -->
 ```ts
 computeBreaks({
   text,
@@ -145,9 +153,10 @@ yarn bench  # ベンチマークを実行
 ### ヒント
 
 - **単一の `MejiroBrowser` インスタンスを再利用**して、レイアウト間で幅キャッシュを活用してください。
-- **`layout()` をループで呼び出す代わりに `layoutChapter()` を使用**してください。段落間でフォント読み込みと計測を共有します。
+- **段落ごとの文字配列も必要なら `layoutChapter()` を使用**してください。段落を 1 つずつレイアウトする点は同じインスタンスで `layout()` をループで呼ぶのと同じで、共有するのはインスタンスの幅キャッシュだけです。加わるのは、改行位置と注釈が指す NFC 形の `chars` と、段落ごとのフォント上書きです。
 - **初回レイアウト前に `preloadFont()` でフォントを事前計測**すると、体感パフォーマンスが向上します:
 
+<!-- doc-example: 09-preload.ts#preload -->
 ```ts
 const mejiro = new MejiroBrowser({
   fixedFontFamily: '"Noto Serif JP"',
@@ -167,8 +176,9 @@ const result = await mejiro.layout({ text, lineWidth: 400 });
 
 コアモジュール（`@libraz/mejiro`）は DOM に一切依存せず、任意の JavaScript ランタイム（Node.js、Deno、Bun、エッジワーカー）で動作します。
 
+<!-- doc-example: 09-headless.ts#headless -->
 ```ts
-import { computeBreaks, toCodepoints, getLineRanges, paginate } from '@libraz/mejiro';
+import { computeBreaks, getLineRanges, paginate, toCodepoints } from '@libraz/mejiro';
 
 // Canvas が利用できないため、文字送り幅は自分で用意する必要があります
 const text = toCodepoints('吾輩は猫である。名前はまだ無い。');
@@ -176,9 +186,7 @@ const advances = new Float32Array(text.length).fill(16); // 等幅の仮定
 
 const result = computeBreaks({ text, advances, lineWidth: 128 });
 const lines = getLineRanges(result.breakPoints, text.length);
-const pages = paginate(400, [
-  { lineCount: lines.length, linePitch: 16 * 1.8, gapBefore: 0 },
-]);
+const pages = paginate(400, [{ lineCount: lines.length, linePitch: 16 * 1.8, gapBefore: 0 }]);
 ```
 
 サーバーでは `Canvas.measureText()` が利用できないため、文字送り幅を取得する方法には以下があります:
@@ -288,14 +296,15 @@ mejiro は `ExclusionEngine` で、画像や図表などの矩形領域を避け
 
 ### 基本的な使い方
 
+<!-- doc-example: 09-exclusion.ts#exclusion -->
 ```ts
-import { ExclusionEngine, computeBreaks, toCodepoints } from '@libraz/mejiro';
+import { computeBreaks, ExclusionEngine, toCodepoints } from '@libraz/mejiro';
 
 const engine = new ExclusionEngine({
-  lineWidth: 600,     // 列の高さ（px）
-  lineCount: 12,      // 列数
-  linePitch: 30.4,    // fontSize × lineHeight
-  contentWidth: 380,  // 列に利用可能な幅（px）
+  lineWidth: 600, // 列の高さ（px）
+  lineCount: 12, // 列数
+  linePitch: 30.4, // fontSize × lineHeight
+  contentWidth: 380, // 列に利用可能な幅（px）
 });
 
 // 画像を追加（コンテンツ領域座標系）
@@ -312,7 +321,7 @@ const result = computeBreaks({
   text,
   advances,
   lineWidth: 600,
-  lineWidths,   // ExclusionEngineからの列ごとの幅
+  lineWidths, // ExclusionEngineからの列ごとの幅
 });
 
 // 各列を slots[i].xPos, slots[i].yStart の位置に
@@ -364,12 +373,13 @@ engine.removeImage(img);
 
 テキストが見開き2ページにわたって流れる書籍スタイルのレイアウトには、`SpreadExclusionEngine` を使用します。ノド（背表紙側余白）の座標変換を自動で処理します:
 
+<!-- doc-example: 09-spread-exclusion.ts#spread -->
 ```ts
-import { SpreadExclusionEngine, computeBreaks } from '@libraz/mejiro';
+import { computeBreaks, SpreadExclusionEngine } from '@libraz/mejiro';
 
 const spread = new SpreadExclusionEngine({
   pageWidth: 537,
-  pagePaddingX: 52,    // ノド側+小口側パディング
+  pagePaddingX: 52, // ノド側+小口側パディング
   pagePaddingY: 56,
   lineWidth: 676,
   linePitch: 30.4,
@@ -517,12 +527,15 @@ globalThis.XMLSerializer = window.XMLSerializer;
 globalThis.Node = window.Node;
 ```
 
+<!-- doc-example: 09-ssr/page.tsx#server -->
 ```tsx
-// Next.js App Router の Server Component 側
+// app/works/[slug]/page.tsx（Server Component）
 import { parseEpub } from '@libraz/mejiro/epub';
 import { renderEpubStatic } from '@libraz/mejiro/render';
+import { ReaderClient } from './ReaderClient';
 
 export default async function ReaderPage({ params }: { params: { slug: string } }) {
+  // fetchEpubBuffer() はサーバー側で EPUB のバイト列を読み込む処理を表す
   const buf = await fetchEpubBuffer(params.slug);
   const book = await parseEpub(buf);
   // renderEpubStatic() の出力は parseEpub の結果から組み立てたもので、
@@ -530,9 +543,13 @@ export default async function ReaderPage({ params }: { params: { slug: string } 
   const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
   return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
 }
+```
 
-// 'use client' 側
+<!-- doc-example: 09-ssr/ReaderClient.tsx#client -->
+```tsx
+// app/works/[slug]/ReaderClient.tsx（Client Component）
 'use client';
+
 import { MejiroReader } from '@libraz/mejiro-react';
 
 // initialHtml は信頼できるソース（自前サーバーが renderEpubStatic で生成したもの）
@@ -540,6 +557,11 @@ import { MejiroReader } from '@libraz/mejiro-react';
 // DOMPurify などでサニタイズする。
 function StaticFallback({ html }: { html: string }) {
   return <div dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+interface Props {
+  slug: string;
+  initialHtml: string;
 }
 
 export function ReaderClient({ slug, initialHtml }: Props) {

@@ -69,6 +69,7 @@ interface LayoutInput {
 
 ### Minimal Usage
 
+<!-- doc-example: 03-basic.ts#basic -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -81,12 +82,13 @@ const result = computeBreaks({
 
 ### Full Usage
 
+<!-- doc-example: 03-options.ts#options -->
 ```ts
-import { computeBreaks, toCodepoints, buildKinsokuRules } from '@libraz/mejiro';
+import { buildKinsokuRules, computeBreaks, toCodepoints } from '@libraz/mejiro';
 
 const customRules = buildKinsokuRules({
   lineStartProhibited: [0x3001, 0x3002], // 、。
-  lineEndProhibited: [0x300c],           // 「
+  lineEndProhibited: [0x300c], // 「
 });
 
 const result = computeBreaks({
@@ -202,6 +204,7 @@ function canBreakAt(
 
 Consider breaking the text "あいうえおっかきくけこ" (11 characters) with each character 16px wide and a line width of 80px (5 characters fit).
 
+<!-- doc-example: 03-modes.ts#modes -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -226,12 +229,13 @@ const loose = computeBreaks({ text, advances, lineWidth: 80, mode: 'loose' });
 
 Use `buildKinsokuRules()` to create custom rules with pre-computed lookup sets:
 
+<!-- doc-example: 03-custom-rules.ts#custom-rules -->
 ```ts
 import { buildKinsokuRules, computeBreaks, toCodepoints } from '@libraz/mejiro';
 
 const rules = buildKinsokuRules({
   lineStartProhibited: [0x3001, 0x3002, 0xff0c, 0xff0e], // 、。，．
-  lineEndProhibited: [0x300c, 0x300e],                     // 「『
+  lineEndProhibited: [0x300c, 0x300e], // 「『
 });
 
 const result = computeBreaks({
@@ -267,6 +271,7 @@ When the accumulated width exceeds `lineWidth` and the overflowing character is 
 
 ### Example: Hanging Enabled (default)
 
+<!-- doc-example: 03-hanging.ts#hanging -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -285,6 +290,7 @@ const result = computeBreaks({
 
 ### Example: Hanging Disabled
 
+<!-- doc-example: 03-hanging.ts#no-hanging -->
 ```ts
 const result = computeBreaks({
   text: toCodepoints('あいうえお、かきくけこ'),
@@ -314,6 +320,7 @@ The `clusterIds` array assigns a cluster ID to each character. When the algorith
 
 ### Example
 
+<!-- doc-example: 03-clusters.ts#clusters -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -346,6 +353,7 @@ A cluster that is wider than the available line width fits on no line at all. In
 
 The `getLineRanges` utility converts the compact `breakPoints` array into explicit `[start, end)` index pairs for each line.
 
+<!-- doc-example: 03-line-ranges.ts#line-ranges -->
 ```ts
 import { computeBreaks, getLineRanges, toCodepoints } from '@libraz/mejiro';
 
@@ -412,6 +420,7 @@ A cluster wider than `maxHardClusterChars` (6 by default) is dropped rather than
 
 Cluster hints ride into `computeBreaks()` through the existing `clusterIds` input, so this is section 6's mechanism with the array supplied by an analysis rather than by hand. Use `mergeClusterIds()` to combine them with ruby or tate-chu-yoko clustering.
 
+<!-- doc-example: 03-hint-clusters.ts#hint-clusters -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -462,6 +471,7 @@ Penalties supersede both `tokenBoundaries` and the whitespace preference.
 
 Given the segmentation `今日 / は / 良い / 天気 / です / ね`, the rules assign the penalties written out below.
 
+<!-- doc-example: 03-break-penalties.ts#break-penalties -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 

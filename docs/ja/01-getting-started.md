@@ -40,9 +40,11 @@ Vue の peer dependency は `vue >= 3.3` です。
 
 この例では `MejiroBook` で EPUB を読み込み、最初の章を見開きページとして表示します。mejiro を試すなら、まずこの流れから始めるのが分かりやすいです。
 
+<!-- doc-example: 01-quick-start.ts#dom -->
 ```ts
-import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
+import { paragraphClassName } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
 
 // 1. MejiroBook を作成する
@@ -73,18 +75,22 @@ const spread = layout.getSpread(0);
 
 // 6. DOM で表示する（右ページだけの例）
 const pageEl = document.createElement('div');
+pageEl.className = 'mejiro-page';
 pageEl.style.width = `${pageWidth}px`;
 pageEl.style.height = `${pageHeight}px`;
-pageEl.style.writingMode = 'vertical-rl';
 pageEl.style.fontFamily = '"Noto Serif JP", serif';
 pageEl.style.fontSize = '16px';
 pageEl.style.lineHeight = '1.8';
 
 for (const para of spread.right.page.paragraphs) {
-  const p = document.createElement('p');
-  if (para.isHeading) p.style.fontWeight = '700';
-  for (const line of para.lines) {
-    for (const seg of line.segments) {
+  const p = document.createElement('div');
+  // クラスとスケールで、見出しをレイアウトが計測したサイズで描く
+  p.className = paragraphClassName(para.kind, para.headingLevel);
+  if (para.scale != null) p.style.setProperty('--mejiro-paragraph-scale', String(para.scale));
+  for (let i = 0; i < para.lines.length; i++) {
+    // RenderLine 1 つが 1 列。<br> で前の列を終える
+    if (i > 0) p.appendChild(document.createElement('br'));
+    for (const seg of para.lines[i].segments) {
       // ルビ・傍点・縦中横・em・strong・リンク・脚注参照まで、
       // 入れ子の注釈を含めて全セグメント種別を解決します。
       appendInlineNode(p, segmentToInlineNode(seg));
@@ -98,9 +104,9 @@ container.appendChild(pageEl);
 
 `segmentToInlineNode()` は `@libraz/mejiro/render` が提供する関数で、フレームワーク非依存の小さな要素記述を返します。これを DOM に変換する処理は十数行で書けます。
 
+<!-- doc-example: 07-render-dom.ts#inline-node -->
 ```ts
-import { segmentToInlineNode } from '@libraz/mejiro/render';
-import type { InlineRenderNode } from '@libraz/mejiro/render';
+import { type InlineRenderNode, segmentToInlineNode } from '@libraz/mejiro/render';
 
 function appendInlineNode(parent: Node, node: InlineRenderNode): void {
   if (node.type === 'text') {
@@ -120,6 +126,7 @@ function appendInlineNode(parent: Node, node: InlineRenderNode): void {
 
 EPUB ファイルを使わず、プレーンテキストの段落をレイアウトすることもできます:
 
+<!-- doc-example: 01-plain-paragraphs.ts#paragraphs -->
 ```ts
 const layout = await book.layoutChapter({
   paragraphs: [
@@ -145,12 +152,13 @@ const layout = await book.layoutChapter({
 
 `@libraz/mejiro-react` パッケージには、高レベル API の `PageResult` を表示する `MejiroPageView` コンポーネントがあります。
 
+<!-- doc-example: 01-react-reader.tsx#reader -->
 ```tsx
-import { useEffect, useRef, useState } from 'react';
-import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
-import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import type { SpreadResult } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-react';
+import { useEffect, useRef, useState } from 'react';
 
 // Create once outside the component so the cache persists across renders
 const book = new MejiroBook({
@@ -195,8 +203,18 @@ function Reader() {
 
   return (
     <div ref={surfaceRef} style={{ display: 'flex', justifyContent: 'center' }}>
-      <MejiroPageView result={spread.right} style={style} fontFamily='"Noto Serif JP", serif' lineSpacing={1.8} />
-      <MejiroPageView result={spread.left} style={style} fontFamily='"Noto Serif JP", serif' lineSpacing={1.8} />
+      <MejiroPageView
+        result={spread.right}
+        style={style}
+        fontFamily='"Noto Serif JP", serif'
+        lineSpacing={1.8}
+      />
+      <MejiroPageView
+        result={spread.left}
+        style={style}
+        fontFamily='"Noto Serif JP", serif'
+        lineSpacing={1.8}
+      />
     </div>
   );
 }
@@ -208,13 +226,14 @@ function Reader() {
 
 `@libraz/mejiro-vue` パッケージにも、Vue 3 向けの `MejiroPageView` コンポーネントがあります。
 
+<!-- doc-example: 01-vue-reader.vue -->
 ```vue
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from 'vue';
-import { MejiroBook, DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { SpreadResult } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
+import { onMounted, ref, shallowRef } from 'vue';
 
 // Create once so the cache persists
 const book = new MejiroBook({
@@ -274,8 +293,9 @@ const lineSpacing = 1.8;
 
 ブラウザでのフォント計測が不要な場合、たとえば Node.js スクリプトで使う場合や、すでに文字ごとの送り幅を持っている場合は、コアモジュールを直接使えます。外部依存はなく、ブラウザ API も必要ありません。
 
+<!-- doc-example: 01-headless.ts#headless -->
 ```ts
-import { computeBreaks, toCodepoints, getLineRanges } from '@libraz/mejiro';
+import { computeBreaks, getLineRanges, toCodepoints } from '@libraz/mejiro';
 
 const text = toCodepoints('吾輩は猫である。名前はまだ無い。');
 const advances = new Float32Array(text.length).fill(16); // 1文字あたり16px

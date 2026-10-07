@@ -22,6 +22,8 @@ JLReq（日本語組版処理の要件、W3C）仕様では、3種類のルビ�
 
 モノルビでは、各注釈が独立しているため、注釈付き文字間での改行が可能です。
 
+`type` の既定値は `'mono'` で、モノルビの注釈は親文字ちょうど 1 文字にかかります。`type` を省略したまま 2 文字以上にかけた注釈は、`preprocessRuby()` と、それを実行する `MejiroBrowser.layout()` / `layoutChapter()` が `RangeError` で拒否します。このような範囲には `type: 'group'` または `'jukugo'` を指定してください。
+
 ### グループルビ
 
 複数の親文字が 1 つのルビ注釈を共有します。まとまりとして扱うため、途中で分割できません。
@@ -90,6 +92,7 @@ const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotat
 
 実際には `preprocessRuby()` を直接呼び出すことはほとんどありません。`LayoutInput` にコアレベルの `rubyAnnotations` を渡して `computeBreaks()` を呼び出すと、関数内部で `preprocessRuby()` が呼ばれ、結果の実効送り幅とクラスタIDが改行処理に使用されます。
 
+<!-- doc-example: 04-ruby-breaks.ts#breaks -->
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
@@ -100,13 +103,15 @@ const result = computeBreaks({
   text,
   advances,
   lineWidth: 48,
-  rubyAnnotations: [{
-    startIndex: 0,
-    endIndex: 2,
-    rubyText: toCodepoints('かんじ'),
-    rubyAdvances: new Float32Array([8, 8, 8]),
-    type: 'group',
-  }],
+  rubyAnnotations: [
+    {
+      startIndex: 0,
+      endIndex: 2,
+      rubyText: toCodepoints('かんじ'),
+      rubyAdvances: new Float32Array([8, 8, 8]),
+      type: 'group',
+    },
+  ],
 });
 // 改行はグループクラスタリングを尊重: インデックス0と1は分割されない。
 ```
@@ -135,6 +140,7 @@ interface InlineRubyAnnotation {
 3. ルビフォントサイズを導出（通常、親文字フォントサイズの50%）。
 4. コアレベルの `RubyAnnotation[]` を構築し、`computeBreaks()` に渡す。
 
+<!-- doc-example: 04-ruby-browser.ts#layout -->
 ```ts
 import { MejiroBrowser, verticalLineWidth } from '@libraz/mejiro/browser';
 
@@ -145,30 +151,35 @@ const result = await mejiro.layout({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineWidth: 200,
-  inlineAnnotations: [{
-    kind: 'ruby',
-    startIndex: 0,
-    endIndex: 2,
-    rubyText: 'かんじ',
-    type: 'group',
-  }],
+  inlineAnnotations: [
+    {
+      kind: 'ruby',
+      startIndex: 0,
+      endIndex: 2,
+      rubyText: 'かんじ',
+      type: 'group',
+    },
+  ],
 });
 ```
 
 複数段落を含む章レベルのレイアウトには `layoutChapter()` を使用します:
 
+<!-- doc-example: 04-ruby-browser.ts#chapter -->
 ```ts
 const chapterResult = await mejiro.layoutChapter({
   paragraphs: [
     {
       text: '漢字を読む',
-      inlineAnnotations: [{
-        kind: 'ruby',
-        startIndex: 0,
-        endIndex: 2,
-        rubyText: 'かんじ',
-        type: 'group',
-      }],
+      inlineAnnotations: [
+        {
+          kind: 'ruby',
+          startIndex: 0,
+          endIndex: 2,
+          rubyText: 'かんじ',
+          type: 'group',
+        },
+      ],
     },
     {
       text: '名前はまだ無い',
@@ -207,11 +218,13 @@ const paragraph = book.chapters[0].paragraphs[0];
 
 `buildRenderPage()` は、プレーンテキストとルビ付きテキストを区別する `RenderSegment` エントリを生成します:
 
+<!-- doc-example: 04-render-segments.ts#segments -->
 ```ts
-import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
 import { paginate } from '@libraz/mejiro';
+import { buildParagraphMeasures, buildRenderPage } from '@libraz/mejiro/render';
 
-// レイアウト後...
+// レイアウト後、段落ごとの RenderEntry から...
+const measures = buildParagraphMeasures(entries, { fontSize: 16, lineSpacing: 1.8 });
 const pages = paginate(400, measures);
 const page = buildRenderPage(pages[0], entries);
 
@@ -234,6 +247,7 @@ for (const para of page.paragraphs) {
 
 `ruby` は `RenderSegment` の 8 バリアントのうちの 1 つなので、ルビだけを特別扱いする描画コードでも残りのバリアントを処理する必要があります。`segmentToInlineNode()` は、親文字の内側に入れ子の注釈があるルビも含めて、全バリアントを解決します。
 
+<!-- doc-example: 04-inline-node.ts#inline-node -->
 ```ts
 import { segmentToInlineNode } from '@libraz/mejiro/render';
 

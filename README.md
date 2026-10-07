@@ -140,8 +140,8 @@ import '@libraz/mejiro/render/mejiro-reader.css';
 ```
 
 Vue exposes the same component under `@libraz/mejiro-vue`. See the
-[React / Vue guide](docs/en/08-react-and-vue.md) for props, theming, controlled
-usage and SSR.
+[React / Vue guide](docs/en/08-react-and-vue.md) for props, theming and controlled
+usage, and [Advanced §7.2.2](docs/en/09-advanced.md#722-first-paint-under-ssr) for SSR.
 
 ## Japanese typography
 

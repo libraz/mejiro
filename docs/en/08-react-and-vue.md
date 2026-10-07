@@ -74,9 +74,9 @@ reader.current?.goToSpread(12);
 | `goToSpread` | `(index: number) => void` | Jump to a spread index (clamped to range). |
 | `next` | `() => void` | Advance one spread. |
 | `prev` | `() => void` | Go back one spread. |
-| `goToChapter` | `(index: number) => void` | Switch chapter; resets the spread index to 0. |
+| `goToChapter` | `(index: number) => void` | Switch chapter (clamped to the book's chapters); resets the spread index to 0. |
 | `getReadingPosition` | `() => ReadingPosition` | Returns `{ chapter, spreadIdx, totalPages, totalSpreads }`. |
-| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`; switches chapters first if needed. The promise resolves once the spread is applied. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
+| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`; switches chapters first if needed. A call made before the book has loaded is applied once it has. The promise resolves once the spread is applied, or without moving when the anchor's chapter or position does not exist in the book. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
 | `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the text on the current spread, or `null` before layout is ready. When an image covers a whole page, the anchor comes from the next page with text. |
 | `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the text on the next spread that has any (or the end of the chapter). |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
@@ -178,11 +178,12 @@ Both modes give each paragraph (flow) or line (slot) the same `mejiro-paragraph-
 
 A full component using `MejiroBook`, spread navigation, and image overlay:
 
+<!-- doc-example: 08-react-vertical-reader.tsx#reader -->
 ```tsx
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
@@ -227,7 +228,8 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
     [layout],
   );
 
-  if (!spread) return <div>Loading...</div>;
+  // The measured container renders on every path, so the effect finds it on first commit.
+  if (!spread) return <div ref={containerRef}>Loading...</div>;
 
   const totalSpreads = Math.ceil(spread.totalPages / 2);
 
@@ -287,16 +289,20 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
       </div>
 
       <div style={{ textAlign: 'center', marginTop: 8 }}>
-        <button onClick={() => goTo(spreadIdx - 1)} disabled={spreadIdx === 0}>
+        <button type="button" onClick={() => goTo(spreadIdx - 1)} disabled={spreadIdx === 0}>
           Previous
         </button>
         <span style={{ margin: '0 1em' }}>
           {spreadIdx + 1} / {totalSpreads}
         </span>
-        <button onClick={() => goTo(spreadIdx + 1)} disabled={spreadIdx >= totalSpreads - 1}>
+        <button
+          type="button"
+          onClick={() => goTo(spreadIdx + 1)}
+          disabled={spreadIdx >= totalSpreads - 1}
+        >
           Next
         </button>
-        <button onClick={toggleImage} style={{ marginLeft: '1em' }}>
+        <button type="button" onClick={toggleImage} style={{ marginLeft: '1em' }}>
           {hasImage ? 'Remove Image' : 'Add Image'}
         </button>
       </div>
@@ -307,12 +313,13 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 
 ### Keeping the reading position across a re-flow
 
-`useChapterLayout` lays the chapter out again whenever the surface resizes or a metric option changes. The book replays the line-breaking hints it already derived, so this never re-runs the analyzer, but the result is a brand-new `ChapterLayout`, which resets any downstream spread index to 0. The hook carries the reading position across the swap in three steps, and the Vue composable has exactly the same shape:
+`useChapterLayout` lays the chapter out again whenever the surface resizes or a metric option changes; a resize observation that reports the box the current layout was measured with does not re-flow. The book replays the line-breaking hints it already derived, so this never re-runs the analyzer, but the result is a brand-new `ChapterLayout`, which resets any downstream spread index to 0. The hook carries the reading position across the swap in three steps, and the Vue composable has exactly the same shape:
 
 - `capturePosition(layout)` is called on the outgoing layout just before a re-flow and returns the anchor to keep (or `null`). It is never called for a blank (content-change) re-layout.
 - `pendingRestore.current` holds that anchor until the new layout is in place.
 - `restorePosition(layout, anchor)`, when given, is called once the new layout is in place (React: after it commits, before paint), with `pendingRestore` already cleared.
 
+<!-- doc-example: 08-reflow-options.tsx#react -->
 ```tsx
 const layout = useChapterLayout(book, epub, chapter, surface, {
   capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
@@ -320,6 +327,7 @@ const layout = useChapterLayout(book, epub, chapter, surface, {
 });
 ```
 
+<!-- doc-example: 08-reflow-options-vue.ts#vue -->
 ```ts
 // Vue: the same options; `layout.layout` is a Ref.
 const layout = useChapterLayout(book, epub, chapter, surface, {
@@ -446,12 +454,13 @@ Props:
 
 A full component using `MejiroBook`, spread navigation, and image overlay:
 
+<!-- doc-example: 08-vue-reader.vue -->
 ```vue
 <script setup lang="ts">
-import { computed, onMounted, ref, shallowRef } from 'vue';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
+import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
 
 const props = defineProps<{ paragraphs: { text: string }[] }>();
 
@@ -474,9 +483,7 @@ const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerD
     spread.value = s;
   });
 
-const totalSpreads = computed(() =>
-  spread.value ? Math.ceil(spread.value.totalPages / 2) : 0,
-);
+const totalSpreads = computed(() => (spread.value ? Math.ceil(spread.value.totalPages / 2) : 0));
 
 function goTo(idx: number): void {
   if (!layout.value) return;
@@ -615,7 +622,7 @@ When adopting mejiro for a posting site, the two editors trade off across the sa
 | Output | A re-serialized EPUB (bytes) | Manuscript chapter array → exported to EPUB |
 | State hook | `useEditableEpub` | `useManuscriptDraft` |
 | Preview | Paragraph list + Reader synced to selection | Chapter body textarea + Reader driven by the manuscript |
-| Notation aids | Ruby/annotation tools applied to paragraph selections | `MejiroNotationHighlighter` + emphasis-dot / TCY / em / strong buttons |
+| Notation aids | Ruby/annotation tools applied to paragraph selections. On a selected scene break the text area is read-only and Apply text / Apply ruby are disabled, since a scene break carries no text | `MejiroNotationHighlighter` + emphasis-dot / TCY / em / strong buttons; the buttons appear only for the `mejiro` dialect, the one that recognizes those markers |
 | Intended use | Proofing published EPUBs, editorial workflows | New writing, novel posting sites, draft-to-publish pipelines |
 | Headless decomposition | `useEditableEpub` lets you replace the UI | `useManuscriptDraft` + `MejiroReader(manuscript=...)` lets you replace the UI |
 | Controlled mode | Drive `useEditableEpub` selection from external state | `title` / `author` / `cover` are individually controllable (React: pass `onXxxChange`; Vue: use `v-model:xxx`) |
@@ -824,8 +831,10 @@ function MyEditor() {
 
 Skip the Reader chrome entirely and embed only the spread in your own UI.
 
+<!-- doc-example: 08-custom-preview.tsx#custom-preview -->
 ```tsx
-import { useMejiroBook, useManuscriptLayout, MejiroSpread } from '@libraz/mejiro-react';
+import type { ManuscriptChapter } from '@libraz/mejiro/book';
+import { MejiroSpread, useManuscriptLayout, useMejiroBook } from '@libraz/mejiro-react';
 import { useRef } from 'react';
 
 function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
