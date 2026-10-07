@@ -7,6 +7,7 @@ import {
 } from '@libraz/mejiro/browser';
 import {
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useRef,
@@ -175,12 +176,15 @@ export function MejiroSpread({
   const selectionRef = useRef<{ start: InChapterAnchor; pointerId: number } | null>(null);
   const selectionEnabled = anchorAtCoord != null && onSelectionChange != null;
   const gestureRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  // Set when a press ends as a swipe, so the click that press produces is not a second turn.
+  const swipedRef = useRef(false);
   const gestureEnabled = onSwipe != null || onSurfaceTap != null;
   const SWIPE_THRESHOLD = 40;
   const TAP_MOVE_THRESHOLD = 8;
 
   function handleGesturePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
     if (!gestureEnabled) return;
+    swipedRef.current = false;
     if (!isPrimaryPointerPress(e)) return;
     // A press on an overlay drags, resizes or removes it; it is never a page turn.
     if ((e.target as HTMLElement | null)?.closest(OVERLAY_SELECTOR)) return;
@@ -198,6 +202,7 @@ export function MejiroSpread({
     const ay = Math.abs(dy);
     if (ax >= SWIPE_THRESHOLD && ax >= ay * 1.4) {
       // Vertical-RL convention: swiping right-to-left advances the reader.
+      swipedRef.current = true;
       onSwipe?.(dx < 0 ? 'next' : 'prev');
       return;
     }
@@ -208,6 +213,13 @@ export function MejiroSpread({
       if (target?.closest(`button, a, ${OVERLAY_SELECTOR}`)) return;
       onSurfaceTap?.();
     }
+  }
+
+  function suppressSwipeClick(e: ReactMouseEvent<HTMLDivElement>): void {
+    if (!swipedRef.current) return;
+    swipedRef.current = false;
+    e.preventDefault();
+    e.stopPropagation();
   }
 
   // By coordinates, not by target: once the spread captures the pointer, every
@@ -352,6 +364,7 @@ export function MejiroSpread({
         onPointerUp={useCombined ? combinedPointerUp : undefined}
         onPointerCancel={useCombined ? combinedPointerCancel : undefined}
         onLostPointerCapture={selectionEnabled ? endSelection : undefined}
+        onClickCapture={gestureEnabled ? suppressSwipeClick : undefined}
       >
         {renderPage(singlePage ? singleSide : 'right')}
         {!singlePage && renderPage('left')}

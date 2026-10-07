@@ -1,4 +1,4 @@
-import type { BookOptions } from '@libraz/mejiro/book';
+import type { BookOptions, MejiroBookOptions } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toError } from './errors.js';
@@ -28,7 +28,10 @@ export interface UseMejiroBookOptions {
 export interface UseMejiroBookReturn {
   /** The managed {@link MejiroBook} instance. Stable across renders. */
   book: MejiroBook;
-  /** Reactive snapshot of the current options. */
+  /**
+   * Reactive snapshot of the current options. Once the latest application
+   * settles it holds what the book applied, so a rejected change rolls back.
+   */
   options: Readonly<BookOptions>;
   /**
    * Update options on the underlying book and the snapshot. The snapshot is
@@ -56,7 +59,7 @@ interface PendingApply {
  * @param options - Behavior overrides (debouncing, error reporting).
  */
 export function useMejiroBook(
-  initial: BookOptions,
+  initial: MejiroBookOptions,
   options: UseMejiroBookOptions = {},
 ): UseMejiroBookReturn {
   const bookRef = useRef<MejiroBook | null>(null);
@@ -66,6 +69,7 @@ export function useMejiroBook(
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const pendingRef = useRef<PendingApply | null>(null);
+  const flushGenerationRef = useRef(0);
 
   const flush = useCallback(() => {
     const pending = pendingRef.current;
@@ -73,12 +77,22 @@ export function useMejiroBook(
     pendingRef.current = null;
     if (pending.timer) clearTimeout(pending.timer);
     const { waiters } = pending;
+    const generation = ++flushGenerationRef.current;
     const applied = bookRef.current?.setOptions(pending.patch) ?? Promise.resolve();
+    // Only the latest application syncs: an earlier one settles before the book
+    // has the newer change. A change still waiting to flush stays on top.
+    const syncSnapshot = () => {
+      const book = bookRef.current;
+      if (!book || generation !== flushGenerationRef.current) return;
+      setLocal((prev) => ({ ...prev, ...book.getOptions(), ...pendingRef.current?.patch }));
+    };
     void applied.then(
       () => {
+        syncSnapshot();
         for (const waiter of waiters) waiter.resolve();
       },
       (err: unknown) => {
+        syncSnapshot();
         const error = toError(err);
         const handler = optionsRef.current.onError;
         if (handler) {

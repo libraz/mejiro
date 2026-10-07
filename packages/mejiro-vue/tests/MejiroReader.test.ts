@@ -5,7 +5,7 @@ import { type EpubBook, EpubProject } from '@libraz/mejiro/epub';
 import { render, waitFor } from '@testing-library/vue';
 import { mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
-import { defineComponent, h, nextTick, ref } from 'vue';
+import { defineComponent, h, nextTick, ref, shallowRef } from 'vue';
 import { enMessages, jaMessages, MejiroI18nProvider } from '../src/i18n.js';
 import {
   MejiroReader,
@@ -751,21 +751,6 @@ describe('MejiroReader (Vue) — imperative handle', () => {
     expect(result).toBeInstanceOf(Promise);
     void result.catch(() => {});
     unmount();
-  });
-
-  it('goToAnchor supersedes the previous in-flight call (prior promise resolves)', async () => {
-    const { handle, unmount } = mountHandle();
-    const firstPromise = handle.goToAnchor({ chapter: 99, paragraph: 0, charIndex: 0 });
-    void handle.goToAnchor({ chapter: 99, paragraph: 1, charIndex: 0 });
-    await expect(firstPromise).resolves.toBeUndefined();
-    unmount();
-  });
-
-  it('goToAnchor resolves on unmount even if the layout never settles', async () => {
-    const { handle, unmount } = mountHandle();
-    const promise = handle.goToAnchor({ chapter: 99, paragraph: 0, charIndex: 0 });
-    unmount();
-    await expect(promise).resolves.toBeUndefined();
   });
 });
 
@@ -1580,6 +1565,368 @@ describe('MejiroReader (Vue) — image overlays', () => {
       expect(handle().getVisibleRange()?.end).toEqual({ chapter: 0, paragraph: 0, charIndex: 3 });
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+/** EPUB bytes of a short chapter 0 and a long chapter 1, as a URL-mode reader fetches them. */
+async function twoChapterBytes(): Promise<ArrayBuffer> {
+  return new EpubProject({
+    metadata: { title: '二章' },
+    chapters: [
+      { title: '一', body: '短い。' },
+      {
+        title: '二',
+        body: Array.from({ length: 80 }, (_, i) => `段落${i}。`.repeat(80)).join('\n\n'),
+      },
+    ],
+    includeTitlePage: false,
+  }).export();
+}
+
+/** A promise with its resolve / reject handles exposed. */
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+/** Records whether `promise` has settled. */
+function track(promise: Promise<void> | undefined): { settled: boolean } {
+  const state = { settled: false };
+  void promise?.then(() => {
+    state.settled = true;
+  });
+  return state;
+}
+
+/** Renders a MejiroReader and returns a getter for its handle plus `unmount`. */
+function renderUnmountable(props: Record<string, unknown>): {
+  handle: () => MejiroReaderHandle;
+  unmount: () => void;
+} {
+  const reader = ref<MejiroReaderHandle | null>(null);
+  const Wrapped = defineComponent({
+    setup: () => () => h(MejiroReader, { ref: reader, ...props }),
+  });
+  const { unmount } = render(Wrapped);
+  return { handle: () => reader.value as MejiroReaderHandle, unmount };
+}
+
+describe('MejiroReader (Vue) — goToAnchor settles on every path', () => {
+  it('settles without moving when the anchor position does not exist', async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = renderReader({ epub: longEpub() });
+      await settle();
+      let state = { settled: false };
+      await settle(() => {
+        state = track(handle().goToAnchor({ chapter: 0, paragraph: 9999, charIndex: 0 }));
+      });
+      expect(state.settled).toBe(true);
+      expect(handle().getReadingPosition()).toMatchObject({ chapter: 0, spreadIdx: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles without moving when the anchor chapter does not exist', async () => {
+    vi.useFakeTimers();
+    try {
+      const onChapterChange = vi.fn();
+      const handle = renderReader({ epub: fakeEpub(), 'onChapter-change': onChapterChange });
+      await settle();
+      let state = { settled: false };
+      await settle(() => {
+        state = track(handle().goToAnchor({ chapter: 99, paragraph: 0, charIndex: 0 }));
+      });
+      expect(state.settled).toBe(true);
+      expect(handle().getReadingPosition().chapter).toBe(0);
+      expect(onChapterChange).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles a pending call once a newer one supersedes it', async () => {
+    const pending = deferred<ArrayBuffer>();
+    const { handle, unmount } = renderUnmountable({
+      epubUrl: '/book.epub',
+      fetchEpub: () => pending.promise,
+    });
+    const first = track(handle().goToAnchor({ chapter: 1, paragraph: 0, charIndex: 0 }));
+    await Promise.resolve();
+    expect(first.settled).toBe(false);
+
+    void handle().goToAnchor({ chapter: 1, paragraph: 1, charIndex: 0 });
+    await waitFor(() => expect(first.settled).toBe(true));
+    unmount();
+  });
+
+  it('settles a pending call on unmount', async () => {
+    const pending = deferred<ArrayBuffer>();
+    const { handle, unmount } = renderUnmountable({
+      epubUrl: '/book.epub',
+      fetchEpub: () => pending.promise,
+    });
+    const state = track(handle().goToAnchor({ chapter: 1, paragraph: 0, charIndex: 0 }));
+    await Promise.resolve();
+    expect(state.settled).toBe(false);
+
+    unmount();
+    await waitFor(() => expect(state.settled).toBe(true));
+  });
+
+  it('applies a call made before the book loads once it has loaded', async () => {
+    const bytes = await twoChapterBytes();
+    const pending = deferred<ArrayBuffer>();
+    const handle = renderReader({ epubUrl: '/book.epub', fetchEpub: () => pending.promise });
+    const target = { chapter: 1, paragraph: 40, charIndex: 0 };
+    const state = track(handle().goToAnchor(target));
+
+    pending.resolve(bytes);
+
+    await waitFor(() => expect(state.settled).toBe(true), { timeout: 3000 });
+    await waitFor(() => expect(handle().getReadingPosition().spreadIdx).toBeGreaterThan(0));
+    expect(handle().getReadingPosition().chapter).toBe(1);
+    const range = handle().getVisibleRange();
+    expect(range?.start.chapter).toBe(1);
+    expect(inRange(target, range as NonNullable<typeof range>)).toBe(true);
+  });
+});
+
+describe('MejiroReader (Vue) — chapter index range', () => {
+  it('clamps goToChapter into the book chapters', async () => {
+    const onChapterChange = vi.fn();
+    const handle = renderReader({ epub: fakeEpub(), 'onChapter-change': onChapterChange });
+
+    handle().goToChapter(99);
+    await nextTick();
+    expect(handle().getReadingPosition().chapter).toBe(1);
+    expect(onChapterChange).toHaveBeenLastCalledWith(1);
+
+    handle().goToChapter(-3);
+    await nextTick();
+    expect(handle().getReadingPosition().chapter).toBe(0);
+    expect(onChapterChange).toHaveBeenLastCalledWith(0);
+  });
+
+  it('clamps an out-of-range controlled chapter', () => {
+    const handle = renderReader({ epub: fakeEpub(), chapter: 5 });
+    expect(handle().getReadingPosition().chapter).toBe(1);
+  });
+});
+
+describe('MejiroReader (Vue) — book swap baseline', () => {
+  it('fires no lifecycle event for the first position of a newly loaded book', async () => {
+    vi.useFakeTimers();
+    try {
+      const log: string[] = [];
+      const book = shallowRef<EpubBook>(twoChapterEpub());
+      const handle = renderReader({
+        get epub() {
+          return book.value;
+        },
+        'onPage-read': (anchor: { chapter: number }) => log.push(`pageRead:${anchor.chapter}`),
+        'onChapter-completed': (ch: number) => log.push(`chapterCompleted:${ch}`),
+      });
+      await settle();
+      handle().subscribe('spreadChanged', (p) =>
+        log.push(`spreadChanged:${p.chapter}:${p.spreadIdx}`),
+      );
+      await settle(() => handle().goToSpread(2));
+      log.splice(0);
+
+      await settle(() => {
+        book.value = longEpub();
+      });
+      expect(handle().getReadingPosition()).toMatchObject({ chapter: 0, spreadIdx: 0 });
+      expect(log).toEqual([]);
+
+      await settle(() => handle().next());
+      expect(log).toEqual(['pageRead:0', 'spreadChanged:0:1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('MejiroReader (Vue) — controlled spreadIdx with a following host', () => {
+  it('turns once and rests on the requested index when the host mirrors every change', async () => {
+    vi.useFakeTimers();
+    try {
+      const book = longEpub();
+      const idx = ref(0);
+      const reports: number[] = [];
+      const handle = renderReader({
+        epub: book,
+        get spreadIdx() {
+          return idx.value;
+        },
+        'onSpread-idx-change': (i: number) => {
+          reports.push(i);
+          idx.value = i;
+        },
+      });
+      await settle();
+      const turns = vi.fn();
+      handle().subscribe('turnStart', turns);
+
+      await settle(() => handle().next());
+
+      expect(reports).toEqual([1]);
+      expect(turns).toHaveBeenCalledTimes(1);
+      expect(handle().getReadingPosition().spreadIdx).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('MejiroReader (Vue) — file picker with a controlled source', () => {
+  /** Header "Open" button, if rendered. */
+  const openButton = (container: Element) =>
+    Array.from(container.querySelectorAll('.mejiro-reader-btn')).find(
+      (b) => b.textContent?.trim() === enMessages.openButton,
+    );
+
+  it('offers neither the drop zone nor the Open button for a controlled epub', async () => {
+    const { container, rerender } = render(MejiroReader, {
+      props: { enableDropZone: true, epub: null },
+    });
+    expect(container.querySelector('.mejiro-reader-drop-zone')).toBeNull();
+    expect(openButton(container)).toBeUndefined();
+
+    await rerender({ enableDropZone: true, epub: fakeEpub() });
+    expect(openButton(container)).toBeUndefined();
+  });
+
+  it('offers neither for a manuscript source', () => {
+    const { container } = render(MejiroReader, {
+      props: { enableDropZone: true, manuscript: [{ title: '章', body: '本文' }] },
+    });
+    expect(container.querySelector('.mejiro-reader-drop-zone')).toBeNull();
+    expect(openButton(container)).toBeUndefined();
+  });
+});
+
+describe('MejiroReader (Vue) — inline page geometry', () => {
+  it('re-lays out only when the geometry value changes, not on a parent re-render', async () => {
+    vi.useFakeTimers();
+    try {
+      const book = longEpub();
+      const tick = ref(0);
+      const gutter = ref(0);
+      const Parent = defineComponent({
+        setup: () => () =>
+          h('div', { 'data-tick': tick.value }, [
+            h(MejiroReader, { epub: book, pageGeometry: { gutterOffset: gutter.value } }),
+          ]),
+      });
+      render(Parent);
+      await settle();
+      breakCalls.count = 0;
+
+      await settle(() => {
+        tick.value++;
+      });
+      expect(breakCalls.count).toBe(0);
+
+      await settle(() => {
+        gutter.value = 40;
+      });
+      expect(breakCalls.count).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('MejiroReader (Vue) — rejected option change', () => {
+  it('rolls the settings back to the applied font and reports the rejection once', async () => {
+    vi.useFakeTimers();
+    const original = MejiroBook.prototype.setOptions;
+    const sent: Array<string | undefined> = [];
+    const spy = vi.spyOn(MejiroBook.prototype, 'setOptions').mockImplementation(function (
+      this: MejiroBook,
+      partial,
+    ) {
+      sent.push(partial.fontFamily);
+      if (partial.fontFamily === 'Rejected') return Promise.reject(new Error('fallback font'));
+      return original.call(this, partial);
+    });
+    try {
+      let settings: { fontFamily: string; lineSpacing: number } | undefined;
+      const wrapper = mount(MejiroReader, {
+        props: { epub: fakeEpub() },
+        slots: {
+          settings: (slot: { settings: { fontFamily: string; lineSpacing: number } }) => {
+            settings = slot.settings;
+            return h('div');
+          },
+        },
+      });
+      const reader = wrapper.vm as unknown as MejiroReaderHandle;
+      await settle();
+      const applied = settings?.fontFamily;
+
+      await settle(() => void reader.setOptions({ fontFamily: 'Rejected' }));
+      expect(wrapper.emitted('error')).toHaveLength(1);
+      expect(settings?.fontFamily).toBe(applied);
+
+      await settle(() => void reader.setOptions({ lineSpacing: 2.5 }));
+      expect(wrapper.emitted('error')).toHaveLength(1);
+      expect(sent.filter((f) => f === 'Rejected')).toHaveLength(1);
+      expect(settings?.lineSpacing).toBe(2.5);
+      wrapper.unmount();
+    } finally {
+      spy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('MejiroReader (Vue) — documented interaction parity', () => {
+  it('emits turnStart then turnEnd around a page turn', async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = renderReader({ epub: longEpub() });
+      await settle();
+      const log: string[] = [];
+      handle().subscribe('turnStart', (p) => log.push(`turnStart:${p.from}`));
+      handle().subscribe('turnEnd', (p) => log.push(`turnEnd:${p.to}`));
+
+      await settle(() => handle().next());
+
+      expect(log).toEqual(['turnStart:0', 'turnEnd:1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports a non-2xx epubUrl response through 'error' once", async () => {
+    const onError = vi.fn();
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(null, { status: 404 }));
+    try {
+      render(MejiroReader, { props: { epubUrl: '/missing.epub' }, attrs: { onError } });
+
+      await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(onError.mock.calls[0][0]).toBeInstanceOf(Error);
+      expect(onError.mock.calls[0][0].message).toBe('Failed to load EPUB: 404');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(onError).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
     }
   });
 });

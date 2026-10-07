@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type AnchorRect,
@@ -13,28 +13,10 @@ import {
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
 import type { RenderPage } from '@libraz/mejiro/render';
 import { render } from '@testing-library/vue';
-import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 import { jaMessages, MejiroI18nProvider } from '../src/i18n.js';
-import type {
-  MejiroChapterNavProps,
-  MejiroDropZoneProps,
-  MejiroEditorProps,
-  MejiroImageOverlayProps,
-  MejiroManuscriptEditorProps,
-  MejiroPageIndicatorProps,
-  MejiroPageProps,
-  MejiroPageViewProps,
-  MejiroReaderProps,
-  MejiroReaderSettingsSlot,
-  MejiroScrollViewProps,
-  MejiroSelectionLayerProps,
-  MejiroSettingsPanelProps,
-  MejiroShelfProps,
-  MejiroSpreadProps,
-  MejiroStatsProps,
-  MejiroTocProps,
-} from '../src/index.js';
 import { MejiroChapterNav } from '../src/MejiroChapterNav.js';
 import { MejiroDropZone } from '../src/MejiroDropZone.js';
 import { MejiroImageOverlay } from '../src/MejiroImageOverlay.js';
@@ -48,25 +30,91 @@ import { MejiroSpread } from '../src/MejiroSpread.js';
 import { MejiroStats } from '../src/MejiroStats.js';
 import { MejiroToc } from '../src/MejiroToc.js';
 
+/** Path of the in-memory probe module, placed beside this file so its imports resolve. */
+const PROBE_FILE = resolve(import.meta.dirname, '__prop-types-probe.ts');
+
+/**
+ * Type-checks `source` as a module beside this file and returns the messages
+ * of the diagnostics reported in it. `tsc -b` covers `src` only, so this is
+ * what makes the type-level assertions below able to fail.
+ */
+function typeErrors(source: string): string[] {
+  const options: ts.CompilerOptions = {
+    strict: true,
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    skipLibCheck: true,
+    noEmit: true,
+    lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
+  };
+  const host = ts.createCompilerHost(options);
+  const getSourceFile = host.getSourceFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  host.getSourceFile = (name, language, ...rest) =>
+    name === PROBE_FILE
+      ? ts.createSourceFile(name, source, language)
+      : getSourceFile(name, language, ...rest);
+  host.fileExists = (name) => name === PROBE_FILE || fileExists(name);
+  const program = ts.createProgram([PROBE_FILE], options, host);
+  return ts
+    .getPreEmitDiagnostics(program, program.getSourceFile(PROBE_FILE))
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+}
+
+/** Each public props type, one property it must expose, and that property's type. */
+const PROP_CONTRACTS: Array<[props: string, property: string, type: string]> = [
+  ['MejiroChapterNavProps', 'epub', 'EpubBook'],
+  ['MejiroDropZoneProps', 'accept', 'string | undefined'],
+  ['MejiroEditorProps', 'epubUrl', 'string | undefined'],
+  ['MejiroImageOverlayProps', 'rect', 'ImageOverlayRect'],
+  ['MejiroManuscriptEditorProps', 'previewProps', 'ManuscriptPreviewProps | undefined'],
+  ['MejiroPageProps', 'page', 'RenderPage'],
+  ['MejiroPageIndicatorProps', 'current', 'number'],
+  ['MejiroPageViewProps', 'result', 'PageResult'],
+  ['MejiroReaderProps', 'epubUrl', 'string | undefined'],
+  ['MejiroReaderSettingsSlot', 'settings', 'EditableSettings'],
+  ['MejiroScrollViewProps', 'layout', 'ChapterLayout'],
+  ['MejiroSelectionLayerProps', 'rects', 'readonly (AnchorRect & { color?: string })[]'],
+  ['MejiroSettingsPanelProps', 'settings', 'EditableSettings'],
+  ['MejiroShelfProps', 'volumes', 'readonly VolumeInfo<unknown>[]'],
+  ['MejiroSpreadProps', 'spread', 'SpreadResult'],
+  ['MejiroStatsProps', 'chapter', 'EpubChapter | null | undefined'],
+  ['MejiroTocProps', 'epub', 'EpubBook'],
+];
+
+/** A probe module asserting each contract as a compile-time type equality. */
+function propTypesProbe(contracts: typeof PROP_CONTRACTS): string {
+  const names = [...new Set(contracts.map(([props]) => props))];
+  return [
+    "import type { ImageOverlayRect } from '@libraz/mejiro';",
+    "import type { AnchorRect, ChapterLayout, PageResult, SpreadResult } from '@libraz/mejiro/book';",
+    "import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';",
+    "import type { RenderPage } from '@libraz/mejiro/render';",
+    `import type { EditableSettings, ManuscriptPreviewProps, VolumeInfo, ${names.join(', ')} } from '../src/index.js';`,
+    'type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;',
+    'type Expect<T extends true> = T;',
+    ...contracts.map(
+      ([props, property, type], i) =>
+        `export type Contract${i} = Expect<Equal<${props}['${property}'], ${type}>>;`,
+    ),
+  ].join('\n');
+}
+
 describe('Vue public component prop types', () => {
-  it('exports prop types for every public component', () => {
-    expectTypeOf<MejiroChapterNavProps>().toHaveProperty('epub');
-    expectTypeOf<MejiroDropZoneProps>().toHaveProperty('accept');
-    expectTypeOf<MejiroEditorProps>().toHaveProperty('epubUrl');
-    expectTypeOf<MejiroImageOverlayProps>().toHaveProperty('rect');
-    expectTypeOf<MejiroManuscriptEditorProps>().toHaveProperty('previewProps');
-    expectTypeOf<MejiroPageProps>().toHaveProperty('page');
-    expectTypeOf<MejiroPageIndicatorProps>().toHaveProperty('current');
-    expectTypeOf<MejiroPageViewProps>().toHaveProperty('result');
-    expectTypeOf<MejiroReaderProps>().toHaveProperty('epubUrl');
-    expectTypeOf<MejiroReaderSettingsSlot>().toHaveProperty('settings');
-    expectTypeOf<MejiroScrollViewProps>().toHaveProperty('layout');
-    expectTypeOf<MejiroSelectionLayerProps>().toHaveProperty('rects');
-    expectTypeOf<MejiroSettingsPanelProps>().toHaveProperty('settings');
-    expectTypeOf<MejiroShelfProps>().toHaveProperty('volumes');
-    expectTypeOf<MejiroSpreadProps>().toHaveProperty('spread');
-    expectTypeOf<MejiroStatsProps>().toHaveProperty('chapter');
-    expectTypeOf<MejiroTocProps>().toHaveProperty('epub');
+  it('exports every public props type with its named property and property type', () => {
+    expect(typeErrors(propTypesProbe(PROP_CONTRACTS))).toEqual([]);
+  });
+
+  it('fails the probe when a named property is dropped or retyped', () => {
+    const renamed = PROP_CONTRACTS.map(([props, property, type], i): [string, string, string] =>
+      i === 0 ? [props, `${property}Renamed`, type] : [props, property, type],
+    );
+    const retyped = PROP_CONTRACTS.map(([props, property, type], i): [string, string, string] =>
+      i === 6 ? [props, property, 'string'] : [props, property, type],
+    );
+    expect(typeErrors(propTypesProbe(renamed)).join('\n')).toMatch(/epubRenamed/u);
+    expect(typeErrors(propTypesProbe(retyped))).toHaveLength(1);
   });
 });
 
@@ -253,6 +301,27 @@ function fakeEpub(): EpubBook {
     ],
   };
 }
+
+describe('MejiroChapterNav (Vue) — identical chapters', () => {
+  it('keeps one panel entry per chapter when chapters share title and text', async () => {
+    const twin = { title: '同題', paragraphs: [{ text: '同文', inlineAnnotations: [] }] };
+    const epub: EpubBook = { title: 'B', author: '', chapters: [twin, { ...twin }, { ...twin }] };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { container, rerender } = render(MejiroChapterNav, {
+        props: { epub, chapter: 0, variant: 'panel' },
+      });
+      await rerender({ epub, chapter: 2, variant: 'panel' });
+
+      const items = container.querySelectorAll('.mejiro-reader-chapter-list-item');
+      expect(items).toHaveLength(3);
+      expect(items[2].querySelector('.is-active')).not.toBeNull();
+      expect(warn.mock.calls.flat().join(' ')).not.toMatch(/Duplicate keys/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
 
 describe('MejiroChapterNav (Vue)', () => {
   it("renders a <select> with one option per chapter ('select' variant)", () => {
@@ -1075,6 +1144,40 @@ describe('MejiroSpread (Vue) — overlays and pointer sessions', () => {
     pointer(content, 'pointerdown', { clientX: 300, clientY: 200 });
     pointer(spreadEl, 'pointerup', { clientX: 200, clientY: 200 });
     expect(onSwipe).toHaveBeenCalledWith('next');
+  });
+
+  it('turns once for a drag-swipe that starts and ends on a nav zone', async () => {
+    const onSwipe = vi.fn();
+    const onNext = vi.fn();
+    const { container } = render(MejiroSpread, {
+      props: {
+        spread: twoPages(),
+        pageWidth: 320,
+        pageHeight: 460,
+        contentHeight: 360,
+        onSwipe,
+        onNext,
+      },
+    });
+    const zone = container.querySelector('.mejiro-reader-nav-zone--next') as HTMLElement;
+    const click = () => zone.click();
+
+    // Vue drops an event no newer than its listener; a real click comes after mount.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+
+    // A mouse drag ends with the click the browser dispatches on the zone.
+    pointer(zone, 'pointerdown', { clientX: 300, clientY: 200 });
+    pointer(zone, 'pointerup', { clientX: 200, clientY: 200 });
+    click();
+    expect(onSwipe).toHaveBeenCalledTimes(1);
+    expect(onNext).not.toHaveBeenCalled();
+
+    // The next press is a plain click again.
+    pointer(zone, 'pointerdown', { clientX: 300, clientY: 200 });
+    pointer(zone, 'pointerup', { clientX: 300, clientY: 200 });
+    click();
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onSwipe).toHaveBeenCalledTimes(1);
   });
 
   it('draws only the overlays whose centre lies on the single page shown', async () => {

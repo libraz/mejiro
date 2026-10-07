@@ -1,4 +1,4 @@
-import type { BookOptions } from '@libraz/mejiro/book';
+import type { BookOptions, MejiroBookOptions } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
 import { isRef, onScopeDispose, type Ref, readonly, ref, watch } from 'vue';
 import { toError } from './errors.js';
@@ -30,7 +30,11 @@ export interface UseMejiroBookOptions {
 export interface UseMejiroBookReturn {
   /** The managed {@link MejiroBook} instance. */
   book: MejiroBook;
-  /** Read-only reactive snapshot of the current options. */
+  /**
+   * Read-only reactive snapshot of the current options. Once the latest
+   * application settles it holds what the book applied, so a rejected change
+   * rolls back.
+   */
   options: Ref<Readonly<BookOptions>>;
   /**
    * Update options on the underlying book and the reactive snapshot. The
@@ -60,7 +64,7 @@ interface PendingApply {
  * @param options - Behavior overrides (debouncing, error reporting).
  */
 export function useMejiroBook(
-  initial: BookOptions,
+  initial: MejiroBookOptions,
   options?: UseMejiroBookOptions,
 ): UseMejiroBookReturn;
 /**
@@ -69,12 +73,12 @@ export function useMejiroBook(
  * @param options - Behavior overrides (debouncing, error reporting).
  */
 export function useMejiroBook(
-  initial: BookOptions,
+  initial: MejiroBookOptions,
   source: Ref<Partial<BookOptions>> | undefined,
   options?: UseMejiroBookOptions,
 ): UseMejiroBookReturn;
 export function useMejiroBook(
-  initial: BookOptions,
+  initial: MejiroBookOptions,
   sourceOrOptions?: Ref<Partial<BookOptions>> | UseMejiroBookOptions,
   maybeOptions?: UseMejiroBookOptions,
 ): UseMejiroBookReturn {
@@ -85,6 +89,7 @@ export function useMejiroBook(
   const opts = ref<BookOptions>({ ...initial });
 
   let pending: PendingApply | null = null;
+  let flushGeneration = 0;
 
   function flush(): void {
     const current = pending;
@@ -92,11 +97,20 @@ export function useMejiroBook(
     pending = null;
     if (current.timer) clearTimeout(current.timer);
     const { waiters } = current;
+    const generation = ++flushGeneration;
+    // Only the latest application syncs: an earlier one settles before the book
+    // has the newer change. A change still waiting to flush stays on top.
+    const syncSnapshot = (): void => {
+      if (generation !== flushGeneration) return;
+      opts.value = { ...opts.value, ...book.getOptions(), ...pending?.patch };
+    };
     void book.setOptions(current.patch).then(
       () => {
+        syncSnapshot();
         for (const waiter of waiters) waiter.resolve();
       },
       (err: unknown) => {
+        syncSnapshot();
         const error = toError(err);
         if (options.onError) {
           options.onError(error);

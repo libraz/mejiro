@@ -53,10 +53,6 @@ export function MejiroChapterNav({
           {epub.chapters.map((ch, i) => {
             const title = ch.title ?? format(messages.chapterN, { n: i + 1 });
             const preview = ch.paragraphs.find((p) => !p.headingLevel && p.text.trim())?.text;
-            const chapterKey = `${title}-${ch.paragraphs
-              .map((p) => p.text)
-              .join('|')
-              .slice(0, 120)}`;
             // Keyed by paragraph index: heading text can repeat within a chapter.
             const headings = ch.paragraphs
               .flatMap((p, paragraph) =>
@@ -66,7 +62,8 @@ export function MejiroChapterNav({
               )
               .slice(0, 3);
             return (
-              <li key={chapterKey} className="mejiro-reader-chapter-list-item">
+              // biome-ignore lint/suspicious/noArrayIndexKey: chapter titles and text are not guaranteed unique
+              <li key={i} className="mejiro-reader-chapter-list-item">
                 <button
                   type="button"
                   className={`mejiro-reader-chapter-card${i === chapter ? ' is-active' : ''}`}

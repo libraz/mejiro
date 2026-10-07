@@ -63,10 +63,6 @@ export const MejiroChapterNav = defineComponent({
               props.epub.chapters.map((ch, i) => {
                 const title = ch.title ?? format(messages.value.chapterN, { n: i + 1 });
                 const preview = ch.paragraphs.find((p) => !p.headingLevel && p.text.trim())?.text;
-                const chapterKey = `${title}-${ch.paragraphs
-                  .map((p) => p.text)
-                  .join('|')
-                  .slice(0, 120)}`;
                 // Keyed by paragraph index: heading text can repeat within a chapter.
                 const headings = ch.paragraphs
                   .flatMap((p, paragraph) =>
@@ -76,7 +72,7 @@ export const MejiroChapterNav = defineComponent({
                   )
                   .slice(0, 3);
 
-                return h('li', { key: chapterKey, class: 'mejiro-reader-chapter-list-item' }, [
+                return h('li', { key: i, class: 'mejiro-reader-chapter-list-item' }, [
                   h(
                     'button',
                     {

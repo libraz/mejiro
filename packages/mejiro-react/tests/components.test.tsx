@@ -315,6 +315,27 @@ describe('MejiroToc (React) — repeated sub-headings', () => {
   });
 });
 
+describe('MejiroChapterNav (React) — identical chapters', () => {
+  it('keeps one panel entry per chapter when chapters share title and text', () => {
+    const twin = { title: '同題', paragraphs: [{ text: '同文', inlineAnnotations: [] }] };
+    const epub: EpubBook = { title: 'B', author: '', chapters: [twin, { ...twin }, { ...twin }] };
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { container, rerender } = render(
+        <MejiroChapterNav epub={epub} chapter={0} onChange={vi.fn()} variant="panel" />,
+      );
+      rerender(<MejiroChapterNav epub={epub} chapter={2} onChange={vi.fn()} variant="panel" />);
+
+      const items = container.querySelectorAll('.mejiro-reader-chapter-list-item');
+      expect(items).toHaveLength(3);
+      expect(items[2].querySelector('.is-active')).not.toBeNull();
+      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
 describe('MejiroChapterNav (React) — repeated sub-headings', () => {
   it('renders every repeated panel sub-heading without a duplicate-key warning', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1064,6 +1085,36 @@ describe('MejiroSpread (React) — overlays and pointer sessions', () => {
     fireEvent.pointerDown(content, { clientX: 300, clientY: 200 });
     fireEvent.pointerUp(spreadEl, { clientX: 200, clientY: 200 });
     expect(onSwipe).toHaveBeenCalledWith('next');
+  });
+
+  it('turns once for a drag-swipe that starts and ends on a nav zone', () => {
+    const onSwipe = vi.fn();
+    const onNext = vi.fn();
+    const { container } = render(
+      <MejiroSpread
+        spread={twoPages()}
+        pageWidth={320}
+        pageHeight={460}
+        contentHeight={360}
+        onSwipe={onSwipe}
+        onNext={onNext}
+      />,
+    );
+    const zone = container.querySelector('.mejiro-reader-nav-zone--next') as HTMLElement;
+
+    // A mouse drag ends with the click the browser dispatches on the zone.
+    fireEvent.pointerDown(zone, { clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(zone, { clientX: 200, clientY: 200 });
+    fireEvent.click(zone);
+    expect(onSwipe).toHaveBeenCalledTimes(1);
+    expect(onNext).not.toHaveBeenCalled();
+
+    // The next press is a plain click again.
+    fireEvent.pointerDown(zone, { clientX: 300, clientY: 200 });
+    fireEvent.pointerUp(zone, { clientX: 300, clientY: 200 });
+    fireEvent.click(zone);
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onSwipe).toHaveBeenCalledTimes(1);
   });
 
   it('draws only the overlays whose centre lies on the single page shown', () => {

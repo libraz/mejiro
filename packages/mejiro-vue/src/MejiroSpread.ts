@@ -206,9 +206,12 @@ export const MejiroSpread = defineComponent({
     }
 
     const gestureStart = ref<{ x: number; y: number } | null>(null);
+    // Set when a press ends as a swipe, so the click that press produces is not a second turn.
+    let swiped = false;
     const SWIPE_THRESHOLD = 40;
     const TAP_MOVE_THRESHOLD = 8;
     function handleGesturePointerDown(e: PointerEvent): void {
+      swiped = false;
       if (!isPrimaryPointerPress(e)) return;
       // A press on an overlay drags, resizes or removes it; it is never a page turn.
       if ((e.target as HTMLElement | null)?.closest(OVERLAY_SELECTOR)) return;
@@ -223,6 +226,7 @@ export const MejiroSpread = defineComponent({
       const ax = Math.abs(dx);
       const ay = Math.abs(dy);
       if (ax >= SWIPE_THRESHOLD && ax >= ay * 1.4) {
+        swiped = true;
         emit('swipe', dx < 0 ? 'next' : 'prev');
         return;
       }
@@ -231,6 +235,12 @@ export const MejiroSpread = defineComponent({
         if (target?.closest(`button, a, ${OVERLAY_SELECTOR}`)) return;
         emit('surface-tap');
       }
+    }
+    function suppressSwipeClick(e: MouseEvent): void {
+      if (!swiped) return;
+      swiped = false;
+      e.preventDefault();
+      e.stopPropagation();
     }
     function combinedPointerDown(e: PointerEvent): void {
       handleGesturePointerDown(e);
@@ -353,6 +363,7 @@ export const MejiroSpread = defineComponent({
             onPointerup: combinedPointerUp,
             onPointercancel: combinedPointerCancel,
             onLostpointercapture: endSelection,
+            onClickCapture: suppressSwipeClick,
           },
           [
             renderPage(props.singlePage ? props.singleSide : 'right'),
