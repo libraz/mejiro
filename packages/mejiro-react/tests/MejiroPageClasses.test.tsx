@@ -87,7 +87,7 @@ describe('MejiroPage paragraph classes', () => {
     expect(classes).toContain('mejiro-paragraph mejiro-paragraph--h2');
   });
 
-  it('falls back to the heading kind for a page that carries no kind', () => {
+  it('styles a legacy isHeading paragraph as a heading from the page data alone', () => {
     const page = buildRenderPage(
       [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }],
       [

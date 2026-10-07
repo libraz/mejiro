@@ -40,10 +40,7 @@ export function MejiroPage({ page, className, style }: MejiroPageProps): ReactNo
   return (
     <div className={rootClass} style={style}>
       {page.paragraphs.map((paragraph, pi) => {
-        const paraClass = paragraphClassName(
-          paragraph.kind ?? (paragraph.isHeading ? 'heading' : undefined),
-          paragraph.headingLevel,
-        );
+        const paraClass = paragraphClassName(paragraph.kind, paragraph.headingLevel);
 
         return (
           // biome-ignore lint/suspicious/noArrayIndexKey: paragraphs have no stable ID
