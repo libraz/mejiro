@@ -215,6 +215,49 @@ describe('useManuscriptDraft (React)', () => {
     }
   });
 
+  it('runs one autosave at a time and ends with the latest draft saved', async () => {
+    const pending: Array<{ body: string; settle: (error?: Error) => void }> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const save = vi.fn(
+      (chapters: Array<{ body: string }>) =>
+        new Promise<void>((resolve, reject) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          pending.push({
+            body: chapters[0].body,
+            settle: (error) => {
+              inFlight -= 1;
+              if (error) reject(error);
+              else resolve();
+            },
+          });
+        }),
+    );
+    const { result, unmount } = renderHook(() =>
+      useManuscriptDraft({ onAutosave: save, autosaveDelay: 10_000 }),
+    );
+
+    act(() => result.current.patchChapter(0, { body: 'v1' }));
+    act(() => result.current.flushAutosave());
+    act(() => result.current.patchChapter(0, { body: 'v2' }));
+    act(() => result.current.flushAutosave());
+    expect(pending.map((call) => call.body)).toEqual(['v1']);
+
+    // The older save fails after the newer edit; the queued flush still saves it.
+    await act(async () => pending[0].settle(new Error('offline')));
+    expect(pending.map((call) => call.body)).toEqual(['v1', 'v2']);
+
+    act(() => result.current.patchChapter(0, { body: 'v3' }));
+    unmount();
+    await act(async () => pending[1].settle());
+    expect(pending.map((call) => call.body)).toEqual(['v1', 'v2', 'v3']);
+    await act(async () => pending[2].settle());
+
+    expect(maxInFlight).toBe(1);
+    expect(save).toHaveBeenCalledTimes(3);
+  });
+
   it('stops retrying once an autosave succeeds', async () => {
     vi.useFakeTimers();
     try {

@@ -119,28 +119,48 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   // Bumped on every change that needs persisting. A save only clears the dirty
   // flag when no further change landed while it was in flight.
   const revisionRef = useRef(0);
-  const inFlightRevisionRef = useRef(-1);
+  // Saves run one at a time, so they land in order; a flush requested while
+  // one is in flight runs once it settles.
+  const inFlightRef = useRef(false);
+  const flushQueuedRef = useRef(false);
 
   const flushAutosave = useCallback(() => {
     const callback = saveRef.current;
-    if (!(callback && dirtyRef.current) || inFlightRevisionRef.current === revisionRef.current) {
+    if (!(callback && dirtyRef.current)) return;
+    if (inFlightRef.current) {
+      flushQueuedRef.current = true;
       return;
     }
     const revision = revisionRef.current;
-    inFlightRevisionRef.current = revision;
     const plain = snapshotChapters(chaptersRef.current);
     const payload = payloadRef.current ? payloadRef.current(plain) : (plain as TAutosave);
-    void Promise.resolve(callback(payload))
-      .then(() => {
-        if (revisionRef.current === revision) dirtyRef.current = false;
-      })
+    const markSaved = () => {
+      if (revisionRef.current === revision) dirtyRef.current = false;
+    };
+    let saved: void | Promise<void>;
+    try {
+      saved = callback(payload);
+    } catch (err) {
+      saved = Promise.reject(err);
+    }
+    // A callback that returns nothing has finished saving when it returns.
+    if (saved === undefined) {
+      markSaved();
+      return;
+    }
+    inFlightRef.current = true;
+    void Promise.resolve(saved)
+      .then(markSaved)
       .catch((err) => {
         // Keep the draft dirty so a later flush retries the failed save.
         if (!mountedRef.current) return;
         setAutosaveError(toError(err));
       })
       .finally(() => {
-        if (inFlightRevisionRef.current === revision) inFlightRevisionRef.current = -1;
+        inFlightRef.current = false;
+        if (!flushQueuedRef.current) return;
+        flushQueuedRef.current = false;
+        flushAutosave();
       });
   }, []);
 

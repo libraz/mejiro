@@ -95,29 +95,51 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   // flight, so a rejected save stays dirty and the next flush retries it.
   let dirty = false;
   let revision = 0;
-  let inFlightRevision = -1;
+  // Saves run one at a time, so they land in order; a flush requested while
+  // one is in flight runs once it settles.
+  let inFlight = false;
+  let flushQueued = false;
 
   function flushAutosave(): void {
     const callback = options.onAutosave;
-    if (!(callback && dirty) || inFlightRevision === revision) return;
+    if (!(callback && dirty)) return;
     if (timer) {
       clearTimeout(timer);
       timer = undefined;
     }
+    if (inFlight) {
+      flushQueued = true;
+      return;
+    }
     const savedRevision = revision;
-    inFlightRevision = savedRevision;
     // Plain copies: reactive proxies are not structured-cloneable (IndexedDB, postMessage).
     const plain = snapshotChapters(chapters.value);
     const payload = options.autosavePayload ? options.autosavePayload(plain) : (plain as TAutosave);
-    void Promise.resolve(callback(payload))
-      .then(() => {
-        if (revision === savedRevision) dirty = false;
-      })
+    const markSaved = () => {
+      if (revision === savedRevision) dirty = false;
+    };
+    let saved: void | Promise<void>;
+    try {
+      saved = callback(payload);
+    } catch (err) {
+      saved = Promise.reject(err);
+    }
+    // A callback that returns nothing has finished saving when it returns.
+    if (saved === undefined) {
+      markSaved();
+      return;
+    }
+    inFlight = true;
+    void Promise.resolve(saved)
+      .then(markSaved)
       .catch((err) => {
         autosaveError.value = toError(err);
       })
       .finally(() => {
-        if (inFlightRevision === savedRevision) inFlightRevision = -1;
+        inFlight = false;
+        if (!flushQueued) return;
+        flushQueued = false;
+        flushAutosave();
       });
   }
 
