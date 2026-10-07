@@ -98,6 +98,25 @@ describe('alignMorphemeOffsets', () => {
     expect(span(text, aligned.morphemes[0])).toBe(text);
   });
 
+  it('widens a span over a kana composed with a spacing sound mark', () => {
+    for (const [mark, composed] of [
+      [0x309b, 'が'],
+      [0x309c, 'ぱ'],
+    ] as const) {
+      const base = composed === 'が' ? 'か' : 'は';
+      const text = `${base}${String.fromCodePoint(mark)}き`;
+      const input = [morpheme(composed, 0, 1), morpheme('き', 1, 2)];
+
+      const aligned = align(text, `${composed}き`, input);
+
+      expect(offsets(aligned.morphemes)).toEqual([
+        [0, 2],
+        [2, 3],
+      ]);
+      expect(aligned.warnings).toEqual([]);
+    }
+  });
+
   it('skips the surplus marks of a collapsed prolonged sound mark run', () => {
     const text = 'ラーーー漢';
     const input = [morpheme('ラー', 0, 2), morpheme('漢', 2, 3)];

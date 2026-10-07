@@ -189,9 +189,10 @@ function collect(
  * each span restate its own surface is what turns that into a dropped morpheme
  * instead of a hint placed on the wrong characters.
  *
- * Both sides are compared through NFKC so that a width fold or a sound-mark
- * composition reads as the match it is, and so that a compatibility character
- * the analyzer passes through unchanged compares equal to itself.
+ * Both sides are compared through {@link composeForComparison} so that a width
+ * fold or a sound-mark composition reads as the match it is, and so that a
+ * compatibility character the analyzer passes through unchanged compares equal
+ * to itself.
  *
  * Only the walk needs this. The identity path is proven, and paragraph text
  * takes it, so the cost stays off the common path.
@@ -207,7 +208,18 @@ function describesSurface(
   for (let index = start; index < end; index++) {
     if (removed[index] === 0) kept += source[index];
   }
-  return kept.normalize('NFKC') === surface.normalize('NFKC');
+  return composeForComparison(kept) === composeForComparison(surface);
+}
+
+/**
+ * NFKC with the spacing sound marks read as their combining forms: NFKC alone
+ * turns U+309B/U+309C into a space plus the combining mark, which composes with nothing.
+ */
+function composeForComparison(str: string): string {
+  return str
+    .replace(/\u309b/gu, '\u3099')
+    .replace(/\u309c/gu, '\u309a')
+    .normalize('NFKC');
 }
 
 /** Whether `[start, end)` is an integer span inside `[0, limit]`. */
@@ -255,8 +267,9 @@ function foldsTo(char: string, target: string): boolean {
  * Whether the character at `index` and the sound mark after it compose into
  * `composed`.
  *
- * The comparison runs through NFKC, which is what makes the half-width case work
- * as well as the combining one: folding both sides to their compatibility
+ * The comparison runs through {@link composeForComparison}, which is what makes
+ * the half-width and spacing cases work as well as the combining one: folding
+ * both sides to their compatibility
  * composition collapses the width difference before the characters are compared,
  * so a wrong guess here cannot consume a character that stands on its own.
  */
@@ -268,7 +281,7 @@ function composesWithSoundMark(
   const mark = source[index + 1];
   if (mark === undefined) return false;
   if (!SOUND_MARKS.has(mark.codePointAt(0) ?? 0)) return false;
-  return (source[index] + mark).normalize('NFKC') === composed.normalize('NFKC');
+  return composeForComparison(source[index] + mark) === composeForComparison(composed);
 }
 
 /** Counts the code points in `str` without materialising them. */

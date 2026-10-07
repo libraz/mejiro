@@ -1,4 +1,8 @@
-import { isClusterBreakAllowed, isGraphemeContinuation } from './cluster.js';
+import {
+  isClusterBreakAllowed,
+  isGraphemeContinuation,
+  regionalIndicatorPairStarts,
+} from './cluster.js';
 import { isHangingTarget } from './hanging.js';
 import { isLineEndProhibited, isLineStartProhibited, isUnbreakablePair } from './kinsoku.js';
 import { preprocessRuby } from './ruby.js';
@@ -95,6 +99,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
   }
 
   const adv = effectiveAdvances ?? input.advances;
+  // Regional-indicator pairing resolved once, keeping each break check O(1).
+  const pairStarts = regionalIndicatorPairStarts(text);
 
   const breaks: number[] = [];
   const hangingAdj: number[] = [];
@@ -105,6 +111,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
   let lineIndex = 0;
   // Overhang of the final line, which has no break point to record it with.
   let lastLineHang = 0;
+  // Overhang of a mark directly before a line feed, recorded with the feed's break.
+  let pendingHang = 0;
 
   /** Returns the effective width for the current line. */
   const getLineWidth = (): number =>
@@ -116,10 +124,13 @@ export function computeBreaks(input: LayoutInput): BreakResult {
     if (text[i] === LINE_FEED) {
       if (i < len - 1) {
         breaks.push(i);
-        hangingAdj.push(0);
+        hangingAdj.push(pendingHang);
         usedLineWidths.push(getLineWidth());
         lineIndex++;
+      } else {
+        lastLineHang = pendingHang;
       }
+      pendingHang = 0;
       lineStart = i + 1;
       accWidth = 0;
       continue;
@@ -133,16 +144,19 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         enableHanging &&
         isHangingTarget(text[i]) &&
         accWidth - adv[i] <= lineWidth &&
-        canBreakAt(text, i, clusterIds, mode, kinsokuRules)
+        isBreakAllowed(text, i, clusterIds, mode, kinsokuRules, pairStarts)
       ) {
-        // Skip break at the very last character — no content follows it
-        if (i < len - 1) {
+        // No break after the last character or before a line feed, which ends the line itself.
+        if (i === len - 1) {
+          lastLineHang = accWidth - lineWidth;
+        } else if (text[i + 1] === LINE_FEED) {
+          pendingHang = accWidth - lineWidth;
+          continue;
+        } else {
           breaks.push(i);
           hangingAdj.push(accWidth - lineWidth);
           usedLineWidths.push(lineWidth);
           lineIndex++;
-        } else {
-          lastLineHang = accWidth - lineWidth;
         }
         lineStart = i + 1;
         accWidth = 0;
@@ -171,10 +185,10 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         let examined = 0;
         while (candidatePos > lineStart && examined < maxBacktrackChars) {
           candidateWidth -= adv[candidatePos + 1];
-          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, candidatePos)) {
+          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, candidatePos, pairStarts)) {
             clusterSafePos = candidatePos;
           }
-          if (canBreakAt(text, candidatePos, clusterIds, mode, kinsokuRules)) {
+          if (isBreakAllowed(text, candidatePos, clusterIds, mode, kinsokuRules, pairStarts)) {
             const shortfall = (lineWidth - candidateWidth) / emSize;
             const cost = penaltyWeight * breakPenalties[candidatePos] + shortfallWeight * shortfall;
             // The walk runs from the position that fills the line best downwards,
@@ -198,10 +212,10 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         breakPos = lowestCostPos;
       } else if (tokenBoundarySet && !breakPenalties) {
         while (breakPos > lineStart) {
-          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos)) {
+          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos, pairStarts)) {
             clusterSafePos = breakPos;
           }
-          if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
+          if (isBreakAllowed(text, breakPos, clusterIds, mode, kinsokuRules, pairStarts)) {
             if (tokenBoundarySet.has(breakPos)) {
               foundTokenBoundary = true;
               break;
@@ -218,10 +232,10 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         }
       } else {
         while (breakPos > lineStart) {
-          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos)) {
+          if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos, pairStarts)) {
             clusterSafePos = breakPos;
           }
-          if (canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules)) {
+          if (isBreakAllowed(text, breakPos, clusterIds, mode, kinsokuRules, pairStarts)) {
             if (isWhitespace(text[breakPos])) {
               whitespacePos = breakPos;
               break;
@@ -241,9 +255,13 @@ export function computeBreaks(input: LayoutInput): BreakResult {
       // one cluster boundary it can never have recorded.
       if (
         breakPos < 0 ||
-        (breakPos === lineStart && !canBreakAt(text, breakPos, clusterIds, mode, kinsokuRules))
+        (breakPos === lineStart &&
+          !isBreakAllowed(text, breakPos, clusterIds, mode, kinsokuRules, pairStarts))
       ) {
-        if (clusterSafePos < lineStart && isClusterBoundary(text, clusterIds, lineStart)) {
+        if (
+          clusterSafePos < lineStart &&
+          isClusterBoundary(text, clusterIds, lineStart, pairStarts)
+        ) {
           clusterSafePos = lineStart;
         }
         breakPos = clusterSafePos >= lineStart ? clusterSafePos : i - 1;
@@ -419,8 +437,12 @@ function isClusterBoundary(
   text: Uint32Array,
   clusterIds: Uint32Array | undefined,
   pos: number,
+  pairStarts?: Uint8Array,
 ): boolean {
-  return isClusterBreakAllowed(clusterIds, pos, text.length) && !isGraphemeContinuation(text, pos);
+  return (
+    isClusterBreakAllowed(clusterIds, pos, text.length) &&
+    !isGraphemeContinuation(text, pos, pairStarts)
+  );
 }
 
 /**
@@ -444,8 +466,20 @@ export function canBreakAt(
   mode: KinsokuMode = 'strict',
   rules?: KinsokuRules,
 ): boolean {
+  return isBreakAllowed(text, pos, clusterIds, mode, rules);
+}
+
+/** {@link canBreakAt} with the regional-indicator pairing `computeBreaks` resolved up front. */
+function isBreakAllowed(
+  text: Uint32Array,
+  pos: number,
+  clusterIds: Uint32Array | undefined,
+  mode: KinsokuMode,
+  rules: KinsokuRules | undefined,
+  pairStarts?: Uint8Array,
+): boolean {
   // Cannot break within a cluster
-  if (!isClusterBoundary(text, clusterIds, pos)) {
+  if (!isClusterBoundary(text, clusterIds, pos, pairStarts)) {
     return false;
   }
   // Line-end prohibition: cannot break if current char is prohibited at line end

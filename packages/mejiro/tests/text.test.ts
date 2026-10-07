@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { isLineEndProhibited, isLineStartProhibited } from '../src/kinsoku.js';
 import { normalizeAnnotatedText } from '../src/normalize.js';
 import { formatDialogueLineBreaks, normalizeText, toCodepoints } from '../src/text.js';
 
@@ -58,5 +59,33 @@ describe('formatDialogueLineBreaks', () => {
     expect(
       formatDialogueLineBreaks('彼は言った。　「こんにちは」   私はうなずいた。\n\n\n次。'),
     ).toBe('彼は言った。\n「こんにちは」\n私はうなずいた。\n\n次。');
+  });
+
+  it('inserts no break that leaves a kinsoku-prohibited character at a line edge', () => {
+    const inputs = [
+      '「はい」、と彼は言った。（「いいえ」）',
+      '「はい」　。と言った。',
+      '彼は（　「そう」）と言った。',
+      '「ええ」…と言った。彼は「はい」と言った。',
+    ];
+    // The inputs hold no line feeds, so every line edge in the output is an inserted break.
+    for (const input of inputs) {
+      const output = formatDialogueLineBreaks(input);
+      const lines = output.split('\n');
+      for (const line of lines.slice(1)) {
+        expect(isLineStartProhibited(line.codePointAt(0) ?? 0), `${input} -> ${line}`).toBe(false);
+      }
+      for (const line of lines.slice(0, -1)) {
+        const last = [...line].at(-1)?.codePointAt(0) ?? 0;
+        expect(isLineEndProhibited(last), `${input} -> ${line}`).toBe(false);
+      }
+      expect(formatDialogueLineBreaks(output)).toBe(output);
+    }
+    expect(formatDialogueLineBreaks('「はい」、と彼は言った。（「いいえ」）')).toBe(
+      '「はい」、と彼は言った。（「いいえ」）',
+    );
+    expect(formatDialogueLineBreaks('「ええ」…と言った。彼は「はい」と言った。')).toBe(
+      '「ええ」…と言った。彼は\n「はい」\nと言った。',
+    );
   });
 });

@@ -1,3 +1,5 @@
+import { isLineEndProhibited, isLineStartProhibited } from './kinsoku.js';
+
 /** CJK Compatibility Ideographs and their supplement, which NFC maps to other glyphs. */
 const COMPATIBILITY_IDEOGRAPH = /[\uF900-\uFAFF\u{2F800}-\u{2FA1F}]/u;
 const COMPATIBILITY_IDEOGRAPH_RUN = /([\uF900-\uFAFF\u{2F800}-\u{2FA1F}]+)/u;
@@ -44,16 +46,44 @@ export function toCodepoints(str: string): Uint32Array {
  * This is a manuscript-editing helper, not an EPUB-specific transform. It
  * normalizes CRLF to LF, inserts a break before opening quotes and after
  * closing quotes when they are attached to surrounding prose, trims whitespace
- * around inserted breaks, and avoids creating more than one blank line.
+ * around inserted breaks, and avoids creating more than one blank line. No
+ * break is inserted where it would leave a line-start-prohibited character
+ * (`、`, `）`, …) at the start of a line or a line-end-prohibited one (`（`, …)
+ * at the end of one.
  *
  * @param text - Japanese prose manuscript text.
  * @returns Text with dialogue quotes separated onto their own lines.
  */
 export function formatDialogueLineBreaks(text: string): string {
-  return text
-    .replace(/\r\n?/gu, '\n')
-    .replace(/([^\n「『])([「『])/gu, '$1\n$2')
-    .replace(/([」』])([^」』\n])/gu, '$1\n$2')
-    .replace(/[ \t　]*\n[ \t　]*/gu, '\n')
-    .replace(/\n{3,}/gu, '\n\n');
+  const chars = [...text.replace(/\r\n?/gu, '\n')];
+  let out = '';
+  for (let i = 0; i < chars.length; i++) {
+    if (i > 0 && (opensDialogueAt(chars, i) || closesDialogueAt(chars, i))) out += '\n';
+    out += chars[i];
+  }
+  return out.replace(/[ \t　]*\n[ \t　]*/gu, '\n').replace(/\n{3,}/gu, '\n\n');
+}
+
+const OPENING_QUOTES = new Set(['「', '『']);
+const CLOSING_QUOTES = new Set(['」', '』']);
+const isInlineSpace = (ch: string): boolean => ch === ' ' || ch === '\t' || ch === '　';
+
+/** Whether a break belongs before the opening quote at `i`, after attached prose. */
+function opensDialogueAt(chars: readonly string[], i: number): boolean {
+  const prev = chars[i - 1];
+  if (!OPENING_QUOTES.has(chars[i]) || prev === '\n' || OPENING_QUOTES.has(prev)) return false;
+  // Whitespace before the break is trimmed, so the line ends at the last visible character.
+  let j = i - 1;
+  while (j > 0 && isInlineSpace(chars[j])) j--;
+  return !isLineEndProhibited(chars[j].codePointAt(0) ?? 0);
+}
+
+/** Whether a break belongs after the closing quote before `i`, before attached prose. */
+function closesDialogueAt(chars: readonly string[], i: number): boolean {
+  const next = chars[i];
+  if (!CLOSING_QUOTES.has(chars[i - 1]) || next === '\n' || CLOSING_QUOTES.has(next)) return false;
+  // Whitespace after the break is trimmed, so the line starts at the next visible character.
+  let j = i;
+  while (j < chars.length - 1 && isInlineSpace(chars[j])) j++;
+  return !isLineStartProhibited(chars[j].codePointAt(0) ?? 0);
 }

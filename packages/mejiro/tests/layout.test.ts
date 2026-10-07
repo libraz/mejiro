@@ -162,6 +162,28 @@ describe('trailing hanging punctuation', () => {
   });
 });
 
+describe('hanging punctuation before a line feed', () => {
+  it('lets the line feed end the line the hanging mark sits on', () => {
+    const cases: Array<[string, number[], number[]]> = [
+      ['あいう。\nえお', [4], [10, 0]],
+      ['あいう。\n', [], [10]],
+      ['あいう。\nえおか、\nき', [4, 9], [10, 10, 0]],
+    ];
+    for (const [s, breakPoints, hangs] of cases) {
+      const text = toCodepoints(s);
+      const result = computeBreaks({
+        text,
+        advances: uniformAdvances(text.length, 10),
+        lineWidth: 30,
+      });
+      expect([...result.breakPoints], s).toEqual(breakPoints);
+      expect([...(result.hangingAdjustments ?? [])], s).toEqual(hangs);
+      // No line holds only the line feed.
+      expect(linesFromBreakPoints(s, result.breakPoints), s).not.toContain('\n');
+    }
+  });
+});
+
 describe('tokenBoundaries support', () => {
   it('prefers breaking at token boundaries', () => {
     // "新しいプログラミング言語" (12 chars), tokens: "新しい"(3) + "プログラミング"(7) + "言語"(2)
@@ -439,6 +461,58 @@ describe('grapheme clusters', () => {
     for (const s of ['葛\u{E0100}', '辻\uFE00', 'セ\u309A', 'q\u0301', '👍\u{1F3FD}']) {
       expect(canBreakAt(toCodepoints(s), 0), s).toBe(false);
     }
+  });
+
+  it('never breaks before any Grapheme_Extend codepoint', () => {
+    const extend = /\p{Grapheme_Extend}/u;
+    for (let cp = 0; cp <= 0x10ffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      if (!extend.test(String.fromCodePoint(cp))) continue;
+      expect(canBreakAt(new Uint32Array([0x30ab, cp]), 0), cp.toString(16)).toBe(false);
+    }
+  });
+
+  it('keeps half-width sound marks with their kana when the line fills', () => {
+    for (const s of ['あいｶﾞｷ', 'あいｶﾟｷ']) {
+      const text = toCodepoints(s);
+      const result = computeBreaks({
+        text,
+        advances: uniformAdvances(text.length, 10),
+        lineWidth: 30,
+      });
+      for (const line of linesFromBreakPoints(s, result.breakPoints)) {
+        expect(/^[ﾞﾟ]/u.test(line), line).toBe(false);
+      }
+    }
+  });
+
+  it('breaks a long regional-indicator run in work linear in its length', () => {
+    const readsFor = (flags: number): number => {
+      const raw = toCodepoints('🇯🇵'.repeat(flags));
+      let reads = 0;
+      // Every indexed read of the text is counted.
+      const text = new Proxy(raw, {
+        get(target, key) {
+          if (typeof key === 'string' && /^\d+$/u.test(key)) reads++;
+          const value = Reflect.get(target, key, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const result = computeBreaks({
+        text,
+        advances: uniformAdvances(raw.length, 10),
+        lineWidth: 95,
+      });
+      // Pairs open at even offsets, so every line ends after a whole flag.
+      expect([...result.breakPoints].every((bp) => bp % 2 === 1)).toBe(true);
+      return reads;
+    };
+
+    const small = readsFor(500);
+    const large = readsFor(5_000);
+    expect(small).toBeGreaterThan(0);
+    // Ten times the run stays near ten times the reads; a walk back per check would be 100x.
+    expect(large).toBeLessThan(small * 15);
   });
 
   it('never breaks on either side of a ZWJ', () => {

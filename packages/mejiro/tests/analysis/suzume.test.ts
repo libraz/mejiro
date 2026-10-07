@@ -79,6 +79,19 @@ describe('createSuzumeAnalyzer', () => {
     expect(analysis.morphemes.map((m) => m.surface).join('')).toBe('吾輩は猫である');
   });
 
+  it('aligns text whose spacing sound marks the normalizer composes', () => {
+    const text = `か${String.fromCodePoint(0x309b)}きを食べる`;
+
+    const analysis = analyzer.analyze(text);
+
+    expect(analysis.morphemes.length).toBeGreaterThan(0);
+    expect(analysis.warnings).toEqual([]);
+    for (const morpheme of analysis.morphemes) {
+      const covered = span(text, morpheme).replace('か\u309b', 'が');
+      expect(covered.normalize('NFKC')).toBe(morpheme.surface.normalize('NFKC'));
+    }
+  });
+
   it('disposes idempotently and refuses to analyse afterwards', async () => {
     const disposable = await createSuzumeAnalyzer();
 
