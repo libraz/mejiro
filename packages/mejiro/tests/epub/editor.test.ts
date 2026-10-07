@@ -1,5 +1,6 @@
 /**
  * @vitest-environment happy-dom
+ * @vitest-environment-options {"settings":{"disableCSSFileLoading":true}}
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
