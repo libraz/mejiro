@@ -169,8 +169,8 @@ penalties that do move break positions. That second stage also keeps a break
 from landing inside a conjunction or an adverb, and which parts of speech it
 treats that way is configurable. It is not "break at word boundaries" —
 Japanese body text is set by breaking wherever kinsoku allows, and word-edge
-breaks alone leave loose lines. The analyzer costs roughly 578 KB of WebAssembly
-with its dictionaries embedded, about 237 KB gzipped; without it everything else
+breaks alone leave loose lines. The analyzer costs roughly 628 KB of WebAssembly
+with its dictionaries embedded, about 260 KB gzipped; without it everything else
 works unchanged.
 
 Custom kinsoku rules go through `LayoutInput.kinsokuRules` on the core
