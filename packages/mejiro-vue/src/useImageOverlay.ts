@@ -110,6 +110,8 @@ export function useImageOverlay(
 
   function toggleImage(): void {
     if (imageRect.value) {
+      // A drag still in flight must not bring the overlay back.
+      for (const cancel of [...activeDragCleanups]) cancel();
       imageRect.value = null;
       syncToLayout(null);
     } else {
@@ -119,7 +121,9 @@ export function useImageOverlay(
     }
   }
 
+  /** Moves or resizes the active overlay; a no-op once it is toggled off. */
   function applyRect(rect: ImageOverlayRect): void {
+    if (imageRect.value === null) return;
     imageRect.value = rect;
     syncToLayout(rect);
   }

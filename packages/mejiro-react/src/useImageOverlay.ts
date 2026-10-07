@@ -92,6 +92,9 @@ export function useImageOverlay(
   spreadRef.current = spreadIdx;
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+  // Read at sync time, so a drag that began before a margin change uses the new one.
+  const marginRef = useRef(margin);
+  marginRef.current = margin;
   const activeDragCleanupsRef = useRef(new Set<() => void>());
 
   useEffect(
@@ -102,18 +105,15 @@ export function useImageOverlay(
     [],
   );
 
-  const syncToLayout = useCallback(
-    (rect: ImageOverlayRect | null) => {
-      const lo = layoutRef.current;
-      if (!lo) return;
-      const images: BookImage[] | undefined = rect
-        ? [{ x: rect.x, y: rect.y, w: rect.w, h: rect.h, margin }]
-        : undefined;
-      const spread = lo.syncImages(spreadRef.current, images);
-      onUpdateRef.current(spread);
-    },
-    [margin],
-  );
+  const syncToLayout = useCallback((rect: ImageOverlayRect | null) => {
+    const lo = layoutRef.current;
+    if (!lo) return;
+    const images: BookImage[] | undefined = rect
+      ? [{ x: rect.x, y: rect.y, w: rect.w, h: rect.h, margin: marginRef.current }]
+      : undefined;
+    const spread = lo.syncImages(spreadRef.current, images);
+    onUpdateRef.current(spread);
+  }, []);
 
   // Re-apply the exclusion after the layout instance is replaced (resize, font
   // or option change), after the reader moves to another spread and after the
@@ -140,17 +140,24 @@ export function useImageOverlay(
 
   const toggleImage = useCallback(() => {
     if (rectRef.current) {
+      // A drag still in flight must not bring the overlay back.
+      for (const cancel of [...activeDragCleanupsRef.current]) cancel();
+      rectRef.current = null;
       setImageRect(null);
       syncToLayout(null);
     } else {
       const r = { x: defX, y: defY, w: defW, h: defH };
+      rectRef.current = r;
       setImageRect(r);
       syncToLayout(r);
     }
   }, [defX, defY, defW, defH, syncToLayout]);
 
+  /** Moves or resizes the active overlay; a no-op once it is toggled off. */
   const applyRect = useCallback(
     (rect: ImageOverlayRect) => {
+      if (rectRef.current === null) return;
+      rectRef.current = rect;
       setImageRect(rect);
       syncToLayout(rect);
     },

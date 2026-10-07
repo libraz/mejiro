@@ -118,6 +118,9 @@ export function useMultiImageOverlay(
   spreadIdxRef.current = spreadIdx;
   const onUpdateRef = useRef(options.onUpdate);
   onUpdateRef.current = options.onUpdate;
+  // Read at sync time, so a drag that began before a margin change uses the new one.
+  const marginRef = useRef(margin);
+  marginRef.current = margin;
   const activeDragCleanupsRef = useRef(new Set<() => void>());
 
   useEffect(
@@ -130,15 +133,12 @@ export function useMultiImageOverlay(
 
   // Every spread's images are set before any spread is read back, so the
   // layout reflows once however many spreads change.
-  const syncSpreads = useCallback(
-    (spreads: readonly number[]) => {
-      const lo = layoutRef.current;
-      if (!lo) return;
-      applyImages(lo, imagesRef.current, spreads, margin);
-      for (const si of spreads) onUpdateRef.current?.(lo.getSpread(si));
-    },
-    [margin],
-  );
+  const syncSpreads = useCallback((spreads: readonly number[]) => {
+    const lo = layoutRef.current;
+    if (!lo) return;
+    applyImages(lo, imagesRef.current, spreads, marginRef.current);
+    for (const si of spreads) onUpdateRef.current?.(lo.getSpread(si));
+  }, []);
 
   // A replacement layout, or a new margin, gets the images while rendering, so
   // every view derived from the layout in this same render already reflows.
