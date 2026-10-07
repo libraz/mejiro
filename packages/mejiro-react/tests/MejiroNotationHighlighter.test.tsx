@@ -6,9 +6,21 @@ import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { MejiroNotationHighlighter } from '../src/MejiroNotationHighlighter.js';
 
-function Harness({ initial = '' }: { initial?: string }) {
+function Harness({
+  initial = '',
+  normalize = (next) => next,
+}: {
+  initial?: string;
+  normalize?: (next: string) => string;
+}) {
   const [value, setValue] = useState(initial);
-  return <MejiroNotationHighlighter value={value} onChange={setValue} data-testid="ta" />;
+  return (
+    <MejiroNotationHighlighter
+      value={value}
+      onChange={(next) => setValue(normalize(next))}
+      data-testid="ta"
+    />
+  );
 }
 
 describe('MejiroNotationHighlighter (React)', () => {
@@ -42,5 +54,17 @@ describe('MejiroNotationHighlighter (React)', () => {
 
     fireEvent.compositionEnd(ta);
     expect(container.querySelector('[data-token="emphasis"]')?.textContent).toBe('《《圏点》》');
+  });
+
+  it('does not rewrite the textarea value while composing when the host normalizes it', () => {
+    const { container } = render(<Harness normalize={(next) => next.replace(/けん/g, '圏')} />);
+    const ta = container.querySelector('.mejiro-notation-textarea') as HTMLTextAreaElement;
+
+    fireEvent.compositionStart(ta);
+    fireEvent.change(ta, { target: { value: 'けん' } });
+    expect(ta.value).toBe('けん');
+
+    fireEvent.compositionEnd(ta);
+    expect(ta.value).toBe('圏');
   });
 });

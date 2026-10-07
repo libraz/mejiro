@@ -62,7 +62,11 @@ export const MejiroNotationHighlighter = forwardRef<
   const overlayRef = useRef<HTMLDivElement | null>(null);
   useImperativeHandle(ref, () => textareaRef.current as HTMLTextAreaElement, []);
 
+  // IME composition freeze: while an IME session is open the textarea is bound
+  // to the text the browser itself holds, so a host normalizing `value` in
+  // `onChange` cannot overwrite the uncommitted string.
   const [isComposing, setIsComposing] = useState(false);
+  const [composingValue, setComposingValue] = useState('');
   const lastSegmentsRef = useRef<Segment[] | null>(null);
   const segments = useMemo(() => {
     if (isComposing && lastSegmentsRef.current) return lastSegmentsRef.current;
@@ -101,14 +105,19 @@ export const MejiroNotationHighlighter = forwardRef<
         ref={textareaRef}
         className={`mejiro-notation-textarea${className ? ` ${className}` : ''}`}
         style={style}
-        value={value}
-        onChange={(event: ChangeEvent<HTMLTextAreaElement>) => onChange(event.target.value)}
+        value={isComposing ? composingValue : value}
+        onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+          if (isComposing) setComposingValue(event.target.value);
+          onChange(event.target.value);
+        }}
         onCompositionStart={(event) => {
+          setComposingValue(event.currentTarget.value);
           setIsComposing(true);
           onCompositionStart?.(event);
         }}
         onCompositionEnd={(event) => {
           setIsComposing(false);
+          onChange(event.currentTarget.value);
           onCompositionEnd?.(event);
         }}
         onScroll={(event) => {
