@@ -577,6 +577,8 @@ export function MejiroEditor({
                   hidden
                   onChange={(event) => {
                     const file = event.target.files?.[0];
+                    // Cleared so picking the same file again still fires `change`.
+                    event.target.value = '';
                     if (file) void addImage(file);
                   }}
                 />

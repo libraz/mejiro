@@ -186,3 +186,30 @@ describe('MejiroEditor (Vue) — export and image-insert failures', () => {
     expect(click).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MejiroEditor (Vue) — image picker', () => {
+  it('inserts the same file again when it is picked a second time', async () => {
+    const { stub, imageInput } = await renderEditor();
+    const input = imageInput();
+    // A browser fires no `change` while the selection equals the input's value.
+    let value = '';
+    Object.defineProperty(input, 'value', {
+      configurable: true,
+      get: () => value,
+      set: (next: string) => {
+        value = next;
+      },
+    });
+    const file = new File([new Uint8Array([1])], 'a.png', { type: 'image/png' });
+    const pick = async () => {
+      if (value === 'C:\\fakepath\\a.png') return;
+      value = 'C:\\fakepath\\a.png';
+      await insertImage(input, file);
+    };
+
+    await pick();
+    await waitFor(() => expect(stub.addImage).toHaveBeenCalledTimes(1));
+    await pick();
+    await waitFor(() => expect(stub.addImage).toHaveBeenCalledTimes(2));
+  });
+});
