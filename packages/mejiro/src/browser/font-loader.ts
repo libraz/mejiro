@@ -65,6 +65,8 @@ export class FontLoader {
   private readonly onFontsLoaded?: () => void;
   /** The `loadingdone` subscription, or null while none is held. */
   private unsubscribe: (() => void) | null = null;
+  /** Set by {@link dispose}: a `loadingdone` may have fired unheard since. */
+  private missedEvents = false;
 
   /**
    * Subscribes to the document's `loadingdone` event so the set of
@@ -86,10 +88,12 @@ export class FontLoader {
   /**
    * Removes the `loadingdone` subscription so the host's font set no longer
    * references this loader, and forgets every readiness answer that depended on
-   * it. The loader stays usable: the next {@link ensureLoaded} subscribes again.
-   * Idempotent.
+   * it. The loader stays usable: the next {@link ensureLoaded} subscribes again
+   * and, since a font may have loaded unheard in between, runs the
+   * `onFontsLoaded` hook once as if `loadingdone` had fired. Idempotent.
    */
   dispose(): void {
+    if (this.unsubscribe) this.missedEvents = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
     this.invalidate();
@@ -110,6 +114,10 @@ export class FontLoader {
         handler,
       );
     };
+    if (this.missedEvents) {
+      this.missedEvents = false;
+      handler();
+    }
   }
 
   private invalidate(): void {

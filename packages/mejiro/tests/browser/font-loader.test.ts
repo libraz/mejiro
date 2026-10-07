@@ -3,6 +3,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FontLoader } from '../../src/browser/font-loader.js';
+import { MejiroBrowser } from '../../src/browser/integration.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -186,6 +187,48 @@ describe('FontLoader', () => {
       // A font that arrives later can change metrics, so the cached answer for
       // every spec is dropped rather than kept.
       expect(loader.isLoaded('16px serif')).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('replays a loadingdone missed while disposed when the loader is used again', async () => {
+    vi.spyOn(document.fonts, 'check').mockReturnValue(true);
+    const { fire, restore } = withLoadingDoneSupport();
+    try {
+      const onFontsLoaded = vi.fn();
+      const loader = new FontLoader({ onFontsLoaded });
+      await loader.ensureLoaded('16px serif');
+      expect(onFontsLoaded).not.toHaveBeenCalled();
+
+      // A face that finishes loading now reaches no listener.
+      loader.dispose();
+      await loader.ensureLoaded('16px serif');
+      expect(onFontsLoaded).toHaveBeenCalledTimes(1);
+
+      // Once per dispose; events heard while subscribed still arrive.
+      await loader.ensureLoaded('16px serif');
+      expect(onFontsLoaded).toHaveBeenCalledTimes(1);
+      fire();
+      expect(onFontsLoaded).toHaveBeenCalledTimes(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it('serves no width measured before dispose once the browser is used again', async () => {
+    vi.spyOn(document.fonts, 'check').mockReturnValue(true);
+    const { restore } = withLoadingDoneSupport();
+    try {
+      const browser = new MejiroBrowser();
+      const cache = browser.getMeasurer().getCache();
+      // A width taken against a fallback face before the view was hidden.
+      cache.set('16px serif', 0x3042, 999);
+      browser.dispose();
+
+      await browser.layout({ text: 'あ', fontFamily: 'serif', fontSize: 16, lineWidth: 100 });
+
+      expect(cache.get('16px serif', 0x3042)).not.toBe(999);
     } finally {
       restore();
     }

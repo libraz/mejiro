@@ -135,6 +135,53 @@ describe('CharMeasurer', () => {
     expect(advances[1]).toBe(cache.get('16px serif', 0x3044));
   });
 
+  /**
+   * A canvas that behaves like a real one where the shared stub does not: it
+   * ignores a font it cannot parse, and resets its font when resized.
+   */
+  function strictCanvas(): { canvas: HTMLCanvasElement; resize: () => void } {
+    let font = '10px sans-serif';
+    const ctx = {
+      get font() {
+        return font;
+      },
+      set font(value: string) {
+        if (/^\d+(?:\.\d+)?px \S/u.test(value)) font = value;
+      },
+      measureText: (text: string) => ({ width: Number.parseFloat(font) * [...text].length }),
+    };
+    return {
+      canvas: { getContext: () => ctx } as unknown as HTMLCanvasElement,
+      resize: () => {
+        font = '10px sans-serif';
+      },
+    };
+  }
+
+  it('throws on a font spec the canvas rejects and caches nothing under it', () => {
+    const m = new CharMeasurer({ canvas: strictCanvas().canvas });
+    expect(m.measure('16px serif', 0x3042)).toBe(16);
+
+    expect(() => m.measure('-16px serif', 0x3042)).toThrow(/rejected/);
+    expect(() => m.measureAll('NaNpx serif', new Uint32Array([0x3042]))).toThrow(/rejected/);
+    expect(m.getCache().get('-16px serif', 0x3042)).toBeUndefined();
+    expect(m.getCache().get('NaNpx serif', 0x3042)).toBeUndefined();
+
+    // A valid spec still measures with its own font afterwards.
+    expect(m.measure('16px serif', 0x3044)).toBe(16);
+    expect(m.measure('10px sans-serif', 0x3044)).toBe(10);
+  });
+
+  it('re-applies the font after a resize reset the context', () => {
+    const { canvas, resize } = strictCanvas();
+    const m = new CharMeasurer({ canvas });
+    expect(m.measure('16px serif', 0x3042)).toBe(16);
+
+    resize();
+
+    expect(m.measure('16px serif', 0x3044)).toBe(16);
+  });
+
   it('serves a fully cached measureAll without touching a canvas', () => {
     const cache = new WidthCache();
     cache.set('16px serif', 0x3042, 16);

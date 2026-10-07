@@ -13,6 +13,9 @@ export function deriveRubyFont(fontFamily: FontFamily, fontSize: number, ratio =
   return `${fontSize * ratio}px ${normalizeFontFamily(fontFamily)}`;
 }
 
+/** Two distinct fonts used to detect a font spec the canvas did not apply. */
+const PROBE_FONTS = ['1px serif', '2px serif'] as const;
+
 function contextOf(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Failed to get 2d context');
@@ -32,6 +35,8 @@ export class CharMeasurer {
   private ctx: CanvasRenderingContext2D | null = null;
   private cache: WidthCache;
   private currentFont = '';
+  /** `ctx.font` as the canvas reported it after {@link currentFont} was set. */
+  private appliedFont = '';
 
   /**
    * @param options - Optional collaborators.
@@ -107,10 +112,29 @@ export class CharMeasurer {
     return this.ctx;
   }
 
+  /**
+   * Puts `fontSpec` on the context, verified by reading it back: a canvas
+   * silently ignores a spec it cannot parse, and resets its font when resized.
+   *
+   * @throws When the canvas rejects `fontSpec`, so no width is cached under it.
+   */
   private setFont(ctx: CanvasRenderingContext2D, fontSpec: string): void {
-    if (this.currentFont !== fontSpec) {
+    if (this.currentFont === fontSpec && ctx.font === this.appliedFont) return;
+    const before = ctx.font;
+    ctx.font = fontSpec;
+    if (ctx.font === before) {
+      // Unchanged: the spec names the font already set, or was rejected. Move
+      // to a different font first to tell the two apart.
+      ctx.font = PROBE_FONTS[0];
+      if (ctx.font === before) ctx.font = PROBE_FONTS[1];
+      const probe = ctx.font;
       ctx.font = fontSpec;
-      this.currentFont = fontSpec;
+      if (ctx.font === probe) {
+        this.currentFont = '';
+        throw new Error(`Font spec rejected by the canvas: ${fontSpec}`);
+      }
     }
+    this.currentFont = fontSpec;
+    this.appliedFont = ctx.font;
   }
 }
