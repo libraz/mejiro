@@ -20,6 +20,18 @@ export function relativeZipPath(fromDir: string, target: string): string {
 }
 
 /**
+ * Percent-encodes a ZIP path for use as a manifest href or `src`, so that
+ * decoding it against the same base (as `resolveZipPath` does) yields the path
+ * again. Only characters that are not valid in a URL path, or that would
+ * change its meaning, are escaped.
+ *
+ * @param path - Unencoded ZIP path, absolute or relative.
+ */
+export function zipPathToHref(path: string): string {
+  return path.replace(/[%:#?"<>[\\\]^`{|}\s\p{Cc}]/gu, (ch) => encodeURIComponent(ch));
+}
+
+/**
  * Returns `base`, or `base-N` with the smallest free `N >= 2` when `base` is
  * already among `existing`.
  *

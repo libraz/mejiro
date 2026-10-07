@@ -600,7 +600,7 @@ describe('EpubProject', () => {
     const out = await project.export();
     const zip = await JSZip.loadAsync(out);
     const xhtml = await zip.file('OPS/Text/chapter-001.xhtml')?.async('string');
-    expect(xhtml).toContain('src="../Images/fig]x|y.png"');
+    expect(xhtml).toContain('src="../Images/fig%5Dx%7Cy.png"');
     expect(xhtml).toContain('alt="挿絵] | &quot;説明&quot;"');
     const image = await zip.file('OPS/Images/fig]x|y.png')?.async('uint8array');
     expect(Array.from(image ?? [])).toEqual([4, 5, 6]);
@@ -802,20 +802,11 @@ describe('EpubProject', () => {
       /must not contain parent directory/,
     );
     expect(() =>
-      project.addAsset({ href: 'OPS/Images/%2e%2e/outside.png', data: new Uint8Array([1]) }),
-    ).toThrow(/must not contain parent directory/);
-    expect(() =>
-      project.addAsset({ href: '%2FOPS/Images/cover.png', data: new Uint8Array([1]) }),
-    ).toThrow(/must be a relative EPUB path/);
-    expect(() =>
       project.addAsset({ href: 'OPS/Images/cover.png#frag', data: new Uint8Array([1]) }),
     ).toThrow(/clean EPUB file path/);
     expect(() =>
       project.addAsset({ href: 'OPS\\Images\\cover.png', data: new Uint8Array([1]) }),
     ).toThrow(/clean EPUB file path/);
-    expect(() =>
-      project.addAsset({ href: 'OPS/Images/%E0%A4%A', data: new Uint8Array([1]) }),
-    ).toThrow(/valid URI path/);
     expect(() =>
       project.addAsset({ href: 'https://example.test/x.png', data: new Uint8Array([1]) }),
     ).toThrow(/must be a relative EPUB path/);
@@ -823,6 +814,37 @@ describe('EpubProject', () => {
       project.setCover({ href: '/OPS/Images/cover.png', data: new Uint8Array([1]) }),
     ).toThrow(/must be a relative EPUB path/);
     expect(project.assets).toHaveLength(0);
+  });
+
+  it('writes every asset under its literal ZIP path and emits hrefs that resolve back to it', async () => {
+    const { resolveZipPath } = await import('../../src/epub/parser.js');
+    const project = EpubProject.fromManuscript({
+      metadata: { title: 'Encoded hrefs', identifier: 'urn:uuid:encoded-hrefs' },
+      chapters: [{ title: '一', body: '本文' }],
+    });
+    // Percent signs are part of the file name, never an encoding.
+    const hrefs = [
+      'OPS/Images/my pic%.png',
+      'OPS/Images/%2e%2e/outside.png',
+      '%2FOPS/cover.png',
+      'OPS/Images/%E0%A4%A.png',
+      'OPS/Images/挿絵 [1].png',
+    ];
+    for (const href of hrefs) project.addAsset({ href, data: new Uint8Array([1]) });
+    project.addInlineImage(0, 1, { href: 'OPS/Images/inline 100%.png', data: new Uint8Array([2]) });
+
+    const zip = await JSZip.loadAsync(await project.export());
+    const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
+    const manifestHrefs = [...opf.matchAll(/<item [^>]*href="([^"]+)"/gu)].map((m) =>
+      resolveZipPath('OPS/', m[1].replaceAll('&amp;', '&')),
+    );
+    for (const href of [...hrefs, 'OPS/Images/inline 100%.png']) {
+      expect(zip.file(href), href).not.toBeNull();
+      expect(manifestHrefs, href).toContain(href);
+    }
+    const chapter = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+    const src = /<img src="([^"]+)"/u.exec(chapter)?.[1] ?? '';
+    expect(resolveZipPath('OPS/Text/', src)).toBe('OPS/Images/inline 100%.png');
   });
 
   it('emits EPUB3 metadata for creators, contributors, subjects, series, and rights', async () => {

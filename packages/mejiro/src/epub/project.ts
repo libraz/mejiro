@@ -14,7 +14,12 @@ import {
   manuscriptParagraphs,
   parseInlineImageMarker,
 } from './manuscript-source.js';
-import { mediaTypeFromPath, relativeZipPath, uniqueManifestId } from './package-paths.js';
+import {
+  mediaTypeFromPath,
+  relativeZipPath,
+  uniqueManifestId,
+  zipPathToHref,
+} from './package-paths.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
 export { parseManuscript, parseManuscriptRuby };
@@ -496,26 +501,19 @@ export class EpubProject {
   }
 }
 
+/**
+ * Validates an asset href as the unencoded ZIP path the exporter writes it to;
+ * manifest hrefs and `src` attributes are percent-encoded from it on output.
+ */
 function assertProjectAssetHref(href: string): void {
   if (!href || href.endsWith('/')) throw new Error('Asset href must point to a file');
-  let decodedHref: string;
-  try {
-    decodedHref = decodeURIComponent(href);
-  } catch {
-    throw new Error(`Asset href must be a valid URI path: ${href}`);
-  }
-  if (
-    decodedHref.includes('\\') ||
-    decodedHref.includes('#') ||
-    decodedHref.includes('?') ||
-    decodedHref.endsWith('/')
-  ) {
+  if (href.includes('\\') || href.includes('#') || href.includes('?')) {
     throw new Error(`Asset href must be a clean EPUB file path: ${href}`);
   }
-  if (decodedHref.startsWith('/') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(decodedHref)) {
+  if (href.startsWith('/') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(href)) {
     throw new Error(`Asset href must be a relative EPUB path: ${href}`);
   }
-  if (decodedHref.split('/').some((part) => part === '..')) {
+  if (href.split('/').some((part) => part === '..')) {
     throw new Error(`Asset href must not contain parent directory segments: ${href}`);
   }
 }
@@ -675,7 +673,7 @@ function markerAssetHrefs(chapter: ProjectChapter): Set<string> {
 }
 
 function inlineImageFigure(image: { src: string; alt: string }): string {
-  return `<figure><img src="${escapeAttribute(image.src)}" alt="${escapeAttribute(
+  return `<figure><img src="${escapeAttribute(zipPathToHref(image.src))}" alt="${escapeAttribute(
     image.alt,
   )}" /></figure>`;
 }
@@ -692,7 +690,7 @@ function packageOpf(project: EpubProject): string {
     .map(
       (asset) =>
         `<item id="${escapeAttribute(asset.id ?? manifestIdFromHref(asset.href))}" href="${escapeAttribute(
-          relativeZipPath('OPS/', asset.href),
+          zipPathToHref(relativeZipPath('OPS/', asset.href)),
         )}" media-type="${escapeAttribute(asset.mediaType ?? mediaTypeFromPath(asset.href))}"${
           asset.properties ? ` properties="${escapeAttribute(asset.properties)}"` : ''
         } />`,
