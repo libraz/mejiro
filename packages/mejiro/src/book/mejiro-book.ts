@@ -5,7 +5,7 @@ import type { FontFamily, InlineAnnotation, InlineRubyAnnotation } from '../brow
 import { toFontSpec } from '../browser/types.js';
 import { type ManuscriptDialect, parseManuscript } from '../manuscript.js';
 import { normalizeAnnotatedText } from '../normalize.js';
-import { type HeadingStyle, isHeadingParagraph, resolveHeadingScale } from '../render/measures.js';
+import { type HeadingStyle, isHeadingParagraph } from '../render/measures.js';
 import type { RenderEntry } from '../render/types.js';
 import type { RubyAnnotation } from '../ruby.js';
 import type { TcyAnnotation } from '../tcy.js';
@@ -20,9 +20,9 @@ import type {
 } from '../types.js';
 import { deriveTypographyHints } from '../typography-hints.js';
 import type { CachedParagraph, LayoutConfig } from './chapter-layout.js';
-import { ChapterLayout } from './chapter-layout.js';
+import { ChapterLayout, paragraphFontSize } from './chapter-layout.js';
 import { DEFAULT_PAGE_GEOMETRY, DEFAULT_PAGE_PADDING } from './constants.js';
-import type { ChapterLayoutSnapshot } from './snapshot.js';
+import { assertChapterLayoutSnapshot, type ChapterLayoutSnapshot } from './snapshot.js';
 import type { BookOptions, BookParagraph, ComputePageSizeOptions, PageSize } from './types.js';
 
 /**
@@ -305,11 +305,14 @@ export class MejiroBook {
     if (options.headingStyles !== undefined) next.headingStyles = options.headingStyles;
     if (options.headingScale != null) next.headingScale = options.headingScale;
 
+    // A layout restored from a snapshot may hold advances measured at another
+    // size; it is re-measured on the first option change, not relabelled.
     const needsMeasurement =
       next.fontFamily !== this.opts.fontFamily ||
       next.fontSize !== this.opts.fontSize ||
       next.headingStyles !== this.opts.headingStyles ||
-      next.headingScale !== this.opts.headingScale;
+      next.headingScale !== this.opts.headingScale ||
+      [...this.liveLayouts()].some((layout) => !layout.measuredAt(next));
 
     const generation = ++this.optionsGeneration;
     if (!needsMeasurement) {
@@ -362,33 +365,55 @@ export class MejiroBook {
    * advances and the config they belong to.
    */
   private remeasureLayouts(): void {
+    const cfg = this.layoutConfigSnapshot();
+    for (const layout of this.liveLayouts()) this.remeasureLayout(layout, cfg);
+  }
+
+  /** Re-measures one layout against the committed options and adopts `cfg`. */
+  private remeasureLayout(layout: ChapterLayout, cfg: LayoutConfig): void {
     const { fontFamily, fontSize } = this.opts;
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
-    const cfg = this.layoutConfigSnapshot();
-
-    for (const layout of this.liveLayouts()) {
-      const cached = layout.getCachedParagraphs();
-      for (const para of cached) {
-        const pFontSize = isHeadingParagraph(para)
-          ? Math.round(fontSize * resolveHeadingScale(para, this.opts))
-          : fontSize;
-        const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
-        // Ruby is measured at half the *paragraph's* scaled size, matching the
-        // initial layout path and the shipped `rt { font-size: 0.5em }` rule.
-        const rubySpec = deriveRubyFont(fontFamily, pFontSize);
-        para.advances = this.measurer.measureAll(spec, para.text);
-        para.layoutRubyAnnotations = buildLayoutRubyAnnotations(
-          para.inlineAnnotations,
-          rubySpec,
-          this.measurer,
-        );
-        // The combined box is one em of the paragraph's own size, so it has to
-        // be rebuilt whenever that size changes.
-        para.layoutTcyAnnotations = buildTcyAnnotations(para.inlineAnnotations, pFontSize);
-      }
-      layout.applyConfig(cfg);
-      layout.recomputeAfterMeasurement();
+    for (const para of layout.getCachedParagraphs()) {
+      const pFontSize = paragraphFontSize(para, cfg);
+      const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
+      // Ruby is measured at half the *paragraph's* scaled size, matching the
+      // initial layout path and the shipped `rt { font-size: 0.5em }` rule.
+      const rubySpec = deriveRubyFont(fontFamily, pFontSize);
+      para.advances = this.measurer.measureAll(spec, para.text);
+      para.layoutRubyAnnotations = buildLayoutRubyAnnotations(
+        para.inlineAnnotations,
+        rubySpec,
+        this.measurer,
+      );
+      // The combined box is one em of the paragraph's own size, so it has to
+      // be rebuilt whenever that size changes.
+      para.layoutTcyAnnotations = buildTcyAnnotations(para.inlineAnnotations, pFontSize);
     }
+    layout.recomputeAfterMeasurement(cfg);
+  }
+
+  /**
+   * The one path by which a layout becomes live, so every later option change
+   * and font load reaches it.
+   *
+   * @param measuredFamily - Family the layout's advances were measured with.
+   *   When it or the layout's measured sizes no longer match the committed
+   *   options — a commit landed while the layout was being measured — the
+   *   layout is re-measured before it is returned; otherwise it takes up the
+   *   committed options that need no measuring. `null` for advances carried in
+   *   by a snapshot, which keep their own config until the next
+   *   {@link MejiroBook.setOptions}, which re-measures them if their sizes differ.
+   */
+  private registerLayout(layout: ChapterLayout, measuredFamily: FontFamily | null): ChapterLayout {
+    this.layouts.add(new WeakRef(layout));
+    if (measuredFamily === null) return layout;
+    const cfg = this.layoutConfigSnapshot();
+    if (measuredFamily !== this.opts.fontFamily || !layout.measuredAt(cfg)) {
+      this.remeasureLayout(layout, cfg);
+    } else {
+      layout.applyConfig(cfg);
+    }
+    return layout;
   }
 
   private layoutConfigSnapshot(): LayoutConfig {
@@ -571,9 +596,7 @@ export class MejiroBook {
       return {
         ...annotated,
         isHeading,
-        paragraphFontSize: isHeading
-          ? Math.round(fontSize * resolveHeadingScale(p, opts))
-          : fontSize,
+        paragraphFontSize: paragraphFontSize(p, opts),
         // The analysis runs here, once, against the NFC text — the same string
         // the break, the render entries and every later re-break work from. A
         // paragraph carrying its own hints is taken at its word and the
@@ -649,9 +672,7 @@ export class MejiroBook {
       analyzer: this.analyzer?.identity,
     };
 
-    const layout = new ChapterLayout(cached, renderEntries, config, size);
-    this.layouts.add(new WeakRef(layout));
-    return layout;
+    return this.registerLayout(new ChapterLayout(cached, renderEntries, config, size), fontFamily);
   }
 
   /**
@@ -688,9 +709,12 @@ export class MejiroBook {
    * the client calls this method on mount.
    *
    * The returned layout uses the **snapshot's** config and page geometry,
-   * not this book's current options. Calling {@link MejiroBook.setOptions}
-   * after restore propagates new font / size values which will trigger a
-   * full re-measure (the measurer rebuilds advances from the live font).
+   * not this book's current options. Its advances are taken to be measured in
+   * this book's font family, which the snapshot does not record. The next
+   * {@link MejiroBook.setOptions} re-measures it against the book's options
+   * whenever the snapshot's font size or heading scales differ from them, so
+   * a restored layout never carries the book's sizes over advances measured
+   * at others.
    *
    * Typography hints are carried over only when the snapshot was produced by
    * the same analyzer this book is configured with; otherwise they are dropped
@@ -699,12 +723,13 @@ export class MejiroBook {
    *
    * @param snapshot - Value previously returned by `layout.snapshot()`.
    * @returns A {@link ChapterLayout} positioned exactly as it was at snapshot time.
-   * @throws If the snapshot is of an unsupported format version.
+   * @throws If the snapshot is of an unsupported format version, or malformed:
+   *   an advance array whose length is not the paragraph's codepoint count,
+   *   break points that are not strictly increasing inside the paragraph, an
+   *   annotation span outside it, or a missing or non-finite field.
    */
   layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout {
-    if (snapshot.version !== 2) {
-      throw new Error(`Unsupported ChapterLayoutSnapshot version: ${snapshot.version}`);
-    }
+    assertChapterLayoutSnapshot(snapshot);
     // A snapshot carrying no hints has nothing to weigh an identity against, so
     // the comparison is only worth making once one is found.
     const hasHints = snapshot.paragraphs.some(
@@ -770,8 +795,7 @@ export class MejiroBook {
     for (const spread of snapshot.images ?? []) {
       layout.setImages(spread.spreadIndex, spread.images);
     }
-    this.layouts.add(new WeakRef(layout));
-    return layout;
+    return this.registerLayout(layout, null);
   }
 
   /** Clears the character width measurement cache. */

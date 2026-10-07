@@ -18,8 +18,9 @@ export interface FindTextOptions {
    */
   caseSensitive?: boolean;
   /**
-   * Cap on the number of matches returned. Useful for incremental UIs that
-   * only render the first N hits.
+   * Cap on the number of matches returned, rounded down; `0` returns none.
+   * Useful for incremental UIs that only render the first N hits. Unlimited
+   * when omitted.
    */
   maxResults?: number;
 }

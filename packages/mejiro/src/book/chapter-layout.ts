@@ -4,11 +4,12 @@ import { splitSpreadImages } from '../exclusion.js';
 import { computeBreaks } from '../layout.js';
 import type { PageSlice } from '../paginate.js';
 import { paginate } from '../paginate.js';
-import type { HeadingStyle, MeasureOptions } from '../render/measures.js';
+import type { HeadingFields, HeadingStyle, MeasureOptions } from '../render/measures.js';
 import {
   buildColumnSlots,
   buildLineMetrics,
   buildParagraphMeasures,
+  isHeadingParagraph,
   paragraphHeading,
   paragraphMetrics,
   resolveHeadingScale,
@@ -17,6 +18,7 @@ import { buildRenderPage } from '../render/page.js';
 import type { LineMetric, RenderEntry, RenderLine, RenderParagraph } from '../render/types.js';
 import { preprocessRuby, type RubyAnnotation } from '../ruby.js';
 import { preprocessTcy, type TcyAnnotation } from '../tcy.js';
+import { normalizeText } from '../text.js';
 import type { BreakCostOptions } from '../types.js';
 import type { AnchorLocation, AnchorRange, AnchorRect, InChapterAnchor } from './anchor.js';
 import { ColumnFlow, type SpreadLayoutInfo } from './column-flow.js';
@@ -85,6 +87,33 @@ export interface LayoutConfig {
    * a snapshot can record which analysis its break points depend on.
    */
   analyzer?: { name: string; version: string };
+}
+
+/** @internal Fields of a {@link LayoutConfig} that cached advances are measured against. */
+type MeasurementConfig = Pick<LayoutConfig, 'fontSize' | 'headingScale' | 'headingStyles'>;
+
+/**
+ * @internal The font size a paragraph is measured and drawn at: the body size,
+ * or the heading scale applied and rounded to whole pixels.
+ */
+export function paragraphFontSize(p: HeadingFields, config: MeasurementConfig): number {
+  if (!isHeadingParagraph(p)) return config.fontSize;
+  return Math.round(config.fontSize * resolveHeadingScale(p, config));
+}
+
+/** True when both configs resolve every heading level to the same scale. */
+function sameMeasurement(a: MeasurementConfig, b: MeasurementConfig): boolean {
+  if (a.fontSize !== b.fontSize || a.headingScale !== b.headingScale) return false;
+  if (a.headingStyles === b.headingStyles) return true;
+  const levels = new Set([
+    ...Object.keys(a.headingStyles ?? {}),
+    ...Object.keys(b.headingStyles ?? {}),
+  ]);
+  for (const level of levels) {
+    const n = Number(level);
+    if (a.headingStyles?.[n]?.scale !== b.headingStyles?.[n]?.scale) return false;
+  }
+  return true;
 }
 
 // ── Internal cache types ──
@@ -409,17 +438,29 @@ export class ChapterLayout {
   }
 
   /**
-   * @internal Applies a fresh layout config snapshot from {@link MejiroBook.setOptions}.
+   * @internal Whether the cached advances were measured for the font size and
+   * heading scales of `config`, so it can be applied without re-measuring.
+   */
+  measuredAt(config: MeasurementConfig): boolean {
+    return sameMeasurement(this.config, config);
+  }
+
+  /**
+   * @internal Applies a layout config from {@link MejiroBook.setOptions} that
+   * changes no measured field.
    *
-   * Updates the fields in place, marks the line breaks stale when `mode` /
-   * `enableHanging` / `fontSize` change, and invalidates the rendered caches so
-   * the next read re-breaks and reflects the new options.
+   * Marks the line breaks stale when `mode` / `enableHanging` change, and
+   * invalidates the rendered caches so the next read reflects the new options.
+   *
+   * @throws If `config` changes a field the advances were measured with; that
+   *   change goes through {@link ChapterLayout.recomputeAfterMeasurement}.
    */
   applyConfig(config: LayoutConfig): void {
+    if (!this.measuredAt(config)) {
+      throw new Error('ChapterLayout.applyConfig: a measured field changed without re-measuring');
+    }
     const breakSensitiveChanged =
-      config.mode !== this.config.mode ||
-      config.enableHanging !== this.config.enableHanging ||
-      config.fontSize !== this.config.fontSize;
+      config.mode !== this.config.mode || config.enableHanging !== this.config.enableHanging;
     this.config = { ...config };
     if (breakSensitiveChanged) this.breaksStale = true;
     this.invalidate();
@@ -431,11 +472,12 @@ export class ChapterLayout {
   }
 
   /**
-   * @internal Marks the line breaks stale after {@link MejiroBook} has
-   * refreshed each cached paragraph's `advances` / `layoutRubyAnnotations`, so
-   * the next read re-breaks against them.
+   * @internal Adopts `config` after {@link MejiroBook} has re-measured each
+   * cached paragraph's `advances` / ruby / tate-chu-yoko against it, and marks
+   * the line breaks stale so the next read re-breaks against them.
    */
-  recomputeAfterMeasurement(): void {
+  recomputeAfterMeasurement(config: LayoutConfig): void {
+    this.config = { ...config };
     this.breaksStale = true;
     this.invalidate();
   }
@@ -747,15 +789,18 @@ export class ChapterLayout {
    * Codepoint offsets (`charStart` / `charEnd`) are compatible with
    * {@link InChapterAnchor.charIndex} and survive reflow.
    *
-   * @param query - Literal substring (default), a regex source string (when
-   *   {@link FindTextOptions.regex} is `true`), or a `RegExp` — whose `source`
+   * @param query - Literal substring (default), normalized the way the layout
+   *   text is, so a decomposed `か\u3099` finds `が`; a regex source string
+   *   (when {@link FindTextOptions.regex} is `true`), left as written; or a
+   *   `RegExp` — whose `source`
    *   takes the regex path whatever {@link FindTextOptions.regex} says. A
    *   `RegExp` keeps its own `i` / `m` / `s` flags unless
    *   {@link FindTextOptions.caseSensitive} is set, which then wins; `g` and
    *   Unicode mode are always applied and `y` is ignored.
    * @param options - Search options.
-   * @returns Matches in document order. Empty array when `query` is empty
-   *   or no matches are found.
+   * @returns Matches in document order. Empty array when `query` is empty,
+   *   `maxResults` is `0`, or no matches are found.
+   * @throws RangeError If `maxResults` is negative or `NaN`.
    * @throws If the pattern is invalid or exceeds the regex safety limits. To
    *   keep matching time bounded, the guard also refuses patterns that can
    *   backtrack catastrophically: a quantified group that itself contains a
@@ -766,12 +811,17 @@ export class ChapterLayout {
    */
   findText(query: string | RegExp, options: FindTextOptions = {}): SearchMatch[] {
     const { regex = false, caseSensitive, maxResults } = options;
+    if (maxResults != null && !(maxResults >= 0)) {
+      throw new RangeError('ChapterLayout.findText: maxResults must be a non-negative number');
+    }
     const isRegExp = query instanceof RegExp;
-    if (!(isRegExp || query)) return [];
-    const limit = maxResults != null && maxResults > 0 ? maxResults : Number.POSITIVE_INFINITY;
+    const limit = maxResults == null ? Number.POSITIVE_INFINITY : Math.floor(maxResults);
+    if (!(isRegExp || query) || limit === 0) return [];
 
     const asRegex = isRegExp || regex;
-    const source = isRegExp ? query.source : query;
+    // A literal query takes the layout text's normalization. A regex source is
+    // left alone, since normalizing it can change what the pattern means.
+    const source = isRegExp ? query.source : asRegex ? query : normalizeText(query);
     if (asRegex) assertSafeRegexSearch(source);
     const pattern = new RegExp(
       asRegex ? source : source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
@@ -824,15 +874,19 @@ export class ChapterLayout {
     return this.size.pageWidth - this.size.pagePaddingX * 2;
   }
 
-  /** Adds the heading scale this layout measured the paragraph at. */
+  /**
+   * Adds the heading scale this layout measured the paragraph at: the rounded
+   * pixel size over the body size, so `scale × fontSize` is the measured size.
+   */
   private scaledParagraph(paragraph: RenderParagraph): RenderParagraph {
     if (!paragraph.isHeading) return paragraph;
-    return { ...paragraph, scale: resolveHeadingScale(paragraph, this.config) };
+    const scale = paragraphFontSize(paragraph, this.config) / this.config.fontSize;
+    return { ...paragraph, scale };
   }
 
   /** Flattens a render paragraph into slot-mode lines. */
   private pageLinesOf(paragraph: RenderParagraph): PageLine[] {
-    const fontSize = Math.round(this.config.fontSize * resolveHeadingScale(paragraph, this.config));
+    const fontSize = paragraphFontSize(paragraph, this.config);
     const kind = paragraph.kind ?? (paragraph.isHeading ? 'heading' : undefined);
     return paragraph.lines.map((line) => ({
       segments: line.segments,

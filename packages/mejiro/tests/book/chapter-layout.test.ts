@@ -669,6 +669,37 @@ describe('ChapterLayout', () => {
       expect(matches).toHaveLength(2);
       expect(matches.map((m) => m.charStart)).toEqual([0, 3]);
     });
+
+    it('never returns more matches than maxResults, and none for 0', () => {
+      const layout = setup(['aa aa aa aa aa']);
+      expect(layout.findText('aa', { maxResults: 0 })).toEqual([]);
+      expect(layout.findText(/aa/, { maxResults: 0 })).toEqual([]);
+      expect(layout.findText('aa', { maxResults: 1.5 })).toHaveLength(1);
+      expect(layout.findText('aa')).toHaveLength(5);
+      expect(() => layout.findText('aa', { maxResults: -1 })).toThrow(RangeError);
+      expect(() => layout.findText('aa', { maxResults: Number.NaN })).toThrow(RangeError);
+    });
+
+    it('matches a decomposed literal query against the NFC layout text', () => {
+      const layout = setup(['かがみとがか']);
+      const decomposed = 'か\u3099';
+      expect(decomposed).not.toBe('が');
+
+      const matches = layout.findText(decomposed);
+      expect(matches.map((m) => [m.charStart, m.charEnd, m.match])).toEqual([
+        [1, 2, 'が'],
+        [4, 5, 'が'],
+      ]);
+      // A regex source is not normalized: its meaning could change.
+      expect(layout.findText(decomposed, { regex: true })).toEqual([]);
+    });
+
+    it('keeps a compatibility ideograph in a literal query as the layout keeps it', () => {
+      // U+FA11 is kept as written in layout text; plain NFC would map it to U+5D0E.
+      const layout = setup(['\uFA11と\u5D0E']);
+      expect(layout.findText('\uFA11').map((m) => m.charStart)).toEqual([0]);
+      expect(layout.findText('\u5D0E').map((m) => m.charStart)).toEqual([2]);
+    });
   });
 
   describe('image exclusion that blocks a whole column', () => {
@@ -1086,8 +1117,8 @@ describe('ChapterLayout', () => {
     it('keeps the kind after an option change re-break', () => {
       const layout = makeKindedLayout();
       layout.applyConfig({
-        fontSize: 12,
-        lineSpacing: 1,
+        fontSize: 10,
+        lineSpacing: 2,
         headingScale: 1.4,
         mode: 'loose',
         enableHanging: false,
@@ -1101,9 +1132,36 @@ describe('ChapterLayout', () => {
       for (const para of layout.getCachedParagraphs()) {
         para.advances = uniformAdvances(para.text.length, 8);
       }
-      layout.recomputeAfterMeasurement();
+      layout.recomputeAfterMeasurement({
+        fontSize: 8,
+        lineSpacing: 1,
+        headingScale: 1.4,
+        mode: 'strict',
+        enableHanging: true,
+      });
 
       expect(renderedKinds(layout)).toEqual(KINDS);
+    });
+
+    it('refuses an option change that would relabel measured advances', () => {
+      const layout = makeKindedLayout();
+      const config = {
+        fontSize: 10,
+        lineSpacing: 1,
+        headingScale: 1.4,
+        mode: 'strict' as const,
+        enableHanging: true,
+      };
+      for (const measured of [
+        { fontSize: 12 },
+        { headingScale: 2 },
+        { headingStyles: { 2: { scale: 3 } } },
+      ]) {
+        expect(layout.measuredAt({ ...config, ...measured })).toBe(false);
+        expect(() => layout.applyConfig({ ...config, ...measured })).toThrow(/re-measuring/);
+      }
+      // A heading style that changes only a gap is not a measured field.
+      expect(layout.measuredAt({ ...config, headingStyles: { 2: { gapAfterEm: 3 } } })).toBe(true);
     });
 
     it('keeps the kind on the image exclusion path', () => {
@@ -1180,6 +1238,44 @@ describe('ChapterLayout', () => {
           Math.round(10 * h3),
           10,
         ]);
+      }
+    });
+
+    it('scales a heading to the rounded pixel size it was measured at', () => {
+      const text = 'あああ';
+      const layout = new ChapterLayout(
+        [
+          {
+            text: toCodepoints(text),
+            advances: uniformAdvances(3, 22),
+            chars: chars(text),
+            inlineAnnotations: [],
+            headingLevel: 2,
+            isHeading: true,
+          },
+        ],
+        [
+          {
+            chars: chars(text),
+            breakPoints: new Uint32Array(0),
+            inlineAnnotations: [],
+            headingLevel: 2,
+            isHeading: true,
+          },
+        ],
+        { fontSize: 16, lineSpacing: 1.8, headingScale: 1.4, mode: 'strict', enableHanging: true },
+        { pageWidth: 400, lineWidth: 400, pagePaddingX: 0, pagePaddingY: 0 },
+      );
+
+      // Flow mode, then the image-exclusion page builder.
+      const pages = [layout.getPage(0)];
+      layout.setImages(0, [{ x: 0, y: 0, w: 1, h: 1 }]);
+      pages.push(layout.getPage(0));
+      for (const page of pages) {
+        const [heading] = page.page.paragraphs;
+        // h2 is 1.4em: 22.4px, measured as Math.round → 22px.
+        expect((heading.scale ?? 0) * 16).toBe(22);
+        expect(page.lines[0].fontSize).toBe(22);
       }
     });
   });

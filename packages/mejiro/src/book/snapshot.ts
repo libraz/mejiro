@@ -18,8 +18,9 @@ import type { BookImage, PageSize, ParagraphKind } from './types.js';
  * layout observing the change.
  *
  * **Authoritative config:** the snapshot bakes in the `fontSize` / `lineSpacing`
- * / `pageWidth` / `lineWidth` / etc. that were active when it was taken. Calling
- * `layoutFromSnapshot` then `setOptions` re-measures from scratch — see the
+ * / `pageWidth` / `lineWidth` / etc. that were active when it was taken. The
+ * first `setOptions` after `layoutFromSnapshot` re-measures the layout when its
+ * font size or heading scales differ from the book's — see the
  * {@link MejiroBook.layoutFromSnapshot} docs.
  *
  * **Typography hints travel with the breaks:** when the layout was produced with
@@ -32,7 +33,8 @@ export interface ChapterLayoutSnapshot {
    * Snapshot format version. Bump when the shape changes.
    *
    * There is no migration path: {@link MejiroBook.layoutFromSnapshot} rejects
-   * any other value, the same way it rejects a malformed snapshot. A snapshot
+   * any other value, the same way it rejects a malformed snapshot — one whose
+   * arrays do not fit the paragraph they belong to. A snapshot
    * is a cache of work that can always be redone by laying the chapter out
    * again, so refusing a stale one costs a re-layout, while replaying one whose
    * shape has drifted would put wrong break points on screen.
@@ -170,4 +172,171 @@ export interface SpreadImagesSnapshot {
   spreadIndex: number;
   /** Image rectangles excluded on that spread, in right-page coordinates. */
   images: BookImage[];
+}
+
+/** Throws the boundary error for a snapshot that fails validation. */
+function malformed(detail: string): never {
+  throw new Error(`Malformed ChapterLayoutSnapshot: ${detail}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isFinitePositive(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function isFiniteNonNegative(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isIndex(value: unknown, max: number): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max;
+}
+
+/** Checks `value` is an array of `length` numbers each accepted by `valid`. */
+function checkNumbers(
+  value: unknown,
+  length: number | null,
+  valid: (n: number) => boolean,
+  where: string,
+): void {
+  if (!Array.isArray(value)) malformed(`${where} is not an array`);
+  if (length !== null && value.length !== length) {
+    malformed(`${where} has ${value.length} entries, expected ${length}`);
+  }
+  for (const n of value) {
+    if (typeof n !== 'number' || !valid(n)) malformed(`${where} holds an invalid value`);
+  }
+}
+
+/** Checks a `[startIndex, endIndex)` span lies within a paragraph of `count` codepoints. */
+function checkSpan(value: unknown, count: number, where: string): Record<string, unknown> {
+  if (!isRecord(value)) malformed(`${where} is not an object`);
+  const { startIndex, endIndex } = value;
+  if (!(isIndex(startIndex, count) && isIndex(endIndex, count)) || startIndex > endIndex) {
+    malformed(`${where} span lies outside the paragraph`);
+  }
+  return value;
+}
+
+function checkParagraph(value: unknown, where: string): void {
+  if (!isRecord(value)) malformed(`${where} is not an object`);
+  if (typeof value.text !== 'string') malformed(`${where}.text is not a string`);
+  const count = [...value.text].length;
+  checkNumbers(value.advances, count, Number.isFinite, `${where}.advances`);
+  checkNumbers(value.breakPoints, null, (n) => isIndex(n, count - 1), `${where}.breakPoints`);
+  const breaks = value.breakPoints as number[];
+  for (let i = 1; i < breaks.length; i++) {
+    if (breaks[i] <= breaks[i - 1]) malformed(`${where}.breakPoints are not strictly increasing`);
+  }
+  if (!Array.isArray(value.inlineAnnotations)) {
+    malformed(`${where}.inlineAnnotations is not an array`);
+  }
+  value.inlineAnnotations.forEach((a, i) => {
+    checkSpan(a, count, `${where}.inlineAnnotations[${i}]`);
+  });
+  if (value.layoutRubyAnnotations !== undefined) {
+    if (!Array.isArray(value.layoutRubyAnnotations)) {
+      malformed(`${where}.layoutRubyAnnotations is not an array`);
+    }
+    value.layoutRubyAnnotations.forEach((r, i) => {
+      const ruby = checkSpan(r, count, `${where}.layoutRubyAnnotations[${i}]`);
+      const rubyWhere = `${where}.layoutRubyAnnotations[${i}]`;
+      checkNumbers(ruby.rubyText, null, (n) => isIndex(n, 0x10ffff), `${rubyWhere}.rubyText`);
+      const rubyLength = (ruby.rubyText as number[]).length;
+      checkNumbers(ruby.rubyAdvances, rubyLength, Number.isFinite, `${rubyWhere}.rubyAdvances`);
+      if (ruby.jukugoSplitPoints !== undefined) {
+        checkNumbers(
+          ruby.jukugoSplitPoints,
+          null,
+          Number.isSafeInteger,
+          `${rubyWhere}.jukugoSplitPoints`,
+        );
+      }
+    });
+  }
+  if (value.layoutTcyAnnotations !== undefined) {
+    if (!Array.isArray(value.layoutTcyAnnotations)) {
+      malformed(`${where}.layoutTcyAnnotations is not an array`);
+    }
+    value.layoutTcyAnnotations.forEach((t, i) => {
+      const tcy = checkSpan(t, count, `${where}.layoutTcyAnnotations[${i}]`);
+      if (!isFiniteNonNegative(tcy.advance)) {
+        malformed(`${where}.layoutTcyAnnotations[${i}].advance is invalid`);
+      }
+    });
+  }
+  if (value.hintClusterIds !== undefined) {
+    checkNumbers(
+      value.hintClusterIds,
+      count,
+      (n) => isIndex(n, 0xffffffff),
+      `${where}.hintClusterIds`,
+    );
+  }
+  if (value.hintBreakPenalties !== undefined) {
+    checkNumbers(
+      value.hintBreakPenalties,
+      count,
+      (n) => isIndex(n, 0xff),
+      `${where}.hintBreakPenalties`,
+    );
+  }
+}
+
+/**
+ * @internal The boundary check {@link MejiroBook.layoutFromSnapshot} runs
+ * before adopting a snapshot, which may arrive as untrusted JSON. Every array
+ * the layout indexes is checked against the paragraph it belongs to, so a
+ * truncated or tampered snapshot fails here instead of producing NaN advances
+ * or out-of-range breaks later.
+ *
+ * @throws Error naming the first malformed field, or the unsupported version.
+ */
+export function assertChapterLayoutSnapshot(
+  value: unknown,
+): asserts value is ChapterLayoutSnapshot {
+  if (!isRecord(value)) malformed('not an object');
+  if (value.version !== 2) {
+    throw new Error(`Unsupported ChapterLayoutSnapshot version: ${String(value.version)}`);
+  }
+  const { config, size, paragraphs, images } = value;
+  if (!isRecord(config)) malformed('config is not an object');
+  for (const key of ['fontSize', 'lineSpacing', 'headingScale'] as const) {
+    if (!isFinitePositive(config[key])) malformed(`config.${key} is not a positive number`);
+  }
+  if (config.mode !== 'strict' && config.mode !== 'loose') malformed('config.mode is invalid');
+  if (typeof config.enableHanging !== 'boolean') malformed('config.enableHanging is invalid');
+  if (config.headingStyles !== undefined && !isRecord(config.headingStyles)) {
+    malformed('config.headingStyles is not an object');
+  }
+  if (!isRecord(size)) malformed('size is not an object');
+  for (const key of ['pageWidth', 'lineWidth'] as const) {
+    if (!isFinitePositive(size[key])) malformed(`size.${key} is not a positive number`);
+  }
+  for (const key of ['pagePaddingX', 'pagePaddingY'] as const) {
+    if (!isFiniteNonNegative(size[key])) malformed(`size.${key} is not a non-negative number`);
+  }
+  if (!Array.isArray(paragraphs)) malformed('paragraphs is not an array');
+  paragraphs.forEach((p, i) => {
+    checkParagraph(p, `paragraphs[${i}]`);
+  });
+  if (images !== undefined) {
+    if (!Array.isArray(images)) malformed('images is not an array');
+    images.forEach((spread, i) => {
+      if (!(isRecord(spread) && isIndex(spread.spreadIndex, Number.MAX_SAFE_INTEGER))) {
+        malformed(`images[${i}].spreadIndex is invalid`);
+      }
+      if (!Array.isArray(spread.images)) malformed(`images[${i}].images is not an array`);
+      spread.images.forEach((image, j) => {
+        const ok =
+          isRecord(image) &&
+          (['x', 'y', 'w', 'h'] as const).every((k) => Number.isFinite(image[k])) &&
+          (image.margin === undefined || isFiniteNonNegative(image.margin));
+        if (!ok) malformed(`images[${i}].images[${j}] is not a valid image rectangle`);
+      });
+    });
+  }
 }

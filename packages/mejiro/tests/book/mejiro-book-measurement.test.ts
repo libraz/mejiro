@@ -1,7 +1,7 @@
 /**
  * @vitest-environment happy-dom
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookParagraph } from '../../src/book/types.js';
 
@@ -203,5 +203,95 @@ describe('MejiroBook measurement', () => {
 
     expect(book.getOptions().fontFamily).toBe('monospace');
     expect(layout.snapshot().paragraphs[0].advances[0]).toBe(40 * FAMILY_WIDTH_RATIO.monospace);
+  });
+
+  it('re-measures live layouts when a disposed book is used again', async () => {
+    installFontsStub();
+    const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
+    book.setPageSize({ pageWidth: 400, lineWidth: 320 });
+    const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
+    const recompute = vi.spyOn(layout, 'recomputeAfterMeasurement');
+
+    // Fonts may finish loading while the book holds no subscription.
+    book.dispose();
+    await book.layoutChapter({ paragraphs: [{ text: 'かきくけこ' }] });
+
+    expect(recompute).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-measures a layout whose font was replaced while it was being measured', async () => {
+    const fonts = installFontsStub({ slowFamily: 'monospace' });
+    const book = new MejiroBook({ fontFamily: 'monospace', fontSize: 16 });
+    book.setPageSize({ pageWidth: 400, lineWidth: 320 });
+
+    // The layout waits on the slow family while a font change commits.
+    const pending = book.layoutChapter({ paragraphs: HEADING_WITH_RUBY });
+    await book.setOptions({ fontFamily: 'serif', fontSize: 20 });
+    await book.setOptions({ mode: 'loose' });
+    fonts.release();
+    const layout = await pending;
+
+    const control = new MejiroBook({ fontFamily: 'serif', fontSize: 20, mode: 'loose' });
+    control.setPageSize({ pageWidth: 400, lineWidth: 320 });
+    const expected = (await control.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
+
+    const snapshot = layout.snapshot();
+    expect(snapshot.config).toEqual(expected.config);
+    expect(snapshot.paragraphs[0].advances).toEqual(expected.paragraphs[0].advances);
+    expect(snapshot.paragraphs[0].layoutRubyAnnotations).toEqual(
+      expected.paragraphs[0].layoutRubyAnnotations,
+    );
+    expect(snapshot.paragraphs[0].breakPoints).toEqual(expected.paragraphs[0].breakPoints);
+  });
+
+  it('re-measures a layout restored at another size on the next option change', async () => {
+    installFontsStub();
+    const source = new MejiroBook({ fontFamily: 'serif', fontSize: 18 });
+    source.setPageSize({ pageWidth: 400, lineWidth: 160 });
+    const snapshot = (await source.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
+
+    const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
+    const restored = book.layoutFromSnapshot(snapshot);
+    // Restored as taken, until the book's options are applied to it.
+    expect(restored.snapshot().paragraphs[0].advances).toEqual(snapshot.paragraphs[0].advances);
+
+    await book.setOptions({ mode: 'loose' });
+
+    const control = new MejiroBook({ fontFamily: 'serif', fontSize: 16, mode: 'loose' });
+    control.setPageSize({ pageWidth: 400, lineWidth: 160 });
+    const expected = (await control.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
+    const after = restored.snapshot();
+    expect(after.config.fontSize).toBe(16);
+    expect(after.config.mode).toBe('loose');
+    expect(after.paragraphs[0].advances).toEqual(expected.paragraphs[0].advances);
+    expect(after.paragraphs[0].layoutRubyAnnotations).toEqual(
+      expected.paragraphs[0].layoutRubyAnnotations,
+    );
+  });
+
+  it('applies an option change to a restored layout of the same size without re-measuring', async () => {
+    installFontsStub();
+    const source = new MejiroBook({
+      fontFamily: 'serif',
+      fontSize: 16,
+      headingStyles: { 1: { scale: 2 } },
+    });
+    source.setPageSize({ pageWidth: 400, lineWidth: 160 });
+    const taken = (await source.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
+    // A JSON round trip gives the heading styles a new identity, not new values.
+    const snapshot = JSON.parse(JSON.stringify(taken)) as typeof taken;
+
+    const book = new MejiroBook({
+      fontFamily: 'serif',
+      fontSize: 16,
+      headingStyles: { 1: { scale: 2 } },
+    });
+    const restored = book.layoutFromSnapshot(snapshot);
+    const recompute = vi.spyOn(restored, 'recomputeAfterMeasurement');
+
+    await book.setOptions({ mode: 'loose' });
+
+    expect(recompute).not.toHaveBeenCalled();
+    expect(restored.snapshot().config.mode).toBe('loose');
   });
 });
