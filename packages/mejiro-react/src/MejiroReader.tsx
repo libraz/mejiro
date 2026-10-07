@@ -919,6 +919,7 @@ function MejiroReaderInner(
       if (visible?.layout === layout) return visible.anchor;
       return spreadAnchorRef.current();
     },
+    onError: reportError,
   });
 
   // Last index reported to the host, consumed by the controlled reconcile below.

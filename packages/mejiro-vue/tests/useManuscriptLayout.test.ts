@@ -66,6 +66,12 @@ function mockBookSequence(layouts: ChapterLayout[]): MejiroBook {
   } as unknown as MejiroBook;
 }
 
+/** Gives `el` a client box, as layout would; the composables re-flow only when it changes. */
+function setBox(el: HTMLElement, width: number, height: number): void {
+  Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => width });
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => height });
+}
+
 function harness<T>(setup: () => T): { result: { current: T }; app: ReturnType<typeof mount> } {
   const result = { current: undefined as unknown as T };
   const TestComponent = defineComponent({
@@ -213,6 +219,7 @@ describe('useManuscriptLayout (Vue)', () => {
       seen.length = 0;
 
       // Only the surface reports a new size — no window resize event is fired.
+      setBox(surfaceEl, 800, 600);
       resizeCallback?.([], {} as ResizeObserver);
       await nextTick();
       await nextTick();

@@ -58,6 +58,12 @@ function mockBook(layout: ChapterLayout = mockLayout()): MejiroBook {
   } as unknown as MejiroBook;
 }
 
+/** Gives `el` a client box, as layout would; the hooks re-flow only when it changes. */
+function setBox(el: HTMLElement, width: number, height: number): void {
+  Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => width });
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => height });
+}
+
 function setupHook(initialChapter: ManuscriptChapter | null) {
   const book = mockBook();
   const surfaceEl = document.createElement('div');
@@ -153,9 +159,11 @@ describe('useManuscriptLayout (React)', () => {
       await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(1));
       expect(observe).toHaveBeenCalledWith(surfaceEl);
 
+      setBox(surfaceEl, 800, 600);
       act(() => resizeCallback?.([], {} as ResizeObserver));
       await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(2));
 
+      setBox(surfaceEl, 640, 600);
       act(() => resizeCallback?.([], {} as ResizeObserver));
       await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(3));
       expect(book.computePageSize).toHaveBeenCalledTimes(3);
@@ -203,6 +211,7 @@ describe('useManuscriptLayout (React)', () => {
       seen.length = 0;
 
       // Only the surface reports a new size — no window resize event is fired.
+      setBox(surfaceEl, 800, 600);
       await act(async () => {
         resizeCallback?.([], {} as ResizeObserver);
       });

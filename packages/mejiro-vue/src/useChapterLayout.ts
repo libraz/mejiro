@@ -6,6 +6,7 @@ import type {
 } from '@libraz/mejiro/book';
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
 import { onScopeDispose, type Ref, shallowRef, unref, watch } from 'vue';
+import { toError } from './errors.js';
 
 /** Options for {@link useChapterLayout}. */
 export interface UseChapterLayoutOptions {
@@ -42,6 +43,12 @@ export interface UseChapterLayoutOptions {
    * first. Without it, consume `pendingRestore` yourself.
    */
   restorePosition?: (layout: ChapterLayout, position: InChapterAnchor) => void;
+  /**
+   * Called once when a layout of the current source fails, whichever path
+   * started it (source change, resize or `recompute`); a superseded layout
+   * reports nothing. When supplied, `recompute` resolves instead of rejecting.
+   */
+  onError?: (error: Error) => void;
 }
 
 /** Options for {@link UseChapterLayoutReturn.recompute}. */
@@ -77,7 +84,10 @@ export interface UseChapterLayoutReturn {
   contentHeight: Ref<number>;
   /** Elapsed layout time in milliseconds for the most recent computation. */
   elapsedMs: Ref<number>;
-  /** Force a fresh layout computation. */
+  /**
+   * Force a fresh layout computation. A failure goes to `onError` when one is
+   * supplied; otherwise the returned promise rejects.
+   */
   recompute: (opts?: RecomputeOptions) => Promise<void>;
   /**
    * Anchor captured by `capturePosition` before the most recent reflow,
@@ -132,6 +142,9 @@ export function useChapterLayout(
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
   let layoutRequestId = 0;
+  // Client box the page size was last computed from; an observation reporting
+  // the same box needs no re-layout.
+  let measuredBox: { width: number; height: number } | null = null;
   const pendingRestore: { current: InChapterAnchor | null } = { current: null };
 
   function currentChapter(): EpubChapter | null {
@@ -143,6 +156,7 @@ export function useChapterLayout(
     const requestId = ++layoutRequestId;
     const chapter = currentChapter();
     if (!(chapter && surface.value)) {
+      measuredBox = null;
       layout.value = null;
       pageWidth.value = 0;
       pageHeight.value = 0;
@@ -150,7 +164,26 @@ export function useChapterLayout(
       elapsedMs.value = 0;
       return;
     }
+    try {
+      await layOut(requestId, blank, chapter, surface.value);
+    } catch (err) {
+      if (requestId !== layoutRequestId) return;
+      if (!options.onError) throw err;
+      options.onError(toError(err));
+    }
+  }
 
+  /** Starts a re-layout nobody awaits; a failure is `onError`'s alone. */
+  function trigger(opts?: RecomputeOptions): void {
+    recompute(opts).catch(() => {});
+  }
+
+  async function layOut(
+    requestId: number,
+    blank: boolean,
+    chapter: EpubChapter,
+    el: HTMLElement,
+  ): Promise<void> {
     // Capture the reading position before a reflow swaps in a new layout, so we
     // can restore it afterwards (a new layout object resets the spread index).
     const captured =
@@ -160,7 +193,8 @@ export function useChapterLayout(
     if (blank) layout.value = null;
 
     const currentBook = unref(book);
-    const dims = currentBook.computePageSize(surface.value, options.pageGeometry?.());
+    measuredBox = { width: el.clientWidth, height: el.clientHeight };
+    const dims = currentBook.computePageSize(el, options.pageGeometry?.());
     pageWidth.value = dims.pageWidth;
     pageHeight.value = dims.pageHeight;
     contentHeight.value = dims.contentHeight;
@@ -176,7 +210,7 @@ export function useChapterLayout(
     }
   }
 
-  watch([() => unref(book), epub, chapterIndex, surface], () => void recompute(), {
+  watch([() => unref(book), epub, chapterIndex, surface], () => trigger(), {
     immediate: true,
     flush: 'sync',
   });
@@ -194,12 +228,12 @@ export function useChapterLayout(
   function scheduleReflow(immediate: boolean): void {
     clearTimer();
     if (immediate) {
-      void recompute({ blank: false });
+      trigger({ blank: false });
       return;
     }
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
-      void recompute({ blank: false });
+      trigger({ blank: false });
     }, resizeDebounce);
   }
 
@@ -221,6 +255,14 @@ export function useChapterLayout(
       // mounted before the surface had its final box. Debounce later changes.
       const immediate = !observed;
       observed = true;
+      if (
+        measuredBox &&
+        measuredBox.width === el.clientWidth &&
+        measuredBox.height === el.clientHeight
+      ) {
+        clearTimer();
+        return;
+      }
       scheduleReflow(immediate);
     });
     observer.observe(el);

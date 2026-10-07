@@ -6,6 +6,7 @@ import type {
 } from '@libraz/mejiro/book';
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
 import { onScopeDispose, type Ref, shallowRef, unref, watch } from 'vue';
+import { toError } from './errors.js';
 
 /** Options for {@link useManuscriptLayout}. */
 export interface UseManuscriptLayoutOptions {
@@ -37,6 +38,12 @@ export interface UseManuscriptLayoutOptions {
    * first. Without it, consume `pendingRestore` yourself.
    */
   restorePosition?: (layout: ChapterLayout, position: InChapterAnchor) => void;
+  /**
+   * Called once when a layout of the current source fails, whichever path
+   * started it (source change, resize or `recompute`); a superseded layout
+   * reports nothing. When supplied, `recompute` resolves instead of rejecting.
+   */
+  onError?: (error: Error) => void;
 }
 
 /** Options for {@link UseManuscriptLayoutReturn.recompute}. */
@@ -72,7 +79,10 @@ export interface UseManuscriptLayoutReturn {
   contentHeight: Ref<number>;
   /** Elapsed layout time in milliseconds for the most recent computation. */
   elapsedMs: Ref<number>;
-  /** Force a fresh layout computation. */
+  /**
+   * Force a fresh layout computation. A failure goes to `onError` when one is
+   * supplied; otherwise the returned promise rejects.
+   */
   recompute: (opts?: ManuscriptRecomputeOptions) => Promise<void>;
   /**
    * Anchor captured by `capturePosition` before the most recent reflow,
@@ -136,6 +146,9 @@ export function useManuscriptLayout(
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
   let layoutRequestId = 0;
+  // Client box the page size was last computed from; an observation reporting
+  // the same box needs no re-layout.
+  let measuredBox: { width: number; height: number } | null = null;
   const pendingRestore: { current: InChapterAnchor | null } = { current: null };
 
   async function recompute(opts: ManuscriptRecomputeOptions = {}): Promise<void> {
@@ -143,6 +156,7 @@ export function useManuscriptLayout(
     const requestId = ++layoutRequestId;
     const current = chapter.value;
     if (!(current && surface.value)) {
+      measuredBox = null;
       layout.value = null;
       pageWidth.value = 0;
       pageHeight.value = 0;
@@ -150,7 +164,26 @@ export function useManuscriptLayout(
       elapsedMs.value = 0;
       return;
     }
+    try {
+      await layOut(requestId, blank, current, surface.value);
+    } catch (err) {
+      if (requestId !== layoutRequestId) return;
+      if (!options.onError) throw err;
+      options.onError(toError(err));
+    }
+  }
 
+  /** Starts a re-layout nobody awaits; a failure is `onError`'s alone. */
+  function trigger(opts?: ManuscriptRecomputeOptions): void {
+    recompute(opts).catch(() => {});
+  }
+
+  async function layOut(
+    requestId: number,
+    blank: boolean,
+    current: ManuscriptChapter,
+    el: HTMLElement,
+  ): Promise<void> {
     // Capture the reading position before a reflow swaps in a new layout, so we
     // can restore it afterwards (a new layout object resets the spread index).
     const captured =
@@ -160,7 +193,8 @@ export function useManuscriptLayout(
     if (blank) layout.value = null;
 
     const currentBook = unref(book);
-    const dims = currentBook.computePageSize(surface.value);
+    measuredBox = { width: el.clientWidth, height: el.clientHeight };
+    const dims = currentBook.computePageSize(el);
     pageWidth.value = dims.pageWidth;
     pageHeight.value = dims.pageHeight;
     contentHeight.value = dims.contentHeight;
@@ -178,12 +212,12 @@ export function useManuscriptLayout(
     }
   }
 
-  watch([() => unref(book), chapter, surface], () => void recompute(), {
+  watch([() => unref(book), chapter, surface], () => trigger(), {
     immediate: true,
     flush: 'sync',
   });
   if (options.dialect && typeof options.dialect === 'object' && 'value' in options.dialect) {
-    watch(options.dialect, () => void recompute());
+    watch(options.dialect, () => trigger());
   }
 
   // --- Size-driven re-flow ---------------------------------------------------
@@ -199,12 +233,12 @@ export function useManuscriptLayout(
   function scheduleReflow(immediate: boolean): void {
     clearTimer();
     if (immediate) {
-      void recompute({ blank: false });
+      trigger({ blank: false });
       return;
     }
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
-      void recompute({ blank: false });
+      trigger({ blank: false });
     }, resizeDebounce);
   }
 
@@ -226,6 +260,14 @@ export function useManuscriptLayout(
       // mounted before the surface had its final box. Debounce later changes.
       const immediate = !observed;
       observed = true;
+      if (
+        measuredBox &&
+        measuredBox.width === el.clientWidth &&
+        measuredBox.height === el.clientHeight
+      ) {
+        clearTimer();
+        return;
+      }
       scheduleReflow(immediate);
     });
     observer.observe(el);

@@ -3,7 +3,7 @@
 import { MejiroBook } from '@libraz/mejiro/book';
 import { type EpubBook, EpubProject } from '@libraz/mejiro/epub';
 import { render, waitFor } from '@testing-library/vue';
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref, shallowRef } from 'vue';
 import { enMessages, jaMessages, MejiroI18nProvider } from '../src/i18n.js';
@@ -868,6 +868,21 @@ describe('MejiroReader (Vue) — runtime option changes', () => {
 
       await expect(reader.setOptions({ fontFamily: '"Missing Font"' })).resolves.toBeUndefined();
       expect(wrapper.emitted('error')?.[0]).toEqual([failure]);
+      wrapper.unmount();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('emits a failed chapter layout on mount as one error event', async () => {
+    const failure = new Error('layout failed');
+    const spy = vi.spyOn(MejiroBook.prototype, 'layoutChapter').mockRejectedValue(failure);
+    try {
+      const wrapper = mount(MejiroReader, { props: { epub: fakeEpub() } });
+
+      await vi.waitFor(() => expect(wrapper.emitted('error')).toEqual([[failure]]));
+      await flushPromises();
+      expect(wrapper.emitted('error')).toEqual([[failure]]);
       wrapper.unmount();
     } finally {
       spy.mockRestore();

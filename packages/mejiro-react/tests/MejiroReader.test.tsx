@@ -637,6 +637,21 @@ describe('MejiroReader (React) — source variants', () => {
       spy.mockRestore();
     }
   });
+
+  it('reports a failed chapter layout on mount through onError exactly once', async () => {
+    const failure = new Error('layout failed');
+    const spy = vi.spyOn(MejiroBook.prototype, 'layoutChapter').mockRejectedValue(failure);
+    const onError = vi.fn();
+    try {
+      render(<MejiroReader epub={fakeEpub()} onError={onError} />);
+
+      await waitFor(() => expect(onError).toHaveBeenCalledWith(failure));
+      await act(async () => {});
+      expect(onError).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('MejiroReader (React) — controlled spreadIdx', () => {

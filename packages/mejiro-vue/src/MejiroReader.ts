@@ -884,6 +884,7 @@ export const MejiroReader = defineComponent({
     const layoutCtx = useChapterLayout(book, epub.epub, activeChapter, surfaceEl, {
       pageGeometry: () => resolvedGeometry.value,
       capturePosition: (layout) => positionBridge.capture(layout),
+      onError: (err) => emit('error', err),
     });
 
     // Re-flow when the resolved page geometry changes at runtime (covers both
