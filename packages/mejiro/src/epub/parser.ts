@@ -6,7 +6,7 @@ import {
   type EpubParseOptions,
   resolveEpubParseLimits,
 } from './limits.js';
-import { extractRubyContent } from './ruby-extractor.js';
+import { extractRubyContent, isNonRenderedElement } from './ruby-extractor.js';
 import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
 import { stripStylesheetLinks } from './xml-utils.js';
 
@@ -155,17 +155,36 @@ function extractRootfilePath(containerXml: string): string {
 /** Extracts chapter title from XHTML heading elements. */
 function extractChapterTitle(xhtml: string): string | undefined {
   const doc = parseXml(stripStylesheetLinks(xhtml));
-  const explicitTitle = doc.getElementById('chapter-title');
-  if (explicitTitle?.textContent?.trim()) {
-    return explicitTitle.textContent.trim();
-  }
+  const explicitTitle = renderedText(doc.getElementById('chapter-title'));
+  if (explicitTitle) return explicitTitle;
   for (const tag of ['h1', 'h2', 'h3']) {
-    const el = firstElementByName(doc, tag);
-    if (el?.textContent?.trim()) {
-      return el.textContent.trim();
-    }
+    const text = renderedText(firstElementByName(doc, tag));
+    if (text) return text;
   }
   return undefined;
+}
+
+/**
+ * @internal
+ * Trimmed base text of an element's content: descendant ruby readings, `<rp>`,
+ * script/style and hidden subtrees are excluded by the same rule
+ * `extractRubyContent` applies. The element itself is always read, since the
+ * `chapter-title` carrier is hidden by design. Empty when nothing renders.
+ */
+export function renderedText(el: Element | null | undefined): string {
+  if (!el) return '';
+  let text = '';
+  const walk = (parent: Node): void => {
+    for (const node of Array.from(parent.childNodes)) {
+      if (node.nodeType === Node.TEXT_NODE || node.nodeType === Node.CDATA_SECTION_NODE) {
+        text += node.textContent ?? '';
+      } else if (node.nodeType === Node.ELEMENT_NODE && !isNonRenderedElement(node as Element)) {
+        walk(node);
+      }
+    }
+  };
+  walk(el);
+  return text.trim();
 }
 
 /**
@@ -208,16 +227,28 @@ export interface TocSources {
  * for chapters the navigation document does not name.
  */
 export function collectTocTitles(sources: TocSources): Map<string, string> {
-  const titles =
-    sources.navHref && sources.navXhtml != null
-      ? collectNavTitles(sources.navXhtml, sources.navHref)
-      : new Map<string, string>();
-  if (sources.ncxHref && sources.ncxXml != null) {
-    for (const [href, text] of collectNcxTitles(sources.ncxXml, sources.ncxHref)) {
-      if (!titles.has(href)) titles.set(href, text);
-    }
+  const titles = tocDocumentTitles(sources.navXhtml, sources.navHref, collectNavTitles);
+  for (const [href, text] of tocDocumentTitles(sources.ncxXml, sources.ncxHref, collectNcxTitles)) {
+    if (!titles.has(href)) titles.set(href, text);
   }
   return titles;
+}
+
+/**
+ * Titles of one TOC document. A missing, malformed or unresolvable document
+ * contributes nothing instead of failing the open.
+ */
+function tocDocumentTitles(
+  source: string | null | undefined,
+  href: string | undefined,
+  collect: (source: string, href: string) => Map<string, string>,
+): Map<string, string> {
+  if (!href || source == null) return new Map();
+  try {
+    return collect(source, href);
+  } catch {
+    return new Map();
+  }
 }
 
 /**
@@ -234,7 +265,7 @@ function collectNcxTitles(ncxXml: string, ncxHref: string): Map<string, string> 
   for (const point of Array.from(navMap.getElementsByTagName('*'))) {
     if (point.localName !== 'navPoint' && point.tagName !== 'navPoint') continue;
     const label = childElementsByName(point, 'navLabel')[0];
-    const text = childElementsByName(label, 'text')[0]?.textContent?.trim();
+    const text = renderedText(childElementsByName(label, 'text')[0]);
     const src = childElementsByName(point, 'content')[0]?.getAttribute('src');
     if (!(src && text) || src.startsWith('#')) continue;
     const key = resolveZipPath(ncxDir, src);
@@ -262,7 +293,7 @@ function collectNavTitles(navXhtml: string, navHref: string): Map<string, string
     for (const anchor of Array.from(root.getElementsByTagName('*'))) {
       if (anchor.localName !== 'a' && anchor.tagName !== 'a') continue;
       const href = anchor.getAttribute('href');
-      const text = anchor.textContent?.trim();
+      const text = renderedText(anchor);
       // A same-document fragment names a section of the nav itself, not a
       // spine document, so it must not bind a title.
       if (!(href && text) || href.startsWith('#')) continue;
@@ -354,11 +385,11 @@ export function parseOpfPackage(opfXml: string, opfDir: string): OpfPackage {
   // Extract title — prefer namespace-aware lookup, then fall back for DOMParser implementations
   // that do not preserve XML namespaces consistently.
   const titleEl = findElementByName(doc, 'title');
-  const title = titleEl?.textContent?.trim() || 'Unknown Title';
+  const title = renderedText(titleEl) || 'Unknown Title';
 
   // Extract author
   const creatorEl = findElementByName(doc, 'creator');
-  const author = creatorEl?.textContent?.trim() || undefined;
+  const author = renderedText(creatorEl) || undefined;
 
   const manifestById = new Map<string, OpfManifestItem>();
   const manifestItems = new Map<string, OpfManifestItem>();

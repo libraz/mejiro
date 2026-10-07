@@ -55,7 +55,7 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
     // input instead of throwing; promote it so the caller can react.
     throw new Error('Failed to parse XHTML document');
   }
-  const body = doc.body ?? doc.documentElement;
+  const body = contentBody(doc);
 
   const paragraphs: AnnotatedParagraph[] = [];
 
@@ -72,6 +72,20 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
   }
 
   return paragraphs;
+}
+
+/**
+ * @internal
+ * Element whose descendants carry the chapter content: `body` found by local
+ * name, so documents outside the XHTML namespace are covered too, else the
+ * document element (whose `head` is never rendered).
+ */
+export function contentBody(doc: Document): Element {
+  return (
+    doc.body ??
+    Array.from(doc.getElementsByTagName('*')).find((el) => el.localName.toLowerCase() === 'body') ??
+    doc.documentElement
+  );
 }
 
 /** One paragraph's worth of source nodes and the block element owning them. */
@@ -276,8 +290,12 @@ function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
 
     for (const child of Array.from(rubyEl.childNodes)) {
       if (child.nodeType === Node.TEXT_NODE) {
-        currentBase += child.textContent ?? '';
-        currentBaseNodes.push(child);
+        const base = rubyTextNodeBase(child);
+        if (!base) continue;
+        currentBase += base;
+        currentBaseNodes.push(
+          base === child.textContent ? child : (child.ownerDocument?.createTextNode(base) ?? child),
+        );
         continue;
       }
 
@@ -519,12 +537,19 @@ function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
   function dropLastChar(): void {
     text = text.slice(0, -1);
     textCharCount -= 1;
-    for (const span of openSpans) {
-      if (span.index > textCharCount) span.index = textCharCount;
+    // Span starts and annotation ends never decrease in push order, so only a
+    // suffix of each list can point past the removed character.
+    for (let i = openSpans.length - 1; i >= 0 && openSpans[i].index > textCharCount; i--) {
+      openSpans[i].index = textCharCount;
     }
-    for (const ann of inlineAnnotations) {
+    for (
+      let i = inlineAnnotations.length - 1;
+      i >= 0 && inlineAnnotations[i].endIndex > textCharCount;
+      i--
+    ) {
+      const ann = inlineAnnotations[i];
       if (ann.startIndex > textCharCount) ann.startIndex = textCharCount;
-      if (ann.endIndex > textCharCount) ann.endIndex = textCharCount;
+      ann.endIndex = textCharCount;
     }
   }
 
@@ -566,6 +591,27 @@ function charCount(str: string): number {
   return [...str].length;
 }
 
+/** Ruby structure elements; XML whitespace next to them is markup layout, not text. */
+const RUBY_STRUCTURE = new Set(['rb', 'rt', 'rp', 'rtc']);
+
+/**
+ * Text a node directly under `<ruby>` contributes to the base, with XML
+ * whitespace removed on each side that touches the ruby boundary or a ruby
+ * structure element.
+ */
+function rubyTextNodeBase(node: Node): string {
+  let value = node.textContent ?? '';
+  if (isRubyLayoutEdge(node.previousSibling)) value = value.replace(/^[\t\n\r ]+/u, '');
+  if (isRubyLayoutEdge(node.nextSibling)) value = value.replace(/[\t\n\r ]+$/u, '');
+  return value;
+}
+
+function isRubyLayoutEdge(sibling: Node | null): boolean {
+  if (!sibling) return true;
+  if (sibling.nodeType !== Node.ELEMENT_NODE) return false;
+  return RUBY_STRUCTURE.has((sibling as Element).localName.toLowerCase());
+}
+
 function directChildrenByName(el: Element, localName: string): Element[] {
   return Array.from(el.children).filter((child) => child.localName.toLowerCase() === localName);
 }
@@ -601,37 +647,52 @@ function rubyBaseText(node: Node): string {
 }
 
 /**
+ * @internal
  * Reports whether an element's subtree is excluded from the base text.
  *
- * Covers author-hidden content, ruby readings (which are captured separately
- * by the `<ruby>` handling) and elements whose character data is source code
- * rather than prose.
+ * Covers author-hidden content, the document head, ruby readings (which are
+ * captured separately by the `<ruby>` handling) and elements whose character
+ * data is source code rather than prose.
  */
-function isNonRenderedElement(el: Element): boolean {
+export function isNonRenderedElement(el: Element): boolean {
   if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return true;
-  const tag = el.localName.toLowerCase();
-  return tag === 'script' || tag === 'style' || tag === 'rp' || tag === 'rt' || tag === 'rtc';
+  return NON_RENDERED_ELEMENTS.has(el.localName.toLowerCase());
 }
+
+const NON_RENDERED_ELEMENTS = new Set(['head', 'script', 'style', 'rp', 'rt', 'rtc']);
 
 function normalizeCssText(raw: string): string {
   return raw.replace(/[\t\n\f\r ]+/gu, ' ');
 }
 
 function firstChar(value: string): string | undefined {
-  return [...value][0];
+  const cp = value.codePointAt(0);
+  return cp === undefined ? undefined : String.fromCodePoint(cp);
 }
 
+/** Last code point of `value`, read from its end. */
 function lastChar(value: string): string | undefined {
-  const chars = [...value];
-  return chars[chars.length - 1];
+  return charEndingAt(value, value.length);
+}
+
+function charEndingAt(value: string, end: number): string | undefined {
+  if (end <= 0) return undefined;
+  const low = value.charCodeAt(end - 1);
+  const high = end >= 2 ? value.charCodeAt(end - 2) : 0;
+  const isPair = low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
+  return isPair ? value.slice(end - 2, end) : value[end - 1];
 }
 
 function firstNonSpace(value: string): string | undefined {
-  return [...value].find((ch) => ch !== ' ');
+  const index = value.search(/[^ ]/u);
+  return index < 0 ? undefined : firstChar(value.slice(index, index + 2));
 }
 
+/** Last non-space code point of `value`, scanning back over trailing spaces only. */
 function previousNonSpace(value: string): string | undefined {
-  return [...value].reverse().find((ch) => ch !== ' ');
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x20) end--;
+  return charEndingAt(value, end);
 }
 
 function isCjk(value: string | undefined): boolean {

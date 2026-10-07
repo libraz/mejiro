@@ -159,6 +159,95 @@ describe('parseEpub', () => {
     }
   });
 
+  const tocOpf = `<?xml version="1.0"?>
+<package version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>TOC</dc:title></metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" />
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml" />
+    <item id="c1" href="Text/ch1.xhtml" media-type="application/xhtml+xml" />
+    <item id="c2" href="Text/ch2.xhtml" media-type="application/xhtml+xml" />
+  </manifest>
+  <spine toc="ncx"><itemref idref="c1" /><itemref idref="c2" /></spine>
+</package>`;
+  const plainChapter = `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`;
+  const validNcx = `<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
+  <navPoint id="p1"><navLabel><text>NCX一</text></navLabel><content src="Text/ch1.xhtml" /></navPoint>
+</navMap></ncx>`;
+
+  it('opens the book with the other sources when a TOC document is broken, on both import paths', async () => {
+    const cases: Array<{ nav: string; ncx: string; titles: Array<string | undefined> }> = [
+      // Malformed nav: the NCX and chapter headings still apply.
+      {
+        nav: '<html><body><nav><ol><li><a href="Text/ch1.xhtml">x',
+        ncx: validNcx,
+        titles: ['NCX一', '見出し二'],
+      },
+      // Unresolvable href in the nav: its titles drop, the NCX still applies.
+      {
+        nav: `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><nav><ol><li><a href="Text/%E0%A4%A.xhtml">bad</a></li><li><a href="Text/ch1.xhtml">ナビ一</a></li></ol></nav></body></html>`,
+        ncx: validNcx,
+        titles: ['NCX一', '見出し二'],
+      },
+      // Malformed NCX: the nav still applies.
+      {
+        nav: `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><nav><ol><li><a href="Text/ch1.xhtml">ナビ一</a></li></ol></nav></body></html>`,
+        ncx: '<ncx><navMap><navPoint>',
+        titles: ['ナビ一', '見出し二'],
+      },
+    ];
+    for (const { nav, ncx, titles } of cases) {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': tocOpf,
+        'OPS/nav.xhtml': nav,
+        'OPS/toc.ncx': ncx,
+        'OPS/Text/ch1.xhtml': plainChapter,
+        'OPS/Text/ch2.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>見出し二</h1><p>本文</p></body></html>`,
+      });
+      const book = await parseEpub(data);
+      expect(book.chapters.map((c) => c.title)).toEqual(titles);
+      expect((await EditableEpub.load(data)).chapters.map((c) => c.title)).toEqual(titles);
+    }
+  });
+
+  it('takes every title as rendered base text, without ruby readings, rp, script or hidden content', async () => {
+    const ruby = '<ruby>漢字<rp>(</rp><rt>かんじ</rt><rp>)</rp></ruby>';
+    const data = await makeEpub({
+      'META-INF/container.xml': containerXml,
+      'OPS/package.opf': tocOpf
+        .replace(
+          '<itemref idref="c2" />',
+          '<itemref idref="c2" /><itemref idref="c3" /><itemref idref="c4" />',
+        )
+        .replace(
+          '</manifest>',
+          `<item id="c3" href="Text/ch3.xhtml" media-type="application/xhtml+xml" />
+    <item id="c4" href="Text/ch4.xhtml" media-type="application/xhtml+xml" />
+  </manifest>`,
+        ),
+      'OPS/nav.xhtml': `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><nav><ol>
+<li><a href="Text/ch3.xhtml">第三${ruby}<span hidden="">隠し</span></a></li></ol></nav></body></html>`,
+      'OPS/toc.ncx': `<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
+  <navPoint id="p4"><navLabel><text>第四章</text></navLabel><content src="Text/ch4.xhtml" /></navPoint>
+</navMap></ncx>`,
+      'OPS/Text/ch1.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><div id="chapter-title">第一${ruby}<script>x()</script></div><p>本文</p></body></html>`,
+      // A heading made only of excluded content falls through to the next source.
+      'OPS/Text/ch2.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body><h1><rt>よみ</rt></h1><h2>第二<ruby>章<rtc><rt>しょう</rt></rtc></ruby></h2><p>本文</p></body></html>`,
+      'OPS/Text/ch3.xhtml': plainChapter,
+      'OPS/Text/ch4.xhtml': plainChapter,
+    });
+    const expected = ['第一漢字', '第二章', '第三漢字', '第四章'];
+    expect((await parseEpub(data)).chapters.map((c) => c.title)).toEqual(expected);
+    expect((await EditableEpub.load(data)).chapters.map((c) => c.title)).toEqual(expected);
+  });
+
   it('keeps the outer toc title for a chapter whose nav entry has nested sections', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,

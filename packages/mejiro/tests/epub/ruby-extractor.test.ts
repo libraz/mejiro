@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { extractRubyContent } from '../../src/epub/ruby-extractor.js';
 import { renderEpubStatic } from '../../src/render/static.js';
 import { toCodepoints } from '../../src/text.js';
+import { expectElapsedUnder } from '../timing.js';
 
 /** Kana plus a combining voiced sound mark: the decomposed form of `が`. */
 const DECOMPOSED_GA = String.fromCodePoint(0x304b, 0x3099);
@@ -532,5 +533,80 @@ describe('extractRubyContent', () => {
     ]);
     expect(result[1].inlineAnnotations).toEqual([]);
     expect(result[2].inlineAnnotations).toEqual([{ kind: 'em', startIndex: 1, endIndex: 2 }]);
+  });
+
+  it('reads pretty-printed ruby exactly like the minified form', () => {
+    const minified = [
+      '<p>前<ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby>後</p>',
+      '<p><ruby><rb>東</rb><rb>京</rb><rtc><rt>とう</rt><rt>きょう</rt></rtc></ruby></p>',
+      '<p><ruby>熟語<rp>(</rp><rt>じゅくご</rt><rp>)</rp></ruby>です</p>',
+    ];
+    const pretty = [
+      '<p>前<ruby>\n  漢\n  <rt>かん</rt>\n  字\n  <rt>じ</rt>\n</ruby>後</p>',
+      '<p><ruby>\n\t<rb>東</rb>\n\t<rb>京</rb>\n\t<rtc>\n\t\t<rt>とう</rt>\n\t\t<rt>きょう</rt>\n\t</rtc>\n</ruby></p>',
+      '<p><ruby>\r\n  熟語\r\n  <rp>(</rp>\r\n  <rt>じゅくご</rt>\r\n  <rp>)</rp>\r\n</ruby>です</p>',
+    ];
+    for (let i = 0; i < minified.length; i++) {
+      const expected = extractRubyContent(wrapXhtml(minified[i]));
+      expect(extractRubyContent(wrapXhtml(pretty[i])), pretty[i]).toEqual(expected);
+    }
+    expect(extractRubyContent(wrapXhtml(pretty[0]))[0]).toEqual({
+      text: '前漢字後',
+      inlineAnnotations: [
+        { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', type: 'mono' },
+        { kind: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'じ', type: 'mono' },
+        {
+          kind: 'ruby',
+          startIndex: 1,
+          endIndex: 3,
+          rubyText: 'かんじ',
+          type: 'jukugo',
+          jukugoSplitPoints: [1],
+        },
+      ],
+    });
+  });
+
+  it('never emits head content as a paragraph, with or without the XHTML namespace', () => {
+    const documents = [
+      '<html><head><title>題名</title><meta name="x" content="y"/></head><body><p>本文</p></body></html>',
+      '<html><head><title>題名</title></head><p>本文</p></html>',
+      '<x:html xmlns:x="urn:other"><x:head><x:title>題名</x:title></x:head><x:body><x:p>本文</x:p></x:body></x:html>',
+    ];
+    for (const xhtml of documents) {
+      expect(
+        extractRubyContent(`<?xml version="1.0"?>${xhtml}`).map((p) => p.text),
+        xhtml,
+      ).toEqual(['本文']);
+    }
+  });
+
+  it('extracts one paragraph in time linear in its source size', () => {
+    const paragraph = (lines: number) =>
+      wrapXhtml(`<p>${'本文\n<ruby>漢<rt>かん</rt></ruby> <em>強</em> 字\n'.repeat(lines)}</p>`);
+    const half = paragraph(4_000);
+    const full = paragraph(8_000);
+    const fastest = (xhtml: string) => {
+      let best = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < 3; i++) {
+        const start = performance.now();
+        extractRubyContent(xhtml);
+        best = Math.min(best, performance.now() - start);
+      }
+      return best;
+    };
+
+    const halfElapsed = fastest(half);
+    const fullElapsed = fastest(full);
+    const [result] = extractRubyContent(full);
+    expect(result.text).toBe('本文漢強字'.repeat(8_000));
+    expect(result.inlineAnnotations).toHaveLength(16_000);
+    expect(result.inlineAnnotations.at(-1)).toEqual({
+      kind: 'em',
+      startIndex: 39_998,
+      endIndex: 39_999,
+    });
+    // Rescanning the paragraph per text node would roughly quadruple here.
+    expectElapsedUnder(fullElapsed, halfElapsed * 3 + 5);
   });
 });
