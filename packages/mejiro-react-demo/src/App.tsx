@@ -1,4 +1,4 @@
-import { formatDialogueLineBreaks } from '@libraz/mejiro';
+import { formatDialogueLineBreaks, normalizeText } from '@libraz/mejiro';
 import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import {
@@ -36,7 +36,6 @@ type DemoMode = 'viewer' | 'create' | 'edit' | 'custom';
 
 type ReaderChromeOptions = {
   enableHeader: boolean;
-  enableDropZone: boolean;
   enableChapterNav: boolean;
   enableSettings: boolean;
   enableImageOverlay: boolean;
@@ -47,7 +46,6 @@ type ReaderChromeOptions = {
 
 const DEFAULT_CHROME_OPTIONS: ReaderChromeOptions = {
   enableHeader: true,
-  enableDropZone: true,
   enableChapterNav: true,
   enableSettings: true,
   enableImageOverlay: true,
@@ -86,8 +84,15 @@ function downloadEpub(buffer: ArrayBuffer, title: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `${title || 'book'}.epub`;
-  a.click();
-  URL.revokeObjectURL(url);
+  a.hidden = true;
+  document.body.append(a);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    // Revoked on the next task, once the browser has started consuming the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }
 
 function codePointIndexAtOffset(text: string, offset: number): number {
@@ -157,11 +162,13 @@ export default function App() {
   const editParagraph = editable.selectedParagraph;
   const selectedEditChapter = editable.selection.chapter;
   const filteredParagraphs = useMemo(() => {
-    const query = paragraphFilter.trim();
+    const query = normalizeText(paragraphFilter.trim()).toLowerCase();
     if (!editChapter) return [];
     return editChapter.paragraphs
       .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
-      .filter(({ paragraph }) => !query || paragraph.text.includes(query));
+      .filter(
+        ({ paragraph }) => !query || normalizeText(paragraph.text).toLowerCase().includes(query),
+      );
   }, [editChapter, paragraphFilter]);
 
   useEffect(() => {
@@ -202,7 +209,7 @@ export default function App() {
     };
     const nextInline: InlineAnnotation[] = [
       ...editParagraph.inlineAnnotations.filter(
-        (ann) => ann.endIndex <= start || ann.startIndex >= end,
+        (ann) => ann.kind !== 'ruby' || ann.endIndex <= start || ann.startIndex >= end,
       ),
       newRuby,
     ].sort((a, b) => a.startIndex - b.startIndex);
@@ -272,7 +279,6 @@ export default function App() {
             locale={locale}
             fallback={<div className="demo-empty">Preparing vertical layout...</div>}
             enableHeader={chrome.enableHeader}
-            enableDropZone={chrome.enableDropZone}
             enableChapterNav={chrome.enableChapterNav}
             chapterNavMode={effectiveChapterNavMode}
             enableSettings={effectiveOption('enableSettings')}
@@ -436,7 +442,6 @@ export default function App() {
   theme="${theme}"
   locale="${locale}"
   enableHeader={${chrome.enableHeader}}
-  enableDropZone={${chrome.enableDropZone}}
   enableChapterNav={${chrome.enableChapterNav}}
   chapterNavMode="${effectiveChapterNavMode}"
   enableSettings={${effectiveOption('enableSettings')}}
@@ -640,6 +645,8 @@ export default function App() {
                     hidden
                     onChange={(event) => {
                       const file = event.target.files?.[0];
+                      // Cleared so picking the same file again still fires `change`.
+                      event.target.value = '';
                       if (file) void addImage(file);
                     }}
                   />

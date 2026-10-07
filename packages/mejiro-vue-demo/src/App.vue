@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { formatDialogueLineBreaks } from '@libraz/mejiro';
+import { formatDialogueLineBreaks, normalizeText } from '@libraz/mejiro';
 import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
 import type {
@@ -62,7 +62,6 @@ const customCurrentTitle = computed(() => customChapters.value[customSelected.va
 
 const enableChapterNav = ref(true);
 const enableHeader = ref(true);
-const enableDropZone = ref(true);
 const enableSettings = ref(true);
 const enableImageOverlay = ref(true);
 const enableStats = ref(true);
@@ -75,7 +74,6 @@ const chapterNavModes: MejiroChapterNavMode[] = ['select', 'panel', 'both', 'non
 
 const chromeOptions = [
   { key: 'enableHeader', model: enableHeader },
-  { key: 'enableDropZone', model: enableDropZone },
   { key: 'enableChapterNav', model: enableChapterNav },
   { key: 'enableSettings', model: enableSettings },
   { key: 'enableImageOverlay', model: enableImageOverlay },
@@ -142,11 +140,13 @@ const editChapter = computed(
 const editParagraph = editable.selectedParagraph;
 const selectedEditChapter = computed(() => editableSelection.value.chapter);
 const filteredParagraphs = computed(() => {
-  const query = paragraphFilter.value.trim();
+  const query = normalizeText(paragraphFilter.value.trim()).toLowerCase();
   if (!editChapter.value) return [];
   return editChapter.value.paragraphs
     .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
-    .filter(({ paragraph }) => !query || paragraph.text.includes(query));
+    .filter(
+      ({ paragraph }) => !query || normalizeText(paragraph.text).toLowerCase().includes(query),
+    );
 });
 const previewBook = computed(() =>
   mode.value === 'create'
@@ -182,8 +182,15 @@ function downloadEpub(buffer: ArrayBuffer, title: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = `${title || 'book'}.epub`;
-  a.click();
-  URL.revokeObjectURL(url);
+  a.hidden = true;
+  document.body.append(a);
+  try {
+    a.click();
+  } finally {
+    a.remove();
+    // Revoked on the next task, once the browser has started consuming the URL.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }
 
 function updateEditText(nextText: string): void {
@@ -210,7 +217,7 @@ function applyRuby(): void {
   if (end <= start) return;
   const nextInline: InlineAnnotation[] = [
     ...editParagraph.value.inlineAnnotations.filter(
-      (ann) => ann.endIndex <= start || ann.startIndex >= end,
+      (ann) => ann.kind !== 'ruby' || ann.endIndex <= start || ann.startIndex >= end,
     ),
     {
       kind: 'ruby',
@@ -230,6 +237,14 @@ function adjustDialogueLineBreaks(): void {
 
 function setEditSelection(chapter: number, paragraph: number): void {
   editable.setSelection({ chapter, paragraph });
+}
+
+function onImagePick(event: Event): void {
+  const target = event.target as HTMLInputElement;
+  const file = target.files?.[0];
+  // Cleared so picking the same file again still fires `change`.
+  target.value = '';
+  if (file) void addImage(file);
 }
 
 async function addImage(file: File): Promise<void> {
@@ -278,7 +293,6 @@ function setPreviewChapter(nextChapter: number): void {
         :epub="sampleEpub"
         subtitle="Vue Viewer"
         :enable-header="enableHeader"
-        :enable-drop-zone="enableDropZone"
         :enable-chapter-nav="enableChapterNav"
         :chapter-nav-mode="effectiveChapterNavMode"
         :enable-settings="enableHeader && enableSettings"
@@ -381,7 +395,6 @@ function setPreviewChapter(nextChapter: number): void {
         </div>
         <pre>&lt;MejiroReader
   :enable-header="{{ enableHeader }}"
-  :enable-drop-zone="{{ enableDropZone }}"
   :enable-chapter-nav="{{ enableChapterNav }}"
   chapter-nav-mode="{{ effectiveChapterNavMode }}"
   :enable-settings="{{ enableHeader && enableSettings }}"
@@ -557,10 +570,7 @@ function setPreviewChapter(nextChapter: number): void {
               type="file"
               accept="image/*"
               hidden
-              @change="
-                ($event.target as HTMLInputElement).files?.[0] &&
-                  addImage(($event.target as HTMLInputElement).files![0])
-              "
+              @change="onImagePick"
             />
           </div>
           <button
