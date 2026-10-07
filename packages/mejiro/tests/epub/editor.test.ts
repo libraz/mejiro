@@ -167,7 +167,7 @@ describe('EditableEpub', () => {
       'META-INF/container.xml': containerXml,
       'OPS/package.opf': opfXml,
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
-<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="x" content="keep" /></head><body><section class="chapter"><h1 id="title">第一章</h1><p class="body" data-keep="yes"><span class="lead">本文</span></p><aside>注記</aside></section></body></html>`,
+<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="x" content="keep" /></head><body><section class="chapter"><h1 class="title">第一章</h1><p class="body" data-keep="yes"><span class="lead">本文</span></p><aside>注記</aside></section></body></html>`,
     });
 
     const editor = await EditableEpub.load(data);
@@ -2215,6 +2215,278 @@ describe('EditableEpub', () => {
       release();
 
       await expect(readPackage(await exporting)).resolves.toEqual(expected);
+    });
+  });
+
+  describe('export completeness for edited chapters', () => {
+    const chapterXhtml = (body: string) => `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>章</title></head><body>${body}</body></html>`;
+    const imageOpf = opfXml.replace(
+      '</manifest>',
+      '<item id="g1" href="Images/gaiji.png" media-type="image/png" /></manifest>',
+    );
+
+    async function exportedChapter(editor: EditableEpub): Promise<string> {
+      const zip = await JSZip.loadAsync(await editor.export());
+      return (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '';
+    }
+
+    it('keeps images that sit inside paragraph elements, with the surrounding text', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': imageOpf,
+        'OPS/Text/chapter.xhtml': chapterXhtml(
+          '<p><img src="../Images/gaiji.png" alt="外字" /></p><h2>前<img src="../Images/gaiji.png" alt="二" />後</h2><p>本文</p>',
+        ),
+        'OPS/Images/gaiji.png': new Uint8Array([7]),
+      });
+      const editor = await EditableEpub.load(data);
+      expect(editor.chapters[0].blocks.map((b) => b.kind)).toEqual([
+        'image',
+        'paragraph',
+        'image',
+        'paragraph',
+        'paragraph',
+      ]);
+      editor.updateParagraph(0, 2, { text: '編集' });
+
+      const chapter = await exportedChapter(editor);
+      expect(chapter.match(/<img src="\.\.\/Images\/gaiji\.png"/gu) ?? []).toHaveLength(2);
+      expect(chapter).toContain('alt="外字"');
+      expect(chapter).toContain('<h2>前</h2>');
+      expect(chapter).toContain('<h2>後</h2>');
+      expect(chapter).toContain('<p>編集</p>');
+      const zip = await JSZip.loadAsync(await editor.export());
+      expect(zip.file('OPS/Images/gaiji.png')).not.toBeNull();
+    });
+
+    it('keeps the wrapper element ids and the chapter-title carrier around rebuilt blocks', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': chapterXhtml(
+          '<section id="chap-1"><h1>本の題</h1><span id="chapter-title" hidden="">章の題</span><p>本文</p></section>',
+        ),
+      });
+      const editor = await EditableEpub.load(data);
+      editor.updateParagraph(0, 1, { text: '改稿' });
+
+      const chapter = await exportedChapter(editor);
+      expect(chapter).toMatch(
+        /<section id="chap-1"><span id="chapter-title" hidden="">章の題<\/span><h1>本の題<\/h1><p>改稿<\/p><\/section>/u,
+      );
+      const reloaded = await EditableEpub.load(await editor.export());
+      expect(reloaded.chapters[0].title).toBe('章の題');
+    });
+
+    it('throws naming the construct instead of dropping ids, media or hidden text', async () => {
+      const cases: Array<[string, RegExp]> = [
+        ['<h1 id="h-1">見出し</h1><p>本文</p>', /element id "h-1"/u],
+        ['<p>本文<a id="ref-1" href="#n1">*</a></p>', /element id "ref-1"/u],
+        [
+          '<p>本文</p><svg xmlns="http://www.w3.org/2000/svg"><text>図</text></svg>',
+          /<svg> structure/u,
+        ],
+        ['<p>本文</p><div hidden="">隠し文</div>', /non-rendered <div> content/u],
+      ];
+      for (const [body, message] of cases) {
+        const data = await makeEpub({
+          'META-INF/container.xml': containerXml,
+          'OPS/package.opf': opfXml,
+          'OPS/Text/chapter.xhtml': chapterXhtml(body),
+        });
+        const editor = await EditableEpub.load(data);
+        let resolved = false;
+        editor.updateParagraph(0, 0, { text: '編集' });
+        await expect(
+          editor.export({
+            assetResolver() {
+              resolved = true;
+              return new Uint8Array();
+            },
+          }),
+        ).rejects.toThrow(message);
+        expect(resolved).toBe(false);
+        // An unedited chapter is written back verbatim, so it still exports.
+        expect(editor.undo()).toBe(true);
+        await expect(editor.export()).resolves.toBeInstanceOf(ArrayBuffer);
+      }
+    });
+
+    it('never lets a scene break carry text, and rejects before touching history', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': chapterXhtml('<p>前</p><hr /><p>後</p>'),
+      });
+      const editor = await EditableEpub.load(data);
+      const [, sceneBreak, after] = editor.chapters[0].blocks;
+
+      expect(() => editor.updateParagraph(0, 1, { text: '消える' })).toThrow(/sceneBreak/u);
+      expect(() => editor.mergeParagraphs(0, sceneBreak.id, after.id)).toThrow(/sceneBreak/u);
+      expect(() =>
+        editor.insertParagraph(0, 0, { text: '消える', paragraphKind: 'sceneBreak' }),
+      ).toThrow(/sceneBreak/u);
+      expect(editor.history.depth).toBe(0);
+      expect(editor.chapters[0].isDirty).toBeFalsy();
+
+      // Turning the break into a heading keeps the text.
+      editor.updateParagraph(0, 1, { text: '章', headingLevel: 2 });
+      editor.splitParagraph(0, editor.chapters[0].blocks[0].id, 0);
+      const chapter = await exportedChapter(editor);
+      expect(chapter).toContain('<h2>章</h2>');
+      expect(chapter).toContain('<p>前</p>');
+      expect(chapter).toContain('<p>後</p>');
+    });
+
+    it('clears an image field passed as undefined and ignores no-op patches', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': imageOpf,
+        'OPS/Text/chapter.xhtml': chapterXhtml(
+          '<p>本文</p><figure data-placement="fullspread"><img src="../Images/gaiji.png" alt="図" /><figcaption>説<ruby>明<rt>めい</rt></ruby></figcaption></figure>',
+        ),
+        'OPS/Images/gaiji.png': new Uint8Array([7]),
+      });
+      const editor = await EditableEpub.load(data);
+      const image = editor.chapters[0].blocks[1];
+      expect(image).toMatchObject({ caption: '説明' });
+
+      editor.updateImage(0, image.id, { alt: '図', caption: '説明' });
+      expect(editor.history.depth).toBe(0);
+      expect(editor.chapters[0].isDirty).toBeFalsy();
+
+      editor.setImageCaption(0, image.id, undefined);
+      editor.updateImage(0, image.id, { placement: undefined });
+      expect(editor.history.depth).toBe(2);
+      expect(editor.chapters[0].blocks[1]).not.toHaveProperty('caption');
+
+      const chapter = await exportedChapter(editor);
+      expect(chapter).not.toContain('figcaption');
+      expect(chapter).not.toContain('data-placement');
+      expect(chapter).toContain('alt="図"');
+    });
+
+    it('fetches URL-only assets with the export signal when no resolver is given', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': chapterXhtml('<p>本文</p>'),
+      });
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, { filename: 'remote.png', url: 'https://cdn.example.com/remote.png' });
+      const controller = new AbortController();
+      const originalFetch = globalThis.fetch;
+      const calls: Array<{ url: string; signal?: AbortSignal | null }> = [];
+      let status = 200;
+      globalThis.fetch = (async (url: string, init?: RequestInit) => {
+        calls.push({ url, signal: init?.signal });
+        return new Response(new Uint8Array([5, 6]), { status });
+      }) as typeof fetch;
+      try {
+        const zip = await JSZip.loadAsync(await editor.export({ signal: controller.signal }));
+        const stored = await zip.file('OPS/Images/remote.png')?.async('uint8array');
+        expect(Array.from(stored ?? [])).toEqual([5, 6]);
+        expect(calls).toEqual([
+          { url: 'https://cdn.example.com/remote.png', signal: controller.signal },
+        ]);
+
+        status = 404;
+        await expect(editor.export()).rejects.toThrow(
+          'Failed to fetch image asset: https://cdn.example.com/remote.png (HTTP 404)',
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    });
+
+    it('encodes added image paths so the manifest href and src resolve to the ZIP entry', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': chapterXhtml('<p>本文</p>'),
+      });
+      const editor = await EditableEpub.load(data);
+      editor.addImage(0, { filename: 'fig 100%.png', data: new Uint8Array([3]) });
+      const out = await editor.export();
+      const zip = await JSZip.loadAsync(out);
+      expect(zip.file('OPS/Images/fig 100%.png')).not.toBeNull();
+      const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
+      expect(opf).toContain('href="Images/fig%20100%25.png"');
+      expect(await exportedChapter(editor)).toContain('src="../Images/fig%20100%25.png"');
+
+      const reloaded = await EditableEpub.load(out);
+      expect(reloaded.chapters[0].imageAssets.get('fig 100%.png')?.data).toEqual(
+        new Uint8Array([3]),
+      );
+    });
+
+    it('keeps an edited chapter well-formed when its stylesheet links carry > or sit in comments', async () => {
+      const link = '<link rel="stylesheet" title="a>b" href="../Styles/s.css"/>';
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': opfXml,
+        'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>章</title>${link}<!-- <link rel="stylesheet" href="old.css"> --></head><body><p>本文</p></body></html>`,
+      });
+      const editor = await EditableEpub.load(data);
+      editor.updateParagraph(0, 0, { text: '改稿' });
+
+      const chapter = await exportedChapter(editor);
+      const doc = new DOMParser().parseFromString(chapter, 'application/xml');
+      expect(doc.getElementsByTagName('parsererror')).toHaveLength(0);
+      expect(chapter.split(link)).toHaveLength(2);
+      expect(chapter).toContain('<p>改稿</p>');
+    });
+
+    it('exports the restored image state after undo, redo and a rolled-back transaction', async () => {
+      const data = await makeEpub({
+        'META-INF/container.xml': containerXml,
+        'OPS/package.opf': imageOpf,
+        'OPS/Text/chapter.xhtml': chapterXhtml(
+          '<p>本文</p><figure><img src="../Images/gaiji.png" alt="既存" /></figure>',
+        ),
+        'OPS/Images/gaiji.png': new Uint8Array([7]),
+      });
+      const editor = await EditableEpub.load(data);
+      const read = async () => {
+        const zip = await JSZip.loadAsync(await editor.export());
+        return {
+          files: Object.keys(zip.files)
+            .filter((path) => path.startsWith('OPS/Images/') && !zip.files[path].dir)
+            .sort(),
+          opf: (await zip.file('OPS/package.opf')?.async('string')) ?? '',
+          chapter: (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '',
+        };
+      };
+
+      editor.addImage(0, { filename: 'added.png', data: new Uint8Array([1]) });
+      editor.removeImage(0, 'gaiji.png');
+      let state = await read();
+      expect(state.files).toEqual(['OPS/Images/added.png']);
+      expect(state.opf).not.toContain('gaiji.png');
+
+      expect(editor.undo()).toBe(true);
+      expect(editor.undo()).toBe(true);
+      state = await read();
+      expect(state.files).toEqual(['OPS/Images/gaiji.png']);
+      expect(state.opf).toContain('href="Images/gaiji.png"');
+      expect(state.opf).not.toContain('added.png');
+      expect(state.chapter).not.toContain('added.png');
+
+      expect(editor.redo()).toBe(true);
+      state = await read();
+      expect(state.files).toEqual(['OPS/Images/added.png', 'OPS/Images/gaiji.png']);
+      expect(state.chapter).toContain('src="../Images/added.png"');
+      expect(state.chapter).toContain('src="../Images/gaiji.png"');
+
+      expect(() =>
+        editor.transaction(() => {
+          editor.removeImage(0, 'added.png');
+          throw new Error('rollback');
+        }),
+      ).toThrow('rollback');
+      expect(await read()).toEqual(state);
     });
   });
 });

@@ -10,17 +10,23 @@ import {
   type EpubParseOptions,
   resolveEpubParseLimits,
 } from './limits.js';
-import { mediaTypeFromPath, relativeZipPath, uniqueManifestId } from './package-paths.js';
+import {
+  mediaTypeFromPath,
+  relativeZipPath,
+  uniqueManifestId,
+  zipPathToHref,
+} from './package-paths.js';
 import {
   assertEpubDomAvailable,
   collectTocTitles,
   extractChapterTitleOrUndefined,
   type OpfManifestItem,
   parseOpfPackage,
+  renderedText,
   resolveZipPath,
 } from './parser.js';
 import type { EpubProjectAsset } from './project.js';
-import { extractRubyContent } from './ruby-extractor.js';
+import { contentBody, extractRubyContent, isNonRenderedElement } from './ruby-extractor.js';
 import type {
   AnnotatedParagraph,
   EditableBlock,
@@ -211,6 +217,7 @@ export class EditableEpub {
   ): void {
     const chapter = requireChapter(this.book, chapterIndex);
     const block = findParagraphBlock(chapter, paragraphIndex);
+    assertParagraphUpdate(block, next);
     this.recordChapterChange(chapterIndex);
     applyParagraphUpdate(chapter, block, next);
   }
@@ -242,6 +249,7 @@ export class EditableEpub {
     paragraph: Omit<EditableParagraphBlock, 'kind' | 'id'>,
   ): string {
     const chapter = requireChapter(this.book, chapterIndex);
+    assertSceneBreakText(paragraph.paragraphKind, paragraph.text);
     this.recordChapterChange(chapterIndex);
     const block: EditableParagraphBlock = {
       kind: 'paragraph',
@@ -332,6 +340,7 @@ export class EditableEpub {
     const right = chapter.blocks[rightIdx];
     if (left.kind !== 'paragraph' || right.kind !== 'paragraph')
       throw new Error('Merge requires two paragraph blocks');
+    assertSceneBreakText(left.paragraphKind, left.text + right.text);
     this.recordChapterChange(chapterIndex);
 
     const leftChars = [...left.text];
@@ -405,7 +414,10 @@ export class EditableEpub {
     syncParagraphsView(chapter);
   }
 
-  /** Updates an image block's alt text, caption, or placement. */
+  /**
+   * Updates an image block's alt text, caption, or placement. A key present
+   * with `undefined` removes that field; absent keys are left untouched.
+   */
   updateImage(
     chapterIndex: number,
     blockId: string,
@@ -414,13 +426,22 @@ export class EditableEpub {
     const chapter = requireChapter(this.book, chapterIndex);
     const block = chapter.blocks.find((b) => b.id === blockId);
     if (block?.kind !== 'image') throw new Error(`Missing image block: ${blockId}`);
+    const changed = IMAGE_PATCH_FIELDS.filter(
+      (field) => Object.hasOwn(patch, field) && patch[field] !== block[field],
+    );
+    if (changed.length === 0) return;
     this.recordChapterChange(chapterIndex);
-    if (patch.alt !== undefined) block.alt = patch.alt;
-    if (patch.caption !== undefined) block.caption = patch.caption;
-    if (patch.placement !== undefined) block.placement = patch.placement;
+    for (const field of changed) {
+      // A key present with `undefined` clears the field.
+      if (patch[field] === undefined) delete block[field];
+      else Object.assign(block, { [field]: patch[field] });
+    }
   }
 
-  /** Shortcut for {@link EditableEpub.updateImage} that only sets the caption. */
+  /**
+   * Shortcut for {@link EditableEpub.updateImage} that only sets the caption.
+   * `undefined` removes the caption.
+   */
   setImageCaption(chapterIndex: number, blockId: string, caption: string | undefined): void {
     this.updateImage(chapterIndex, blockId, { caption });
   }
@@ -436,6 +457,8 @@ export class EditableEpub {
     return exportEditableEpubBook(this.book, options);
   }
 }
+
+const IMAGE_PATCH_FIELDS = ['alt', 'caption', 'placement'] as const;
 
 /**
  * Asset handed to an {@link AssetResolver}.
@@ -669,8 +692,28 @@ export function updateEpubParagraph(
 ): void {
   const chapter = requireChapter(book, chapterIndex);
   const block = findParagraphBlock(chapter, paragraphIndex);
+  assertParagraphUpdate(block, next);
   markChapterDirty(chapter);
   applyParagraphUpdate(chapter, block, next);
+}
+
+/** Rejects an update whose result could not be exported without losing text. */
+function assertParagraphUpdate(
+  block: EditableParagraphBlock,
+  next: Partial<AnnotatedParagraph>,
+): void {
+  // Setting a heading level turns a scene break into a heading, which keeps its text.
+  if (Object.hasOwn(next, 'headingLevel') && next.headingLevel != null && next.headingLevel >= 1) {
+    return;
+  }
+  assertSceneBreakText(block.paragraphKind, next.text ?? block.text);
+}
+
+/** A scene break exports as a bare `<hr/>`, so it cannot carry text. */
+function assertSceneBreakText(kind: EditableParagraphBlock['paragraphKind'], text: string): void {
+  if (kind === 'sceneBreak' && text !== '') {
+    throw new Error('A sceneBreak block cannot carry text');
+  }
 }
 
 function applyParagraphUpdate(
@@ -897,6 +940,9 @@ async function exportEditableEpubBook(
   // meanwhile. Freeze the whole book synchronously so the export reflects one
   // point in time instead of a mix of pre- and mid-export states.
   const snapshot = snapshotBookForExport(book);
+  for (const chapter of snapshot.chapters) {
+    if (chapter.isDirty || !chapter.originalXhtml) assertEditableChapterStructure(chapter);
+  }
   const files = snapshot.packageData.files;
   let opfXml = snapshot.packageData.opfXml;
   const originalImageHrefs = new Set<string>();
@@ -928,7 +974,8 @@ async function exportEditableEpubBook(
       opfXml = ensureManifestItem(
         opfXml,
         asset.manifestId ?? manifestIdFromAssetKey(assetKey),
-        asset.manifestHref ?? relativeZipPath(snapshot.packageData.opfDir, assetHref),
+        asset.manifestHref ??
+          zipPathToHref(relativeZipPath(snapshot.packageData.opfDir, assetHref)),
         asset.mediaType ?? mediaTypeFromPath(asset.filename),
       );
     }
@@ -940,7 +987,7 @@ async function exportEditableEpubBook(
     files.delete(href);
     opfXml = removeManifestItemByHref(
       opfXml,
-      relativeZipPath(snapshot.packageData.opfDir, href),
+      zipPathToHref(relativeZipPath(snapshot.packageData.opfDir, href)),
       href,
       snapshot.packageData.opfDir,
     );
@@ -1068,19 +1115,20 @@ async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<Arr
 
 /**
  * Rebuilds a chapter's XHTML from `blocks`. Pure `createElementNS` —
- * `innerHTML` is never invoked. Unrelated source attributes / asides from
- * the original document are dropped.
+ * `innerHTML` is never invoked. The document shell and the wrapper chain
+ * around the content (see {@link contentRoot}) are kept; source attributes of
+ * the rebuilt blocks are dropped.
  *
  * The result always begins with exactly one XML declaration, so it stays
  * well-formed XHTML regardless of the host DOM implementation.
  */
 function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): string {
-  assertEditableChapterStructure(chapter);
   const stylesheetLinks = extractStylesheetLinks(chapter.originalXhtml);
   const doc = createSerializationDocument(chapter);
   const html = doc.documentElement;
   const head = ensureChildElement(doc, html, 'head', html.firstChild);
-  const body = ensureChildElement(doc, html, 'body');
+  const body = contentRoot(ensureChildElement(doc, html, 'body'));
+  const hadTitleCarrier = findChapterTitleCarrier(body) !== undefined;
 
   if (chapter.title && !findFirstDescendant(doc, 'title')) {
     const titleEl = doc.createElementNS(XHTML_NS, 'title');
@@ -1089,6 +1137,13 @@ function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): st
   }
 
   while (body.firstChild) body.removeChild(body.firstChild);
+  if (hadTitleCarrier) {
+    const carrier = doc.createElementNS(XHTML_NS, 'span');
+    carrier.setAttribute('id', CHAPTER_TITLE_ID);
+    carrier.setAttribute('hidden', '');
+    carrier.appendChild(doc.createTextNode(chapter.title ?? ''));
+    body.appendChild(carrier);
+  }
   for (const block of chapter.blocks) {
     body.appendChild(renderBlock(doc, chapter, block, opfDir));
   }
@@ -1277,16 +1332,73 @@ function renderInlineElement(
   }
 }
 
+/**
+ * Rejects a chapter whose source carries content the block model cannot write
+ * back: unsupported structures, element ids, and text that never became a block.
+ */
 function assertEditableChapterStructure(chapter: EditableEpubChapter): void {
   if (!chapter.originalXhtml) return;
   const doc = parseXml(stripStylesheetLinks(chapter.originalXhtml));
-  const unsupported = Array.from(doc.getElementsByTagName('*')).find((el) =>
-    UNSUPPORTED_EDITABLE_CONTAINERS.has(el.localName.toLowerCase()),
-  );
-  if (!unsupported) return;
-  throw new Error(
-    `Cannot export edited chapter with <${unsupported.localName}> structure: ${chapter.href}`,
-  );
+  const body = contentBody(doc);
+  const fail = (construct: string): never => {
+    throw new Error(`Cannot export edited chapter with ${construct}: ${chapter.href}`);
+  };
+  const check = (el: Element): void => {
+    for (const child of Array.from(el.children)) {
+      const tag = child.localName.toLowerCase();
+      if (UNSUPPORTED_EDITABLE_ELEMENTS.has(tag)) fail(`<${tag}> structure`);
+      // The chapter-title carrier is rewritten from `chapter.title`.
+      if (isChapterTitleCarrier(child)) continue;
+      const id = child.getAttribute('id');
+      if (id) fail(`element id "${id}"`);
+      if (!RUBY_PARTS.has(tag) && isNonRenderedElement(child) && child.textContent?.trim()) {
+        fail(`non-rendered <${tag}> content`);
+      }
+      check(child);
+    }
+  };
+  check(contentRoot(body));
+}
+
+const CHAPTER_TITLE_ID = 'chapter-title';
+
+const RUBY_PARTS = new Set(['rt', 'rp', 'rtc']);
+
+function isChapterTitleCarrier(el: Element): boolean {
+  return el.getAttribute('id') === CHAPTER_TITLE_ID;
+}
+
+function findChapterTitleCarrier(root: Element): Element | undefined {
+  return Array.from(root.getElementsByTagName('*')).find(isChapterTitleCarrier);
+}
+
+/** Elements that only wrap the chapter content and are kept around the rebuilt blocks. */
+const CONTENT_WRAPPER_ELEMENTS = new Set(['section', 'article', 'main', 'div']);
+
+/**
+ * Innermost element of a chain of single wrappers below `body` (for example
+ * `<section id>` around the whole chapter). Blocks are rebuilt inside it, so
+ * the wrappers and their attributes survive an edit.
+ */
+function contentRoot(body: Element): Element {
+  let root = body;
+  for (;;) {
+    const children = Array.from(root.children);
+    const only = children[0];
+    if (
+      children.length !== 1 ||
+      !CONTENT_WRAPPER_ELEMENTS.has(only.localName.toLowerCase()) ||
+      Array.from(root.childNodes).some(
+        (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+      ) ||
+      !Array.from(only.children).some((child) =>
+        EDITABLE_BLOCK_ELEMENTS.has(child.localName.toLowerCase()),
+      )
+    ) {
+      return root;
+    }
+    root = only;
+  }
 }
 
 function renderImageBlock(
@@ -1300,7 +1412,12 @@ function renderImageBlock(
   const img = doc.createElementNS(XHTML_NS, 'img');
   img.setAttribute(
     'src',
-    relativeZipPath(dirname(chapter.href), imageAssetHrefForBlock(chapter, block.assetKey, opfDir)),
+    zipPathToHref(
+      relativeZipPath(
+        dirname(chapter.href),
+        imageAssetHrefForBlock(chapter, block.assetKey, opfDir),
+      ),
+    ),
   );
   img.setAttribute('alt', block.alt ?? '');
   figure.appendChild(img);
@@ -1353,7 +1470,23 @@ const EDITABLE_BLOCK_ELEMENTS = new Set([
   'figure',
 ]);
 
-const UNSUPPORTED_EDITABLE_CONTAINERS = new Set(['ul', 'ol', 'dl', 'table', 'thead', 'tbody']);
+/** Source elements an edited chapter cannot be rebuilt with. */
+const UNSUPPORTED_EDITABLE_ELEMENTS = new Set([
+  'ul',
+  'ol',
+  'dl',
+  'table',
+  'thead',
+  'tbody',
+  'svg',
+  'math',
+  'video',
+  'audio',
+  'iframe',
+  'object',
+  'embed',
+  'canvas',
+]);
 
 function extractEditableBlocks(
   xhtml: string,
@@ -1366,7 +1499,7 @@ function extractEditableBlocks(
   originalImageHrefs: string[];
 } {
   const doc = parseXml(stripStylesheetLinks(xhtml));
-  const root = doc.body ?? doc.documentElement;
+  const root = contentBody(doc);
   const imageAssets = new Map<string, EditableImageAsset>();
   const originalImageHrefs = new Set<string>();
   const blocks: EditableBlock[] = [];
@@ -1415,14 +1548,13 @@ function extractEditableBlocks(
       data,
       mediaType: manifestItem?.mediaType ?? mediaTypeFromPath(filename),
     });
+    const figcaption = figure ? firstChildElementByName(figure, 'figcaption') : undefined;
     const block: EditableImageBlock = {
       kind: 'image',
       id: nextGeneratedBlockId(blocks),
       assetKey,
       alt: img.getAttribute('alt') ?? undefined,
-      caption: figure
-        ? firstChildElementByName(figure, 'figcaption')?.textContent?.trim()
-        : undefined,
+      caption: figcaption ? renderedText(figcaption) : undefined,
       placement: figure ? imagePlacement(figure.getAttribute('data-placement')) : undefined,
     };
     blocks.push(block);
@@ -1469,15 +1601,23 @@ function extractEditableBlocks(
     const childBlocks = Array.from(el.children).filter((child) =>
       EDITABLE_BLOCK_ELEMENTS.has(child.localName.toLowerCase()),
     );
-    if (EDITABLE_BLOCK_ELEMENTS.has(tag) && childBlocks.length === 0) {
+    const isParagraphElement = EDITABLE_BLOCK_ELEMENTS.has(tag) && childBlocks.length === 0;
+    if (isParagraphElement && !firstDescendantElementByName(el, 'img')) {
       pushParagraph(el);
       return;
     }
     // Runs of loose text and inline markup between structural children are
-    // paragraphs too, whatever element owns them.
+    // paragraphs too, whatever element owns them. A paragraph element split
+    // around its images wraps each run in a copy of itself to keep its kind.
     let run: Node[] = [];
     const flush = (): void => {
-      if (run.length > 0) pushParagraph(el, run);
+      if (run.length > 0 && isParagraphElement) {
+        const wrapper = el.cloneNode(false) as Element;
+        for (const node of run) wrapper.appendChild(node.cloneNode(true));
+        pushParagraph(el, [wrapper]);
+      } else if (run.length > 0) {
+        pushParagraph(el, run);
+      }
       run = [];
     };
     for (const child of Array.from(el.childNodes)) {
