@@ -109,10 +109,26 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     [load],
   );
 
+  // A URL load still in flight when the URL changes or clears is abandoned.
   const defaultUrl = options.defaultUrl;
   useEffect(() => {
-    if (defaultUrl) void loadUrl(defaultUrl);
+    if (!defaultUrl) return;
+    void loadUrl(defaultUrl);
+    const requestId = requestIdRef.current;
+    return () => {
+      if (requestIdRef.current !== requestId) return;
+      requestIdRef.current++;
+      setLoading(false);
+    };
   }, [defaultUrl, loadUrl]);
+
+  // Nothing settles into an unmounted hook.
+  useEffect(
+    () => () => {
+      requestIdRef.current++;
+    },
+    [],
+  );
 
   const replaceEpub = useCallback((book: EpubBook | null) => {
     requestIdRef.current++;

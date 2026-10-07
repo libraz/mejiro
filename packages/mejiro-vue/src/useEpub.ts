@@ -97,18 +97,28 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
     );
   }
 
+  // A URL load still in flight when the URL changes or clears is abandoned.
   let stopDefaultUrlWatch: WatchStopHandle | undefined;
   onMounted(() => {
     stopDefaultUrlWatch = watch(
       () => options.defaultUrl,
-      (url) => {
-        if (url) void loadUrl(url);
+      (url, _previous, onCleanup) => {
+        if (!url) return;
+        void loadUrl(url);
+        const urlRequest = requestId;
+        onCleanup(() => {
+          if (requestId !== urlRequest) return;
+          requestId++;
+          loading.value = false;
+        });
       },
       { immediate: true },
     );
   });
+  // Nothing settles into an unmounted component.
   onBeforeUnmount(() => {
     stopDefaultUrlWatch?.();
+    requestId++;
   });
 
   function setEpub(book: EpubBook | null): void {
