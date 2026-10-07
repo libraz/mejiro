@@ -77,7 +77,10 @@ export interface UseEpubProjectReturn {
   previewError: Error | null;
   /** Whether a preview build is pending or running. */
   previewing: boolean;
-  /** Merges `patch` into the metadata. */
+  /**
+   * Merges `patch` into the metadata. A missing or blank `identifier` keeps the
+   * current one.
+   */
   setMetadata: (patch: Partial<EpubProjectMetadata>) => void;
   /** Replaces every chapter; an empty list becomes one generated chapter. */
   setChapters: (chapters: EpubProjectChapterDraft[]) => void;
@@ -214,7 +217,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   // relative update once per updater evaluation, which React is free to repeat
   // (StrictMode, discarded renders).
   const setMetadata = useCallback((patch: Partial<EpubProjectMetadata>) => {
-    const next = { ...metadataRef.current, ...patch };
+    const next = mergeMetadata(metadataRef.current, patch);
     metadataRef.current = next;
     setMetadataState(next);
   }, []);
@@ -368,6 +371,19 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       setSelectedChapter,
     ],
   );
+}
+
+/**
+ * Merges `patch` over `current`. A missing or blank identifier in the patch
+ * keeps the current one, so every build of one project stays one publication.
+ */
+function mergeMetadata(
+  current: EpubProjectMetadata,
+  patch: Partial<EpubProjectMetadata>,
+): EpubProjectMetadata {
+  const next = { ...current, ...patch };
+  if (!next.identifier?.trim()) next.identifier = current.identifier;
+  return next;
 }
 
 /** Seeds the metadata with an identifier, so every build of one project shares it. */

@@ -7,7 +7,17 @@ import {
   type EpubProjectMetadata,
   parseEpub,
 } from '@libraz/mejiro/epub';
-import { type ComputedRef, computed, type Ref, ref, shallowRef, watch } from 'vue';
+import {
+  type ComputedRef,
+  computed,
+  onMounted,
+  onScopeDispose,
+  type Ref,
+  ref,
+  shallowRef,
+  type WatchStopHandle,
+  watch,
+} from 'vue';
 import { toError } from './errors.js';
 import { mergeDefined, uniqueChapterId } from './persistence.js';
 
@@ -77,7 +87,10 @@ export interface UseEpubProjectReturn {
   previewError: Ref<Error | null>;
   /** Whether a preview build is pending or running. */
   previewing: Ref<boolean>;
-  /** Merges `patch` into the metadata. */
+  /**
+   * Merges `patch` into the metadata. A missing or blank `identifier` keeps the
+   * current one.
+   */
   setMetadata: (patch: Partial<EpubProjectMetadata>) => void;
   /** Replaces every chapter; an empty list becomes one generated chapter. */
   setChapters: (chapters: EpubProjectChapterDraft[]) => void;
@@ -158,42 +171,49 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   const assetGeneration = ref(0);
   watch([cover, assets], () => assetGeneration.value++, { flush: 'sync' });
 
-  watch(
-    [metadata, chapters, assetGeneration],
-    (_values, _oldValues, onCleanup) => {
-      const requestId = ++previewRequestId;
-      const controller = new AbortController();
-      previewing.value = true;
-      const timer = setTimeout(() => {
-        void (async () => {
-          try {
-            const book = await parseEpub(
-              await buildProject().export(exportOptions(controller.signal)),
-            );
-            if (requestId !== previewRequestId) return;
-            previewBook.value = book;
-            previewError.value = null;
-            options.onPreview?.(book);
-          } catch (err) {
-            if (requestId === previewRequestId) {
-              previewError.value = toError(err);
+  // Deferred to mount so server-side setup never schedules a build.
+  let stopPreviewWatch: WatchStopHandle | undefined;
+  onMounted(() => {
+    stopPreviewWatch = watch(
+      [metadata, chapters, assetGeneration],
+      (_values, _oldValues, onCleanup) => {
+        const requestId = ++previewRequestId;
+        const controller = new AbortController();
+        previewing.value = true;
+        const timer = setTimeout(() => {
+          void (async () => {
+            try {
+              const book = await parseEpub(
+                await buildProject().export(exportOptions(controller.signal)),
+              );
+              if (requestId !== previewRequestId) return;
+              previewBook.value = book;
+              previewError.value = null;
+              options.onPreview?.(book);
+            } catch (err) {
+              if (requestId === previewRequestId) {
+                previewError.value = toError(err);
+              }
+            } finally {
+              if (requestId === previewRequestId) previewing.value = false;
             }
-          } finally {
-            if (requestId === previewRequestId) previewing.value = false;
-          }
-        })();
-      }, options.debounceMs ?? 250);
-      onCleanup(() => {
-        previewRequestId++;
-        clearTimeout(timer);
-        controller.abort();
-      });
-    },
-    { deep: true, immediate: true },
-  );
+          })();
+        }, options.debounceMs ?? 250);
+        onCleanup(() => {
+          previewRequestId++;
+          clearTimeout(timer);
+          controller.abort();
+        });
+      },
+      { deep: true, immediate: true },
+    );
+  });
+  onScopeDispose(() => {
+    stopPreviewWatch?.();
+  });
 
   function setMetadata(patch: Partial<EpubProjectMetadata>): void {
-    metadata.value = { ...metadata.value, ...patch };
+    metadata.value = mergeMetadata(metadata.value, patch);
   }
 
   function setChapters(next: EpubProjectChapterDraft[]): void {
@@ -298,6 +318,19 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     buildProject,
     exportEpub,
   };
+}
+
+/**
+ * Merges `patch` over `current`. A missing or blank identifier in the patch
+ * keeps the current one, so every build of one project stays one publication.
+ */
+function mergeMetadata(
+  current: EpubProjectMetadata,
+  patch: Partial<EpubProjectMetadata>,
+): EpubProjectMetadata {
+  const next = { ...current, ...patch };
+  if (!next.identifier?.trim()) next.identifier = current.identifier;
+  return next;
 }
 
 /** Seeds the metadata with an identifier, so every build of one project shares it. */

@@ -88,6 +88,20 @@ describe('useEpubProject package identifier (React)', () => {
 
     expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:1');
   });
+
+  it('keeps the identifier when setMetadata clears or blanks it', () => {
+    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const seeded = result.current.buildProject().metadata.identifier;
+
+    for (const identifier of [undefined, '', '   ']) {
+      act(() => result.current.setMetadata({ identifier }));
+      expect(result.current.buildProject().metadata.identifier).toBe(seeded);
+    }
+    act(() => result.current.setMetadata({ identifier: 'urn:isbn:2' }));
+    expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:2');
+    act(() => result.current.setMetadata({ identifier: undefined }));
+    expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:2');
+  });
 });
 
 describe('useEpubProject generated chapter ids (React)', () => {

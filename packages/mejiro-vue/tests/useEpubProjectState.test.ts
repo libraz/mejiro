@@ -95,6 +95,20 @@ describe('useEpubProject package identifier (Vue)', () => {
 
     expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:1');
   });
+
+  it('keeps the identifier when setMetadata clears or blanks it', () => {
+    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const seeded = result.current.buildProject().metadata.identifier;
+
+    for (const identifier of [undefined, '', '   ']) {
+      result.current.setMetadata({ identifier });
+      expect(result.current.buildProject().metadata.identifier).toBe(seeded);
+    }
+    result.current.setMetadata({ identifier: 'urn:isbn:2' });
+    expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:2');
+    result.current.setMetadata({ identifier: undefined });
+    expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:2');
+  });
 });
 
 describe('useEpubProject generated chapter ids (Vue)', () => {
@@ -152,5 +166,17 @@ describe('useEpubProject preview pipeline (Vue)', () => {
 
     expect(signals[0]?.aborted).toBe(true);
     expect(onPreview).not.toHaveBeenCalled();
+  });
+
+  it('never starts a preview whose debounce is still pending at unmount', async () => {
+    const assetResolver = vi.fn(() => COVER_BYTES);
+    const { unmount } = harness(() =>
+      useEpubProject({ chapters, debounceMs: 20, cover: COVER, assetResolver }),
+    );
+
+    unmount();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(assetResolver).not.toHaveBeenCalled();
   });
 });
