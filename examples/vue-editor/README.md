@@ -57,5 +57,5 @@ npm run dev
 
 ## Reading further
 
-- [`@libraz/mejiro-vue` README](https://github.com/libraz/mejiro/tree/main/packages/mejiro-vue) — full prop / composable reference.
-- [`useEditableEpub`](https://github.com/libraz/mejiro/tree/main/packages/mejiro-vue) — the headless composable behind `MejiroEditor` if you want a custom UI.
+- [`@libraz/mejiro-vue` API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-vue--vue-component) — full prop / composable reference.
+- [`useEditableEpub`](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#composables) — the headless composable behind `MejiroEditor` if you want a custom UI.

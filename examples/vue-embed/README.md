@@ -32,4 +32,4 @@ npm run dev
 ## Reading further
 
 - [`examples/vue`](../vue) — the minimal full-screen variant.
-- [`@libraz/mejiro-vue` README](../../packages/mejiro-vue) — full API reference.
+- [`@libraz/mejiro-vue` API reference](../../docs/en/10-api-reference.md#librazmejiro-vue--vue-component) — full prop / composable reference.

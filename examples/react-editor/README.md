@@ -55,5 +55,5 @@ npm run dev
 
 ## Reading further
 
-- [`@libraz/mejiro-react` README](https://github.com/libraz/mejiro/tree/main/packages/mejiro-react) — full prop / hook reference.
-- [`useEditableEpub`](https://github.com/libraz/mejiro/tree/main/packages/mejiro-react) — the headless hook behind `MejiroEditor` if you want a custom UI.
+- [`@libraz/mejiro-react` API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-react--react-component) — full prop / hook reference.
+- [`useEditableEpub`](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#hooks) — the headless hook behind `MejiroEditor` if you want a custom UI.

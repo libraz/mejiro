@@ -32,4 +32,4 @@ npm run dev
 ## Reading further
 
 - [`examples/react`](../react) — the minimal full-screen variant.
-- [`@libraz/mejiro-react` README](../../packages/mejiro-react) — full API reference.
+- [`@libraz/mejiro-react` API reference](../../docs/en/10-api-reference.md#librazmejiro-react--react-component) — full prop / hook reference.

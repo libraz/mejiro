@@ -38,4 +38,4 @@ npm run dev
 ## Reading further
 
 - [`examples/react`](../react) — the high-level `MejiroReader` variant.
-- [`@libraz/mejiro-react` README](../../packages/mejiro-react#hooks-headless-no-ui) — hook reference.
+- [Hook reference](../../docs/en/10-api-reference.md#hooks) — every hook and its options.

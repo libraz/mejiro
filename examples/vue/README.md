@@ -88,5 +88,5 @@ at your own `@font-face` rules.
 
 ## Reading further
 
-- [`@libraz/mejiro-vue` README](https://github.com/libraz/mejiro/tree/main/packages/mejiro-vue) — full prop / composable reference.
-- [Headless composables](https://github.com/libraz/mejiro/tree/main/packages/mejiro-vue#composables-headless-no-ui) — bypass `MejiroReader` and consume the composables directly.
+- [`@libraz/mejiro-vue` API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-vue--vue-component) — full prop / composable reference.
+- [Headless composables](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#composables) — bypass `MejiroReader` and consume the composables directly; [the React / Vue guide](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md) shows them assembled.

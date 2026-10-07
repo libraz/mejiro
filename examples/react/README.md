@@ -82,5 +82,5 @@ at your own `@font-face` rules.
 
 ## Reading further
 
-- [`@libraz/mejiro-react` README](https://github.com/libraz/mejiro/tree/main/packages/mejiro-react) — full prop / hook reference.
-- [Headless hooks](https://github.com/libraz/mejiro/tree/main/packages/mejiro-react#hooks-headless-no-ui) — bypass `MejiroReader` and consume the hooks directly.
+- [`@libraz/mejiro-react` API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-react--react-component) — full prop / hook reference.
+- [Headless hooks](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#hooks) — bypass `MejiroReader` and consume the hooks directly; [the React / Vue guide](https://github.com/libraz/mejiro/tree/main/docs/en/08-react-and-vue.md) shows them assembled.

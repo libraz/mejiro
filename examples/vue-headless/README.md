@@ -38,4 +38,4 @@ npm run dev
 ## Reading further
 
 - [`examples/vue`](../vue) — the high-level `MejiroReader` variant.
-- [`@libraz/mejiro-vue` README](../../packages/mejiro-vue#composables-headless-no-ui) — composable reference.
+- [Composable reference](../../docs/en/10-api-reference.md#composables) — every composable and its options.
