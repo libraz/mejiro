@@ -136,6 +136,8 @@ export function useSpread(
   const spread = shallowRef<SpreadResult | null>(null);
   const turning = ref(false);
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
+  // Target of the turn in flight and the mode it was counted in.
+  let turnTarget: { index: number; single: boolean } | null = null;
   let layoutGeneration = 0;
 
   const single = computed(() => toValue(options.single) ?? false);
@@ -179,6 +181,7 @@ export function useSpread(
         clearTimeout(turnTimer);
         turnTimer = null;
       }
+      turnTarget = null;
       turning.value = false;
       spreadIdx.value = 0;
       refresh();
@@ -198,21 +201,37 @@ export function useSpread(
     options.onChange?.(spreadIdx.value);
   });
 
+  /** Target of the turn in flight in the current mode, else the current index. */
+  function navigationTarget(): number {
+    if (!turnTarget) return spreadIdx.value;
+    // A mode flip during the turn re-counts the target in the new mode.
+    return indexOfPageIn(firstPageOf(turnTarget.index, turnTarget.single), single.value);
+  }
+
   function goTo(index: number): void {
     if (!layout.value) return;
     const targetSingle = single.value;
     const max = totalSpreads.value - 1;
     const target = Math.max(0, Math.min(max, index));
+    if (turnTimer) {
+      if (target === navigationTarget()) return;
+      // A new turn first lands the one in flight, so no target is skipped.
+      clearTimeout(turnTimer);
+      turnTimer = null;
+      spreadIdx.value = navigationTarget();
+      turnTarget = null;
+      turning.value = false;
+    }
     if (target === spreadIdx.value) return;
     if (turnDuration > 0) {
       const generation = layoutGeneration;
-      if (turnTimer) clearTimeout(turnTimer);
+      turnTarget = { index: target, single: targetSingle };
       turning.value = true;
       turnTimer = setTimeout(() => {
         if (generation !== layoutGeneration) return;
-        // A mode flip during the turn re-counts the target in the new mode.
-        spreadIdx.value = indexOfPageIn(firstPageOf(target, targetSingle), single.value);
+        spreadIdx.value = navigationTarget();
         turning.value = false;
+        turnTarget = null;
         turnTimer = null;
       }, turnDuration);
     } else {
@@ -226,6 +245,7 @@ export function useSpread(
       clearTimeout(turnTimer);
       turnTimer = null;
     }
+    turnTarget = null;
     turning.value = false;
     const max = totalSpreads.value - 1;
     spreadIdx.value = Math.max(0, Math.min(max, index));
@@ -241,12 +261,13 @@ export function useSpread(
     return firstTextAnchorFrom(l, firstPageOf(index, single.value));
   }
 
+  // Step from the turn in flight, so each call moves exactly one position.
   function next(): void {
-    goTo(spreadIdx.value + 1);
+    goTo(navigationTarget() + 1);
   }
 
   function prev(): void {
-    goTo(spreadIdx.value - 1);
+    goTo(navigationTarget() - 1);
   }
 
   function onKey(e: KeyboardEvent): void {

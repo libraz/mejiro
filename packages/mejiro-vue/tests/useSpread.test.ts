@@ -133,6 +133,62 @@ describe('useSpread (Vue)', () => {
     },
   );
 
+  it('advances one position per next()/prev() call while a turn is in flight', async () => {
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      const layout = shallowRef<ChapterLayout | null>(mockLayout(10));
+      const { result } = harness(() =>
+        useSpread(layout, { turnDuration: 180, enableKeyboard: false, onChange }),
+      );
+      await nextTick();
+
+      result.current.next();
+      await nextTick();
+      result.current.next();
+      await nextTick();
+      result.current.next();
+      await nextTick();
+      vi.advanceTimersByTime(180);
+      await nextTick();
+      expect(result.current.spreadIdx.value).toBe(3);
+      // Each earlier target landed before the next turn started.
+      expect(onChange.mock.calls.map((c) => c[0])).toEqual([1, 2, 3]);
+
+      result.current.prev();
+      result.current.prev();
+      vi.advanceTimersByTime(180);
+      await nextTick();
+      expect(result.current.spreadIdx.value).toBe(1);
+
+      // Clamped at the end: extra calls past the last spread do not move further.
+      for (let i = 0; i < 6; i++) result.current.next();
+      vi.advanceTimersByTime(180);
+      await nextTick();
+      expect(result.current.spreadIdx.value).toBe(4);
+      expect(result.current.turning.value).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets to spread 0 of a replacement layout with the new page count', async () => {
+    const first = mockLayout(6);
+    const second = mockLayout(10);
+    const layout = shallowRef<ChapterLayout | null>(first);
+    const { result } = harness(() => useSpread(layout, { turnDuration: 0, enableKeyboard: false }));
+    await nextTick();
+    result.current.setSpread(2);
+    await nextTick();
+
+    layout.value = second;
+    await nextTick();
+    expect(result.current.spreadIdx.value).toBe(0);
+    expect(result.current.totalPages.value).toBe(10);
+    expect(result.current.totalSpreads.value).toBe(5);
+    expect(result.current.spread.value).toBe(second.getSpread(0));
+  });
+
   it('keeps the visible page when single mode is toggled mid-chapter', async () => {
     const layout = shallowRef<ChapterLayout | null>(mockLayout(9));
     const single = ref(false);

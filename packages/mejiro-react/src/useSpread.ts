@@ -133,6 +133,8 @@ export function useSpread(
   const singleRef = useRef(single);
   singleRef.current = single;
   const turnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Target of the turn in flight and the mode it was counted in.
+  const turnTargetRef = useRef<{ index: number; single: boolean } | null>(null);
   const layoutGenerationRef = useRef(0);
   const lastEmittedRef = useRef<{ layout: ChapterLayout; spreadIdx: number } | null>(null);
 
@@ -162,6 +164,7 @@ export function useSpread(
       clearTimeout(turnTimerRef.current);
       turnTimerRef.current = null;
     }
+    turnTargetRef.current = null;
     setTurning(false);
     setSpreadIdx(0);
     if (!layout) {
@@ -186,29 +189,48 @@ export function useSpread(
     lastEmittedRef.current = { layout, spreadIdx };
   }, [layout, spreadIdx, layoutSpreadIdx]);
 
+  /** Target of the turn in flight in the current mode, else the current index. */
+  const navigationTarget = useCallback((): number => {
+    const pending = turnTargetRef.current;
+    if (!pending) return spreadIdxRef.current;
+    // A mode flip during the turn re-counts the target in the new mode.
+    return indexOfPageIn(firstPageOf(pending.index, pending.single), singleRef.current);
+  }, []);
+
   const goTo = useCallback(
     (index: number) => {
       if (!layoutRef.current) return;
       const targetSingle = singleRef.current;
       const max = navigationCount(layoutRef.current.totalPages, targetSingle) - 1;
       const target = Math.max(0, Math.min(max, index));
+      if (turnTimerRef.current) {
+        if (target === navigationTarget()) return;
+        // A new turn first lands the one in flight, so no target is skipped.
+        clearTimeout(turnTimerRef.current);
+        turnTimerRef.current = null;
+        const landed = navigationTarget();
+        turnTargetRef.current = null;
+        spreadIdxRef.current = landed;
+        setSpreadIdx(landed);
+        setTurning(false);
+      }
       if (target === spreadIdxRef.current) return;
       if (turnDuration > 0) {
         const generation = layoutGenerationRef.current;
-        if (turnTimerRef.current) clearTimeout(turnTimerRef.current);
+        turnTargetRef.current = { index: target, single: targetSingle };
         setTurning(true);
         turnTimerRef.current = setTimeout(() => {
           if (generation !== layoutGenerationRef.current) return;
-          // A mode flip during the turn re-counts the target in the new mode.
-          setSpreadIdx(indexOfPageIn(firstPageOf(target, targetSingle), singleRef.current));
+          setSpreadIdx(navigationTarget());
           setTurning(false);
+          turnTargetRef.current = null;
           turnTimerRef.current = null;
         }, turnDuration);
       } else {
         setSpreadIdx(target);
       }
     },
-    [turnDuration],
+    [turnDuration, navigationTarget],
   );
 
   const setSpreadIndex = useCallback((index: number) => {
@@ -217,6 +239,7 @@ export function useSpread(
       clearTimeout(turnTimerRef.current);
       turnTimerRef.current = null;
     }
+    turnTargetRef.current = null;
     setTurning(false);
     const max = navigationCount(layoutRef.current.totalPages, singleRef.current) - 1;
     setSpreadIdx(Math.max(0, Math.min(max, index)));
@@ -232,8 +255,9 @@ export function useSpread(
     [layout, single],
   );
 
-  const next = useCallback(() => goTo(spreadIdxRef.current + 1), [goTo]);
-  const prev = useCallback(() => goTo(spreadIdxRef.current - 1), [goTo]);
+  // Step from the turn in flight, so each call moves exactly one position.
+  const next = useCallback(() => goTo(navigationTarget() + 1), [goTo, navigationTarget]);
+  const prev = useCallback(() => goTo(navigationTarget() - 1), [goTo, navigationTarget]);
 
   useEffect(() => {
     if (!enableKeyboard) return;

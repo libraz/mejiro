@@ -5,8 +5,8 @@ import type { ChapterLayout, InChapterAnchor, MejiroBook, SpreadResult } from '@
 import { MejiroBook as MejiroBookClass } from '@libraz/mejiro/book';
 import type { EditableEpub, EpubBook } from '@libraz/mejiro/epub';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { type MutableRefObject, useMemo } from 'react';
-import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { useLayoutEffect, useMemo } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
   // Only the loaders are faked; the module's pure helpers (the book clone the
@@ -1027,6 +1027,89 @@ describe('useSpread (React)', () => {
     expect(result.current.layoutSpreadIdx).toBe(2);
     expect(result.current.singleSide).toBeNull();
   });
+
+  it('advances one position per next()/prev() call while a turn is in flight', () => {
+    vi.useFakeTimers();
+    try {
+      const onChange = vi.fn();
+      const layout = mockLayout(10);
+      const { result } = renderHook(() => useSpread(layout, { turnDuration: 180, onChange }));
+
+      act(() => result.current.next());
+      act(() => result.current.next());
+      act(() => result.current.next());
+      act(() => {
+        vi.advanceTimersByTime(180);
+      });
+      expect(result.current.spreadIdx).toBe(3);
+      // Each earlier target landed before the next turn started.
+      expect(onChange.mock.calls.map((c) => c[0])).toEqual([1, 2, 3]);
+
+      act(() => result.current.prev());
+      act(() => result.current.prev());
+      act(() => {
+        vi.advanceTimersByTime(180);
+      });
+      expect(result.current.spreadIdx).toBe(1);
+
+      // Clamped at the end: extra calls past the last spread do not move further.
+      for (let i = 0; i < 6; i++) act(() => result.current.next());
+      act(() => {
+        vi.advanceTimersByTime(180);
+      });
+      expect(result.current.spreadIdx).toBe(4);
+      expect(result.current.turning).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resets to spread 0 of a replacement layout and reports the move', () => {
+    const onChange = vi.fn();
+    const first = mockLayout(6);
+    const second = mockLayout(10);
+    const { result, rerender } = renderHook(
+      ({ l }: { l: ChapterLayout }) => useSpread(l, { turnDuration: 0, onChange }),
+      { initialProps: { l: first } },
+    );
+    act(() => result.current.setSpread(2));
+    onChange.mockClear();
+
+    rerender({ l: second });
+    expect(result.current.spreadIdx).toBe(0);
+    expect(result.current.totalPages).toBe(10);
+    expect(result.current.totalSpreads).toBe(5);
+    expect(second.getSpread).toHaveBeenLastCalledWith(0);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(0);
+  });
+
+  it('follows a spread index restored in the same commit as a layout swap', () => {
+    const onChange = vi.fn();
+    const first = mockLayout(8);
+    const second = mockLayout(8);
+    const { result, rerender } = renderHook(
+      ({ l, restore }: { l: ChapterLayout; restore: number | null }) => {
+        const ctx = useSpread(l, { turnDuration: 0, onChange });
+        // Registered after useSpread's reset, as a reader's restore effect is.
+        // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the layout object, like the reader's restore.
+        useLayoutEffect(() => {
+          if (restore != null) ctx.setSpread(restore);
+        }, [l]);
+        return ctx;
+      },
+      { initialProps: { l: first, restore: null as number | null } },
+    );
+    act(() => result.current.setSpread(2));
+    onChange.mockClear();
+
+    rerender({ l: second, restore: 2 });
+    expect(result.current.spreadIdx).toBe(2);
+    expect(second.getSpread).toHaveBeenLastCalledWith(2);
+    expect((result.current.spread as unknown as { spreadIdx: number }).spreadIdx).toBe(2);
+    // The index never effectively moved, so subscribers are not notified.
+    expect(onChange).not.toHaveBeenCalled();
+  });
 });
 
 describe('useChapterLayout (React)', () => {
@@ -1125,13 +1208,7 @@ describe('useChapterLayout (React)', () => {
   });
 
   it('exposes pendingRestore as a writable ref', async () => {
-    // `@types/react@18` models `RefObject.current` as read-only, so the hook's
-    // own recipe — assign the consumed anchor back to `null` — must be typed
-    // through a mutable ref to compile across the whole supported peer range.
-    expectTypeOf<ReturnType<typeof useChapterLayout>['pendingRestore']>().toEqualTypeOf<
-      MutableRefObject<InChapterAnchor | null>
-    >();
-
+    // The type-level contract is compile-checked in layoutHookTypes.test.ts.
     const book = makeBook([mockLayout(6)]);
     const epub = makeEpub();
     const surface = { current: document.createElement('div') };
