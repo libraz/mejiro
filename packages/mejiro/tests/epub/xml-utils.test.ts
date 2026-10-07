@@ -40,6 +40,21 @@ describe('stripStylesheetLinks', () => {
     expect(stripStylesheetLinks(xhtml)).toBe('<head></head>');
   });
 
+  it('covers exactly one whole start tag when an attribute value contains >', () => {
+    const link = `<link rel="stylesheet" title='a>b "c"' href="s.css"/>`;
+    const xhtml = `<head>${link}<link rel="next" href="n.xhtml"/></head>`;
+
+    expect(extractStylesheetLinks(xhtml)).toEqual([link]);
+    expect(stripStylesheetLinks(xhtml)).toBe('<head><link rel="next" href="n.xhtml"/></head>');
+  });
+
+  it('ignores link markup inside comments, CDATA and processing instructions, and look-alike tags', () => {
+    const xhtml = `<head><!-- <link rel="stylesheet" href="old.css"> --><style><![CDATA[ <link rel="stylesheet" href="x.css"> ]]></style><?pi <link rel="stylesheet" href="y.css"> ?><link-x rel="stylesheet"/><link data-rel="stylesheet" href="z.css"/></head>`;
+
+    expect(extractStylesheetLinks(xhtml)).toEqual([]);
+    expect(stripStylesheetLinks(xhtml)).toBe(xhtml);
+  });
+
   it('completes in linear time on unterminated link tags', () => {
     // Over 1 MB of `<link` starts with no closing `>` anywhere in the document.
     const xhtml = '<link '.repeat(175_000);
