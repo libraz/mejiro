@@ -55,7 +55,8 @@ export function isKana(cp: number): boolean {
  *
  * Clustering prevents line breaks within ruby groups:
  * - `group`: all base characters share one cluster ID (no internal breaks).
- * - `jukugo`: sub-groups between split points share cluster IDs.
+ * - `jukugo`: sub-groups between split points share cluster IDs; a word with
+ *   no split points is one group. An aggregate without split points adds none.
  * - `mono`: single base character, no clustering needed.
  *
  * A `jukugo` annotation that fully covers other annotations is an aggregate:
@@ -76,7 +77,7 @@ export function preprocessRuby(
 ): RubyPreprocessResult {
   // Sort annotations (outermost first) for consistent processing
   const sorted = normalizeRubyAnnotations(annotations);
-  const aggregates = new Set(sorted.filter((ann) => isAggregateJukugo(ann, sorted)));
+  const { aggregates } = resolveJukugoAggregates(sorted);
   validateRubyInput(text, advances, sorted, aggregates, existingClusterIds);
   const len = text.length;
   const effectiveAdvances = new Float32Array(advances);
@@ -127,9 +128,9 @@ export function preprocessRuby(
       for (let i = startIndex; i < endIndex; i++) {
         clusterIds[i] = cid;
       }
-    } else if (type === 'jukugo' && ann.jukugoSplitPoints?.length) {
-      // Create sub-groups between split points
-      const splits = [0, ...ann.jukugoSplitPoints, endIndex - startIndex];
+    } else if (type === 'jukugo' && (ann.jukugoSplitPoints?.length || !aggregates.has(ann))) {
+      // Sub-groups between split points; a word without any is one group.
+      const splits = [0, ...(ann.jukugoSplitPoints ?? []), endIndex - startIndex];
       for (let s = 0; s < splits.length - 1; s++) {
         const groupStart = startIndex + splits[s];
         const groupEnd = startIndex + splits[s + 1];
@@ -215,21 +216,90 @@ function validateRubyInput(
   }
 }
 
+/** Span fields of a ruby annotation that jukugo aggregate classification reads. */
+export interface JukugoSpan {
+  /** Start index in base text (inclusive). */
+  readonly startIndex: number;
+  /** End index in base text (exclusive). */
+  readonly endIndex: number;
+  /** @defaultValue 'mono' */
+  readonly type?: RubyType;
+}
+
 /**
- * Returns true when `ann` is a jukugo annotation that fully covers at least one
- * other annotation — i.e. it aggregates per-segment ruby and only supplies
- * split points.
+ * Classifies the jukugo aggregates among ruby annotations: a `jukugo`
+ * annotation that fully covers another ruby annotation of a different range or
+ * of a non-jukugo type. The covered annotations own the reading, so an
+ * aggregate only supplies split points. Also returns the non-jukugo segments
+ * that continue an aggregate's word (starting strictly inside it).
+ *
+ * Linear after one sort by start, so the line breaker and the render layer
+ * share one classification at the same cost.
+ *
+ * @param rubies - Ruby annotations in any order.
+ * @returns The aggregates and the continuing segments, as subsets of `rubies`.
  */
-function isAggregateJukugo(ann: RubyAnnotation, annotations: readonly RubyAnnotation[]): boolean {
-  if ((ann.type ?? 'mono') !== 'jukugo') return false;
-  const span = ann.endIndex - ann.startIndex;
-  return annotations.some(
-    (other) =>
-      other !== ann &&
-      other.startIndex >= ann.startIndex &&
-      other.endIndex <= ann.endIndex &&
-      (other.endIndex - other.startIndex < span || (other.type ?? 'mono') !== 'jukugo'),
-  );
+export function resolveJukugoAggregates<T extends JukugoSpan>(
+  rubies: readonly T[],
+): { aggregates: Set<T>; continuations: Set<T> } {
+  const byStart = [...rubies].sort((a, b) => a.startIndex - b.startIndex);
+  const n = byStart.length;
+  // Smallest end among annotations from index k on: one starting after an
+  // aggregate's start and ending by its end is covered by it.
+  const minEndFrom = new Float64Array(n + 1);
+  minEndFrom[n] = Number.POSITIVE_INFINITY;
+  for (let k = n - 1; k >= 0; k--) {
+    const end = byStart[k].endIndex;
+    minEndFrom[k] = end < minEndFrom[k + 1] ? end : minEndFrom[k + 1];
+  }
+
+  const aggregates = new Set<T>();
+  for (let g = 0; g < n; ) {
+    const start = byStart[g].startIndex;
+    let h = g;
+    let minEnd = Number.POSITIVE_INFINITY;
+    const nonJukugoEnds = new Set<number>();
+    for (; h < n && byStart[h].startIndex === start; h++) {
+      const ann = byStart[h];
+      if (ann.endIndex < minEnd) minEnd = ann.endIndex;
+      if ((ann.type ?? 'mono') !== 'jukugo') nonJukugoEnds.add(ann.endIndex);
+    }
+    for (let k = g; k < h; k++) {
+      const ann = byStart[k];
+      if ((ann.type ?? 'mono') !== 'jukugo') continue;
+      if (
+        minEnd < ann.endIndex ||
+        minEndFrom[h] <= ann.endIndex ||
+        nonJukugoEnds.has(ann.endIndex)
+      ) {
+        aggregates.add(ann);
+      }
+    }
+    g = h;
+  }
+
+  // A segment continues a word when an aggregate starting before it reaches past it.
+  const continuations = new Set<T>();
+  let maxAggregateEnd = Number.NEGATIVE_INFINITY;
+  for (let g = 0; g < n; ) {
+    const start = byStart[g].startIndex;
+    let h = g;
+    for (; h < n && byStart[h].startIndex === start; h++) {
+      const ann = byStart[h];
+      if (
+        (ann.type ?? 'mono') !== 'jukugo' &&
+        maxAggregateEnd >= Math.max(ann.startIndex, ann.endIndex)
+      ) {
+        continuations.add(ann);
+      }
+    }
+    for (let k = g; k < h; k++) {
+      const ann = byStart[k];
+      if (aggregates.has(ann) && ann.endIndex > maxAggregateEnd) maxAggregateEnd = ann.endIndex;
+    }
+    g = h;
+  }
+  return { aggregates, continuations };
 }
 
 function normalizeRubyAnnotations(annotations: readonly RubyAnnotation[]): RubyAnnotation[] {

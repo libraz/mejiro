@@ -41,6 +41,51 @@ describe('buildInlineNodes', () => {
     expect(lines.map(elementKinds)).toEqual([['link'], ['link'], ['link', 'tcy'], ['link', 'tcy']]);
   });
 
+  it('keeps whole-paragraph ancestry on every slice, even when clamping ties ranges', () => {
+    const annotations: InlineAnnotation[] = [
+      { kind: 'link', startIndex: 0, endIndex: 10, href: 'https://example.test' },
+      { kind: 'tcy', startIndex: 1, endIndex: 5 },
+      { kind: 'em', startIndex: 3, endIndex: 5 },
+      { kind: 'strong', startIndex: 6, endIndex: 10 },
+      { kind: 'emphasis', startIndex: 6, endIndex: 8 },
+      { kind: 'ruby', startIndex: 8, endIndex: 10, rubyText: 'る' },
+    ];
+    /** `outer>inner` for every element and each of its descendants. */
+    const ancestry = (nodes: readonly InlineNode[], outer: string[] = []): string[] =>
+      nodes.flatMap((node) =>
+        node.type === 'text'
+          ? []
+          : [
+              ...outer.map((kind) => `${kind}>${node.type}`),
+              ...ancestry(node.children, [...outer, node.type]),
+            ],
+      );
+    const whole = new Set(ancestry(buildInlineNodes(chars, annotations)));
+
+    for (let cut = 1; cut < chars.length; cut++) {
+      for (const [start, end] of [
+        [0, cut],
+        [cut, chars.length],
+      ]) {
+        for (const pair of ancestry(buildInlineNodes(chars, annotations, start, end))) {
+          const [outer, inner] = pair.split('>');
+          expect(whole.has(`${inner}>${outer}`), `slice [${start}, ${end}) has ${pair}`).toBe(
+            false,
+          );
+        }
+      }
+    }
+    // tcy [1, 5) holds em [3, 5); cut at 3, both clamp to [3, 5) and tcy stays outside.
+    expect(elementKinds(buildInlineNodes(chars, annotations, 3, 16))).toEqual([
+      'link',
+      'tcy',
+      'em',
+      'strong',
+      'emphasis',
+      'ruby',
+    ]);
+  });
+
   it('visits only the annotations a slice intersects', () => {
     // Every property read on an annotation is counted.
     let reads = 0;

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { InlineAnnotation } from '../src/browser/types.js';
+import { buildInlineNodes, type InlineNode } from '../src/render/inline-tree.js';
 import type { RubyAnnotation } from '../src/ruby.js';
 import { isKana, preprocessRuby } from '../src/ruby.js';
 import { toCodepoints, uniformAdvances } from './helpers.js';
@@ -338,5 +340,105 @@ describe('preprocessRuby', () => {
     ]);
     expect(single.clusterIds[1]).toBe(single.clusterIds[2]);
     expect(single.clusterIds[0]).not.toBe(single.clusterIds[1]);
+  });
+});
+
+describe('jukugo aggregate classification', () => {
+  // 東京都 is an aggregate over per-character ruby, 大阪府 a standalone jukugo,
+  // and 名古屋 an aggregate over a shorter jukugo plus a mono segment.
+  const text = toCodepoints('東京都大阪府名古屋');
+  const advances = uniformAdvances(text.length, 16);
+  const fixture = (widened?: string): RubyAnnotation[] =>
+    [
+      makeAnnotation(0, 3, 'とうきょうと', 20, 'jukugo', [1, 2]),
+      makeAnnotation(0, 1, 'とう', 8, 'mono'),
+      makeAnnotation(1, 2, 'きょう', 8, 'mono'),
+      makeAnnotation(2, 3, 'と', 8, 'mono'),
+      makeAnnotation(3, 6, 'おおさかふ', 20, 'jukugo', [1, 2]),
+      makeAnnotation(6, 9, 'なごや', 20, 'jukugo', [2]),
+      makeAnnotation(6, 8, 'なご', 20, 'jukugo'),
+      makeAnnotation(8, 9, 'や', 8, 'mono'),
+    ].map((ann) => {
+      const reading = String.fromCodePoint(...ann.rubyText);
+      if (reading !== widened) return ann;
+      return { ...ann, rubyAdvances: uniformAdvances(ann.rubyText.length, 100) };
+    });
+  const jukugoReadings = fixture()
+    .filter((ann) => ann.type === 'jukugo')
+    .map((ann) => String.fromCodePoint(...ann.rubyText));
+
+  it('treats the same jukugo annotations as aggregates in line breaking and rendering', () => {
+    // preprocessRuby: an aggregate reserves no width, so widening its ruby changes nothing.
+    const base = Array.from(preprocessRuby(text, advances, fixture()).effectiveAdvances);
+    const sizedNothing = jukugoReadings.filter(
+      (reading) =>
+        JSON.stringify(
+          Array.from(preprocessRuby(text, advances, fixture(reading)).effectiveAdvances),
+        ) === JSON.stringify(base),
+    );
+
+    // buildInlineNodes: an aggregate's reading is not rendered.
+    const inline: InlineAnnotation[] = fixture().map((ann) => ({
+      kind: 'ruby',
+      startIndex: ann.startIndex,
+      endIndex: ann.endIndex,
+      rubyText: String.fromCodePoint(...ann.rubyText),
+      type: ann.type,
+    }));
+    const rendered = new Set<string>();
+    const collect = (nodes: readonly InlineNode[]): void => {
+      for (const node of nodes) {
+        if (node.type === 'text') continue;
+        if (node.type === 'ruby') rendered.add(node.rubyText);
+        collect(node.children);
+      }
+    };
+    collect(buildInlineNodes([...'東京都大阪府名古屋'], inline));
+    const notRendered = jukugoReadings.filter((reading) => !rendered.has(reading));
+
+    expect(sizedNothing).toEqual(['とうきょうと', 'なごや']);
+    expect(notRendered).toEqual(sizedNothing);
+  });
+
+  it('resolves aggregates in work linear in the annotation count', () => {
+    // Every property read on a per-character segment is counted.
+    let reads = 0;
+    const counted = <T extends object>(ann: T): T =>
+      new Proxy(ann, {
+        get(target, key, receiver) {
+          reads++;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    const readsFor = (words: number): { ruby: number; inline: number } => {
+      const chars = Array.from({ length: words * 2 }, () => '字');
+      const annotations = Array.from({ length: words }, (_, w) => [
+        makeAnnotation(2 * w, 2 * w + 2, 'じじ', 8, 'jukugo', [1]),
+        counted(makeAnnotation(2 * w, 2 * w + 1, 'じ', 8, 'mono')),
+        counted(makeAnnotation(2 * w + 1, 2 * w + 2, 'じ', 8, 'mono')),
+      ]).flat();
+      reads = 0;
+      preprocessRuby(toCodepoints(chars.join('')), uniformAdvances(chars.length, 16), annotations);
+      const ruby = reads;
+      const inline = annotations.map(
+        (ann): InlineAnnotation =>
+          counted({
+            kind: 'ruby',
+            startIndex: ann.startIndex,
+            endIndex: ann.endIndex,
+            rubyText: 'じ',
+            type: ann.type,
+          }),
+      );
+      reads = 0;
+      buildInlineNodes(chars, inline, 0, 2);
+      return { ruby, inline: reads };
+    };
+
+    const small = readsFor(1_000);
+    const large = readsFor(10_000);
+    // Ten times the annotations stays near ten times the work; a pairwise scan would be 100x.
+    expect(large.ruby).toBeLessThan(small.ruby * 15);
+    expect(large.inline).toBeLessThan(small.inline * 15);
   });
 });

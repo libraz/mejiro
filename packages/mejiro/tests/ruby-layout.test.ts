@@ -120,6 +120,19 @@ describe('computeBreaks with ruby', () => {
     expect([...splitAfterFirst.breakPoints]).toEqual([5]);
   });
 
+  it('keeps a jukugo word without split points together on every line width', () => {
+    const text = toCodepoints('あい東京都です');
+    const advances = uniformAdvances(text.length, 10);
+    for (const splitPoints of [undefined, []]) {
+      const ann = makeAnnotation(2, 5, 'とうきょうと', 5, 'jukugo', splitPoints);
+      for (let lineWidth = 30; lineWidth <= 70; lineWidth += 10) {
+        const result = computeBreaks({ text, advances, lineWidth, rubyAnnotations: [ann] });
+        // A break at 2 or 3 would end a line inside 東京都.
+        expect([...result.breakPoints].filter((bp) => bp === 2 || bp === 3)).toEqual([]);
+      }
+    }
+  });
+
   it('breaks inside a jukugo aggregate only at its split points', () => {
     // 東京<rt>とうきょう</rt>都<rt>と</rt> — per-segment annotations plus the
     // aggregate that only supplies the split point after 東京 (index 6).

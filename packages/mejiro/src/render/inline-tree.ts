@@ -1,4 +1,5 @@
 import type { InlineAnnotation } from '../browser/types.js';
+import { resolveJukugoAggregates } from '../ruby.js';
 
 /**
  * Node of the nested inline tree {@link buildInlineNodes} produces — one variant
@@ -152,7 +153,9 @@ function prepareAnnotations(
   const cached = preparedCache.get(annotations);
   if (cached && cached.charCount === charCount) return cached;
 
-  const { covered, continuations } = resolveJukugo(annotations);
+  const resolved = resolveJukugoAggregates(annotations.filter((ann) => ann.kind === 'ruby'));
+  const covered: ReadonlySet<InlineAnnotation> = resolved.aggregates;
+  const continuations: ReadonlySet<InlineAnnotation> = resolved.continuations;
   const valid = annotations
     .filter(
       (ann) =>
@@ -194,48 +197,6 @@ function prepareAnnotations(
   return prepared;
 }
 
-/**
- * Finds the jukugo ruby aggregates whose reading is already rendered by the
- * per-segment rubies inside them (they exist only to carry split points for
- * the line breaker), and the segments that continue each such word.
- */
-function resolveJukugo(annotations: readonly InlineAnnotation[]): {
-  covered: ReadonlySet<InlineAnnotation>;
-  continuations: ReadonlySet<InlineAnnotation>;
-} {
-  const covered = new Set<InlineAnnotation>();
-  const continuations = new Set<InlineAnnotation>();
-  const rubies = annotations
-    .filter((ann) => ann.kind === 'ruby')
-    .sort((a, b) => a.startIndex - b.startIndex);
-  for (const agg of rubies) {
-    if (agg.kind !== 'ruby' || agg.type !== 'jukugo') continue;
-    const span = agg.endIndex - agg.startIndex;
-    const inside: InlineAnnotation[] = [];
-    for (
-      let j = lowerBound(rubies, agg.startIndex);
-      j < rubies.length && rubies[j].startIndex <= agg.endIndex;
-      j++
-    ) {
-      const other = rubies[j];
-      if (other !== agg && other.endIndex <= agg.endIndex) inside.push(other);
-    }
-    const isCovered = inside.some(
-      (other) =>
-        other.kind === 'ruby' &&
-        (other.endIndex - other.startIndex < span || other.type !== 'jukugo'),
-    );
-    if (!isCovered) continue;
-    covered.add(agg);
-    for (const seg of inside) {
-      if (seg.kind === 'ruby' && seg.type !== 'jukugo' && seg.startIndex > agg.startIndex) {
-        continuations.add(seg);
-      }
-    }
-  }
-  return { covered, continuations };
-}
-
 /** Index of the first annotation in `sorted` whose start is at or after `index`. */
 function lowerBound(sorted: readonly InlineAnnotation[], index: number): number {
   let lo = 0;
@@ -250,8 +211,9 @@ function lowerBound(sorted: readonly InlineAnnotation[], index: number): number 
 
 /**
  * Collects the annotations intersecting `[start, end)`, clamped to it: the
- * containers still open at `start` (an ancestor chain) plus those starting
- * inside the slice, so the cost follows the slice rather than the paragraph.
+ * containers still open at `start` (an ancestor chain, outermost first) plus
+ * those starting inside the slice in paragraph order, so the cost follows the
+ * slice rather than the paragraph and the whole-paragraph nesting is kept.
  */
 function sliceAnnotations(
   prepared: PreparedAnnotations,
@@ -273,7 +235,8 @@ function sliceAnnotations(
     const clamped = clampAnnotation(sorted[k], start, end);
     if (clamped) result.push(clamped);
   }
-  return result.sort(compareAnnotations);
+  // Ancestors stay ahead of what they contain even when clamping ties their ranges.
+  return result;
 }
 
 /**
