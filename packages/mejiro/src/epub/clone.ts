@@ -1,3 +1,4 @@
+import type { InlineAnnotation } from '../browser/types.js';
 import type { EditableBlock, EditableEpubBook, EditableEpubChapter } from './types.js';
 
 /**
@@ -22,11 +23,12 @@ export interface EditableEpubSelection {
  * mutable containers, which is what makes a new field carried over without
  * touching this function.
  *
- * Every mutable field is copied — down to individual inline annotations —
- * matching the fidelity of the editor's own undo/redo snapshots. Binary payloads
- * (`imageAssets` entries and `packageData.files` buffers) are shared by
- * reference: they are treated as immutable blobs and copying them would double
- * the memory a loaded book occupies.
+ * Every mutable field is copied — down to individual inline annotations and
+ * their `jukugoSplitPoints`, and each `imageAssets` entry — matching the
+ * fidelity of the editor's own undo/redo snapshots. Binary payloads (asset
+ * `data` and `packageData.files` buffers) are shared by reference: they are
+ * treated as immutable blobs and copying them would double the memory a loaded
+ * book occupies.
  *
  * @param book - Book to copy; never mutated.
  * @returns An independent book whose chapters can be edited freely.
@@ -47,11 +49,13 @@ function cloneEditableEpubChapter(chapter: EditableEpubChapter): EditableEpubCha
   return {
     ...chapter,
     blocks: chapter.blocks.map(cloneEditableBlock),
-    imageAssets: new Map(chapter.imageAssets),
+    imageAssets: new Map(
+      Array.from(chapter.imageAssets, ([key, asset]) => [key, { ...asset }] as const),
+    ),
     originalImageHrefs: chapter.originalImageHrefs ? [...chapter.originalImageHrefs] : undefined,
     paragraphs: chapter.paragraphs.map((paragraph) => ({
       ...paragraph,
-      inlineAnnotations: paragraph.inlineAnnotations.map((annotation) => ({ ...annotation })),
+      inlineAnnotations: paragraph.inlineAnnotations.map(copyAnnotation),
     })),
     paragraphRefs: chapter.paragraphRefs?.map((ref) => ({ ...ref })),
     images: chapter.images?.map((image) => ({ ...image })),
@@ -69,8 +73,15 @@ function cloneEditableEpubChapter(chapter: EditableEpubChapter): EditableEpubCha
  */
 export function cloneEditableBlock(block: EditableBlock): EditableBlock {
   return block.kind === 'paragraph'
-    ? { ...block, inlineAnnotations: block.inlineAnnotations.map((ann) => ({ ...ann })) }
+    ? { ...block, inlineAnnotations: block.inlineAnnotations.map(copyAnnotation) }
     : { ...block };
+}
+
+/** Copies an annotation together with its one array field, `jukugoSplitPoints`. */
+function copyAnnotation(annotation: InlineAnnotation): InlineAnnotation {
+  return annotation.kind === 'ruby' && annotation.jukugoSplitPoints
+    ? { ...annotation, jukugoSplitPoints: [...annotation.jukugoSplitPoints] }
+    : { ...annotation };
 }
 
 /**

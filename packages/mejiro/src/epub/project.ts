@@ -6,8 +6,14 @@ import {
   parseManuscriptRuby,
 } from '../manuscript.js';
 import { mergeDefined } from '../merge.js';
-import { buildInlineNodes, type InlineNode, inlineNodeContent } from '../render/inline-tree.js';
-import { sanitizeUrl } from '../url.js';
+import {
+  CHAPTER_TITLE_ID,
+  chapterTitleCarrierMarkup,
+  escapeAttribute,
+  escapeText,
+  figureMarkup,
+  inlineContentMarkup,
+} from './chapter-markup.js';
 import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
 import {
   insertManuscriptParagraph,
@@ -224,6 +230,21 @@ rt {
   font-size: 50%;
 }`;
 
+/**
+ * A `urn:uuid:` package identifier. Falls back to a `Math.random` v4 UUID where
+ * `crypto.randomUUID` is missing (insecure origins, older runtimes).
+ */
+function packageIdentifier(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `urn:uuid:${globalThis.crypto.randomUUID()}`;
+  }
+  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const digit = Math.floor(Math.random() * 16);
+    return (ch === 'x' ? digit : (digit & 0x3) | 0x8).toString(16);
+  });
+  return `urn:uuid:${uuid}`;
+}
+
 /** Builds a new EPUB package from manuscript chapters and assets. */
 export class EpubProject {
   /**
@@ -272,13 +293,13 @@ export class EpubProject {
       {
         title: options.metadata.title,
         language: 'ja',
-        identifier: `urn:uuid:${crypto.randomUUID()}`,
+        identifier: packageIdentifier(),
         modified: new Date(),
       },
       options.metadata,
     );
     if (!this.metadata.identifier?.trim()) {
-      this.metadata.identifier = `urn:uuid:${crypto.randomUUID()}`;
+      this.metadata.identifier = packageIdentifier();
     }
     this.includeTitlePage = options.includeTitlePage ?? true;
     this.includeTitleInFirstChapter = options.includeTitleInFirstChapter ?? false;
@@ -581,65 +602,12 @@ ${paragraphs}
 
 function firstChapterFrontmatter(project: EpubProject, chapterTitle: string): string {
   return `    <h1>${escapeText(project.metadata.title)}</h1>
-    <span id="chapter-title" hidden="">${escapeText(chapterTitle)}</span>`;
+    ${chapterTitleCarrierMarkup(chapterTitle)}`;
 }
 
 function serializeManuscriptParagraph(text: string, dialect: ManuscriptDialect): string {
   const parsed = parseManuscript(text, { dialect });
-  return renderInlineNodes(buildInlineNodes([...parsed.text], parsed.inlineAnnotations));
-}
-
-/**
- * Serializes sibling inline nodes, writing each jukugo word as one `<ruby>`
- * with interleaved `<rt>` so a re-parse recovers the same split points.
- */
-function renderInlineNodes(nodes: readonly InlineNode[]): string {
-  let out = '';
-  let previousRuby = false;
-  for (const node of nodes) {
-    const rendered = renderInlineNode(node);
-    const joins = node.type === 'ruby' && node.continuesJukugo === true && previousRuby;
-    out = joins
-      ? `${out.slice(0, -'</ruby>'.length)}${rendered.slice('<ruby>'.length)}`
-      : out + rendered;
-    previousRuby = node.type === 'ruby';
-  }
-  return out;
-}
-
-function renderInlineNode(node: InlineNode): string {
-  switch (node.type) {
-    case 'text':
-      return escapeTextWithBreaks(node.text);
-    case 'ruby':
-      return `<ruby>${renderInlineChildren(node)}<rt>${escapeText(node.rubyText)}</rt></ruby>`;
-    case 'emphasis':
-      return `<em class="mejiro-emphasis" data-style="${escapeAttribute(
-        node.style,
-      )}">${renderInlineChildren(node)}</em>`;
-    case 'tcy':
-      return `<span class="mejiro-tcy">${renderInlineChildren(node)}</span>`;
-    case 'em':
-      return `<em>${renderInlineChildren(node)}</em>`;
-    case 'strong':
-      return `<strong>${renderInlineChildren(node)}</strong>`;
-    case 'link': {
-      const href = sanitizeUrl(node.href);
-      // An unsafe scheme drops the anchor, never the content.
-      if (!href) return renderInlineChildren(node);
-      return `<a href="${escapeAttribute(href)}"${
-        node.title ? ` title="${escapeAttribute(node.title)}"` : ''
-      }>${renderInlineChildren(node)}</a>`;
-    }
-    case 'footnote-ref':
-      return `<a class="mejiro-footnote-ref" href="#${escapeAttribute(
-        node.noteId,
-      )}">${renderInlineChildren(node)}</a>`;
-  }
-}
-
-function renderInlineChildren(node: Exclude<InlineNode, { type: 'text' }>): string {
-  return renderInlineNodes(inlineNodeContent(node));
+  return inlineContentMarkup(parsed.text, parsed.inlineAnnotations);
 }
 
 /** Builds the manuscript marker for an inline image inserted via `addInlineImage`. */
@@ -673,13 +641,7 @@ function markerAssetHrefs(chapter: ProjectChapter): Set<string> {
 }
 
 function inlineImageFigure(image: { src: string; alt: string }): string {
-  return `<figure><img src="${escapeAttribute(zipPathToHref(image.src))}" alt="${escapeAttribute(
-    image.alt,
-  )}" /></figure>`;
-}
-
-function escapeTextWithBreaks(value: string): string {
-  return escapeText(value).replace(/\n/gu, '<br />');
+  return figureMarkup({ src: zipPathToHref(image.src), alt: image.alt });
 }
 
 function packageOpf(project: EpubProject): string {
@@ -714,7 +676,12 @@ function packageOpf(project: EpubProject): string {
     .filter(Boolean)
     .join('\n    ');
 
-  const metadataLines = buildMetadataLines(metadata, modified, coverMeta?.id);
+  const metadataLines = buildMetadataLines(
+    metadata,
+    modified,
+    coverMeta?.id,
+    allocateMetadataIds(metadata, projectManifestIds(project, project.assets, false)),
+  );
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="pub-id">
@@ -738,6 +705,7 @@ function buildMetadataLines(
   metadata: EpubProjectMetadata,
   modified: string,
   coverImageId: string | undefined,
+  ids: MetadataIds,
 ): string {
   const lines: string[] = [];
   const push = (line: string): void => {
@@ -764,7 +732,7 @@ function buildMetadataLines(
 
   const creators = normalizeCreators(metadata);
   creators.forEach((creator, index) => {
-    const id = `creator-${index + 1}`;
+    const id = ids.creators[index];
     push(`<dc:creator id="${id}">${escapeText(creator.name)}</dc:creator>`);
     if (creator.role) {
       push(
@@ -777,7 +745,7 @@ function buildMetadataLines(
   });
 
   (metadata.contributors ?? []).forEach((contributor, index) => {
-    const id = `contributor-${index + 1}`;
+    const id = ids.contributors[index];
     push(`<dc:contributor id="${id}">${escapeText(contributor.name)}</dc:contributor>`);
     if (contributor.role) {
       push(
@@ -798,7 +766,7 @@ function buildMetadataLines(
   }
 
   (metadata.collections ?? []).forEach((collection, index) => {
-    const id = `collection-${index + 1}`;
+    const id = ids.collections[index];
     push(`<meta property="belongs-to-collection" id="${id}">${escapeText(collection.name)}</meta>`);
     push(
       `<meta refines="#${id}" property="collection-type">${escapeText(collection.type ?? 'series')}</meta>`,
@@ -901,7 +869,16 @@ function uniqueAssetHref(href: string, existing: readonly string[]): string {
   return candidate;
 }
 
-const RESERVED_PACKAGE_IDS = ['nav', 'style', 'title-page', 'pub-id', 'title', 'subtitle'];
+/** Ids `export()` writes itself, in the OPF or in every chapter document. */
+const RESERVED_PACKAGE_IDS = [
+  'nav',
+  'style',
+  'title-page',
+  'pub-id',
+  'title',
+  'subtitle',
+  CHAPTER_TITLE_ID,
+];
 
 /** ZIP paths `export()` writes itself, whatever the project contains. */
 const RESERVED_PACKAGE_PATHS = [
@@ -925,60 +902,61 @@ function isReservedPackagePath(href: string): boolean {
   return RESERVED_PACKAGE_PATHS.includes(href) || RESERVED_CHAPTER_PATH.test(href);
 }
 
+/**
+ * Every id the exported package already holds. With `withMetadata`, the
+ * metadata entry ids as they would be generated with no collision are included
+ * too, so a chapter or asset added after the metadata steers clear of them.
+ */
 function projectManifestIds(
   project: EpubProject,
   assets: readonly EpubProjectAsset[] = project.assets,
+  withMetadata = true,
 ): (string | undefined)[] {
+  const metadataIds = withMetadata ? allocateMetadataIds(project.metadata, []) : undefined;
   return [
     ...RESERVED_PACKAGE_IDS,
-    ...projectMetadataIds(project.metadata),
+    ...(metadataIds
+      ? [...metadataIds.creators, ...metadataIds.contributors, ...metadataIds.collections]
+      : []),
     ...project.chapters.map((chapter) => chapter.id),
     ...assets.map((asset) => asset.id ?? manifestIdFromHref(asset.href)),
   ];
 }
 
-function projectMetadataIds(metadata: EpubProjectMetadata): string[] {
-  const ids: string[] = [];
-  normalizeCreators(metadata).forEach((_creator, index) => {
-    ids.push(`creator-${index + 1}`);
-  });
-  (metadata.contributors ?? []).forEach((_contributor, index) => {
-    ids.push(`contributor-${index + 1}`);
-  });
-  (metadata.collections ?? []).forEach((_collection, index) => {
-    ids.push(`collection-${index + 1}`);
-  });
-  return ids;
+/** Ids of the generated `<dc:creator>`, `<dc:contributor>` and collection entries. */
+interface MetadataIds {
+  creators: string[];
+  contributors: string[];
+  collections: string[];
+}
+
+/**
+ * Allocates the metadata entry ids against `taken`, so they stay unique however
+ * metadata, chapters and assets were set or reordered.
+ */
+function allocateMetadataIds(
+  metadata: EpubProjectMetadata,
+  taken: readonly (string | undefined)[],
+): MetadataIds {
+  const used = [...taken];
+  const allocate = (base: string): string => {
+    const id = uniqueManifestId(base, used);
+    used.push(id);
+    return id;
+  };
+  return {
+    creators: normalizeCreators(metadata).map((_, index) => allocate(`creator-${index + 1}`)),
+    contributors: (metadata.contributors ?? []).map((_, index) =>
+      allocate(`contributor-${index + 1}`),
+    ),
+    collections: (metadata.collections ?? []).map((_, index) =>
+      allocate(`collection-${index + 1}`),
+    ),
+  };
 }
 
 function toManifestId(value: string, fallback = 'asset'): string {
   const sanitized = value.replace(/[^a-zA-Z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '');
   const base = sanitized || fallback;
   return /^[a-zA-Z_]/.test(base) ? base : `id-${base}`;
-}
-
-/**
- * Characters XML 1.0 forbids in document content: the C0 controls other than
- * tab / line feed / carriage return, lone surrogates, and the two BMP
- * non-characters. They cannot be expressed as character references either, so
- * the only way to keep a well-formed document is to drop them.
- */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the characters XML forbids is the point
-const XML_ILLEGAL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uD800-\uDFFF\uFFFE\uFFFF]/gu;
-
-function escapeText(text: string): string {
-  return text
-    .replace(XML_ILLEGAL_CHARS, '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function escapeAttribute(text: string): string {
-  // Attribute-value normalization would otherwise turn these into plain spaces.
-  return escapeText(text)
-    .replace(/"/g, '&quot;')
-    .replace(/\t/g, '&#9;')
-    .replace(/\n/g, '&#10;')
-    .replace(/\r/g, '&#13;');
 }

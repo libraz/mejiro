@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { CHAPTER_TITLE_ID } from './chapter-markup.js';
 import {
   assertEpubArchiveWithinLimits,
   assertEpubInputSize,
@@ -46,13 +47,10 @@ export async function parseEpub(
 
   // 1. Read container.xml to find rootfile path
   const containerXml = await readZipText(zip, budget, 'META-INF/container.xml');
-  const rootfilePath = extractRootfilePath(containerXml);
+  const { rootfilePath, opfDir } = packageDocumentLocation(containerXml);
 
   // 2. Parse OPF
   const opfXml = await readZipText(zip, budget, rootfilePath);
-  const opfDir = rootfilePath.includes('/')
-    ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
-    : '';
   const { title, author, spineHrefs, navHref, ncxHref, pageProgressionDirection } = parseOpfPackage(
     opfXml,
     opfDir,
@@ -143,19 +141,33 @@ function parseXml(xml: string): Document {
   return doc;
 }
 
-/** Extracts the rootfile path from container.xml. */
-function extractRootfilePath(containerXml: string): string {
+/**
+ * @internal
+ * Locates the package document named by container.xml. `full-path` is a URL
+ * string, so it is decoded by the same {@link resolveZipPath} as manifest hrefs.
+ *
+ * @returns The OPF's ZIP path and its directory, with a trailing slash.
+ * @throws When container.xml names no rootfile or its path is malformed.
+ */
+export function packageDocumentLocation(containerXml: string): {
+  rootfilePath: string;
+  opfDir: string;
+} {
   const doc = parseXml(containerXml);
   const rootfile = firstElementByName(doc, 'rootfile');
   const fullPath = rootfile?.getAttribute('full-path');
   if (!fullPath) throw new Error('Cannot find rootfile path in container.xml');
-  return fullPath;
+  const rootfilePath = resolveZipPath('', fullPath);
+  const opfDir = rootfilePath.includes('/')
+    ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
+    : '';
+  return { rootfilePath, opfDir };
 }
 
 /** Extracts chapter title from XHTML heading elements. */
 function extractChapterTitle(xhtml: string): string | undefined {
   const doc = parseXml(stripStylesheetLinks(xhtml));
-  const explicitTitle = renderedText(doc.getElementById('chapter-title'));
+  const explicitTitle = renderedText(doc.getElementById(CHAPTER_TITLE_ID));
   if (explicitTitle) return explicitTitle;
   for (const tag of ['h1', 'h2', 'h3']) {
     const text = renderedText(firstElementByName(doc, tag));

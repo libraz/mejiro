@@ -125,6 +125,43 @@ describe('cloneEditableEpubBook', () => {
     expect((sourceBlock.inlineAnnotations[0] as { rubyText: string }).rubyText).toBe('わがはい');
   });
 
+  it('copies jukugo split points and asset entries, sharing only binary payloads', () => {
+    const book = makeBook();
+    const jukugo = {
+      kind: 'ruby' as const,
+      startIndex: 0,
+      endIndex: 2,
+      rubyText: 'わがはい',
+      type: 'jukugo' as const,
+      jukugoSplitPoints: [1],
+    };
+    book.chapters[0].blocks[0] = { ...book.chapters[0].blocks[0], inlineAnnotations: [jukugo] };
+    book.chapters[0].paragraphs[0] = {
+      ...book.chapters[0].paragraphs[0],
+      inlineAnnotations: [jukugo],
+    };
+    const data = new Uint8Array([1]);
+    book.chapters[0].imageAssets.set('figure-01.png', {
+      filename: 'figure-01.png',
+      url: 'a',
+      data,
+    });
+
+    const copy = cloneEditableEpubBook(book);
+    const copiedBlock = copy.chapters[0].blocks[0];
+    if (copiedBlock.kind !== 'paragraph') throw new Error('fixture must start with a paragraph');
+    const splitPointsOf = (annotation: unknown) =>
+      (annotation as { jukugoSplitPoints: number[] }).jukugoSplitPoints;
+    splitPointsOf(copiedBlock.inlineAnnotations[0])[0] = 9;
+    splitPointsOf(copy.chapters[0].paragraphs[0].inlineAnnotations[0]).push(5);
+    const copiedAsset = copy.chapters[0].imageAssets.get('figure-01.png');
+    if (copiedAsset) copiedAsset.url = 'changed';
+
+    expect(jukugo.jukugoSplitPoints).toEqual([1]);
+    expect(book.chapters[0].imageAssets.get('figure-01.png')?.url).toBe('a');
+    expect(copiedAsset?.data).toBe(data);
+  });
+
   it('carries over a chapter field the clone does not name', () => {
     // The clone spreads each chapter before overriding its containers, so a
     // field added to EditableEpubChapter reaches every surface without an edit

@@ -931,14 +931,100 @@ describe('EpubProject', () => {
     expect(events.some(([phase, ratio]) => phase === 'zip' && ratio > 0 && ratio <= 1)).toBe(true);
   });
 
-  it('aborts when the signal is already triggered', async () => {
-    const project = EpubProject.fromManuscript({
-      metadata: { title: 'aborted', identifier: 'urn:uuid:aborted-book' },
-      chapters: [{ title: '一', body: '本文。' }],
+  describe('abort during export phases', () => {
+    function remoteAssetProject(): EpubProject {
+      const project = EpubProject.fromManuscript({
+        metadata: { title: 'aborted', identifier: 'urn:uuid:aborted-book' },
+        chapters: [{ title: '一', body: '本文。' }],
+      });
+      project.addAsset({ href: 'OPS/Images/remote.png', url: 'https://cdn.example.test/r.png' });
+      return project;
+    }
+
+    it('rejects with AbortError when the signal is already triggered', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        remoteAssetProject().export({ signal: controller.signal }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
     });
-    const controller = new AbortController();
-    controller.abort();
-    await expect(project.export({ signal: controller.signal })).rejects.toThrow();
+
+    it('rejects with AbortError when aborted while an asset resolves', async () => {
+      const controller = new AbortController();
+      await expect(
+        remoteAssetProject().export({
+          signal: controller.signal,
+          assetResolver() {
+            controller.abort();
+            return new Uint8Array([1]);
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('rejects with AbortError, not the resolver error, when the resolver fails after abort', async () => {
+      const controller = new AbortController();
+      await expect(
+        remoteAssetProject().export({
+          signal: controller.signal,
+          async assetResolver() {
+            controller.abort();
+            throw new TypeError('network torn down');
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('rejects with AbortError when aborted during ZIP generation', async () => {
+      const controller = new AbortController();
+      const phases: string[] = [];
+      await expect(
+        remoteAssetProject().export({
+          signal: controller.signal,
+          assetResolver: () => new Uint8Array([1]),
+          onProgress(phase) {
+            phases.push(phase);
+            if (phase === 'zip') controller.abort();
+          },
+        }),
+      ).rejects.toMatchObject({ name: 'AbortError' });
+      expect(phases).toContain('serialize');
+      expect(phases).toContain('zip');
+    });
+  });
+
+  it('reserves the chapter-title id and keeps metadata ids unique in any mutation order', async () => {
+    const project = EpubProject.fromManuscript({
+      metadata: { title: '題', identifier: 'urn:uuid:reserved-ids-book' },
+      includeTitlePage: false,
+      includeTitleInFirstChapter: true,
+      chapters: [
+        { id: 'chapter-title', title: '一', body: '本文1' },
+        { id: 'creator-1', title: '二', body: '本文2' },
+      ],
+    });
+    project.addAsset({ id: 'chapter-title', href: 'OPS/Data/a.bin', data: new Uint8Array([1]) });
+    // Metadata set after the chapter that already took a generated-looking id.
+    project.metadata.author = '作者';
+    project.metadata.contributors = [{ name: '編集' }];
+
+    expect(project.chapters[0].id).not.toBe('chapter-title');
+    expect(project.assets[0].id).not.toBe('chapter-title');
+
+    const out = await project.export();
+    const zip = await JSZip.loadAsync(out);
+    const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
+    const ids = Array.from(opf.matchAll(/\bid="([^"]+)"/gu)).map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    const creatorId = /<dc:creator id="([^"]+)">作者<\/dc:creator>/u.exec(opf)?.[1];
+    expect(creatorId).toBeDefined();
+    expect(creatorId).not.toBe('creator-1');
+    expect(opf).toContain(`refines="#${creatorId}" property="role"`);
+
+    const first = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
+    expect(first.match(/id="chapter-title"/gu)).toHaveLength(1);
+    const book = await parseEpub(out);
+    expect(book.chapters.map((chapter) => chapter.title)).toEqual(['一', '二']);
   });
 
   it('generates EPUB3 package, nav, stylesheet, cover asset, and OCF mimetype', async () => {
@@ -1101,5 +1187,26 @@ describe('EpubProject', () => {
 
       await expect(project.export()).rejects.toThrow(/has neither `data` nor `url`/);
     });
+  });
+});
+
+describe('EpubProject package identifier', () => {
+  it('builds a urn:uuid identifier where crypto.randomUUID is unavailable', () => {
+    const original = globalThis.crypto.randomUUID;
+    Object.defineProperty(globalThis.crypto, 'randomUUID', {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      const project = new EpubProject({ metadata: { title: 'T' } });
+      expect(project.metadata.identifier).toMatch(
+        /^urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
+    } finally {
+      Object.defineProperty(globalThis.crypto, 'randomUUID', {
+        value: original,
+        configurable: true,
+      });
+    }
   });
 });

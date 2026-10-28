@@ -1,7 +1,13 @@
 import JSZip from 'jszip';
 import type { InlineAnnotation } from '../browser/types.js';
-import { buildInlineNodes, type InlineNode, inlineNodeContent } from '../render/inline-tree.js';
-import { sanitizeUrl } from '../url.js';
+import {
+  CHAPTER_TITLE_ID,
+  chapterTitleCarrierMarkup,
+  figureMarkup,
+  inlineContentMarkup,
+  sanitizeXmlText,
+  XHTML_NS,
+} from './chapter-markup.js';
 import { cloneEditableBlock } from './clone.js';
 import {
   assertEpubArchiveWithinLimits,
@@ -21,6 +27,7 @@ import {
   collectTocTitles,
   extractChapterTitleOrUndefined,
   type OpfManifestItem,
+  packageDocumentLocation,
   parseOpfPackage,
   renderedText,
   resolveZipPath,
@@ -38,8 +45,6 @@ import type {
   EditableParagraphBlock,
 } from './types.js';
 import { extractStylesheetLinks, stripStylesheetLinks } from './xml-utils.js';
-
-const XHTML_NS = 'http://www.w3.org/1999/xhtml';
 
 /** Reusable EPUB editing session with read/modify/write-back support. */
 export class EditableEpub {
@@ -217,9 +222,9 @@ export class EditableEpub {
   ): void {
     const chapter = requireChapter(this.book, chapterIndex);
     const block = findParagraphBlock(chapter, paragraphIndex);
-    assertParagraphUpdate(block, next);
+    const updated = updatedParagraph(block, next);
     this.recordChapterChange(chapterIndex);
-    applyParagraphUpdate(chapter, block, next);
+    storeParagraph(chapter, block, updated);
   }
 
   /**
@@ -233,15 +238,20 @@ export class EditableEpub {
   ): void {
     const chapter = requireChapter(this.book, chapterIndex);
     const block = findParagraphBlock(chapter, paragraphIndex);
+    const updated = annotatedParagraph(block, inlineAnnotations);
     this.recordChapterChange(chapterIndex);
-    applyInlineAnnotations(chapter, block, inlineAnnotations);
+    storeParagraph(chapter, block, updated);
   }
 
   /**
    * Inserts a new paragraph block. Returns the generated `blockId`.
    *
    * `atIndex` is the position in the chapter's `blocks` array. Pass
-   * `chapter.blocks.length` to append.
+   * `chapter.blocks.length` to append. Annotations outside `text` are dropped.
+   *
+   * @throws If `headingLevel` is not an integer from 1 to 6, if
+   *   `paragraphKind: 'heading'` comes without one, or if a scene break carries
+   *   text. Nothing is recorded in that case.
    */
   insertParagraph(
     chapterIndex: number,
@@ -249,16 +259,14 @@ export class EditableEpub {
     paragraph: Omit<EditableParagraphBlock, 'kind' | 'id'>,
   ): string {
     const chapter = requireChapter(this.book, chapterIndex);
-    assertSceneBreakText(paragraph.paragraphKind, paragraph.text);
+    const block = paragraphBlock(
+      nextBlockId(chapter),
+      paragraph.text,
+      paragraph.inlineAnnotations ?? [],
+      paragraph.paragraphKind,
+      paragraph.headingLevel,
+    );
     this.recordChapterChange(chapterIndex);
-    const block: EditableParagraphBlock = {
-      kind: 'paragraph',
-      id: nextBlockId(chapter),
-      text: paragraph.text,
-      inlineAnnotations: paragraph.inlineAnnotations ?? [],
-      paragraphKind: paragraph.paragraphKind,
-      headingLevel: paragraph.headingLevel,
-    };
     chapter.blocks.splice(clamp(atIndex, 0, chapter.blocks.length), 0, block);
     syncParagraphsView(chapter);
     return block.id;
@@ -283,7 +291,10 @@ export class EditableEpub {
 
   /**
    * Splits a paragraph block at `charIndex` (codepoint index in `text`).
-   * Inline annotations that straddle the split are dropped.
+   * A fractional index is truncated and an out-of-range one clamped. Inline
+   * annotations that straddle the split are dropped.
+   *
+   * @throws If `charIndex` is not a finite number. Nothing is recorded then.
    */
   splitParagraph(chapterIndex: number, blockId: string, charIndex: number): [string, string] {
     const chapter = requireChapter(this.book, chapterIndex);
@@ -292,10 +303,10 @@ export class EditableEpub {
     const target = chapter.blocks[index];
     if (target.kind !== 'paragraph')
       throw new Error(`Cannot split non-paragraph block: ${blockId}`);
-    this.recordChapterChange(chapterIndex);
+    if (!Number.isFinite(charIndex)) throw new Error(`Invalid split index: ${charIndex}`);
 
     const chars = [...target.text];
-    const cut = clamp(charIndex, 0, chars.length);
+    const cut = clamp(Math.trunc(charIndex), 0, chars.length);
     const leftText = chars.slice(0, cut).join('');
     const rightText = chars.slice(cut).join('');
 
@@ -308,19 +319,21 @@ export class EditableEpub {
       // Annotations spanning the cut are intentionally dropped.
     }
 
-    const leftBlock: EditableParagraphBlock = {
-      ...target,
-      text: leftText,
-      inlineAnnotations: leftAnns,
-    };
-    const rightBlock: EditableParagraphBlock = {
-      kind: 'paragraph',
-      id: nextBlockId(chapter),
-      text: rightText,
-      inlineAnnotations: rightAnns,
-      paragraphKind: target.paragraphKind,
-      headingLevel: target.headingLevel,
-    };
+    const leftBlock = paragraphBlock(
+      target.id,
+      leftText,
+      leftAnns,
+      target.paragraphKind,
+      target.headingLevel,
+    );
+    const rightBlock = paragraphBlock(
+      nextBlockId(chapter),
+      rightText,
+      rightAnns,
+      target.paragraphKind,
+      target.headingLevel,
+    );
+    this.recordChapterChange(chapterIndex);
     chapter.blocks.splice(index, 1, leftBlock, rightBlock);
     syncParagraphsView(chapter);
     return [leftBlock.id, rightBlock.id];
@@ -340,15 +353,12 @@ export class EditableEpub {
     const right = chapter.blocks[rightIdx];
     if (left.kind !== 'paragraph' || right.kind !== 'paragraph')
       throw new Error('Merge requires two paragraph blocks');
-    assertSceneBreakText(left.paragraphKind, left.text + right.text);
-    this.recordChapterChange(chapterIndex);
 
-    const leftChars = [...left.text];
-    const offset = leftChars.length;
-    const merged: EditableParagraphBlock = {
-      ...left,
-      text: left.text + right.text,
-      inlineAnnotations: [
+    const offset = [...left.text].length;
+    const merged = paragraphBlock(
+      left.id,
+      left.text + right.text,
+      [
         ...left.inlineAnnotations,
         ...right.inlineAnnotations.map((ann) => ({
           ...ann,
@@ -356,7 +366,10 @@ export class EditableEpub {
           endIndex: ann.endIndex + offset,
         })),
       ],
-    };
+      left.paragraphKind,
+      left.headingLevel,
+    );
+    this.recordChapterChange(chapterIndex);
     chapter.blocks.splice(leftIdx, 2, merged);
     syncParagraphsView(chapter);
     return merged.id;
@@ -622,11 +635,8 @@ async function parseEditableEpubBook(
   }
 
   const containerXml = readEntryText(files, 'META-INF/container.xml');
-  const rootfilePath = extractRootfilePath(containerXml);
+  const { rootfilePath, opfDir } = packageDocumentLocation(containerXml);
   const opfXml = readEntryText(files, rootfilePath);
-  const opfDir = rootfilePath.includes('/')
-    ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
-    : '';
   const { title, author, spineHrefs, manifestItems, navHref, ncxHref, pageProgressionDirection } =
     parseOpfPackage(opfXml, opfDir);
   const navTitles = collectTocTitles({
@@ -692,21 +702,54 @@ export function updateEpubParagraph(
 ): void {
   const chapter = requireChapter(book, chapterIndex);
   const block = findParagraphBlock(chapter, paragraphIndex);
-  assertParagraphUpdate(block, next);
+  const updated = updatedParagraph(block, next);
   markChapterDirty(chapter);
-  applyParagraphUpdate(chapter, block, next);
+  storeParagraph(chapter, block, updated);
 }
 
-/** Rejects an update whose result could not be exported without losing text. */
-function assertParagraphUpdate(
-  block: EditableParagraphBlock,
-  next: Partial<AnnotatedParagraph>,
-): void {
-  // Setting a heading level turns a scene break into a heading, which keeps its text.
-  if (Object.hasOwn(next, 'headingLevel') && next.headingLevel != null && next.headingLevel >= 1) {
-    return;
+/**
+ * The one constructor for stored paragraph blocks. Every mutator and the
+ * loader build blocks here, so a stored block always has a `headingLevel` that
+ * is an integer from 1 to 6 exactly when it is a heading, annotations with
+ * integer offsets inside its text, and no text on a scene break.
+ */
+function paragraphBlock(
+  id: string,
+  text: string,
+  annotations: readonly InlineAnnotation[],
+  paragraphKind: EditableParagraphBlock['paragraphKind'],
+  requestedLevel: number | undefined,
+): EditableParagraphBlock {
+  const level = normalizeHeadingLevel(paragraphKind, requestedLevel);
+  // A heading level turns any kind, a scene break included, into a heading.
+  const kind = level ? 'heading' : paragraphKind;
+  assertSceneBreakText(kind, text);
+  const inlineAnnotations = validInlineAnnotations(annotations, text);
+  const block: EditableParagraphBlock = { kind: 'paragraph', id, text, inlineAnnotations };
+  if (kind) block.paragraphKind = kind;
+  if (level) block.headingLevel = level;
+  return block;
+}
+
+/**
+ * Validates a heading level against its paragraph kind.
+ *
+ * @returns The level for a heading, `undefined` otherwise.
+ * @throws If the level is not an integer from 1 to 6, or a heading has none.
+ */
+function normalizeHeadingLevel(
+  kind: EditableParagraphBlock['paragraphKind'],
+  level: number | undefined,
+): number | undefined {
+  if (level == null) {
+    if (kind === 'heading')
+      throw new Error('A heading block must carry a headingLevel from 1 to 6');
+    return undefined;
   }
-  assertSceneBreakText(block.paragraphKind, next.text ?? block.text);
+  if (!Number.isInteger(level) || level < 1 || level > 6) {
+    throw new Error(`Invalid headingLevel ${level}: expected an integer from 1 to 6`);
+  }
+  return level;
 }
 
 /** A scene break exports as a bare `<hr/>`, so it cannot carry text. */
@@ -716,31 +759,49 @@ function assertSceneBreakText(kind: EditableParagraphBlock['paragraphKind'], tex
   }
 }
 
-function applyParagraphUpdate(
-  chapter: EditableEpubChapter,
+/** Builds the block an update leaves behind; throws before anything is recorded. */
+function updatedParagraph(
   block: EditableParagraphBlock,
   next: Partial<AnnotatedParagraph>,
+): EditableParagraphBlock {
+  const text = next.text ?? block.text;
+  const annotations =
+    next.inlineAnnotations ??
+    (next.text === undefined
+      ? block.inlineAnnotations
+      : reanchorInlineAnnotations(block.inlineAnnotations, block.text, next.text));
+  if (!Object.hasOwn(next, 'headingLevel')) {
+    return paragraphBlock(block.id, text, annotations, block.paragraphKind, block.headingLevel);
+  }
+  // Clearing the level turns a heading back into body text.
+  const kind =
+    next.headingLevel == null && block.paragraphKind === 'heading' ? 'body' : block.paragraphKind;
+  return paragraphBlock(block.id, text, annotations, kind, next.headingLevel ?? undefined);
+}
+
+/** Builds the block that replacing its annotations leaves behind. */
+function annotatedParagraph(
+  block: EditableParagraphBlock,
+  inlineAnnotations: readonly InlineAnnotation[],
+): EditableParagraphBlock {
+  return paragraphBlock(
+    block.id,
+    block.text,
+    inlineAnnotations,
+    block.paragraphKind,
+    block.headingLevel,
+  );
+}
+
+/** Writes `next` into `block` in place, keeping the object callers may hold. */
+function storeParagraph(
+  chapter: EditableEpubChapter,
+  block: EditableParagraphBlock,
+  next: EditableParagraphBlock,
 ): void {
-  if (next.text !== undefined) {
-    block.inlineAnnotations = reanchorInlineAnnotations(
-      block.inlineAnnotations,
-      block.text,
-      next.text,
-    );
-    block.text = next.text;
-  }
-  if (next.inlineAnnotations !== undefined) {
-    block.inlineAnnotations = validInlineAnnotations(next.inlineAnnotations, block.text);
-  }
-  if (Object.hasOwn(next, 'headingLevel')) {
-    if (next.headingLevel == null) {
-      delete block.headingLevel;
-      if (block.paragraphKind === 'heading') block.paragraphKind = 'body';
-    } else {
-      block.headingLevel = next.headingLevel;
-      if (next.headingLevel >= 1) block.paragraphKind = 'heading';
-    }
-  }
+  delete block.paragraphKind;
+  delete block.headingLevel;
+  Object.assign(block, next);
   syncParagraphsView(chapter);
 }
 
@@ -756,23 +817,15 @@ export function setEpubInlineAnnotations(
 ): void {
   const chapter = requireChapter(book, chapterIndex);
   const block = findParagraphBlock(chapter, paragraphIndex);
+  const updated = annotatedParagraph(block, inlineAnnotations);
   markChapterDirty(chapter);
-  applyInlineAnnotations(chapter, block, inlineAnnotations);
-}
-
-function applyInlineAnnotations(
-  chapter: EditableEpubChapter,
-  block: EditableParagraphBlock,
-  inlineAnnotations: readonly InlineAnnotation[],
-): void {
-  block.inlineAnnotations = validInlineAnnotations(inlineAnnotations, block.text);
-  syncParagraphsView(chapter);
+  storeParagraph(chapter, block, updated);
 }
 
 /**
  * Keeps only the annotations whose range addresses real characters of `text`,
- * i.e. `0 <= startIndex < endIndex <= [...text].length`. The input array is
- * returned unchanged when nothing has to be dropped.
+ * i.e. integer `0 <= startIndex < endIndex <= [...text].length`. The input
+ * array is returned unchanged when nothing has to be dropped.
  */
 function validInlineAnnotations(
   annotations: readonly InlineAnnotation[],
@@ -780,7 +833,12 @@ function validInlineAnnotations(
 ): readonly InlineAnnotation[] {
   const length = [...text].length;
   const kept = annotations.filter(
-    (ann) => ann.startIndex >= 0 && ann.startIndex < ann.endIndex && ann.endIndex <= length,
+    (ann) =>
+      Number.isInteger(ann.startIndex) &&
+      Number.isInteger(ann.endIndex) &&
+      ann.startIndex >= 0 &&
+      ann.startIndex < ann.endIndex &&
+      ann.endIndex <= length,
   );
   return kept.length === annotations.length ? annotations : kept;
 }
@@ -941,7 +999,9 @@ async function exportEditableEpubBook(
   // point in time instead of a mix of pre- and mid-export states.
   const snapshot = snapshotBookForExport(book);
   for (const chapter of snapshot.chapters) {
-    if (chapter.isDirty || !chapter.originalXhtml) assertEditableChapterStructure(chapter);
+    if (chapter.isDirty || !chapter.originalXhtml) {
+      assertEditableChapterStructure(chapter, snapshot.packageData.files);
+    }
   }
   const files = snapshot.packageData.files;
   let opfXml = snapshot.packageData.opfXml;
@@ -1132,20 +1192,18 @@ function serializeChapterXhtml(chapter: EditableEpubChapter, opfDir: string): st
 
   if (chapter.title && !findFirstDescendant(doc, 'title')) {
     const titleEl = doc.createElementNS(XHTML_NS, 'title');
-    titleEl.appendChild(doc.createTextNode(chapter.title));
+    titleEl.appendChild(doc.createTextNode(sanitizeXmlText(chapter.title)));
     head.appendChild(titleEl);
   }
 
   while (body.firstChild) body.removeChild(body.firstChild);
-  if (hadTitleCarrier) {
-    const carrier = doc.createElementNS(XHTML_NS, 'span');
-    carrier.setAttribute('id', CHAPTER_TITLE_ID);
-    carrier.setAttribute('hidden', '');
-    carrier.appendChild(doc.createTextNode(chapter.title ?? ''));
-    body.appendChild(carrier);
-  }
-  for (const block of chapter.blocks) {
-    body.appendChild(renderBlock(doc, chapter, block, opfDir));
+  const markup =
+    (hadTitleCarrier ? chapterTitleCarrierMarkup(chapter.title ?? '') : '') +
+    chapter.blocks.map((block) => blockMarkup(chapter, block, opfDir)).join('');
+  // The shared serializer writes the blocks as markup; parsing it once moves them into the shell.
+  const fragment = parseXml(`<div xmlns="${XHTML_NS}">${markup}</div>`).documentElement;
+  for (const node of Array.from(fragment.childNodes)) {
+    body.appendChild(doc.importNode(node, true));
   }
 
   // Strip any duplicate xmlns attributes the engine may have stamped onto
@@ -1219,148 +1277,162 @@ function ensureChildElement(
   return el;
 }
 
-function renderBlock(
-  doc: Document,
-  chapter: EditableEpubChapter,
-  block: EditableBlock,
-  opfDir: string,
-): Element {
-  if (block.kind === 'image') return renderImageBlock(doc, chapter, block, opfDir);
-  return renderParagraphBlock(doc, block);
-}
-
-function renderParagraphBlock(doc: Document, block: EditableParagraphBlock): Element {
-  if (block.paragraphKind === 'sceneBreak') {
-    return doc.createElementNS(XHTML_NS, 'hr');
+function blockMarkup(chapter: EditableEpubChapter, block: EditableBlock, opfDir: string): string {
+  if (block.kind === 'image') {
+    return figureMarkup({
+      src: zipPathToHref(
+        relativeZipPath(
+          dirname(chapter.href),
+          imageAssetHrefForBlock(chapter, block.assetKey, opfDir),
+        ),
+      ),
+      alt: block.alt ?? '',
+      caption: block.caption,
+      placement: block.placement,
+    });
   }
+  if (block.paragraphKind === 'sceneBreak') return '<hr />';
   const tagName = paragraphTagName(block);
-  const el = doc.createElementNS(XHTML_NS, tagName);
-  appendInlineContent(doc, el, block);
-  return el;
+  return `<${tagName}>${inlineContentMarkup(block.text, block.inlineAnnotations)}</${tagName}>`;
 }
 
 function paragraphTagName(block: EditableParagraphBlock): string {
-  if (block.paragraphKind === 'heading' && block.headingLevel) {
-    return `h${Math.min(6, Math.max(1, block.headingLevel))}`;
-  }
-  if (block.headingLevel) {
-    return `h${Math.min(6, Math.max(1, block.headingLevel))}`;
-  }
+  const level = normalizeHeadingLevel(block.paragraphKind, block.headingLevel);
+  if (level) return `h${level}`;
   if (block.paragraphKind === 'blockquote') return 'blockquote';
   if (block.paragraphKind === 'pre') return 'pre';
   return 'p';
 }
 
-/** Appends a paragraph's text + inline annotations as DOM nodes. */
-function appendInlineContent(doc: Document, parent: Element, block: EditableParagraphBlock): void {
-  appendInlineNodes(doc, parent, buildInlineNodes([...block.text], block.inlineAnnotations));
-}
-
-/**
- * Appends sibling inline nodes, writing each jukugo word as one `<ruby>` with
- * interleaved `<rt>` so a re-parse recovers the same split points.
- */
-function appendInlineNodes(doc: Document, parent: Node, nodes: readonly InlineNode[]): void {
-  for (const node of nodes) {
-    const rendered = renderInlineNode(doc, node);
-    const previous = parent.lastChild;
-    if (
-      node.type === 'ruby' &&
-      node.continuesJukugo &&
-      previous?.nodeType === Node.ELEMENT_NODE &&
-      (previous as Element).localName === 'ruby'
-    ) {
-      while (rendered.firstChild) previous.appendChild(rendered.firstChild);
-      continue;
-    }
-    parent.appendChild(rendered);
-  }
-}
-
-function renderInlineNode(doc: Document, inline: InlineNode): Node {
-  if (inline.type === 'text') return doc.createTextNode(inline.text);
-  const element = renderInlineElement(doc, inline);
-  appendInlineNodes(doc, element, inlineNodeContent(inline));
-  if (inline.type === 'ruby') {
-    const rt = doc.createElementNS(XHTML_NS, 'rt');
-    rt.appendChild(doc.createTextNode(inline.rubyText));
-    element.appendChild(rt);
-  }
-  return element;
-}
-
-function renderInlineElement(
-  doc: Document,
-  inline: Exclude<InlineNode, { type: 'text' }>,
-): Element | DocumentFragment {
-  switch (inline.type) {
-    case 'ruby': {
-      return doc.createElementNS(XHTML_NS, 'ruby');
-    }
-    case 'emphasis': {
-      const em = doc.createElementNS(XHTML_NS, 'em');
-      em.setAttribute('class', 'mejiro-emphasis');
-      em.setAttribute('data-style', inline.style);
-      return em;
-    }
-    case 'tcy': {
-      const span = doc.createElementNS(XHTML_NS, 'span');
-      span.setAttribute('class', 'mejiro-tcy');
-      return span;
-    }
-    case 'em': {
-      return doc.createElementNS(XHTML_NS, 'em');
-    }
-    case 'strong': {
-      return doc.createElementNS(XHTML_NS, 'strong');
-    }
-    case 'link': {
-      const href = sanitizeUrl(inline.href);
-      // An unsafe scheme drops the anchor, never the content.
-      if (!href) return doc.createDocumentFragment();
-      const anchor = doc.createElementNS(XHTML_NS, 'a');
-      anchor.setAttribute('href', href);
-      if (inline.title) anchor.setAttribute('title', inline.title);
-      return anchor;
-    }
-    case 'footnote-ref': {
-      const anchor = doc.createElementNS(XHTML_NS, 'a');
-      anchor.setAttribute('class', 'mejiro-footnote-ref');
-      anchor.setAttribute('href', `#${inline.noteId}`);
-      return anchor;
-    }
-  }
-}
-
 /**
  * Rejects a chapter whose source carries content the block model cannot write
- * back: unsupported structures, element ids, and text that never became a block.
+ * back, as {@link classifyEditableElement} reports it.
  */
-function assertEditableChapterStructure(chapter: EditableEpubChapter): void {
+function assertEditableChapterStructure(
+  chapter: EditableEpubChapter,
+  files: ReadonlyMap<string, Uint8Array>,
+): void {
   if (!chapter.originalXhtml) return;
   const doc = parseXml(stripStylesheetLinks(chapter.originalXhtml));
-  const body = contentBody(doc);
-  const fail = (construct: string): never => {
-    throw new Error(`Cannot export edited chapter with ${construct}: ${chapter.href}`);
-  };
+  const resolveImage = archiveImageResolver(chapter.href, files);
   const check = (el: Element): void => {
     for (const child of Array.from(el.children)) {
-      const tag = child.localName.toLowerCase();
-      if (UNSUPPORTED_EDITABLE_ELEMENTS.has(tag)) fail(`<${tag}> structure`);
-      // The chapter-title carrier is rewritten from `chapter.title`.
-      if (isChapterTitleCarrier(child)) continue;
-      const id = child.getAttribute('id');
-      if (id) fail(`element id "${id}"`);
-      if (!RUBY_PARTS.has(tag) && isNonRenderedElement(child) && child.textContent?.trim()) {
-        fail(`non-rendered <${tag}> content`);
-      }
-      check(child);
+      const { role, loss } = classifyEditableElement(child, resolveImage);
+      if (loss) throw new Error(`Cannot export edited chapter with ${loss}: ${chapter.href}`);
+      if (role !== 'skip') check(child);
     }
   };
-  check(contentRoot(body));
+  check(contentRoot(contentBody(doc)));
 }
 
-const CHAPTER_TITLE_ID = 'chapter-title';
+/** How the block model reads one source element. */
+interface EditableElementClass {
+  /**
+   * `image` and `sceneBreak` become one block; `skip` contributes nothing;
+   * `quote` gives every paragraph below it the blockquote kind; `flow` is read
+   * for paragraphs and nested structure.
+   */
+  role: 'image' | 'sceneBreak' | 'skip' | 'quote' | 'flow';
+  /** The image to import, for the `image` role. */
+  image?: { img: Element; href: string; figure?: Element };
+  /** What rebuilding an edited chapter would drop; its export throws naming it. */
+  loss?: string;
+}
+
+/**
+ * The one classification of source elements, shared by the block extractor and
+ * the edited-chapter guard: anything extraction skips or collapses carries a
+ * `loss`, so an edited chapter either round-trips the element or fails to export.
+ */
+function classifyEditableElement(
+  el: Element,
+  resolveImage: (img: Element) => string | undefined,
+): EditableElementClass {
+  // The chapter-title carrier is rewritten from `chapter.title`.
+  if (isChapterTitleCarrier(el)) return { role: 'skip' };
+  const cls = classifyByName(el, resolveImage);
+  const id = el.getAttribute('id');
+  return cls.loss || !id ? cls : { ...cls, loss: `element id "${id}"` };
+}
+
+function classifyByName(
+  el: Element,
+  resolveImage: (img: Element) => string | undefined,
+): EditableElementClass {
+  const localName = el.localName.toLowerCase();
+  if (!RUBY_PARTS.has(localName) && isNonRenderedElement(el)) {
+    const hasContent = Boolean(el.textContent?.trim()) || descendantsByName(el, 'img').length > 0;
+    return hasContent
+      ? { role: 'skip', loss: `non-rendered <${localName}> content` }
+      : { role: 'skip' };
+  }
+  if (UNSUPPORTED_EDITABLE_ELEMENTS.has(localName)) {
+    return { role: 'flow', loss: `<${localName}> structure` };
+  }
+  if (localName === 'img') {
+    const href = resolveImage(el);
+    if (!href) {
+      return { role: 'skip', loss: `unresolved <img src="${el.getAttribute('src') ?? ''}">` };
+    }
+    return { role: 'image', image: { img: el, href } };
+  }
+  if (localName === 'hr') return { role: 'sceneBreak' };
+  if (localName === 'figure') {
+    const images = descendantsByName(el, 'img');
+    if (images.length === 0) return { role: 'flow' };
+    if (images.length > 1 || figureHasExtraContent(el)) {
+      return { role: 'flow', loss: '<figure> content beyond one image and its caption' };
+    }
+    const href = resolveImage(images[0]);
+    // An unresolvable image reports its own loss when the figure is read as flow.
+    return href ? { role: 'image', image: { img: images[0], href, figure: el } } : { role: 'flow' };
+  }
+  if (localName === 'blockquote') {
+    const nested = descendantsByName(el).find((child) => {
+      const name = child.localName.toLowerCase();
+      return name !== 'p' && (EDITABLE_BLOCK_ELEMENTS.has(name) || name === 'img');
+    });
+    return nested
+      ? { role: 'flow', loss: `<blockquote> around <${nested.localName.toLowerCase()}>` }
+      : { role: 'quote' };
+  }
+  return { role: 'flow' };
+}
+
+/** Whether a figure holds text outside its one `<figcaption>`. */
+function figureHasExtraContent(figure: Element): boolean {
+  const captions = Array.from(figure.children).filter(
+    (child) => child.localName.toLowerCase() === 'figcaption',
+  );
+  if (captions.length > 1) return true;
+  const textOutside = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+    if (node === captions[0]) return '';
+    return Array.from(node.childNodes).map(textOutside).join('');
+  };
+  return textOutside(figure).trim() !== '';
+}
+
+/**
+ * Resolves an `<img>` to the archive entry it shows, or `undefined` when it has
+ * no `src`, a malformed one, or one naming no file in the archive.
+ */
+function archiveImageResolver(
+  chapterHref: string,
+  files: ReadonlyMap<string, Uint8Array>,
+): (img: Element) => string | undefined {
+  return (img) => {
+    const src = img.getAttribute('src');
+    if (!src) return undefined;
+    let href: string;
+    try {
+      href = resolveZipPath(dirname(chapterHref), src);
+    } catch {
+      return undefined;
+    }
+    return files.has(href) ? href : undefined;
+  };
+}
 
 const RUBY_PARTS = new Set(['rt', 'rp', 'rtc']);
 
@@ -1399,34 +1471,6 @@ function contentRoot(body: Element): Element {
     }
     root = only;
   }
-}
-
-function renderImageBlock(
-  doc: Document,
-  chapter: EditableEpubChapter,
-  block: EditableImageBlock,
-  opfDir: string,
-): Element {
-  const figure = doc.createElementNS(XHTML_NS, 'figure');
-  if (block.placement) figure.setAttribute('data-placement', block.placement);
-  const img = doc.createElementNS(XHTML_NS, 'img');
-  img.setAttribute(
-    'src',
-    zipPathToHref(
-      relativeZipPath(
-        dirname(chapter.href),
-        imageAssetHrefForBlock(chapter, block.assetKey, opfDir),
-      ),
-    ),
-  );
-  img.setAttribute('alt', block.alt ?? '');
-  figure.appendChild(img);
-  if (block.caption) {
-    const caption = doc.createElementNS(XHTML_NS, 'figcaption');
-    caption.appendChild(doc.createTextNode(block.caption));
-    figure.appendChild(caption);
-  }
-  return figure;
 }
 
 function imageAssetHref(
@@ -1500,42 +1544,33 @@ function extractEditableBlocks(
 } {
   const doc = parseXml(stripStylesheetLinks(xhtml));
   const root = contentBody(doc);
+  const resolveImage = archiveImageResolver(chapterHref, files);
   const imageAssets = new Map<string, EditableImageAsset>();
   const originalImageHrefs = new Set<string>();
   const blocks: EditableBlock[] = [];
 
-  const pushParagraph = (el: Element, nodes: readonly Node[] = [el]): void => {
+  const pushParagraph = (el: Element, quoted: boolean, nodes: readonly Node[] = [el]): void => {
     const serializer = new XMLSerializer();
     const paragraphs = extractRubyContent(
       wrapXhtml(nodes.map((node) => serializer.serializeToString(node)).join('')),
     );
+    const tag = el.localName.toLowerCase();
+    const kind = quoted || tag === 'blockquote' ? 'blockquote' : tag === 'pre' ? 'pre' : undefined;
     for (const para of paragraphs) {
       if (!para.text) continue;
-      const block: EditableParagraphBlock = {
-        kind: 'paragraph',
-        id: nextGeneratedBlockId(blocks),
-        text: para.text,
-        inlineAnnotations: para.inlineAnnotations,
-      };
-      const tag = el.localName.toLowerCase();
-      if (para.headingLevel) {
-        block.headingLevel = para.headingLevel;
-        block.paragraphKind = 'heading';
-      } else if (tag === 'blockquote') {
-        block.paragraphKind = 'blockquote';
-      } else if (tag === 'pre') {
-        block.paragraphKind = 'pre';
-      }
-      blocks.push(block);
+      blocks.push(
+        paragraphBlock(
+          nextGeneratedBlockId(blocks),
+          para.text,
+          para.inlineAnnotations,
+          kind,
+          para.headingLevel,
+        ),
+      );
     }
   };
 
-  const pushImage = (img: Element, figure?: Element): void => {
-    const src = img.getAttribute('src');
-    if (!src) return;
-    const href = resolveZipPath(dirname(chapterHref), src);
-    const data = files.get(href);
-    if (!data) return;
+  const addImageBlock = ({ img, href, figure }: NonNullable<EditableElementClass['image']>) => {
     originalImageHrefs.add(href);
     const filename = basename(href);
     const manifestItem = manifestItems.get(href);
@@ -1545,19 +1580,18 @@ function extractEditableBlocks(
       href,
       manifestId: manifestItem?.id,
       manifestHref: manifestItem?.packageHref,
-      data,
+      data: files.get(href),
       mediaType: manifestItem?.mediaType ?? mediaTypeFromPath(filename),
     });
     const figcaption = figure ? firstChildElementByName(figure, 'figcaption') : undefined;
-    const block: EditableImageBlock = {
+    blocks.push({
       kind: 'image',
       id: nextGeneratedBlockId(blocks),
       assetKey,
       alt: img.getAttribute('alt') ?? undefined,
       caption: figcaption ? renderedText(figcaption) : undefined,
       placement: figure ? imagePlacement(figure.getAttribute('data-placement')) : undefined,
-    };
-    blocks.push(block);
+    });
   };
 
   const structureMemo = new Map<Node, boolean>();
@@ -1574,36 +1608,25 @@ function extractEditableBlocks(
     return result;
   };
 
-  const visit = (el: Element): void => {
+  const visit = (el: Element, inQuote: boolean): void => {
+    const { role, image } = classifyEditableElement(el, resolveImage);
+    if (role === 'skip') return;
+    if (image) {
+      addImageBlock(image);
+      return;
+    }
+    if (role === 'sceneBreak') {
+      blocks.push(paragraphBlock(nextGeneratedBlockId(blocks), '', [], 'sceneBreak', undefined));
+      return;
+    }
+    const quoted = inQuote || role === 'quote';
     const tag = el.localName.toLowerCase();
-    if (tag === 'figure') {
-      const img = firstDescendantElementByName(el, 'img');
-      if (img) {
-        pushImage(img, el);
-        return;
-      }
-    }
-    if (tag === 'img') {
-      pushImage(el);
-      return;
-    }
-    if (tag === 'hr') {
-      blocks.push({
-        kind: 'paragraph',
-        id: nextGeneratedBlockId(blocks),
-        text: '',
-        inlineAnnotations: [],
-        paragraphKind: 'sceneBreak',
-      });
-      return;
-    }
-
     const childBlocks = Array.from(el.children).filter((child) =>
       EDITABLE_BLOCK_ELEMENTS.has(child.localName.toLowerCase()),
     );
     const isParagraphElement = EDITABLE_BLOCK_ELEMENTS.has(tag) && childBlocks.length === 0;
-    if (isParagraphElement && !firstDescendantElementByName(el, 'img')) {
-      pushParagraph(el);
+    if (isParagraphElement && descendantsByName(el, 'img').length === 0) {
+      pushParagraph(el, quoted);
       return;
     }
     // Runs of loose text and inline markup between structural children are
@@ -1614,16 +1637,16 @@ function extractEditableBlocks(
       if (run.length > 0 && isParagraphElement) {
         const wrapper = el.cloneNode(false) as Element;
         for (const node of run) wrapper.appendChild(node.cloneNode(true));
-        pushParagraph(el, [wrapper]);
+        pushParagraph(el, quoted, [wrapper]);
       } else if (run.length > 0) {
-        pushParagraph(el, run);
+        pushParagraph(el, quoted, run);
       }
       run = [];
     };
     for (const child of Array.from(el.childNodes)) {
       if (containsStructure(child)) {
         flush();
-        visit(child as Element);
+        visit(child as Element, quoted);
       } else {
         run.push(child);
       }
@@ -1631,7 +1654,7 @@ function extractEditableBlocks(
     flush();
   };
 
-  visit(root);
+  visit(root, false);
   return { blocks, imageAssets, originalImageHrefs: [...originalImageHrefs] };
 }
 
@@ -1674,8 +1697,10 @@ function firstChildElementByName(parent: Element, localName: string): Element | 
   return Array.from(parent.children).find((el) => el.localName === localName);
 }
 
-function firstDescendantElementByName(parent: Element, localName: string): Element | undefined {
-  return Array.from(parent.getElementsByTagName('*')).find((el) => el.localName === localName);
+/** Descendant elements of `parent`, optionally only those named `localName`. */
+function descendantsByName(parent: Element, localName?: string): Element[] {
+  const all = Array.from(parent.getElementsByTagName('*'));
+  return localName ? all.filter((el) => el.localName.toLowerCase() === localName) : all;
 }
 
 /** Generates a unique block id within `chapter`. */
@@ -1719,11 +1744,9 @@ function nthParagraphBlockIndex(chapter: EditableEpubChapter, paragraphIndex: nu
 function syncParagraphsView(chapter: EditableEpubChapter): void {
   chapter.paragraphs = chapter.blocks
     .filter((b): b is EditableParagraphBlock => b.kind === 'paragraph')
-    .map((b) => ({
-      text: b.text,
-      inlineAnnotations: b.inlineAnnotations,
-      ...(b.headingLevel ? { headingLevel: b.headingLevel } : {}),
-    }));
+    .map(({ text, inlineAnnotations, headingLevel }) =>
+      headingLevel ? { text, inlineAnnotations, headingLevel } : { text, inlineAnnotations },
+    );
 }
 
 function parseXml(xml: string): Document {
@@ -1747,13 +1770,6 @@ function readEntryTextOrNull(files: Map<string, Uint8Array>, path: string): stri
   const bytes = files.get(path);
   if (!bytes) return null;
   return new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
-}
-
-function extractRootfilePath(containerXml: string): string {
-  const doc = parseXml(containerXml);
-  const fullPath = firstElementByName(doc, 'rootfile')?.getAttribute('full-path');
-  if (!fullPath) throw new Error('Cannot find rootfile path in container.xml');
-  return fullPath;
 }
 
 function ensureManifestItem(opfXml: string, id: string, href: string, mediaType: string): string {

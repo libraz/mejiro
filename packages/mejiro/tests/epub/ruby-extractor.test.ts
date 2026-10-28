@@ -22,6 +22,24 @@ function wrapXhtml(body: string): string {
 }
 
 describe('extractRubyContent', () => {
+  it('extracts nothing from a hidden or aria-hidden block, owning or containing', () => {
+    for (const body of [
+      '<p hidden="">H1</p><p>vis</p>',
+      '<p aria-hidden="true">H2</p><p>vis</p>',
+      '<div hidden=""><p>H3</p></div><p>vis</p>',
+    ]) {
+      expect(extractRubyContent(wrapXhtml(body)).map((p) => p.text)).toEqual(['vis']);
+    }
+  });
+
+  it('keeps pre whitespace verbatim while other blocks still collapse it', () => {
+    const paragraphs = extractRubyContent(
+      wrapXhtml('<pre>line 1\nline 2\n  <em>line</em> 3</pre><p> 漢字\n  かな </p>'),
+    );
+    expect(paragraphs.map((p) => p.text)).toEqual(['line 1\nline 2\n  line 3', '漢字かな']);
+    expect(paragraphs[0].inlineAnnotations).toEqual([{ kind: 'em', startIndex: 16, endIndex: 20 }]);
+  });
+
   it('keeps every run of loose text whatever element owns it', () => {
     const xhtml = wrapXhtml(
       '前文<p>段落</p><span>中文</span><aside>脇<p>内側</p>後</aside><span><p>包まれた</p></span>末尾',

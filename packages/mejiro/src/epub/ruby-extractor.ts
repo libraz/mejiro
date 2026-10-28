@@ -60,7 +60,9 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
   const paragraphs: AnnotatedParagraph[] = [];
 
   for (const { element, nodes } of collectParagraphSources(body)) {
-    const result = trimParagraph(normalizeParagraph(extractFromNodes(nodes)));
+    const preformatted = isPreformatted(element);
+    const extracted = normalizeParagraph(extractFromNodes(nodes, preformatted));
+    const result = preformatted ? extracted : trimParagraph(extracted);
     if (result.text.length > 0) {
       const tag = element.localName?.toLowerCase() ?? '';
       const headingMatch = /^h([1-6])$/.exec(tag);
@@ -88,6 +90,14 @@ export function contentBody(doc: Document): Element {
   );
 }
 
+/** Whether `el` is, or sits inside, a `<pre>`, whose whitespace is content. */
+function isPreformatted(el: Element): boolean {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    if (node.localName?.toLowerCase() === 'pre') return true;
+  }
+  return false;
+}
+
 /** One paragraph's worth of source nodes and the block element owning them. */
 interface ParagraphSource {
   /** Block element the run belongs to; drives the heading level. */
@@ -108,13 +118,15 @@ interface RubyBaseSegment {
  * An element with no block inside it contributes one paragraph. Otherwise each
  * run of siblings between children that are or contain a block becomes a
  * paragraph of its own, whatever the owning element is, so no text is dropped
- * and the emitted order follows the source order.
+ * and the emitted order follows the source order. A non-rendered element
+ * contributes nothing, whether it owns a paragraph or contains blocks.
  */
 function collectParagraphSources(root: Element): ParagraphSource[] {
   const sources: ParagraphSource[] = [];
   const containsBlock = blockContainmentTest();
 
   function visit(el: Element): void {
+    if (isNonRenderedElement(el)) return;
     const childNodes = Array.from(el.childNodes);
 
     if (!childNodes.some(containsBlock)) {
@@ -164,8 +176,10 @@ function blockContainmentTest(): (node: Node) => boolean {
 
 /**
  * Extracts base text and ruby annotations from one run of sibling nodes.
+ * Inside `<pre>` (`preformatted`) text nodes are kept verbatim instead of
+ * having their whitespace collapsed.
  */
-function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
+function extractFromNodes(nodes: readonly Node[], preformatted: boolean): AnnotatedParagraph {
   let text = '';
   let textCharCount = 0;
   const inlineAnnotations: InlineAnnotation[] = [];
@@ -175,7 +189,8 @@ function extractFromNodes(nodes: readonly Node[]): AnnotatedParagraph {
 
   function walk(node: Node): void {
     if (node.nodeType === Node.TEXT_NODE) {
-      appendCssText(node.textContent ?? '');
+      if (preformatted) appendText(node.textContent ?? '');
+      else appendCssText(node.textContent ?? '');
       return;
     }
 
