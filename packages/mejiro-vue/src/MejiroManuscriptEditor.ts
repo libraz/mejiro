@@ -213,7 +213,7 @@ export const MejiroManuscriptEditor = defineComponent({
      * parent declines would otherwise stay visible in the field.
      */
     function resyncInput(el: HTMLInputElement, read: () => string): void {
-      void nextTick(() => {
+      void nextTick().then(() => {
         if (el.value !== read()) el.value = read();
       });
     }

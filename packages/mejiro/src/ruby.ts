@@ -250,7 +250,7 @@ export function resolveJukugoAggregates<T extends JukugoSpan>(
   minEndFrom[n] = Number.POSITIVE_INFINITY;
   for (let k = n - 1; k >= 0; k--) {
     const end = byStart[k].endIndex;
-    minEndFrom[k] = end < minEndFrom[k + 1] ? end : minEndFrom[k + 1];
+    minEndFrom[k] = Math.min(end, minEndFrom[k + 1]);
   }
 
   const aggregates = new Set<T>();

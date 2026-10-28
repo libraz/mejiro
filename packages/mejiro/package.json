@@ -90,6 +90,6 @@
     }
   },
   "devDependencies": {
-    "@libraz/suzume": "^0.9.13"
+    "@libraz/suzume": "^0.9.14"
   }
 }

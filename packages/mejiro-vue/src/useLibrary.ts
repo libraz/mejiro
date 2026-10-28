@@ -98,7 +98,7 @@ export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibra
     if (arr.length === 0) return -1;
     if (currentId.value == null) return 0;
     const found = arr.findIndex((v) => v.id === currentId.value);
-    return found >= 0 ? found : 0;
+    return Math.max(found, 0);
   });
 
   const current = computed<VolumeInfo<T> | null>(() => {
