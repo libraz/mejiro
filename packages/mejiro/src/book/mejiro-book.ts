@@ -4,6 +4,7 @@ import { deriveRubyFont } from '../browser/measure.js';
 import type { FontFamily, InlineAnnotation, InlineRubyAnnotation } from '../browser/types.js';
 import { toFontSpec } from '../browser/types.js';
 import { type ManuscriptDialect, parseManuscript } from '../manuscript.js';
+import { manuscriptParagraphs, parseInlineImageMarker } from '../manuscript-paragraphs.js';
 import { normalizeAnnotatedText } from '../normalize.js';
 import { type HeadingStyle, isHeadingParagraph } from '../render/measures.js';
 import type { RenderEntry } from '../render/types.js';
@@ -72,18 +73,8 @@ function manuscriptChapterToParagraphs(
       headingLevel: 1,
     });
   }
-  const blocks = chapter.body
-    .replace(/\r\n?/gu, '\n')
-    .split(/\n[ \t　]*\n+/u)
-    .map((block) =>
-      block
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join('\n'),
-    )
-    .filter(Boolean);
-  for (const block of blocks) {
+  for (const block of manuscriptParagraphs(chapter.body)) {
+    if (parseInlineImageMarker(block)) continue;
     const parsed = parseManuscript(block, { dialect });
     paragraphs.push({
       text: parsed.text,
@@ -261,17 +252,37 @@ export class MejiroBook {
     this.browser.dispose();
   }
 
-  /** Returns a snapshot of the current options. */
+  /**
+   * Returns a snapshot of the options the book is using, construction-time
+   * ones (`analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty`,
+   * `breakCost`) included.
+   */
   getOptions(): Readonly<
     Required<
       Pick<
         BookOptions,
-        'fontFamily' | 'fontSize' | 'lineSpacing' | 'mode' | 'enableHanging' | 'headingScale'
+        | 'fontFamily'
+        | 'fontSize'
+        | 'lineSpacing'
+        | 'mode'
+        | 'enableHanging'
+        | 'headingScale'
+        | 'wordAwareBreaking'
       >
     > &
-      Pick<BookOptions, 'headingStyles'>
+      Pick<
+        BookOptions,
+        'headingStyles' | 'analyzer' | 'keepWholePos' | 'keepWholePenalty' | 'breakCost'
+      >
   > {
-    return { ...this.opts };
+    return {
+      ...this.opts,
+      analyzer: this.analyzer,
+      wordAwareBreaking: this.wordAwareBreaking,
+      keepWholePos: this.keepWholePos,
+      keepWholePenalty: this.keepWholePenalty,
+      breakCost: this.breakCost,
+    };
   }
 
   /**
@@ -284,6 +295,10 @@ export class MejiroBook {
    * re-measurement: the new values are staged and only become visible to
    * {@link getOptions} once the font has loaded, so every live layout always
    * holds advances measured with the font recorded in its own config.
+   *
+   * `analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and
+   * `breakCost` are fixed at construction: they are ignored here, and
+   * {@link getOptions} keeps reporting the values the book was built with.
    *
    * Overlapping calls converge on the last one — an earlier call whose font is
    * still loading resolves without overwriting the newer options.
@@ -342,7 +357,7 @@ export class MejiroBook {
     if (this.optionsGeneration !== generation) return;
     this.pendingOpts = null;
     this.opts = next;
-    this.remeasureLayouts();
+    this.remeasureLayouts(this.layoutConfigSnapshot());
   }
 
   /** Walks tracked layouts, pruning collected ones and yielding the rest. */
@@ -360,18 +375,23 @@ export class MejiroBook {
   }
 
   /**
-   * Re-measures every live layout against the committed options. Runs to
-   * completion synchronously so no other call can interleave between the
-   * advances and the config they belong to.
+   * Re-measures every live layout. Runs to completion synchronously so no other
+   * call can interleave between the advances and the config they belong to.
+   *
+   * @param cfg - Config to adopt, for a commit of new options. Without it each
+   *   layout is re-measured against the config it already holds, so a font load
+   *   refreshes advances without replacing a snapshot's config.
    */
-  private remeasureLayouts(): void {
-    const cfg = this.layoutConfigSnapshot();
-    for (const layout of this.liveLayouts()) this.remeasureLayout(layout, cfg);
+  private remeasureLayouts(cfg?: LayoutConfig): void {
+    for (const layout of this.liveLayouts()) {
+      this.remeasureLayout(layout, cfg ?? layout.getConfig());
+    }
   }
 
-  /** Re-measures one layout against the committed options and adopts `cfg`. */
+  /** Re-measures one layout in the book's font family at `cfg` and adopts `cfg`. */
   private remeasureLayout(layout: ChapterLayout, cfg: LayoutConfig): void {
-    const { fontFamily, fontSize } = this.opts;
+    const { fontFamily } = this.opts;
+    const { fontSize } = cfg;
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
     for (const para of layout.getCachedParagraphs()) {
       const pFontSize = paragraphFontSize(para, cfg);
@@ -680,11 +700,14 @@ export class MejiroBook {
    * round-trip used by `MejiroEditor` / `EpubProject.export`. Intended for
    * live preview in manuscript editors.
    *
-   * Each chapter body is split into paragraphs on blank lines and run through
-   * {@link parseManuscript} so the renderer sees the same `InlineAnnotation`s
-   * an exported EPUB would carry.
+   * Each chapter body is split into paragraphs on blank lines, keeping the
+   * ideographic spaces that indent a paragraph or stand alone as a scene
+   * divider, and run through {@link parseManuscript} so the renderer sees the
+   * same paragraphs and `InlineAnnotation`s an exported EPUB would carry.
+   * Inline-image markers are skipped, as the exported figures are.
    *
-   * @returns A map keyed by `chapter.id` (or the array index when missing).
+   * @returns A map keyed by `chapter.id` (or `chapter-<1-based position>` when
+   *   missing).
    */
   async layoutManuscript(options: LayoutManuscriptOptions): Promise<Map<string, ChapterLayout>> {
     const dialect = options.dialect ?? 'mejiro';

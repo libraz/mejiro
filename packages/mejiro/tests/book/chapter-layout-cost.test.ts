@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { type CachedParagraph, ChapterLayout } from '../../src/book/chapter-layout.js';
+import { ColumnFlow } from '../../src/book/column-flow.js';
 import { computeBreaks } from '../../src/layout.js';
 import type { RenderEntry } from '../../src/render/types.js';
 import { toCodepoints, uniformAdvances } from '../helpers.js';
@@ -197,5 +198,66 @@ describe('selectionRects cost', () => {
     expect(counters.buildRenderPage).toBe(pagesSpanned);
     expect(deep).toHaveLength(100);
     expectElapsedUnder(elapsed, 50);
+  });
+});
+
+describe('image reflow flow probing', () => {
+  it('probes a few line widths per line rather than one per character', () => {
+    // 200 paragraphs of 100 characters: 10 lines each, 2000 lines in all.
+    const layout = makeLayout(200, 100);
+    layout.syncImages(0, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    // Images on the last spread keep the whole chapter inside the probed region.
+    layout.setImages(150, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+
+    const place = vi.spyOn(ColumnFlow.prototype, 'place');
+    layout.getSpread(0);
+    const calls = place.mock.calls.length;
+    place.mockRestore();
+
+    const lines = layout.snapshot().paragraphs.reduce((n, p) => n + p.breakPoints.length + 1, 0);
+    // Committing places each line once; probing may add a bounded multiple.
+    expect(calls).toBeLessThan(lines * 4);
+  });
+});
+
+describe('findText cost', () => {
+  /** Counts how often a page's slices are walked by wrapping each page in a proxy. */
+  function countPageWalks(layout: ChapterLayout): () => number {
+    const normal = (layout as unknown as { normal: { pages: object[][] } }).normal;
+    let walks = 0;
+    normal.pages = normal.pages.map(
+      (page) =>
+        new Proxy(page, {
+          get(target, key, receiver) {
+            if (key === Symbol.iterator) walks++;
+            return Reflect.get(target, key, receiver);
+          },
+        }),
+    );
+    return () => walks;
+  }
+
+  it('locates each match without scanning the pages before it', () => {
+    const layout = makeLayout(200, 100);
+    expect(layout.totalPages).toBeGreaterThan(100);
+    const walks = countPageWalks(layout);
+
+    const matches = layout.findText('あ'.repeat(10));
+    expect(matches).toHaveLength(2000);
+    expect(matches.at(-1)?.pageIdx).toBeGreaterThan(100);
+    // One page is read per match; a scan from the first page would walk ~pageIdx pages each.
+    expect(walks()).toBeLessThanOrEqual(matches.length * 2);
+  });
+
+  it('locates matches the same in exclusion mode', () => {
+    const layout = makeLayout(200, 100);
+    layout.setImages(0, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    const matches = layout.findText('あ'.repeat(10), { maxResults: 5 });
+    for (const m of matches) {
+      expect(layout.locateAnchor({ paragraph: m.paragraph, charIndex: m.charStart })).toMatchObject(
+        { spreadIdx: m.spreadIdx, pageIdx: m.pageIdx, lineIdx: m.lineIdx, side: m.side },
+      );
+    }
+    expect(matches).toHaveLength(5);
   });
 });

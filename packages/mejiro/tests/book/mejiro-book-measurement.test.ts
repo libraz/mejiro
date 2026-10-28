@@ -54,6 +54,8 @@ const HEADING_WITH_RUBY: BookParagraph[] = [
 interface FontsStubControls {
   /** Resolves the pending load of the configured slow family. */
   release(): void;
+  /** Fires `loadingdone` on every subscribed listener. */
+  fireLoadingDone(): void;
 }
 
 let restoreFonts: (() => void) | null = null;
@@ -68,6 +70,7 @@ function installFontsStub(
 ): FontsStubControls {
   let release: () => void = () => {};
   let slowLoaded = false;
+  const listeners: Array<() => void> = [];
   const isSlow = (spec: string) =>
     options.slowFamily !== undefined && spec.includes(options.slowFamily);
   const isFailing = (spec: string) =>
@@ -87,7 +90,9 @@ function installFontsStub(
       }
       return Promise.resolve([]);
     },
-    addEventListener: () => {},
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === 'loadingdone') listeners.push(listener);
+    },
     [Symbol.iterator]: function* () {},
   };
 
@@ -97,7 +102,12 @@ function installFontsStub(
     if (original) Object.defineProperty(document, 'fonts', original);
     else Reflect.deleteProperty(document, 'fonts');
   };
-  return { release: () => release() };
+  return {
+    release: () => release(),
+    fireLoadingDone: () => {
+      for (const listener of listeners) listener();
+    },
+  };
 }
 
 describe('MejiroBook measurement', () => {
@@ -267,6 +277,25 @@ describe('MejiroBook measurement', () => {
     expect(after.paragraphs[0].layoutRubyAnnotations).toEqual(
       expected.paragraphs[0].layoutRubyAnnotations,
     );
+  });
+
+  it('keeps a restored layout config through a font load and refreshes its advances', async () => {
+    const fonts = installFontsStub();
+    const source = new MejiroBook({ fontFamily: 'serif', fontSize: 20, mode: 'loose' });
+    source.setPageSize({ pageWidth: 400, lineWidth: 160 });
+    const snapshot = (await source.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
+
+    const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
+    const restored = book.layoutFromSnapshot(snapshot);
+    restored.getPage(0);
+    // The host's glyphs change under the layout: a stale-width marker to refresh.
+    restored.getCachedParagraphs()[0].advances = new Float32Array(7).fill(1);
+
+    fonts.fireLoadingDone();
+
+    const after = restored.snapshot();
+    expect(after.config).toEqual(snapshot.config);
+    expect(after.paragraphs[0].advances).toEqual(snapshot.paragraphs[0].advances);
   });
 
   it('applies an option change to a restored layout of the same size without re-measuring', async () => {

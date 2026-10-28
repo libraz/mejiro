@@ -46,6 +46,13 @@ describe('snapshot boundary validation', () => {
     return copy;
   }
 
+  /** A copy of {@link SNAPSHOT} with its config patched. */
+  function withConfig(patch: Record<string, unknown>): ChapterLayoutSnapshot {
+    const copy = structuredClone(SNAPSHOT);
+    Object.assign(copy.config, patch);
+    return copy;
+  }
+
   /** The error `layoutFromSnapshot` throws for `snapshot`, which must be one. */
   function restoreError(snapshot: unknown): Error {
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
@@ -83,12 +90,36 @@ describe('snapshot boundary validation', () => {
       }),
       withParagraph({ hintClusterIds: [0, 1] }),
       { ...SNAPSHOT, images: [{ spreadIndex: 0, images: [{ x: 0, y: 0, w: Number.NaN, h: 1 }] }] },
+      // Decomposed kana: restore would build 2 codepoints beside 3 characters.
+      withParagraph({ text: 'か\u3099あ', advances: [16, 16, 16], breakPoints: [] }),
+      withParagraph({ headingLevel: 7 }),
+      withParagraph({ kind: 'banner' }),
+      withConfig({ headingStyles: { 1: { scale: {} } } }),
+      withConfig({ headingStyles: { 1: { scale: Number.NaN } } }),
+      withConfig({ headingStyles: { 1: { gapAfterEm: -1 } } }),
+      withConfig({ headingStyles: { 1: null } }),
+      withConfig({ breakCost: { shortfallWeight: Number.NaN } }),
+      withConfig({ breakCost: 'heavy' }),
+      withConfig({ analyzer: { name: 'a' } }),
     ];
     for (const snapshot of cases) {
       const error = restoreError(snapshot);
       expect(error.constructor).toBe(Error);
       expect(error.message).toMatch(/^Malformed ChapterLayoutSnapshot: /);
     }
+  });
+
+  it('accepts sizing fields that are finite and a snapshot of an NFC paragraph', () => {
+    const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
+    const snapshot = withConfig({
+      headingStyles: { 1: { scale: 1.6, gapAfterEm: 0 } },
+      breakCost: { penaltyWeight: 1, shortfallWeight: 1.5, maxBacktrackChars: 6 },
+      analyzer: { name: 'a', version: '1' },
+    });
+    snapshot.paragraphs[0].headingLevel = 1;
+    snapshot.paragraphs[0].kind = 'heading';
+    const layout = book.layoutFromSnapshot(snapshot);
+    expect(layout.snapshot().config.headingStyles).toEqual({ 1: { scale: 1.6, gapAfterEm: 0 } });
   });
 
   it('rejects an unsupported version', () => {

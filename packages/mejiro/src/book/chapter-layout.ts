@@ -118,8 +118,21 @@ function sameMeasurement(a: MeasurementConfig, b: MeasurementConfig): boolean {
 
 // ── Internal cache types ──
 
+/** Whether two break cost settings carry the same weights, absence included. */
+function sameBreakCost(a: BreakCostOptions | undefined, b: BreakCostOptions | undefined): boolean {
+  if (a === b) return true;
+  return (
+    a?.penaltyWeight === b?.penaltyWeight &&
+    a?.shortfallWeight === b?.shortfallWeight &&
+    a?.maxBacktrackChars === b?.maxBacktrackChars &&
+    a?.emSize === b?.emSize
+  );
+}
+
 interface NormalCache {
   pages: PageSlice[][];
+  /** Global line span `[start, end)` of every page, in page order. */
+  pageRanges: { start: number; end: number }[];
   paraLineStarts: number[];
   metrics: LineMetric[];
 }
@@ -449,7 +462,7 @@ export class ChapterLayout {
    * @internal Applies a layout config from {@link MejiroBook.setOptions} that
    * changes no measured field.
    *
-   * Marks the line breaks stale when `mode` / `enableHanging` change, and
+   * Marks the line breaks stale when `mode` / `enableHanging` / `breakCost` change, and
    * invalidates the rendered caches so the next read reflects the new options.
    *
    * @throws If `config` changes a field the advances were measured with; that
@@ -460,10 +473,25 @@ export class ChapterLayout {
       throw new Error('ChapterLayout.applyConfig: a measured field changed without re-measuring');
     }
     const breakSensitiveChanged =
-      config.mode !== this.config.mode || config.enableHanging !== this.config.enableHanging;
-    this.config = { ...config };
+      config.mode !== this.config.mode ||
+      config.enableHanging !== this.config.enableHanging ||
+      !sameBreakCost(config.breakCost, this.config.breakCost);
+    this.config = this.adopt(config);
     if (breakSensitiveChanged) this.breaksStale = true;
     this.invalidate();
+  }
+
+  /** `config` as the layout's own, keeping the analyzer its hints were derived from. */
+  private adopt(config: LayoutConfig): LayoutConfig {
+    return { ...config, analyzer: this.config.analyzer };
+  }
+
+  /**
+   * @internal The config the layout currently holds, for a re-measure that must
+   * not change it.
+   */
+  getConfig(): LayoutConfig {
+    return { ...this.config };
   }
 
   /** @internal Exposes cached paragraphs so {@link MejiroBook} can re-measure on font change. */
@@ -477,7 +505,7 @@ export class ChapterLayout {
    * the line breaks stale so the next read re-breaks against them.
    */
   recomputeAfterMeasurement(config: LayoutConfig): void {
-    this.config = { ...config };
+    this.config = this.adopt(config);
     this.breaksStale = true;
     this.invalidate();
   }
@@ -1010,7 +1038,17 @@ export class ChapterLayout {
       total += entry.breakPoints.length + 1;
     }
 
-    this.normal = { pages, paraLineStarts, metrics };
+    // Global line span of every page; an empty page keeps the running cursor.
+    const pageRanges: { start: number; end: number }[] = [];
+    let cursor = 0;
+    for (const slices of pages) {
+      const head = slices[0];
+      const start = head ? paraLineStarts[head.paragraphIndex] + head.lineStart : cursor;
+      cursor = start + slices.reduce((sum, s) => sum + (s.lineEnd - s.lineStart), 0);
+      pageRanges.push({ start, end: cursor });
+    }
+
+    this.normal = { pages, pageRanges, paraLineStarts, metrics };
   }
 
   private getNormalSpread(spreadIndex: number, totalPages: number): SpreadResult {
@@ -1096,17 +1134,9 @@ export class ChapterLayout {
       };
       const rest: LineMetric = { pitch, gapBefore: 0 };
 
-      let lineWidths: Float32Array | undefined;
-      if (!flow.pastImages) {
-        // A paragraph occupies at most one line per character.
-        const probe = flow.probe();
-        const widths: number[] = [];
-        while (widths.length <= para.text.length && !probe.pastImages) {
-          widths.push(probe.place(widths.length === 0 ? first : rest));
-        }
-        lineWidths = new Float32Array(widths);
-      }
-      entry.breakPoints = this.breakWithLineWidths(para, lineWidths);
+      entry.breakPoints = flow.pastImages
+        ? this.breakWithLineWidths(para)
+        : this.breakProbed(para, flow, first, rest);
       for (let li = 0; li <= entry.breakPoints.length; li++) flow.place(li === 0 ? first : rest);
       entries.push(entry);
     }
@@ -1149,6 +1179,33 @@ export class ChapterLayout {
       spreadLayouts: layouts,
       totalPages: this.exclusionTotalPages(layouts),
     };
+  }
+
+  /**
+   * Breaks a paragraph against the widths a probe of `flow` reports. The probe
+   * starts at the line count the text needs on full-width lines and doubles
+   * (up to one line per character) while the break runs past it.
+   */
+  private breakProbed(
+    para: CachedParagraph,
+    flow: ColumnFlow,
+    first: LineMetric,
+    rest: LineMetric,
+  ): Uint32Array {
+    const probe = flow.probe();
+    const widths: number[] = [];
+    let total = 0;
+    for (const advance of para.advances) total += advance;
+    const maxLines = para.text.length + 1;
+    let target = Math.min(maxLines, Math.ceil(total / this.size.lineWidth) + 1);
+    for (;;) {
+      while (widths.length < target && !probe.pastImages) {
+        widths.push(probe.place(widths.length === 0 ? first : rest));
+      }
+      const breakPoints = this.breakWithLineWidths(para, new Float32Array(widths));
+      if (breakPoints.length < widths.length || probe.pastImages) return breakPoints;
+      target = Math.min(maxLines, target * 2);
+    }
   }
 
   private breakWithLineWidths(para: CachedParagraph, lineWidths?: Float32Array): Uint32Array {
@@ -1239,25 +1296,26 @@ export class ChapterLayout {
 
   private locateAnchorInNormal(paragraph: number, charIndex: number): AnchorLocation | null {
     this.ensureNormal();
-    const { pages, paraLineStarts } = this.normal as NormalCache;
+    const { pageRanges, paraLineStarts } = this.normal as NormalCache;
     const inParaLine = findInParaLine(this.entries[paragraph].breakPoints, charIndex);
     const globalLine = paraLineStarts[paragraph] + inParaLine;
 
-    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
-      for (const slice of pages[pageIdx]) {
-        const sliceStart = paraLineStarts[slice.paragraphIndex] + slice.lineStart;
-        const sliceEnd = paraLineStarts[slice.paragraphIndex] + slice.lineEnd;
-        if (globalLine >= sliceStart && globalLine < sliceEnd) {
-          return {
-            spreadIdx: Math.floor(pageIdx / 2),
-            pageIdx,
-            lineIdx: globalLine,
-            side: pageIdx % 2 === 0 ? 'right' : 'left',
-          };
-        }
-      }
+    // Ranges are contiguous and ordered: the page is the first one ending past the line.
+    let lo = 0;
+    let hi = pageRanges.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pageRanges[mid].end > globalLine) hi = mid;
+      else lo = mid + 1;
     }
-    return null;
+    const range = pageRanges[lo];
+    if (!range || globalLine < range.start) return null;
+    return {
+      spreadIdx: Math.floor(lo / 2),
+      pageIdx: lo,
+      lineIdx: globalLine,
+      side: lo % 2 === 0 ? 'right' : 'left',
+    };
   }
 
   private locateAnchorInExclusion(paragraph: number, charIndex: number): AnchorLocation | null {
@@ -1266,19 +1324,24 @@ export class ChapterLayout {
     const inParaLine = findInParaLine(entries[paragraph].breakPoints, charIndex);
     const globalLine = paraLineStarts[paragraph] + inParaLine;
 
-    for (let s = 0; s < spreadLayouts.length; s++) {
-      const sl = spreadLayouts[s];
-      if (globalLine >= sl.lineStart && globalLine < sl.lineStart + sl.slotCount) {
-        const isRight = globalLine < sl.lineStart + sl.rightSlotCount;
-        return {
-          spreadIdx: s,
-          pageIdx: s * 2 + (isRight ? 0 : 1),
-          lineIdx: globalLine,
-          side: isRight ? 'right' : 'left',
-        };
-      }
+    // The spread holding the line is the last one starting at or before it.
+    let lo = 0;
+    let hi = spreadLayouts.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (spreadLayouts[mid].lineStart > globalLine) hi = mid;
+      else lo = mid + 1;
     }
-    return null;
+    const s = lo - 1;
+    const sl = spreadLayouts[s];
+    if (!sl || globalLine >= sl.lineStart + sl.slotCount) return null;
+    const isRight = globalLine < sl.lineStart + sl.rightSlotCount;
+    return {
+      spreadIdx: s,
+      pageIdx: s * 2 + (isRight ? 0 : 1),
+      lineIdx: globalLine,
+      side: isRight ? 'right' : 'left',
+    };
   }
 
   private anchorAtInNormal(pageIdx: number): InChapterAnchor | null {
@@ -1412,17 +1475,7 @@ export class ChapterLayout {
 
   private selectionRectsInNormal(range: AnchorRange): AnchorRect[] {
     this.ensureNormal();
-    const { pages, paraLineStarts, metrics } = this.normal as NormalCache;
-
-    // Global line span of every page, so each run only needs a cursor step.
-    const pageRanges: { start: number; end: number }[] = [];
-    let cursor = 0;
-    for (const slices of pages) {
-      const first = slices[0];
-      const start = first ? paraLineStarts[first.paragraphIndex] + first.lineStart : cursor;
-      cursor = start + slices.reduce((sum, s) => sum + (s.lineEnd - s.lineStart), 0);
-      pageRanges.push({ start, end: cursor });
-    }
+    const { pageRanges, paraLineStarts, metrics } = this.normal as NormalCache;
 
     const rects: AnchorRect[] = [];
     let pageIdx = 0;

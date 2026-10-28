@@ -2,9 +2,13 @@
  * @vitest-environment happy-dom
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChapterLayout } from '../../src/book/chapter-layout.js';
 import { DEFAULT_HEADING_STYLES } from '../../src/book/constants.js';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookOptions } from '../../src/book/types.js';
+import { toFontSpec } from '../../src/browser/types.js';
+import { manuscriptParagraphs, parseInlineImageMarker } from '../../src/epub/manuscript-source.js';
+import { parseManuscript } from '../../src/manuscript.js';
 
 const breakCalls = vi.hoisted(() => ({ count: 0 }));
 
@@ -44,6 +48,41 @@ describe('MejiroBook', () => {
     expect(opts.mode).toBe('strict');
     expect(opts.enableHanging).toBe(true);
     expect(opts.headingScale).toBe(1.4);
+  });
+
+  it('getOptions reports construction-time options and setOptions leaves them as built', async () => {
+    const analyzer = { identity: { name: 'a', version: '1' }, analyze: () => ({ morphemes: [] }) };
+    const built = new MejiroBook({
+      ...baseOptions,
+      analyzer: analyzer as unknown as BookOptions['analyzer'],
+      wordAwareBreaking: 'clusters',
+      keepWholePos: ['名詞'],
+      keepWholePenalty: 3,
+      breakCost: { shortfallWeight: 2 },
+    });
+    expect(built.getOptions()).toMatchObject({
+      analyzer,
+      wordAwareBreaking: 'clusters',
+      keepWholePos: ['名詞'],
+      keepWholePenalty: 3,
+      breakCost: { shortfallWeight: 2 },
+    });
+
+    await built.setOptions({
+      analyzer: undefined,
+      wordAwareBreaking: 'full',
+      keepWholePos: ['動詞'],
+      keepWholePenalty: 1,
+      breakCost: { shortfallWeight: 9 },
+    });
+    expect(built.getOptions()).toMatchObject({
+      analyzer,
+      wordAwareBreaking: 'clusters',
+      keepWholePos: ['名詞'],
+      keepWholePenalty: 3,
+      breakCost: { shortfallWeight: 2 },
+    });
+    expect(new MejiroBook(baseOptions).getOptions().wordAwareBreaking).toBe('off');
   });
 
   it('provides default heading styles for h1 through h6', () => {
@@ -107,9 +146,21 @@ describe('MejiroBook', () => {
     expect(single.pageWidth).toBeGreaterThan(double.pageWidth);
   });
 
-  it('clearCache does not throw and produces no observable error', () => {
-    expect(() => book.clearCache()).not.toThrow();
-    expect(() => book.clearCache('serif 16px')).not.toThrow();
+  it('clearCache(spec) drops that font only and clearCache() drops all', async () => {
+    book.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
+    await book.setOptions({ fontSize: 32 });
+    const before = book.cacheStats();
+    expect(before.fonts).toBe(2);
+
+    book.clearCache(toFontSpec('serif', 16));
+    const after = book.cacheStats();
+    expect(after.fonts).toBe(1);
+    expect(after.codepoints).toBeLessThan(before.codepoints);
+    expect(after.codepoints).toBeGreaterThan(0);
+
+    book.clearCache();
+    expect(book.cacheStats()).toEqual({ fonts: 0, codepoints: 0 });
   });
 
   it('cacheStats reports zero on a fresh book and grows with layouts', async () => {
@@ -147,14 +198,18 @@ describe('MejiroBook', () => {
 
   it('setOptions propagates lineSpacing changes to live layouts', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
-    const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
-    const beforePages = layout.totalPages;
+    const layout = await book.layoutChapter({
+      paragraphs: [{ text: 'あいうえお' }, { text: 'かきくけこ' }],
+    });
+    const beforeSlots = layout.getSpread(0).right.slots.map((s) => s.xPos);
+    expect(layout.snapshot().config.lineSpacing).toBe(1.8);
+
     await book.setOptions({ lineSpacing: 3.0 });
-    // After a tighter/looser line spacing, getSpread should reflect the new config.
-    const after = layout.getSpread(0);
-    expect(after).toBeDefined();
-    // The layout was invalidated by setOptions; recomputed values are valid.
-    expect(layout.totalPages).toBeGreaterThanOrEqual(beforePages);
+
+    expect(layout.snapshot().config.lineSpacing).toBe(3);
+    const afterSlots = layout.getSpread(0).right.slots.map((s) => s.xPos);
+    expect(afterSlots).toHaveLength(beforeSlots.length);
+    expect(afterSlots).not.toEqual(beforeSlots);
   });
 
   it('setOptions propagates fontSize changes by re-measuring live layouts', async () => {
@@ -295,6 +350,32 @@ describe('MejiroBook', () => {
         paragraphs: [],
       }),
     ).toThrow('Unsupported ChapterLayoutSnapshot version');
+  });
+
+  it('layoutManuscript lays out the paragraphs the EPUB export path yields', async () => {
+    book.setPageSize({ pageWidth: 400, lineWidth: 600 });
+    const body = [
+      '　一段目の字下げ。',
+      '　',
+      '[[mejiro-image:fig.png|図]]',
+      '　 \t\n  二行目だけ字下げ。\n続き。',
+      '',
+      '',
+      '末尾の段落。',
+    ].join('\n\n');
+    const layouts = await book.layoutManuscript({ chapters: [{ title: '題', body }] });
+    const texts = (layouts.get('chapter-1') as ChapterLayout)
+      .snapshot()
+      .paragraphs.map((p) => p.text);
+
+    const expected = manuscriptParagraphs(body)
+      .filter((block) => parseInlineImageMarker(block) === null)
+      .map((block) => parseManuscript(block, { dialect: 'mejiro' }).text);
+    expect(texts).toEqual(['題', ...expected]);
+    // Indents and the lone ideographic-space divider survive; the marker is dropped.
+    expect(texts).toContain('　一段目の字下げ。');
+    expect(texts).toContain('　');
+    expect(texts.some((t) => t.includes('mejiro-image'))).toBe(false);
   });
 
   it('layoutManuscript parses manuscript markup and returns layouts keyed by chapter id', async () => {

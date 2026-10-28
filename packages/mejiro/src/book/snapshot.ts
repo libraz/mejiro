@@ -1,6 +1,7 @@
 import type { InlineAnnotation } from '../browser/types.js';
 import type { HeadingStyle } from '../render/measures.js';
 import type { TcyAnnotation } from '../tcy.js';
+import { normalizeText } from '../text.js';
 import type { BreakCostOptions } from '../types.js';
 import type { BookImage, PageSize, ParagraphKind } from './types.js';
 
@@ -221,9 +222,66 @@ function checkSpan(value: unknown, count: number, where: string): Record<string,
   return value;
 }
 
+const PARAGRAPH_KINDS: readonly unknown[] = [
+  'body',
+  'heading',
+  'blockquote',
+  'sceneBreak',
+  'pre',
+  'figure',
+];
+
+/** Checks an optional field holds a finite number accepted by `valid`. */
+function checkOptionalNumber(value: unknown, valid: (n: number) => boolean, where: string): void {
+  if (value === undefined) return;
+  if (typeof value !== 'number' || !valid(value)) malformed(`${where} is not a valid number`);
+}
+
+function checkHeadingStyles(value: unknown): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) malformed('config.headingStyles is not an object');
+  for (const [level, style] of Object.entries(value)) {
+    const where = `config.headingStyles[${level}]`;
+    if (!isRecord(style)) malformed(`${where} is not an object`);
+    checkOptionalNumber(style.scale, isFinitePositive, `${where}.scale`);
+    checkOptionalNumber(style.gapAfterEm, isFiniteNonNegative, `${where}.gapAfterEm`);
+  }
+}
+
+function checkBreakCost(value: unknown): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) malformed('config.breakCost is not an object');
+  for (const key of ['penaltyWeight', 'shortfallWeight', 'maxBacktrackChars', 'emSize'] as const) {
+    checkOptionalNumber(value[key], isFiniteNonNegative, `config.breakCost.${key}`);
+  }
+}
+
+function checkAnalyzer(value: unknown): void {
+  if (value === undefined) return;
+  if (!(isRecord(value) && typeof value.name === 'string' && typeof value.version === 'string')) {
+    malformed('config.analyzer is not a {name, version} pair');
+  }
+}
+
 function checkParagraph(value: unknown, where: string): void {
   if (!isRecord(value)) malformed(`${where} is not an object`);
   if (typeof value.text !== 'string') malformed(`${where}.text is not a string`);
+  // Restore rebuilds codepoints through NFC next to the raw characters, so text
+  // that is not already NFC would leave the two out of step.
+  if (normalizeText(value.text) !== value.text) malformed(`${where}.text is not NFC-normalized`);
+  if (
+    value.headingLevel !== undefined &&
+    !(
+      Number.isInteger(value.headingLevel) &&
+      (value.headingLevel as number) >= 1 &&
+      (value.headingLevel as number) <= 6
+    )
+  ) {
+    malformed(`${where}.headingLevel is not an integer from 1 to 6`);
+  }
+  if (value.kind !== undefined && !PARAGRAPH_KINDS.includes(value.kind)) {
+    malformed(`${where}.kind is not a paragraph kind`);
+  }
   const count = [...value.text].length;
   checkNumbers(value.advances, count, Number.isFinite, `${where}.advances`);
   checkNumbers(value.breakPoints, null, (n) => isIndex(n, count - 1), `${where}.breakPoints`);
@@ -309,9 +367,9 @@ export function assertChapterLayoutSnapshot(
   }
   if (config.mode !== 'strict' && config.mode !== 'loose') malformed('config.mode is invalid');
   if (typeof config.enableHanging !== 'boolean') malformed('config.enableHanging is invalid');
-  if (config.headingStyles !== undefined && !isRecord(config.headingStyles)) {
-    malformed('config.headingStyles is not an object');
-  }
+  checkHeadingStyles(config.headingStyles);
+  checkBreakCost(config.breakCost);
+  checkAnalyzer(config.analyzer);
   if (!isRecord(size)) malformed('size is not an object');
   for (const key of ['pageWidth', 'lineWidth'] as const) {
     if (!isFinitePositive(size[key])) malformed(`size.${key} is not a positive number`);

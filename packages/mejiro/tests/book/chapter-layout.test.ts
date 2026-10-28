@@ -36,6 +36,63 @@ function computedBreakPoints(charCount: number): Uint32Array {
 }
 
 describe('ChapterLayout', () => {
+  it('re-breaks when applyConfig changes only the break cost', () => {
+    const text = 'あ'.repeat(25);
+    // A heavy penalty after the 10th character: the default weights move the
+    // break one character earlier, a stiff shortfall weight keeps it.
+    const penalties = new Uint8Array(25);
+    penalties[9] = 4;
+    const params = {
+      text: toCodepoints(text),
+      advances: uniformAdvances(25, 10),
+      lineWidth: 100,
+      breakPenalties: penalties,
+    };
+    const stiff = { shortfallWeight: 10 };
+    const cached: CachedParagraph[] = [
+      {
+        text: params.text,
+        advances: params.advances,
+        chars: chars(text),
+        inlineAnnotations: [],
+        hintBreakPenalties: penalties,
+      },
+    ];
+    const entries: RenderEntry[] = [
+      {
+        chars: chars(text),
+        breakPoints: computeBreaks({ ...params, breakCost: stiff }).breakPoints,
+        inlineAnnotations: [],
+      },
+    ];
+    const config = {
+      fontSize: 10,
+      lineSpacing: 1,
+      headingScale: 1.4,
+      mode: 'strict' as const,
+      enableHanging: true,
+    };
+    const layout = new ChapterLayout(
+      cached,
+      entries,
+      { ...config, breakCost: stiff },
+      {
+        pageWidth: 100,
+        lineWidth: 100,
+        pagePaddingX: 0,
+        pagePaddingY: 0,
+      },
+    );
+    expect(layout.snapshot().paragraphs[0].breakPoints[0]).toBe(9);
+
+    layout.applyConfig(config);
+
+    expect(layout.snapshot().paragraphs[0].breakPoints).toEqual(
+      Array.from(computeBreaks(params).breakPoints),
+    );
+    expect(layout.snapshot().paragraphs[0].breakPoints[0]).toBe(8);
+  });
+
   it('preserves ruby-aware breaks after resize reflow', () => {
     const text = '漢あいうえ';
     const rubyText = toCodepoints('かんかん');
