@@ -18,9 +18,9 @@ function manualFetcher() {
   return { fetchEpub, requests };
 }
 
-const bytes = () =>
+const bytes = (title = '本') =>
   new EpubProject({
-    metadata: { title: '本' },
+    metadata: { title },
     chapters: [{ title: '一', body: '本文。' }],
     includeTitlePage: false,
   }).export();
@@ -96,7 +96,8 @@ describe('useEpub (Vue) — abandoned loads', () => {
   });
 
   it('loads only the latest URL when it changes mid-load', async () => {
-    const book = await bytes();
+    const stale = await bytes('古');
+    const latest = await bytes('本');
     const { fetchEpub, requests } = manualFetcher();
     const onLoad = vi.fn();
     const url = ref('/a.epub');
@@ -109,13 +110,13 @@ describe('useEpub (Vue) — abandoned loads', () => {
     });
     url.value = '/b.epub';
     await nextTick();
-    requests[0].resolve(book);
-    await drain();
-    expect(onLoad).not.toHaveBeenCalled();
+    requests[0].resolve(stale);
+    requests[1].resolve(latest);
 
-    requests[1].resolve(book);
+    await vi.waitFor(() => expect(onLoad).toHaveBeenCalled());
     await drain();
     expect(onLoad).toHaveBeenCalledTimes(1);
+    expect(onLoad.mock.calls[0][0].title).toBe('本');
     expect(epub.epub.value?.title).toBe('本');
   });
 });

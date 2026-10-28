@@ -149,6 +149,8 @@ describe('MejiroEditor (Vue) — ruby without proofread', () => {
     const { container, stub, button } = await renderEditor({ enableProofread: false });
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
     expect(textarea.readOnly).toBe(true);
+    // The paragraph text lands after the list renders; a selection set before it is clamped to 0.
+    await waitFor(() => expect(textarea.value).toBe('abcdef'));
 
     textarea.setSelectionRange(2, 4);
     await fireEvent.select(textarea);

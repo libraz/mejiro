@@ -2,7 +2,7 @@
 /** @jsxImportSource react */
 
 import { EpubProject } from '@libraz/mejiro/epub';
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useEpub } from '../src/useEpub.js';
 
@@ -18,9 +18,9 @@ function manualFetcher() {
   return { fetchEpub, requests };
 }
 
-const bytes = () =>
+const bytes = (title = '本') =>
   new EpubProject({
-    metadata: { title: '本' },
+    metadata: { title },
     chapters: [{ title: '一', body: '本文。' }],
     includeTitlePage: false,
   }).export();
@@ -79,7 +79,8 @@ describe('useEpub (React) — abandoned loads', () => {
   });
 
   it('loads only the latest URL when it changes mid-load', async () => {
-    const book = await bytes();
+    const stale = await bytes('古');
+    const latest = await bytes('本');
     const { fetchEpub, requests } = manualFetcher();
     const onLoad = vi.fn();
     const { result, rerender } = renderHook(
@@ -87,13 +88,13 @@ describe('useEpub (React) — abandoned loads', () => {
       { initialProps: { url: '/a.epub' } },
     );
     rerender({ url: '/b.epub' });
-    requests[0].resolve(book);
-    await drain();
-    expect(onLoad).not.toHaveBeenCalled();
+    requests[0].resolve(stale);
+    requests[1].resolve(latest);
 
-    requests[1].resolve(book);
+    await waitFor(() => expect(onLoad).toHaveBeenCalled());
     await drain();
     expect(onLoad).toHaveBeenCalledTimes(1);
+    expect(onLoad.mock.calls[0][0].title).toBe('本');
     expect(result.current.epub?.title).toBe('本');
   });
 });
