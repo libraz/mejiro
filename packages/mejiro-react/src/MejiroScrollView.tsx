@@ -1,9 +1,12 @@
-import type { AnchorRect, ChapterLayout } from '@libraz/mejiro/book';
+import type { AnchorRect, ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
+import { type PageNumberDisplay, pageNumberFor } from '@libraz/mejiro/render';
 import {
   type CSSProperties,
+  memo,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -16,6 +19,95 @@ import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js'
 
 // Shared default, so an omitted `images` never re-reads the pages.
 const NO_IMAGES: MultiImageItem[] = [];
+
+interface ScrollPageProps {
+  result: PageResult;
+  index: number;
+  pageNumber: number | null;
+  pageWidth: number;
+  pageHeight: number;
+  contentHeight: number;
+  slotMode?: boolean;
+  fontFamily?: FontFamily;
+  lineSpacing?: number;
+  contentStyle: CSSProperties;
+  rects?: (AnchorRect & { color?: string })[];
+  /** Overlays this page carries; empty for every page but the current spread's. */
+  overlays: MultiImageItem[];
+  /** Whether the overlays belong to the left page of the spread (offset by one page width). */
+  overlaysLeft: boolean;
+  registerPage: (index: number, el: HTMLDivElement | null) => void;
+  onImagePointerDown: (id: string, e: ReactPointerEvent) => void;
+  onImageResizePointerDown: (id: string, e: ReactPointerEvent) => void;
+  onImageClose: (id: string) => void;
+}
+
+/** One page of the scroll track; memoized so only pages whose inputs changed re-render. */
+const ScrollPage = memo(function ScrollPage({
+  result,
+  index,
+  pageNumber,
+  pageWidth,
+  pageHeight,
+  contentHeight,
+  slotMode,
+  fontFamily,
+  lineSpacing,
+  contentStyle,
+  rects,
+  overlays,
+  overlaysLeft,
+  registerPage,
+  onImagePointerDown,
+  onImageResizePointerDown,
+  onImageClose,
+}: ScrollPageProps): ReactNode {
+  return (
+    <div
+      ref={(el) => registerPage(index, el)}
+      data-page-idx={index}
+      className="mejiro-reader-page"
+      style={{
+        width: pageWidth,
+        height: pageHeight,
+        flexShrink: 0,
+        ...(overlays.length > 0 ? { overflow: 'visible' } : null),
+      }}
+    >
+      <div className="mejiro-reader-page-rule" />
+      <div className="mejiro-reader-page-header">
+        <span className="mejiro-reader-page-header-title" />
+        <span className="mejiro-reader-page-header-num">
+          {pageNumber != null ? String(pageNumber) : ''}
+        </span>
+      </div>
+      <div className="mejiro-reader-page-viewport">
+        <div className="mejiro-reader-page-clip" style={{ height: contentHeight }}>
+          <MejiroPageView
+            result={result}
+            slotMode={slotMode}
+            fontFamily={fontFamily}
+            lineSpacing={lineSpacing}
+            className="mejiro-reader-page-content"
+            style={contentStyle}
+          />
+          {rects && (
+            <MejiroSelectionLayer rects={rects} side={index % 2 === 0 ? 'right' : 'left'} />
+          )}
+        </div>
+      </div>
+      {overlays.map((item) => (
+        <MejiroImageOverlay
+          key={item.id}
+          rect={overlaysLeft ? { ...item.rect, x: item.rect.x + pageWidth } : item.rect}
+          onOverlayPointerDown={(e) => onImagePointerDown(item.id, e)}
+          onResizePointerDown={(e) => onImageResizePointerDown(item.id, e)}
+          onClose={() => onImageClose(item.id)}
+        />
+      ))}
+    </div>
+  );
+});
 
 /** Props for {@link MejiroScrollView}. */
 export interface MejiroScrollViewProps {
@@ -64,6 +156,11 @@ export interface MejiroScrollViewProps {
    * provides one on every change.
    */
   images?: MultiImageItem[];
+  /**
+   * Which pages print their page number in the running head, by the same rule
+   * as the paginated reader. @defaultValue 'both'
+   */
+  pageNumbers?: PageNumberDisplay;
   /** Pointer-down on an image overlay. */
   onImagePointerDown?: (id: string, e: ReactPointerEvent) => void;
   /** Pointer-down on an image resize handle. */
@@ -93,6 +190,7 @@ export function MejiroScrollView({
   selectionRects,
   spreadIdx,
   images = NO_IMAGES,
+  pageNumbers = 'both',
   onImagePointerDown,
   onImageResizePointerDown,
   onImageClose,
@@ -135,10 +233,33 @@ export function MejiroScrollView({
     return byPage;
   }, [selectionRects]);
 
-  const contentStyle: CSSProperties = { height: contentHeight };
-  if (fontFamily) contentStyle.fontFamily = normalizeFontFamily(fontFamily);
-  if (fontSize != null) contentStyle.fontSize = fontSize;
-  if (lineSpacing != null) contentStyle.lineHeight = String(lineSpacing);
+  const contentStyle = useMemo(() => {
+    const style: CSSProperties = { height: contentHeight };
+    if (fontFamily) style.fontFamily = normalizeFontFamily(fontFamily);
+    if (fontSize != null) style.fontSize = fontSize;
+    if (lineSpacing != null) style.lineHeight = String(lineSpacing);
+    return style;
+  }, [contentHeight, fontFamily, fontSize, lineSpacing]);
+
+  const registerPage = useCallback((index: number, el: HTMLDivElement | null) => {
+    pageRefs.current[index] = el;
+  }, []);
+  // Image callbacks are read through refs so they never invalidate a page.
+  const imageHandlersRef = useRef({ onImagePointerDown, onImageResizePointerDown, onImageClose });
+  imageHandlersRef.current = { onImagePointerDown, onImageResizePointerDown, onImageClose };
+  const handleImagePointerDown = useCallback(
+    (id: string, e: ReactPointerEvent) => imageHandlersRef.current.onImagePointerDown?.(id, e),
+    [],
+  );
+  const handleImageResizePointerDown = useCallback(
+    (id: string, e: ReactPointerEvent) =>
+      imageHandlersRef.current.onImageResizePointerDown?.(id, e),
+    [],
+  );
+  const handleImageClose = useCallback(
+    (id: string) => imageHandlersRef.current.onImageClose?.(id),
+    [],
+  );
 
   useEffect(() => {
     const container = containerRef.current;
@@ -202,68 +323,27 @@ export function MejiroScrollView({
         style={{ display: 'flex', flexDirection: 'column', gap: pageGap }}
       >
         {pages.map((result, i) => (
-          <div
+          <ScrollPage
             // biome-ignore lint/suspicious/noArrayIndexKey: pages have no stable ID
             key={i}
-            ref={(el) => {
-              pageRefs.current[i] = el;
-            }}
-            data-page-idx={i}
-            className="mejiro-reader-page"
-            style={{
-              width: pageWidth,
-              height: pageHeight,
-              flexShrink: 0,
-              ...((i === rightPage && rightImages.length > 0) ||
-              (i === leftPage && leftImages.length > 0)
-                ? { overflow: 'visible' }
-                : null),
-            }}
-          >
-            <div className="mejiro-reader-page-rule" />
-            <div className="mejiro-reader-page-header">
-              <span className="mejiro-reader-page-header-title" />
-              <span className="mejiro-reader-page-header-num">{i + 1}</span>
-            </div>
-            <div className="mejiro-reader-page-viewport">
-              <div className="mejiro-reader-page-clip" style={{ height: contentHeight }}>
-                <MejiroPageView
-                  result={result}
-                  slotMode={slotMode}
-                  fontFamily={fontFamily}
-                  lineSpacing={lineSpacing}
-                  className="mejiro-reader-page-content"
-                  style={contentStyle}
-                />
-                {rectsByPage[i] && (
-                  <MejiroSelectionLayer
-                    rects={rectsByPage[i]}
-                    side={i % 2 === 0 ? 'right' : 'left'}
-                  />
-                )}
-              </div>
-            </div>
-            {i === rightPage &&
-              rightImages.map((item) => (
-                <MejiroImageOverlay
-                  key={item.id}
-                  rect={item.rect}
-                  onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
-                  onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
-                  onClose={() => onImageClose?.(item.id)}
-                />
-              ))}
-            {i === leftPage &&
-              leftImages.map((item) => (
-                <MejiroImageOverlay
-                  key={item.id}
-                  rect={{ ...item.rect, x: item.rect.x + pageWidth }}
-                  onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
-                  onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
-                  onClose={() => onImageClose?.(item.id)}
-                />
-              ))}
-          </div>
+            result={result}
+            index={i}
+            pageNumber={pageNumberFor(pageNumbers, i)}
+            pageWidth={pageWidth}
+            pageHeight={pageHeight}
+            contentHeight={contentHeight}
+            slotMode={slotMode}
+            fontFamily={fontFamily}
+            lineSpacing={lineSpacing}
+            contentStyle={contentStyle}
+            rects={rectsByPage[i]}
+            overlays={i === rightPage ? rightImages : i === leftPage ? leftImages : NO_IMAGES}
+            overlaysLeft={i === leftPage}
+            registerPage={registerPage}
+            onImagePointerDown={handleImagePointerDown}
+            onImageResizePointerDown={handleImageResizePointerDown}
+            onImageClose={handleImageClose}
+          />
         ))}
       </div>
     </div>

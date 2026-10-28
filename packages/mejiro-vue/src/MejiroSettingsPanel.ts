@@ -1,5 +1,6 @@
 import type { EditableSettings, FontChoice } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
+import * as Vue from 'vue';
 import { defineComponent, h, type PropType } from 'vue';
 import { useI18n } from './i18n.js';
 
@@ -19,6 +20,13 @@ const DEFAULT_FONTS: FontChoice[] = [
 function fontLabelFromCss(css: string): string {
   const first = css.split(',')[0]?.trim() ?? css;
   return first.replace(/^["']|["']$/g, '') || css;
+}
+
+let panelSeq = 0;
+
+/** A per-instance id prefix: Vue's own `useId` where it exists (3.5+), else a counter. */
+function usePanelId(): string {
+  return typeof Vue.useId === 'function' ? Vue.useId() : `mejiro-settings-${++panelSeq}`;
 }
 
 function clampNumber(value: number, min: number, max: number, fallback: number): number {
@@ -68,6 +76,8 @@ export const MejiroSettingsPanel = defineComponent({
   emits: ['update:settings'],
   setup(props, { emit }) {
     const messages = useI18n();
+    // Per-instance ids keep label associations valid when two panels share a page.
+    const uid = usePanelId();
     function patch(next: Partial<EditableSettings>): void {
       emit('update:settings', { ...props.settings, ...next });
     }
@@ -95,6 +105,7 @@ export const MejiroSettingsPanel = defineComponent({
                 h(
                   'select',
                   {
+                    'aria-label': m.settingsFont,
                     value: normalizeFontFamily(s.fontFamily),
                     onChange: (e: Event) =>
                       patch({ fontFamily: (e.target as HTMLSelectElement).value }),
@@ -103,7 +114,11 @@ export const MejiroSettingsPanel = defineComponent({
                 ),
               ]),
               h('div', { class: 'mejiro-reader-control' }, [
-                h('label', { class: 'mejiro-reader-control-label' }, m.settingsSize),
+                h(
+                  'label',
+                  { class: 'mejiro-reader-control-label', for: `${uid}-font-size` },
+                  m.settingsSize,
+                ),
                 h(
                   'button',
                   {
@@ -123,6 +138,7 @@ export const MejiroSettingsPanel = defineComponent({
                   'A−',
                 ),
                 h('input', {
+                  id: `${uid}-font-size`,
                   type: 'number',
                   value: s.fontSize,
                   min: props.minFontSize,
@@ -163,10 +179,15 @@ export const MejiroSettingsPanel = defineComponent({
             h('div', { class: 'mejiro-reader-settings-group' }, [
               h('span', { class: 'mejiro-reader-settings-group-title' }, m.settingsLayout),
               h('div', { class: 'mejiro-reader-control' }, [
-                h('label', { class: 'mejiro-reader-control-label' }, m.settingsKinsoku),
+                h(
+                  'label',
+                  { class: 'mejiro-reader-control-label', for: `${uid}-kinsoku` },
+                  m.settingsKinsoku,
+                ),
                 h(
                   'select',
                   {
+                    id: `${uid}-kinsoku`,
                     value: s.mode ?? 'strict',
                     onChange: (e: Event) =>
                       patch({
@@ -180,10 +201,15 @@ export const MejiroSettingsPanel = defineComponent({
                 ),
               ]),
               h('div', { class: 'mejiro-reader-control' }, [
-                h('label', { class: 'mejiro-reader-control-label' }, m.settingsHanging),
+                h(
+                  'label',
+                  { class: 'mejiro-reader-control-label', for: `${uid}-hanging` },
+                  m.settingsHanging,
+                ),
                 h(
                   'select',
                   {
+                    id: `${uid}-hanging`,
                     value: String(s.enableHanging ?? true),
                     onChange: (e: Event) =>
                       patch({
@@ -197,8 +223,13 @@ export const MejiroSettingsPanel = defineComponent({
                 ),
               ]),
               h('div', { class: 'mejiro-reader-control' }, [
-                h('label', { class: 'mejiro-reader-control-label' }, m.settingsLineSpacing),
+                h(
+                  'label',
+                  { class: 'mejiro-reader-control-label', for: `${uid}-line-spacing` },
+                  m.settingsLineSpacing,
+                ),
                 h('input', {
+                  id: `${uid}-line-spacing`,
                   class: 'mejiro-reader-control--wide',
                   type: 'number',
                   value: s.lineSpacing ?? 1.8,

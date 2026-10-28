@@ -269,11 +269,12 @@ describe('useAnnotations (React) — StrictMode', () => {
     });
     expect(onChange).toHaveBeenCalledTimes(1);
 
+    // The list is empty again, so clear() is a no-op and does not notify.
     onChange.mockClear();
     act(() => {
       result.current.clear();
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('composes consecutive add() calls made in the same tick', () => {
@@ -595,5 +596,33 @@ describe('useAnnotations (React) — storage identity', () => {
 
     expect(getItem.mock.calls.length).toBeGreaterThan(readsAfterMount);
     expect(result.current.annotations.map((annotation) => annotation.id)).toEqual(['b1']);
+  });
+});
+
+describe('useAnnotations (React) — key change and clear', () => {
+  it('never returns the previous key list in the render that carries the new key', () => {
+    const storage = memoryStorage();
+    storage.setItem('a', storedAnnotation('a1'));
+    const seen: [string, string[]][] = [];
+    const { rerender } = renderHook(
+      ({ key }) => {
+        const r = useAnnotations({ key, storage });
+        seen.push([key, r.annotations.map((a) => a.id)]);
+        return r;
+      },
+      { initialProps: { key: 'a' } },
+    );
+    rerender({ key: 'b' });
+    expect(seen.filter(([k]) => k === 'b').every(([, ids]) => ids.length === 0)).toBe(true);
+  });
+
+  it('clear() on an empty list neither notifies nor touches storage', () => {
+    const storage = memoryStorage();
+    const removeItem = vi.spyOn(storage, 'removeItem');
+    const onChange = vi.fn();
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }));
+    act(() => result.current.clear());
+    expect(onChange).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
   });
 });

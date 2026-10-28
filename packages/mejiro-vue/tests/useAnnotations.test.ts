@@ -2,7 +2,7 @@
 
 import { parseAnnotations, serializeAnnotations } from '@libraz/mejiro';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type App, createApp, defineComponent, nextTick, ref } from 'vue';
+import { type App, createApp, defineComponent, isProxy, nextTick, ref } from 'vue';
 import type { AnnotationsStorage } from '../src/useAnnotations.js';
 import { useAnnotations } from '../src/useAnnotations.js';
 
@@ -453,6 +453,40 @@ describe('useAnnotations (Vue) — key changes', () => {
 
     expect(storedIds(storage, 'b')).toEqual(['b1', 'b2']);
     expect(storedIds(storage, 'a')).toEqual(['a1']);
+    unmount();
+  });
+});
+
+describe('useAnnotations (Vue) — plain payloads and clear', () => {
+  const range = {
+    chapter: 0,
+    start: { paragraph: 0, charIndex: 0 },
+    end: { paragraph: 0, charIndex: 1 },
+  };
+
+  it('passes structured-cloneable lists to onChange after add, update and remove', () => {
+    const lists: unknown[] = [];
+    const { result, unmount } = withSetup(() =>
+      useAnnotations({ key: 'k', storage: memoryStorage(), onChange: (l) => lists.push(l) }),
+    );
+    result.add({ ...range, id: 'a' });
+    result.add({ ...range, id: 'b' });
+    result.update('a', { note: 'n' });
+    result.remove('b');
+    expect(lists).toHaveLength(4);
+    for (const list of lists) expect(() => structuredClone(list)).not.toThrow();
+    for (const el of result.annotations.value) expect(isProxy(el)).toBe(false);
+    unmount();
+  });
+
+  it('clear() on an empty list neither notifies nor touches storage', () => {
+    const storage = memoryStorage();
+    const removeItem = vi.spyOn(storage, 'removeItem');
+    const onChange = vi.fn();
+    const { result, unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onChange }));
+    result.clear();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(removeItem).not.toHaveBeenCalled();
     unmount();
   });
 });

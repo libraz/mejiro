@@ -1,5 +1,6 @@
 import type { AnchorRect, ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
+import { type PageNumberDisplay, pageNumberFor } from '@libraz/mejiro/render';
 import {
   computed,
   defineComponent,
@@ -66,6 +67,11 @@ export const MejiroScrollView = defineComponent({
      * `useMultiImageOverlay`'s `currentImages` provides one on every change.
      */
     images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
+    /**
+     * Which pages print their page number in the running head, by the same
+     * rule as the paginated reader. @defaultValue 'both'
+     */
+    pageNumbers: { type: String as PropType<PageNumberDisplay>, default: 'both' },
   },
   emits: {
     /**
@@ -252,7 +258,11 @@ export const MejiroScrollView = defineComponent({
                 h('div', { class: 'mejiro-reader-page-rule' }),
                 h('div', { class: 'mejiro-reader-page-header' }, [
                   h('span', { class: 'mejiro-reader-page-header-title' }),
-                  h('span', { class: 'mejiro-reader-page-header-num' }, String(i + 1)),
+                  h(
+                    'span',
+                    { class: 'mejiro-reader-page-header-num' },
+                    String(pageNumberFor(props.pageNumbers, i) ?? ''),
+                  ),
                 ]),
                 h('div', { class: 'mejiro-reader-page-viewport' }, [
                   h(

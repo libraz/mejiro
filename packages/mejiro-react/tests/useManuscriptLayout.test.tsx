@@ -251,4 +251,46 @@ describe('useManuscriptLayout (React)', () => {
     await waitFor(() => expect(result.current.layout).toBe(l1));
     expect(bookB.layoutManuscript).toHaveBeenCalledTimes(1);
   });
+
+  it('lays out once for an inline chapter literal recreated on every render', async () => {
+    const book = mockBook();
+    const surfaceEl = document.createElement('div');
+    const { result, rerender } = renderHook(
+      ({ tick }: { tick: number }) => {
+        void tick;
+        const surface = useRef<HTMLElement | null>(surfaceEl);
+        return useManuscriptLayout(book, { id: 'c1', title: 'T', body: 'B' }, surface, {
+          enableResize: false,
+        });
+      },
+      { initialProps: { tick: 0 } },
+    );
+    await waitFor(() => expect(result.current.layout).not.toBeNull());
+
+    rerender({ tick: 1 });
+    rerender({ tick: 2 });
+    await act(async () => {});
+
+    expect(book.layoutManuscript).toHaveBeenCalledTimes(1);
+  });
+
+  it('lays out again when the chapter body changes in a new object', async () => {
+    const book = mockBook();
+    const surfaceEl = document.createElement('div');
+    const { result, rerender } = renderHook(
+      ({ body }: { body: string }) => {
+        const surface = useRef<HTMLElement | null>(surfaceEl);
+        return useManuscriptLayout(book, { id: 'c1', title: 'T', body }, surface, {
+          enableResize: false,
+        });
+      },
+      { initialProps: { body: 'one' } },
+    );
+    await waitFor(() => expect(result.current.layout).not.toBeNull());
+
+    rerender({ body: 'two' });
+
+    await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(book.layoutManuscript).mock.calls[1][0].chapters[0].body).toBe('two');
+  });
 });

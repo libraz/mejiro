@@ -38,7 +38,9 @@ export interface UseAnnotationsOptions {
    * every render is safe — only `key` triggers a re-hydration.
    */
   storage?: AnnotationsStorage;
-  /** Throttle ms between writes. @defaultValue 250 */
+  /**
+   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and unmount. @defaultValue 250
+   */
   throttleMs?: number;
   /**
    * Called immediately after each mutation (`add` / `remove` / `update` /
@@ -90,35 +92,46 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const { key, throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const [annotations, setAnnotations] = useState<readonly Annotation[]>(() =>
-    readStorage(storage, key, parseSorted, []),
-  );
   const storageRef = useRef(storage);
   storageRef.current = storage;
+
+  // The list is kept with the key it was read for, so a key change is
+  // re-hydrated in the same render instead of one commit late.
+  const [hydrated, setHydrated] = useState<{ key: string; list: readonly Annotation[] }>(() => ({
+    key,
+    list: readStorage(storage, key, parseSorted, []),
+  }));
+  let annotations = hydrated.list;
 
   // Mirrors the latest list so mutations can derive the next one outside the
   // state updater — updaters must stay pure (they run twice in StrictMode).
   const annotationsRef = useRef(annotations);
+  if (hydrated.key !== key) {
+    annotations = readStorage(storage, key, parseSorted, []);
+    annotationsRef.current = annotations;
+    setHydrated({ key, list: annotations });
+  }
 
-  const applyNext = useCallback((next: readonly Annotation[]) => {
-    annotationsRef.current = next;
-    setAnnotations(next);
-  }, []);
+  const applyNext = useCallback(
+    (next: readonly Annotation[]) => {
+      annotationsRef.current = next;
+      setHydrated({ key, list: next });
+    },
+    [key],
+  );
 
   const pendingRef = useRef<ReturnType<typeof createPendingWrite> | null>(null);
   if (!pendingRef.current) pendingRef.current = createPendingWrite();
   const pending = pendingRef.current;
 
-  // Closing the tab mid-throttle must not lose the last mutation.
+  // Closing the tab mid-debounce must not lose the last mutation.
   useEffect(() => flushOnPageHide(pending.flush), [pending]);
 
-  // Re-hydrate when the key changes (different book). Unmounting or switching
-  // book mid-throttle must not lose the last mutation, so the pending write —
-  // which targets the key it was scheduled under — is flushed on cleanup.
-  useEffect(() => {
-    applyNext(readStorage(storageRef.current, key, parseSorted, []));
-    return pending.flush;
-  }, [key, applyNext, pending]);
+  // Unmounting or switching book mid-debounce must not lose the last mutation,
+  // so the pending write — which targets the key it was scheduled under — is
+  // flushed on cleanup.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` is the trigger — each key change runs the previous cleanup.
+  useEffect(() => pending.flush, [key, pending]);
 
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
@@ -179,6 +192,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   );
 
   const clear = useCallback(() => {
+    if (annotationsRef.current.length === 0) return;
     applyNext([]);
     pending.cancel();
     removeStorage(storageRef.current, key);

@@ -127,6 +127,38 @@ describe('useManuscriptLayout (Vue)', () => {
     expect(result.current.pageWidth.value).toBe(0);
   });
 
+  it('re-lays out exactly once with the new text when the chapter body is mutated in place', async () => {
+    const book = mockBook();
+    const chapter = ref<ManuscriptChapter | null>({ id: 'c1', title: 'T', body: 'one' });
+    const surface = ref(document.createElement('div'));
+    harness(() => useManuscriptLayout(book, chapter, surface));
+    await nextTick();
+    await nextTick();
+    expect(book.layoutManuscript).toHaveBeenCalledTimes(1);
+
+    (chapter.value as ManuscriptChapter).body = 'two';
+    await nextTick();
+    await nextTick();
+
+    expect(book.layoutManuscript).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(book.layoutManuscript).mock.calls[1][0].chapters[0].body).toBe('two');
+  });
+
+  it('does not re-lay out when the chapter is replaced by an equal object', async () => {
+    const book = mockBook();
+    const chapter = shallowRef<ManuscriptChapter | null>({ id: 'c1', title: 'T', body: 'B' });
+    const surface = ref(document.createElement('div'));
+    harness(() => useManuscriptLayout(book, chapter, surface));
+    await nextTick();
+    await nextTick();
+
+    chapter.value = { id: 'c1', title: 'T', body: 'B' };
+    await nextTick();
+    await nextTick();
+
+    expect(book.layoutManuscript).toHaveBeenCalledTimes(1);
+  });
+
   it('honors a reactive dialect option', async () => {
     const book = mockBook();
     const surfaceEl = document.createElement('div');

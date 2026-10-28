@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 import { toError } from './errors.js';
+import { useRequestToken } from './useRequestToken.js';
 
 /** Page dimensions as returned by {@link MejiroBook.computePageSize}. */
 type SurfacePageSize = ReturnType<MejiroBook['computePageSize']>;
@@ -67,7 +68,7 @@ interface SurfaceBox {
  * `source` out against `surface`, once per source change, and re-flows when
  * the surface's client box changes.
  *
- * The observer is keyed on the surface and the resize options only, so a
+ * The observer is keyed on the surface element and the resize options only, so a
  * source change never re-creates it. An observation reporting the box the
  * current layout was measured with is skipped, so mounting or switching the
  * source lays out exactly once. A failed layout of a current request goes to
@@ -87,9 +88,16 @@ export function useSurfaceLayout(
   const [contentHeight, setContentHeight] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
 
+  // The attached element, as state: a surface that mounts or is replaced after
+  // the first effect re-keys the layout and the observer.
+  const [element, setElement] = useState<HTMLElement | null>(surface.current);
+  useLayoutEffect(() => {
+    if (surface.current !== element) setElement(surface.current);
+  });
+
   const layoutRef = useRef<ChapterLayout | null>(null);
   layoutRef.current = layout;
-  const requestIdRef = useRef(0);
+  const requests = useRequestToken();
   const pendingRestore = useRef<InChapterAnchor | null>(null);
   const measuredBoxRef = useRef<SurfaceBox | null>(null);
 
@@ -101,8 +109,8 @@ export function useSurfaceLayout(
     async (opts: { blank?: boolean } = {}) => {
       const blank = opts.blank ?? true;
       const o = optionsRef.current;
-      const requestId = ++requestIdRef.current;
-      const el = surface.current;
+      const requestId = requests.begin();
+      const el = element;
       if (!(source && el)) {
         measuredBoxRef.current = null;
         setLayout(null);
@@ -127,18 +135,18 @@ export function useSurfaceLayout(
         setContentHeight(dims.contentHeight);
         const t0 = performance.now();
         const next = await source.layout();
-        if (requestId !== requestIdRef.current) return;
+        if (!requests.isCurrent(requestId)) return;
         layoutRef.current = next;
         setLayout(next);
         setElapsedMs(performance.now() - t0);
       } catch (err) {
-        if (requestId !== requestIdRef.current) return;
+        if (!requests.isCurrent(requestId)) return;
         const handler = optionsRef.current.onError;
         if (!handler) throw err;
         handler(toError(err));
       }
     },
-    [source, surface],
+    [source, element, requests],
   );
 
   const recomputeRef = useRef(recompute);
@@ -152,7 +160,7 @@ export function useSurfaceLayout(
   // previous source can never be rendered under the new one.
   // biome-ignore lint/correctness/useExhaustiveDependencies: recompute changes exactly when the source changes.
   useLayoutEffect(() => {
-    requestIdRef.current++;
+    requests.invalidate();
     pendingRestore.current = null;
     setLayout(null);
     setPageWidth(0);
@@ -164,9 +172,9 @@ export function useSurfaceLayout(
   useEffect(() => {
     recompute().catch(() => {});
     return () => {
-      requestIdRef.current++;
+      requests.invalidate();
     };
-  }, [recompute]);
+  }, [recompute, requests]);
 
   useLayoutEffect(() => {
     const anchor = pendingRestore.current;
@@ -179,7 +187,7 @@ export function useSurfaceLayout(
   // Size-driven re-flow, as a fresh layout that keeps the current one on screen.
   useEffect(() => {
     if (!enableResize) return;
-    const el = surface.current;
+    const el = element;
     if (!el) return;
 
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -230,7 +238,7 @@ export function useSurfaceLayout(
       window.removeEventListener('resize', onWindowResize);
       clear();
     };
-  }, [surface, enableResize, resizeDebounce, trigger]);
+  }, [element, enableResize, resizeDebounce, trigger]);
 
   return { layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore };
 }

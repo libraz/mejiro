@@ -15,6 +15,8 @@ export {
   packPageLines,
 } from './measures.js';
 export { buildRenderPage } from './page.js';
+export type { PageNumberDisplay } from './page-number.js';
+export { pageNumberFor } from './page-number.js';
 export type { InlineRenderNode, InlineRenderTag } from './segment-descriptor.js';
 export { segmentToInlineNode } from './segment-descriptor.js';
 export type { RenderEpubStaticOptions, StaticChapter } from './static.js';

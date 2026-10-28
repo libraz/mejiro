@@ -32,7 +32,9 @@ export interface UseReadingPositionOptions {
    * SSR consumers can omit this and the hook will fall back to in-memory.
    */
   storage?: ReadingPositionStorage;
-  /** Throttle ms between writes. @defaultValue 250 */
+  /**
+   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and unmount. @defaultValue 250
+   */
   throttleMs?: number;
   /**
    * Called immediately after `save()` (with the new anchor) or `clear()`
@@ -46,7 +48,7 @@ export interface UseReadingPositionOptions {
 export interface UseReadingPositionReturn {
   /** Most recently persisted position, or `null` if none. */
   position: ReadingPositionValue | null;
-  /** Persist a new position (throttled). */
+  /** Persist a new position (debounced by `throttleMs`). */
   save(next: ReadingPositionValue): void;
   /** Remove the persisted position. */
   clear(): void;
@@ -54,7 +56,7 @@ export interface UseReadingPositionReturn {
 
 /**
  * Persistence helper for reader state. Returns the saved anchor and a
- * throttled saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
+ * debounced saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
  * {@link MejiroReaderHandle.subscribe} for exact reflow-safe restore.
  *
  * ```tsx
@@ -83,33 +85,39 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
   const { key, throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const [position, setPosition] = useState<ReadingPositionValue | null>(() =>
-    readStorage(storage, key, parseReadingPosition, null),
-  );
   const storageRef = useRef(storage);
   storageRef.current = storage;
+
+  // The value is kept with the key it was read for, so a key change is
+  // re-hydrated in the same render instead of one commit late.
+  const [hydrated, setHydrated] = useState<{ key: string; value: ReadingPositionValue | null }>(
+    () => ({ key, value: readStorage(storage, key, parseReadingPosition, null) }),
+  );
+  let position = hydrated.value;
+  if (hydrated.key !== key) {
+    position = readStorage(storage, key, parseReadingPosition, null);
+    setHydrated({ key, value: position });
+  }
 
   const pendingRef = useRef<ReturnType<typeof createPendingWrite> | null>(null);
   if (!pendingRef.current) pendingRef.current = createPendingWrite();
   const pending = pendingRef.current;
 
-  // Closing the tab mid-throttle must not lose the last save().
+  // Closing the tab mid-debounce must not lose the last save().
   useEffect(() => flushOnPageHide(pending.flush), [pending]);
 
-  // Re-hydrate when the key changes (different book). Unmounting or switching
-  // book mid-throttle must not lose the last save(), so the pending write —
-  // which targets the key it was scheduled under — is flushed on cleanup.
-  useEffect(() => {
-    setPosition(readStorage(storageRef.current, key, parseReadingPosition, null));
-    return pending.flush;
-  }, [key, pending]);
+  // Unmounting or switching book mid-debounce must not lose the last save(), so
+  // the pending write — which targets the key it was scheduled under — is
+  // flushed on cleanup.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `key` is the trigger — each key change runs the previous cleanup.
+  useEffect(() => pending.flush, [key, pending]);
 
   const onChangeRef = useRef(options.onChange);
   onChangeRef.current = options.onChange;
 
   const save = useCallback(
     (next: ReadingPositionValue) => {
-      setPosition(next);
+      setHydrated({ key, value: next });
       const currentStorage = storageRef.current;
       if (currentStorage) {
         pending.schedule(() => {
@@ -122,7 +130,7 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
   );
 
   const clear = useCallback(() => {
-    setPosition(null);
+    setHydrated({ key, value: null });
     pending.cancel();
     removeStorage(storageRef.current, key);
     onChangeRef.current?.(null);

@@ -90,3 +90,89 @@ describe('composable cleanup in a bare effectScope', () => {
     expect(spread?.spreadIdx.value).toBe(0);
   });
 });
+
+describe('layout composables abandon an in-flight layout when the scope stops', () => {
+  /** A promise settled from outside. */
+  function deferred<T>() {
+    let resolve: (value: T) => void = () => {};
+    let reject: (error: Error) => void = () => {};
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('useChapterLayout assigns nothing and reports no error after the scope stops', async () => {
+    vi.stubGlobal('ResizeObserver', StubResizeObserver);
+    const pending = deferred<ChapterLayout | null>();
+    const book = stubBook();
+    vi.mocked(book.layoutChapter).mockReturnValue(pending.promise);
+    const onError = vi.fn();
+    const epub = shallowRef({ chapters: [{ title: 'c' }] } as unknown as EpubBook);
+    const scope = effectScope();
+    const state = scope.run(() =>
+      useChapterLayout(book, epub, ref(0), ref(document.createElement('div')), { onError }),
+    );
+    await nextTick();
+    expect(book.layoutChapter).toHaveBeenCalledTimes(1);
+
+    scope.stop();
+    pending.resolve(mockLayout());
+    await pending.promise;
+    await nextTick();
+
+    expect(state?.layout.value).toBeNull();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('useChapterLayout reports no error for a layout that fails after the scope stops', async () => {
+    vi.stubGlobal('ResizeObserver', StubResizeObserver);
+    const pending = deferred<ChapterLayout | null>();
+    const book = stubBook();
+    vi.mocked(book.layoutChapter).mockReturnValue(pending.promise);
+    const onError = vi.fn();
+    const epub = shallowRef({ chapters: [{ title: 'c' }] } as unknown as EpubBook);
+    const scope = effectScope();
+    scope.run(() =>
+      useChapterLayout(book, epub, ref(0), ref(document.createElement('div')), { onError }),
+    );
+    await nextTick();
+
+    scope.stop();
+    pending.reject(new Error('late failure'));
+    await pending.promise.catch(() => {});
+    await nextTick();
+
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it('useManuscriptLayout assigns nothing and skips restorePosition after the scope stops', async () => {
+    vi.stubGlobal('ResizeObserver', StubResizeObserver);
+    const pending = deferred<Map<string, ChapterLayout>>();
+    const book = stubBook();
+    vi.mocked(book.layoutManuscript).mockReturnValue(pending.promise);
+    const restorePosition = vi.fn();
+    const scope = effectScope();
+    const state = scope.run(() =>
+      useManuscriptLayout(
+        book,
+        ref({ id: 'c1', title: 'T', body: 'B' }),
+        ref(document.createElement('div')),
+        { restorePosition },
+      ),
+    );
+    await nextTick();
+    expect(book.layoutManuscript).toHaveBeenCalledTimes(1);
+
+    scope.stop();
+    pending.resolve(new Map([['c1', mockLayout()]]));
+    await pending.promise;
+    await nextTick();
+
+    expect(state?.layout.value).toBeNull();
+    expect(restorePosition).not.toHaveBeenCalled();
+  });
+});

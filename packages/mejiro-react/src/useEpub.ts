@@ -2,6 +2,7 @@ import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
+import { useRequestToken } from './useRequestToken.js';
 
 /** Options for {@link useEpub}. */
 export interface UseEpubOptions {
@@ -56,7 +57,7 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   const [epub, setEpub] = useState<EpubBook | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
-  const requestIdRef = useRef(0);
+  const requests = useRequestToken();
 
   const onLoadRef = useRef(options.onLoad);
   onLoadRef.current = options.onLoad;
@@ -70,27 +71,30 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   limitsRef.current = options.limits;
 
   /** Parses whatever `read` yields; every failure lands in `error` and `onError` once. */
-  const load = useCallback(async (read: () => Promise<ArrayBuffer>): Promise<EpubBook | null> => {
-    const requestId = ++requestIdRef.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const book = await parseEpub(await read(), { limits: limitsRef.current });
-      if (requestId !== requestIdRef.current) return null;
-      setEpub(book);
-      onLoadRef.current?.(book);
-      return book;
-    } catch (err) {
-      if (requestId === requestIdRef.current) {
-        const nextError = toError(err);
-        setError(nextError);
-        onErrorRef.current?.(nextError);
+  const load = useCallback(
+    async (read: () => Promise<ArrayBuffer>): Promise<EpubBook | null> => {
+      const requestId = requests.begin();
+      setLoading(true);
+      setError(null);
+      try {
+        const book = await parseEpub(await read(), { limits: limitsRef.current });
+        if (!requests.isCurrent(requestId)) return null;
+        setEpub(book);
+        onLoadRef.current?.(book);
+        return book;
+      } catch (err) {
+        if (requests.isCurrent(requestId)) {
+          const nextError = toError(err);
+          setError(nextError);
+          onErrorRef.current?.(nextError);
+        }
+        return null;
+      } finally {
+        if (requests.isCurrent(requestId)) setLoading(false);
       }
-      return null;
-    } finally {
-      if (requestId === requestIdRef.current) setLoading(false);
-    }
-  }, []);
+    },
+    [requests],
+  );
 
   const loadBuffer = useCallback((buffer: ArrayBuffer) => load(async () => buffer), [load]);
 
@@ -114,28 +118,23 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   useEffect(() => {
     if (!defaultUrl) return;
     void loadUrl(defaultUrl);
-    const requestId = requestIdRef.current;
+    const requestId = requests.current();
     return () => {
-      if (requestIdRef.current !== requestId) return;
-      requestIdRef.current++;
+      if (requests.current() !== requestId) return;
+      requests.invalidate();
       setLoading(false);
     };
-  }, [defaultUrl, loadUrl]);
+  }, [defaultUrl, loadUrl, requests]);
 
-  // Nothing settles into an unmounted hook.
-  useEffect(
-    () => () => {
-      requestIdRef.current++;
+  const replaceEpub = useCallback(
+    (book: EpubBook | null) => {
+      requests.invalidate();
+      setLoading(false);
+      setError(null);
+      setEpub(book);
     },
-    [],
+    [requests],
   );
-
-  const replaceEpub = useCallback((book: EpubBook | null) => {
-    requestIdRef.current++;
-    setLoading(false);
-    setError(null);
-    setEpub(book);
-  }, []);
 
   return { epub, loading, error, loadBuffer, loadFile, loadUrl, setEpub: replaceEpub };
 }

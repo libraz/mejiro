@@ -122,6 +122,24 @@ describe('useReadingPosition (React)', () => {
     expect(result.current.position).toEqual({ chapter: 2, paragraph: 2, charIndex: 0 });
   });
 
+  it('never returns the previous key position in the render that carries the new key', () => {
+    const storage = memoryStorage();
+    storage.setItem('a', JSON.stringify({ version: 2, chapter: 1, paragraph: 1, charIndex: 0 }));
+    const seen: [string, number | undefined][] = [];
+    const { rerender } = renderHook(
+      ({ key }) => {
+        const r = useReadingPosition({ key, storage });
+        seen.push([key, r.position?.chapter]);
+        return r;
+      },
+      { initialProps: { key: 'a' } },
+    );
+    rerender({ key: 'b' });
+    expect(seen.filter(([k]) => k === 'b').every(([, chapter]) => chapter === undefined)).toBe(
+      true,
+    );
+  });
+
   it('migrates legacy {chapter, spreadIdx} payloads to chapter start', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const storage = memoryStorage();

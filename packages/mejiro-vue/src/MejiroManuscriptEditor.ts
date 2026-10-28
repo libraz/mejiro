@@ -19,6 +19,7 @@ import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
 import { MejiroReader, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
 import { mergeDefined } from './persistence.js';
+import { createPackageIdentifier } from './useEpubProject.js';
 import { useManuscriptDraft } from './useManuscriptDraft.js';
 
 /** One chapter of the manuscript being edited. */
@@ -306,40 +307,45 @@ export const MejiroManuscriptEditor = defineComponent({
     }
 
     // One package identifier per editor instance, so re-exports stay one publication.
-    const identifier = `urn:uuid:${crypto.randomUUID()}`;
+    const identifier = createPackageIdentifier();
+
+    /** Shows `error` in the panel and emits it as `error`. */
+    function reportError(error: Error): void {
+      exportError.value = error;
+      emit('error', error);
+    }
+
+    /** Removes the error banner once a later export has succeeded. */
+    function clearError(): void {
+      exportError.value = null;
+    }
 
     // Every way an export can fail — cover bytes, asset resolution, packaging —
     // reports through the same channel the panel already uses for autosave.
     async function exportEpub(): Promise<void> {
-      await withErrorReporting(
-        async () => {
-          const project = EpubProject.fromManuscript({
-            metadata: { title: title.value, author: author.value || undefined, identifier },
-            dialect: props.dialect,
-            chapters: chapters.value.map((chapter) => ({
-              id: chapter.id,
-              title: chapter.title || messages.value.untitled,
-              body: chapter.body,
-            })),
+      await withErrorReporting(async () => {
+        const project = EpubProject.fromManuscript({
+          metadata: { title: title.value, author: author.value || undefined, identifier },
+          dialect: props.dialect,
+          chapters: chapters.value.map((chapter) => ({
+            id: chapter.id,
+            title: chapter.title || messages.value.untitled,
+            body: chapter.body,
+          })),
+        });
+        if (cover.value) {
+          project.setCover({
+            href: coverAssetHref(cover.value),
+            mediaType: cover.value.type || undefined,
+            data: await cover.value.arrayBuffer(),
           });
-          if (cover.value) {
-            project.setCover({
-              href: coverAssetHref(cover.value),
-              mediaType: cover.value.type || undefined,
-              data: await cover.value.arrayBuffer(),
-            });
-          }
-          const resolver = props.assetResolver;
-          const buffer = await project.export(resolver ? { assetResolver: resolver } : undefined);
-          exportError.value = null;
-          emit('export', buffer);
-          downloadEpub(buffer, `${title.value || 'book'}.epub`);
-        },
-        (error) => {
-          exportError.value = error;
-          emit('error', error);
-        },
-      );
+        }
+        const resolver = props.assetResolver;
+        const buffer = await project.export(resolver ? { assetResolver: resolver } : undefined);
+        clearError();
+        emit('export', buffer);
+        downloadEpub(buffer, `${title.value || 'book'}.epub`);
+      }, reportError);
     }
 
     /** Root attributes, including the panel-side switch the stylesheet reads. */
@@ -370,6 +376,7 @@ export const MejiroManuscriptEditor = defineComponent({
               fonts: props.fonts ?? undefined,
               chapter: selected.value,
               'onChapter-change': draft.setSelected,
+              onError: reportError,
               enableImageOverlay: false,
             },
             // Custom preview settings controls, the Vue counterpart of the
@@ -416,7 +423,11 @@ export const MejiroManuscriptEditor = defineComponent({
               accept: 'image/*',
               hidden: true,
               onChange: (event: Event) => {
-                setCover((event.target as HTMLInputElement).files?.[0] ?? null);
+                const input = event.target as HTMLInputElement;
+                const file = input.files?.[0] ?? null;
+                // Cleared so picking the same path again still fires `change`.
+                input.value = '';
+                setCover(file);
               },
             }),
           ]),
@@ -440,7 +451,11 @@ export const MejiroManuscriptEditor = defineComponent({
                     onClick: () => draft.setSelected(index),
                     onDragstart: (event: DragEvent) => {
                       draggingIndex.value = index;
-                      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+                      if (event.dataTransfer) {
+                        event.dataTransfer.effectAllowed = 'move';
+                        // Firefox starts a drag only when the transfer carries data.
+                        event.dataTransfer.setData('text/plain', chapter.id);
+                      }
                     },
                     onDragend: () => {
                       draggingIndex.value = null;

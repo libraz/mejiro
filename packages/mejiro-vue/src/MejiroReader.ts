@@ -11,6 +11,7 @@ import { DEFAULT_BOOK_OPTIONS, DEFAULT_PAGE_GEOMETRY } from '@libraz/mejiro/book
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
 import type { EpubBook, EpubParseLimits, ManuscriptDialect } from '@libraz/mejiro/epub';
 import { manuscriptToEpubBook } from '@libraz/mejiro/epub';
+import { type PageNumberDisplay, pageNumberFor } from '@libraz/mejiro/render';
 import {
   computed,
   defineComponent,
@@ -23,6 +24,7 @@ import {
   type VNode,
   watch,
 } from 'vue';
+import { bookIdentity, resolveLayoutEpub } from './bookIdentity.js';
 import { toError } from './errors.js';
 import {
   format as formatMessage,
@@ -191,18 +193,24 @@ interface AnchorTarget {
  * Sole owner of the pending `goToAnchor` request; the React MejiroReader carries
  * an identical copy. Every request settles exactly once: applied, unresolvable
  * (its chapter or position does not exist in the shown book), superseded by a
- * newer request, or disposed. A request made before a book is shown waits for one.
+ * newer request, or disposed. A request made before a book is shown waits for one;
+ * one that moves the spread settles on the next update, once the spread is shown.
  */
 function createAnchorResolver(nav: {
   goToChapter: (chapter: number) => void;
-  goToPage: (pageIdx: number) => void;
+  /** Shows the spread holding `pageIdx`; returns whether that changes the shown spread. */
+  goToPage: (pageIdx: number) => boolean;
 }): {
   request: (anchor: ReadingAnchor, target: AnchorTarget) => Promise<void>;
   update: (target: AnchorTarget) => void;
   dispose: () => void;
 } {
-  let pending: { anchor: ReadingAnchor; resolve: () => void; chapterRequested: boolean } | null =
-    null;
+  let pending: {
+    anchor: ReadingAnchor;
+    resolve: () => void;
+    chapterRequested: boolean;
+    moved: boolean;
+  } | null = null;
   const settle = (): void => {
     const settled = pending;
     pending = null;
@@ -211,6 +219,10 @@ function createAnchorResolver(nav: {
   const update = (target: AnchorTarget): void => {
     const current = pending;
     if (!(current && target.book)) return;
+    if (current.moved) {
+      settle();
+      return;
+    }
     const { anchor } = current;
     if (!(anchor.chapter >= 0 && anchor.chapter < target.book.chapters.length)) {
       settle();
@@ -228,14 +240,17 @@ function createAnchorResolver(nav: {
       paragraph: anchor.paragraph,
       charIndex: anchor.charIndex,
     });
-    if (loc) nav.goToPage(loc.pageIdx);
+    if (loc && nav.goToPage(loc.pageIdx)) {
+      current.moved = true;
+      return;
+    }
     settle();
   };
   return {
     request: (anchor, target) =>
       new Promise<void>((resolve) => {
         settle();
-        pending = { anchor, resolve, chapterRequested: false };
+        pending = { anchor, resolve, chapterRequested: false, moved: false };
         update(target);
       }),
     update,
@@ -259,11 +274,8 @@ export type MejiroReaderMode = 'paginated' | 'scroll';
  */
 export type MejiroSpreadMode = 'double' | 'single' | 'auto';
 
-/**
- * Which page of a spread prints its page number: `'both'` (right = odd,
- * left = even), only `'right'`, only `'left'`, or `'none'`.
- */
-export type PageNumberDisplay = 'both' | 'right' | 'left' | 'none';
+/** Which page of a spread prints its page number (`'both'`, `'right'`, `'left'` or `'none'`). */
+export type { PageNumberDisplay };
 
 /**
  * How the reader sizes itself inside its container.
@@ -546,7 +558,8 @@ export const MejiroReader = defineComponent({
     enableSurfaceTap: { type: Boolean, default: true },
     /**
      * Built-in locale for UI strings (`'en'` / `'ja'`). Pair with `messages`
-     * to override individual strings. @defaultValue 'en'
+     * to override individual strings. Defaults to the nearest `MejiroI18nProvider`
+     * locale, or `'en'` without one.
      */
     locale: { type: String as PropType<MejiroLocale>, default: undefined },
     /**
@@ -676,7 +689,9 @@ export const MejiroReader = defineComponent({
       const surface = surfaceEl.value;
       if (!surface) return;
       const rect = surface.getBoundingClientRect();
-      autoSingle.value = rect.width < rect.height;
+      // A `fit="width"` surface derives its height from the current mode, so
+      // its width is judged against the viewport height the host supplies.
+      autoSingle.value = rect.width < (props.fit === 'width' ? window.innerHeight : rect.height);
     }
     function onKey(e: KeyboardEvent): void {
       if (e.key === 'Escape' && settingsOpen.value) {
@@ -693,11 +708,13 @@ export const MejiroReader = defineComponent({
     function stopAutoSingleObserver(): void {
       resizeObserver?.disconnect();
       resizeObserver = null;
+      window.removeEventListener('resize', updateAutoSingle);
     }
     function startAutoSingleObserver(): void {
       stopAutoSingleObserver();
       if (props.spreadMode !== 'auto') return;
       updateAutoSingle();
+      window.addEventListener('resize', updateAutoSingle);
       if (typeof ResizeObserver === 'undefined') return;
       const surface = surfaceEl.value;
       if (!surface) return;
@@ -713,6 +730,12 @@ export const MejiroReader = defineComponent({
       (next) => {
         if (next === 'auto') startAutoSingleObserver();
         else stopAutoSingleObserver();
+      },
+    );
+    watch(
+      () => props.fit,
+      () => {
+        if (props.spreadMode === 'auto') updateAutoSingle();
       },
     );
     const effectiveSingle = computed(
@@ -770,6 +793,11 @@ export const MejiroReader = defineComponent({
     const effEnableSettings = computed(() => props.enableSettings ?? !props.bare);
     const effEnableStats = computed(() => props.enableStats ?? !props.bare);
     const effEnablePageIndicator = computed(() => props.enablePageIndicator ?? !props.bare);
+    const pageIndicator = (): VNode =>
+      h(MejiroPageIndicator, {
+        current: spreadCtx.spreadIdx.value + 1,
+        total: spreadCtx.totalSpreads.value,
+      });
 
     // Fill any omitted option from the defaults so a host can pass just the
     // fields it cares about (`:options="{ fontSize: 15 }"`) without dropping the
@@ -835,7 +863,6 @@ export const MejiroReader = defineComponent({
         return props.fetchEpub;
       },
       onLoad: (b) => {
-        if (props.chapter == null) chapter.value = 0;
         imageCtx.clearImages();
         emit('load', b);
       },
@@ -848,13 +875,25 @@ export const MejiroReader = defineComponent({
       { flush: 'sync' },
     );
 
-    const activeChapter = computed(() =>
-      clampChapter(props.chapter ?? chapter.value, epub.epub.value),
-    );
     // Book identity: changes on a swap, not on a manuscript content edit.
     const bookKey = computed<unknown>(() =>
-      props.manuscript !== undefined ? MANUSCRIPT_SOURCE : epub.epub.value,
+      props.manuscript !== undefined ? MANUSCRIPT_SOURCE : bookIdentity(epub.epub.value),
     );
+    // `chapter` only counts for the book it was set on, so a swap reads as
+    // chapter 0 in the same step the new book is published: one layout, for it.
+    const chapterBook = shallowRef<unknown>(null);
+    const activeChapter = computed(() =>
+      clampChapter(
+        props.chapter ?? (chapterBook.value === bookKey.value ? chapter.value : 0),
+        epub.epub.value,
+      ),
+    );
+    // The reset is a chapter change the host has not been told about yet.
+    watch([bookKey, activeChapter], ([nextBook, next], [prevBook, prev]) => {
+      if (props.chapter == null && nextBook !== prevBook && next !== prev) {
+        emit('chapter-change', next);
+      }
+    });
     // A controlled source owns the book, so the reader offers no file of its own.
     const filePicker = computed(
       () => props.enableDropZone && props.epub === undefined && props.manuscript === undefined,
@@ -881,7 +920,18 @@ export const MejiroReader = defineComponent({
       },
     };
 
-    const layoutCtx = useChapterLayout(book, epub.epub, activeChapter, surfaceEl, {
+    // An edit outside the shown chapter keeps the layout source as it was.
+    let layoutMemo: ReturnType<typeof resolveLayoutEpub> | null = null;
+    const layoutEpub = computed(() => {
+      layoutMemo = resolveLayoutEpub(
+        layoutMemo,
+        epub.epub.value,
+        bookKey.value,
+        activeChapter.value,
+      );
+      return layoutMemo.epub;
+    });
+    const layoutCtx = useChapterLayout(book, layoutEpub, activeChapter, surfaceEl, {
       pageGeometry: () => resolvedGeometry.value,
       capturePosition: (layout) => positionBridge.capture(layout),
       onError: (err) => emit('error', err),
@@ -1025,19 +1075,20 @@ export const MejiroReader = defineComponent({
       () => props.epub,
       (next, prev) => {
         if (next === undefined) {
-          if (prev !== undefined) {
-            epub.setEpub(null);
-            imageCtx.clearImages();
-            book.clearCache();
-          }
+          if (prev !== undefined) epub.setEpub(null);
           return;
         }
-        if (next === prev) return;
         epub.setEpub(next ?? null);
-        if (props.chapter == null) chapter.value = 0;
+      },
+      { immediate: true },
+    );
+    watch(
+      () => (props.epub ? bookIdentity(props.epub) : props.epub),
+      (next, prev) => {
+        if (next === prev) return;
         imageCtx.clearImages();
         book.clearCache();
-        if (next) emit('load', next);
+        if (props.epub) emit('load', props.epub);
       },
       { immediate: true },
     );
@@ -1048,7 +1099,6 @@ export const MejiroReader = defineComponent({
       () => props.manuscript !== undefined,
       (isManuscript) => {
         if (!isManuscript) return;
-        if (props.chapter == null) chapter.value = 0;
         imageCtx.clearImages();
         book.clearCache();
         if (synthesizedEpub.value) emit('load', synthesizedEpub.value);
@@ -1085,10 +1135,14 @@ export const MejiroReader = defineComponent({
 
     // Controlled spreadIdx → reflow restore: a re-layout resets useSpread to
     // spread 0, so snap back to the controlled index immediately (no turn
-    // animation, which would otherwise flash spread 0 on every resize).
+    // animation, which would otherwise flash spread 0 on every resize). Only a
+    // reflow of the same (book, chapter) restores; a chapter or book change
+    // keeps the reset to 0.
+    let restoreHostSpread = true;
     watch(
       () => layoutCtx.layout.value,
       () => {
+        if (!restoreHostSpread) return;
         const next = props.spreadIdx;
         if (next == null) return;
         if (next === spreadCtx.spreadIdx.value) return;
@@ -1099,7 +1153,10 @@ export const MejiroReader = defineComponent({
     function setChapter(index: number): void {
       const i = clampChapter(index, epub.epub.value);
       if (i === activeChapter.value) return;
-      if (props.chapter == null) chapter.value = i;
+      if (props.chapter == null) {
+        chapter.value = i;
+        chapterBook.value = bookKey.value;
+      }
       emit('chapter-change', i);
     }
 
@@ -1121,10 +1178,18 @@ export const MejiroReader = defineComponent({
     // layout survives until the re-layout replaces it. Recorded synchronously,
     // as each layout lands.
     const layoutOwner = shallowRef<{ chapter: number; book: unknown } | null>(null);
+    let lastLandedOwner: { chapter: number; book: unknown } | null = null;
     watch(
       () => layoutCtx.layout.value,
       (next) => {
-        layoutOwner.value = next ? { chapter: activeChapter.value, book: bookKey.value } : null;
+        const owner = next ? { chapter: activeChapter.value, book: bookKey.value } : null;
+        if (owner) {
+          const previous = lastLandedOwner;
+          restoreHostSpread =
+            !previous || (previous.chapter === owner.chapter && previous.book === owner.book);
+          lastLandedOwner = owner;
+        }
+        layoutOwner.value = owner;
       },
       { flush: 'sync' },
     );
@@ -1141,10 +1206,21 @@ export const MejiroReader = defineComponent({
     });
     const anchorResolver = createAnchorResolver({
       goToChapter: (i) => setChapter(i),
-      goToPage: (pageIdx) => spreadCtx.goTo(spreadCtx.indexOfPage(pageIdx)),
+      goToPage: (pageIdx) => {
+        const target = spreadCtx.indexOfPage(pageIdx);
+        if (target === spreadCtx.spreadIdx.value) return false;
+        spreadCtx.setSpread(target);
+        return true;
+      },
     });
-    watch([() => (epub.loading.value ? null : epub.epub.value), activeChapter, chapterLayout], () =>
-      anchorResolver.update(anchorTarget()),
+    watch(
+      [
+        () => (epub.loading.value ? null : epub.epub.value),
+        activeChapter,
+        chapterLayout,
+        spreadCtx.spreadIdx,
+      ],
+      () => anchorResolver.update(anchorTarget()),
     );
     // Settle any in-flight anchor so awaiting callers never hang.
     onBeforeUnmount(() => anchorResolver.dispose());
@@ -1458,6 +1534,7 @@ export const MejiroReader = defineComponent({
             selectionRects: annotationRects.value.length ? annotationRects.value : undefined,
             spreadIdx: spreadCtx.layoutSpreadIdx.value,
             images: imageCtx.currentImages.value,
+            pageNumbers: props.pageNumbers,
             onImagePointerdown: (id: string, ev: PointerEvent) =>
               imageCtx.onOverlayPointerDown(id, ev),
             onImageResizePointerdown: (id: string, ev: PointerEvent) =>
@@ -1465,14 +1542,11 @@ export const MejiroReader = defineComponent({
             onImageClose: (id: string) => imageCtx.removeImage(id),
           }),
         );
+        if (effEnablePageIndicator.value) children.push(pageIndicator());
       } else if (layoutReady && spreadCtx.spread.value) {
         const spread = spreadCtx.spread.value;
         const currentSpread = spreadCtx.layoutSpreadIdx.value;
-        const rightPage = currentSpread * 2 + 1;
-        const leftPage = currentSpread * 2 + 2;
-        const showLeft = leftPage <= spread.totalPages;
-        const showRightNum = props.pageNumbers === 'both' || props.pageNumbers === 'right';
-        const showLeftNum = props.pageNumbers === 'both' || props.pageNumbers === 'left';
+        const showLeft = currentSpread * 2 + 2 <= spread.totalPages;
         children.push(
           h(
             MejiroSpread,
@@ -1490,11 +1564,13 @@ export const MejiroReader = defineComponent({
               singleSide: spreadCtx.singleSide.value ?? undefined,
               rightHeader: {
                 title: runningTitleRight.value,
-                pageNumber: showRightNum ? rightPage : null,
+                pageNumber: pageNumberFor(props.pageNumbers, currentSpread * 2),
               },
               leftHeader: {
                 title: runningTitleLeft.value,
-                pageNumber: showLeft && showLeftNum ? leftPage : null,
+                pageNumber: showLeft
+                  ? pageNumberFor(props.pageNumbers, currentSpread * 2 + 1)
+                  : null,
               },
               images: imageCtx.currentImages.value,
               onPrev: () => spreadCtx.prev(),
@@ -1515,13 +1591,7 @@ export const MejiroReader = defineComponent({
               selectionRects: annotationRects.value.length ? annotationRects.value : undefined,
             },
             {
-              indicator: () =>
-                effEnablePageIndicator.value
-                  ? h(MejiroPageIndicator, {
-                      current: spreadCtx.spreadIdx.value + 1,
-                      total: spreadCtx.totalSpreads.value,
-                    })
-                  : null,
+              indicator: () => (effEnablePageIndicator.value ? pageIndicator() : null),
             },
           ),
         );

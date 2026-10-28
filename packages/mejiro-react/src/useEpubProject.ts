@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toError } from './errors.js';
 import { mergeDefined, uniqueChapterId } from './persistence.js';
+import { useRequestToken } from './useRequestToken.js';
 
 /** One chapter of the manuscript draft the hook keeps in React state. */
 export interface EpubProjectChapterDraft {
@@ -133,7 +134,7 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
   const [previewBook, setPreviewBook] = useState<EpubBook | null>(null);
   const [previewError, setPreviewError] = useState<Error | null>(null);
   const [previewing, setPreviewing] = useState(false);
-  const previewRequestIdRef = useRef(0);
+  const previewRequest = useRequestToken();
 
   const onPreviewRef = useRef(options.onPreview);
   const onExportRef = useRef(options.onExport);
@@ -179,9 +180,8 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: the project state is read through refs; these values are what schedule a rebuild
   useEffect(() => {
-    const requestId = ++previewRequestIdRef.current;
+    const token = previewRequest.begin();
     const controller = new AbortController();
-    let cancelled = false;
     setPreviewing(true);
     const timer = setTimeout(() => {
       void (async () => {
@@ -189,26 +189,32 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
           const book = await parseEpub(
             await buildProject().export(exportOptions(controller.signal)),
           );
-          if (cancelled || requestId !== previewRequestIdRef.current) return;
+          if (!previewRequest.isCurrent(token)) return;
           setPreviewBook(book);
           setPreviewError(null);
           onPreviewRef.current?.(book);
         } catch (err) {
-          if (!cancelled && requestId === previewRequestIdRef.current) {
-            setPreviewError(toError(err));
-          }
+          if (previewRequest.isCurrent(token)) setPreviewError(toError(err));
         } finally {
-          if (!cancelled && requestId === previewRequestIdRef.current) setPreviewing(false);
+          if (previewRequest.isCurrent(token)) setPreviewing(false);
         }
       })();
     }, options.debounceMs ?? 250);
     return () => {
-      cancelled = true;
-      previewRequestIdRef.current++;
+      previewRequest.invalidate();
       clearTimeout(timer);
       controller.abort();
     };
-  }, [assets, buildProject, chapters, cover, exportOptions, metadata, options.debounceMs]);
+  }, [
+    assets,
+    buildProject,
+    chapters,
+    cover,
+    exportOptions,
+    metadata,
+    options.debounceMs,
+    previewRequest,
+  ]);
 
   const currentChapter = chapters[selectedChapter] ?? chapters[0] ?? null;
 
@@ -386,13 +392,29 @@ function mergeMetadata(
   return next;
 }
 
+/**
+ * Returns a fresh `urn:uuid:` package identifier. Falls back to a
+ * `Math.random` UUID where `crypto.randomUUID` is missing (insecure origins,
+ * Node without a global `crypto`), so setup never throws.
+ */
+export function createPackageIdentifier(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `urn:uuid:${globalThis.crypto.randomUUID()}`;
+  }
+  const uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
+    const digit = Math.floor(Math.random() * 16);
+    return (ch === 'x' ? digit : (digit & 0x3) | 0x8).toString(16);
+  });
+  return `urn:uuid:${uuid}`;
+}
+
 /** Seeds the metadata with an identifier, so every build of one project shares it. */
 function initialMetadata(patch: Partial<EpubProjectMetadata> = {}): EpubProjectMetadata {
   const metadata = mergeDefined<EpubProjectMetadata>(
     { title: '新しい作品', language: 'ja' },
     patch,
   );
-  if (!metadata.identifier?.trim()) metadata.identifier = `urn:uuid:${crypto.randomUUID()}`;
+  if (!metadata.identifier?.trim()) metadata.identifier = createPackageIdentifier();
   return metadata;
 }
 

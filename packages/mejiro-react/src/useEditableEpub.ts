@@ -13,7 +13,9 @@ import {
   type EpubParseLimits,
 } from '@libraz/mejiro/epub';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { markBookIdentity } from './bookIdentity.js';
 import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
+import { useRequestToken } from './useRequestToken.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
@@ -95,7 +97,8 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     chapter: 0,
     paragraph: 0,
   });
-  const requestIdRef = useRef(0);
+  const request = useRequestToken();
+  const exportsInFlightRef = useRef(0);
 
   const onLoadRef = useRef(options.onLoad);
   const onErrorRef = useRef(options.onError);
@@ -116,12 +119,12 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   selectionRef.current = selection;
 
   const loadBufferWithRequest = useCallback(
-    async (buffer: ArrayBuffer, requestId: number): Promise<EditableEpub | null> => {
+    async (buffer: ArrayBuffer, currentRequest: number): Promise<EditableEpub | null> => {
       setLoading(true);
       setError(null);
       try {
         const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
-        if (requestId !== requestIdRef.current) return null;
+        if (!request.isCurrent(currentRequest)) return null;
         const firstParagraph = { chapter: 0, paragraph: 0 };
         editorRef.current = next;
         selectionRef.current = firstParagraph;
@@ -131,36 +134,39 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         onLoadRef.current?.(next);
         return next;
       } catch (err) {
-        if (requestId === requestIdRef.current) {
+        if (request.isCurrent(currentRequest)) {
           const nextError = toError(err);
           setError(nextError);
           onErrorRef.current?.(nextError);
         }
         return null;
       } finally {
-        if (requestId === requestIdRef.current) setLoading(false);
+        if (request.isCurrent(currentRequest)) setLoading(false);
       }
     },
-    [],
+    [request],
   );
 
   const loadBuffer = useCallback(
     async (buffer: ArrayBuffer): Promise<EditableEpub | null> => {
-      const requestId = ++requestIdRef.current;
-      return loadBufferWithRequest(buffer, requestId);
+      const currentRequest = request.begin();
+      return loadBufferWithRequest(buffer, currentRequest);
     },
-    [loadBufferWithRequest],
+    [loadBufferWithRequest, request],
   );
 
   const loadFile = useCallback(
     async (file: File): Promise<EditableEpub | null> => {
-      const requestId = ++requestIdRef.current;
+      const currentRequest = request.begin();
       setLoading(true);
       setError(null);
       try {
-        return await loadBufferWithRequest(await readEpubFile(file, limitsRef.current), requestId);
+        return await loadBufferWithRequest(
+          await readEpubFile(file, limitsRef.current),
+          currentRequest,
+        );
       } catch (err) {
-        if (requestId === requestIdRef.current) {
+        if (request.isCurrent(currentRequest)) {
           const nextError = toError(err);
           setError(nextError);
           onErrorRef.current?.(nextError);
@@ -169,18 +175,18 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         return null;
       }
     },
-    [loadBufferWithRequest],
+    [loadBufferWithRequest, request],
   );
 
   const loadUrl = useCallback(
     async (url: string): Promise<EditableEpub | null> => {
-      const requestId = ++requestIdRef.current;
+      const currentRequest = request.begin();
       setLoading(true);
       setError(null);
       try {
-        return await loadBufferWithRequest(await fetchEpubBuffer(url), requestId);
+        return await loadBufferWithRequest(await fetchEpubBuffer(url), currentRequest);
       } catch (err) {
-        if (requestId === requestIdRef.current) {
+        if (request.isCurrent(currentRequest)) {
           const nextError = toError(err);
           setError(nextError);
           onErrorRef.current?.(nextError);
@@ -189,20 +195,29 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         return null;
       }
     },
-    [loadBufferWithRequest],
+    [loadBufferWithRequest, request],
   );
 
+  // A URL load still in flight when the URL changes or clears is abandoned.
+  const defaultUrl = options.defaultUrl;
   useEffect(() => {
-    if (options.defaultUrl) void loadUrl(options.defaultUrl);
-  }, [options.defaultUrl, loadUrl]);
+    if (!defaultUrl) return;
+    void loadUrl(defaultUrl);
+    const urlRequest = request.current();
+    return () => {
+      if (!request.isCurrent(urlRequest)) return;
+      request.invalidate();
+      setLoading(false);
+    };
+  }, [defaultUrl, loadUrl, request]);
 
   const book = editor?.book ?? null;
   const selectedParagraph =
     book?.chapters[selection.chapter]?.paragraphs[selection.paragraph] ?? null;
   const previewBook = useMemo(() => {
     void revision;
-    return book ? cloneEditableEpubBook(book) : null;
-  }, [book, revision]);
+    return book && editor ? markBookIdentity(cloneEditableEpubBook(book), editor) : null;
+  }, [book, editor, revision]);
   const history = editor?.history ?? null;
 
   const setSelection = useCallback((nextSelection: EditableEpubSelection) => {
@@ -257,6 +272,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     async (exportOptions?: EpubExportOptions): Promise<ArrayBuffer | null> => {
       const current = editorRef.current;
       if (!current) return null;
+      exportsInFlightRef.current++;
       setExporting(true);
       try {
         const buffer = await current.export(
@@ -265,7 +281,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         onExportRef.current?.(buffer);
         return buffer;
       } finally {
-        setExporting(false);
+        setExporting(--exportsInFlightRef.current > 0);
       }
     },
     [],

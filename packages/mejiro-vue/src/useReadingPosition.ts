@@ -36,7 +36,9 @@ export interface UseReadingPositionOptions {
    * SSR consumers can omit this and the composable will fall back to in-memory.
    */
   storage?: ReadingPositionStorage;
-  /** Throttle ms between writes. @defaultValue 250 */
+  /**
+   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and scope dispose. @defaultValue 250
+   */
   throttleMs?: number;
   /**
    * Called immediately after `save()` (with the new anchor) or `clear()`
@@ -50,7 +52,7 @@ export interface UseReadingPositionOptions {
 export interface UseReadingPositionReturn {
   /** Most recently persisted position, or `null` if none. */
   position: Ref<ReadingPositionValue | null>;
-  /** Persist a new position (throttled). */
+  /** Persist a new position (debounced by `throttleMs`). */
   save(next: ReadingPositionValue): void;
   /** Remove the persisted position. */
   clear(): void;
@@ -62,7 +64,7 @@ function unwrapKey(key: Ref<string> | string): string {
 
 /**
  * Persistence helper for reader state. Returns the saved anchor and a
- * throttled saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
+ * debounced saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
  * {@link MejiroReaderHandle.subscribe} for exact reflow-safe restore.
  *
  * Legacy `{ chapter, spreadIdx }` JSON from v0.4 is migrated automatically:
@@ -107,7 +109,7 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
     options.onChange?.(null);
   }
 
-  // Closing the tab or disposing the scope mid-throttle must not lose the last save().
+  // Closing the tab or disposing the scope mid-debounce must not lose the last save().
   const detachPageHide = flushOnPageHide(pending.flush);
   onScopeDispose(() => {
     detachPageHide();

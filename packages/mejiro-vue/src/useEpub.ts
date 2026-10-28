@@ -2,6 +2,7 @@ import type { EpubBook, EpubParseLimits } from '@libraz/mejiro/epub';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { onBeforeUnmount, onMounted, type Ref, shallowRef, type WatchStopHandle, watch } from 'vue';
 import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
+import { createRequestToken } from './useRequestToken.js';
 
 /** Options for {@link useEpub}. */
 export interface UseEpubOptions {
@@ -59,27 +60,27 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
   const epub = shallowRef<EpubBook | null>(null);
   const loading = shallowRef(false);
   const error = shallowRef<Error | null>(null);
-  let requestId = 0;
+  const requests = createRequestToken();
 
   /** Parses whatever `read` yields; every failure lands in `error` and `onError` once. */
   async function load(read: () => Promise<ArrayBuffer>): Promise<EpubBook | null> {
-    const currentRequest = ++requestId;
+    const currentRequest = requests.begin();
     loading.value = true;
     error.value = null;
     try {
       const book = await parseEpub(await read(), { limits: options.limits });
-      if (currentRequest !== requestId) return null;
+      if (!requests.isCurrent(currentRequest)) return null;
       epub.value = book;
       options.onLoad?.(book);
       return book;
     } catch (err) {
-      if (currentRequest === requestId) {
+      if (requests.isCurrent(currentRequest)) {
         error.value = toError(err);
         options.onError?.(error.value);
       }
       return null;
     } finally {
-      if (currentRequest === requestId) loading.value = false;
+      if (requests.isCurrent(currentRequest)) loading.value = false;
     }
   }
 
@@ -105,24 +106,23 @@ export function useEpub(options: UseEpubOptions = {}): UseEpubReturn {
       (url, _previous, onCleanup) => {
         if (!url) return;
         void loadUrl(url);
-        const urlRequest = requestId;
+        const urlRequest = requests.current();
         onCleanup(() => {
-          if (requestId !== urlRequest) return;
-          requestId++;
+          if (requests.current() !== urlRequest) return;
+          requests.invalidate();
           loading.value = false;
         });
       },
       { immediate: true },
     );
   });
-  // Nothing settles into an unmounted component.
+  // Scope disposal invalidates the token, so nothing settles into an unmounted component.
   onBeforeUnmount(() => {
     stopDefaultUrlWatch?.();
-    requestId++;
   });
 
   function setEpub(book: EpubBook | null): void {
-    requestId++;
+    requests.invalidate();
     loading.value = false;
     error.value = null;
     epub.value = book;

@@ -176,7 +176,7 @@ describe('MejiroReader (Vue) — enable* toggles', () => {
       )?.textContent,
     ).toBe('Custom');
     // Built-in controls are gone.
-    expect(container.querySelector('#mejiro-reader-font-size')).toBeNull();
+    expect(container.querySelector('[id$="-font-size"]')).toBeNull();
   });
 
   it('settings slot receives a live slot (settings, update, open, toggle)', () => {
@@ -1942,6 +1942,189 @@ describe('MejiroReader (Vue) — documented interaction parity', () => {
       expect(onError).toHaveBeenCalledTimes(1);
     } finally {
       fetchSpy.mockRestore();
+    }
+  });
+});
+
+/** The page-column aspect the fit-width surface sizes itself from (`columns / aspect`). */
+function surfaceAspect(container: Element): string | undefined {
+  return (container.querySelector('.mejiro-reader') as HTMLElement | null)?.style.getPropertyValue(
+    '--mejiro-surface-aspect',
+  );
+}
+
+describe('MejiroReader (Vue) — navigation contracts', () => {
+  // The React suite drives the identical scenarios.
+  it("spreadMode='auto' under fit='width' follows the host viewport in both directions", async () => {
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 });
+    // A self-sized surface is landscape here; only the viewport can say "portrait".
+    const surface = stubSurface(500, 300, false);
+    vi.useFakeTimers();
+    try {
+      const { container } = renderReaderIn({
+        epub: pagedEpub(7),
+        spreadMode: 'auto',
+        fit: 'width',
+      });
+      await settle();
+      expect(surfaceAspect(container)).toBe('1 / 1.45');
+
+      await settle(() => surface.resize(1200, 300));
+      expect(surfaceAspect(container)).toBe('2 / 1.45');
+
+      await settle(() => surface.resize(500, 300));
+      expect(surfaceAspect(container)).toBe('1 / 1.45');
+    } finally {
+      vi.useRealTimers();
+      surface.restore();
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalHeight });
+    }
+  });
+
+  it('reports spread 0 and shows it after a chapter switch under a controlled spreadIdx', async () => {
+    vi.useFakeTimers();
+    try {
+      const reader = ref<MejiroReaderHandle | null>(null);
+      const idx = ref(0);
+      const reported: number[] = [];
+      const epub = twoChapterEpub();
+      render(
+        defineComponent({
+          setup: () => () =>
+            h(MejiroReader, {
+              ref: reader,
+              epub,
+              spreadIdx: idx.value,
+              'onSpread-idx-change': (i: number) => {
+                reported.push(i);
+                idx.value = i;
+              },
+            }),
+        }),
+      );
+      await settle();
+      await settle(() => reader.value?.goToSpread(2));
+      expect(reader.value?.getReadingPosition().spreadIdx).toBe(2);
+
+      reported.length = 0;
+      await settle(() => reader.value?.goToChapter(1));
+      expect(reader.value?.getReadingPosition()).toMatchObject({ chapter: 1, spreadIdx: 0 });
+      expect(reported.at(-1)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('goToAnchor resolves with the target spread already shown', async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = renderReader({ epub: pagedEpub(7) });
+      await settle();
+      await settle(() => handle().goToSpread(2));
+      const anchor = handle().getAnchor() as NonNullable<
+        ReturnType<MejiroReaderHandle['getAnchor']>
+      >;
+      await settle(() => handle().goToSpread(0));
+
+      let seen = -1;
+      await settle(() => {
+        void handle()
+          .goToAnchor(anchor)
+          .then(() => {
+            seen = handle().getReadingPosition().spreadIdx;
+          });
+      });
+      expect(seen).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('goToAnchor lands on the target spread when another chapter is open at the same index', async () => {
+    vi.useFakeTimers();
+    try {
+      const handle = renderReader({ epub: unevenChaptersEpub() });
+      await settle();
+      await settle(() => handle().goToChapter(1));
+      await settle(() => handle().goToSpread(1));
+      const anchor = handle().getAnchor() as NonNullable<
+        ReturnType<MejiroReaderHandle['getAnchor']>
+      >;
+      await settle(() => handle().goToChapter(0));
+      await settle(() => handle().goToSpread(1));
+
+      let seen: ReturnType<MejiroReaderHandle['getReadingPosition']> | null = null;
+      await settle(() => {
+        void handle()
+          .goToAnchor(anchor)
+          .then(() => {
+            seen = handle().getReadingPosition();
+          });
+      });
+      expect(seen).toMatchObject({ chapter: 1, spreadIdx: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('page-read reports moves within the shown book, not a book swap or unmount', async () => {
+    vi.useFakeTimers();
+    try {
+      const onPageRead = vi.fn();
+      const reader = ref<MejiroReaderHandle | null>(null);
+      const epub = shallowRef(twoChapterEpub());
+      const { unmount } = render(
+        defineComponent({
+          setup: () => () =>
+            h(MejiroReader, { ref: reader, epub: epub.value, 'onPage-read': onPageRead }),
+        }),
+      );
+      await settle();
+      await settle(() => reader.value?.goToSpread(1));
+      expect(onPageRead).toHaveBeenCalledTimes(1);
+
+      onPageRead.mockClear();
+      await settle(() => {
+        epub.value = twoChapterEpub();
+      });
+      expect(onPageRead).not.toHaveBeenCalled();
+
+      unmount();
+      expect(onPageRead).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('MejiroReader (Vue) — URL book swap', () => {
+  it('lays out only chapter 0 when a loaded book is replaced from chapter 1', async () => {
+    const bytes = await twoChapterBytes();
+    const layoutSpy = vi.spyOn(MejiroBook.prototype, 'layoutChapter');
+    try {
+      const url = ref('/a.epub');
+      const reader = ref<MejiroReaderHandle | null>(null);
+      render(
+        defineComponent({
+          setup: () => () =>
+            h(MejiroReader, { ref: reader, epubUrl: url.value, fetchEpub: async () => bytes }),
+        }),
+      );
+      await waitFor(() => expect(layoutSpy).toHaveBeenCalled(), { timeout: 3000 });
+      reader.value?.goToChapter(1);
+      await waitFor(() => expect(reader.value?.getReadingPosition().chapter).toBe(1));
+      await waitFor(() => expect(layoutSpy).toHaveBeenCalledTimes(2), { timeout: 3000 });
+      layoutSpy.mockClear();
+
+      url.value = '/b.epub';
+      await waitFor(() => expect(layoutSpy).toHaveBeenCalled(), { timeout: 3000 });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(layoutSpy).toHaveBeenCalledTimes(1);
+      expect(layoutSpy.mock.calls[0][0].title).toBe('一');
+      expect(reader.value?.getReadingPosition().chapter).toBe(0);
+    } finally {
+      layoutSpy.mockRestore();
     }
   });
 });

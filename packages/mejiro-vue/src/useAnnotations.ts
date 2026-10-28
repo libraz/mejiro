@@ -6,7 +6,7 @@ import {
   serializeAnnotations,
   sortAnnotations,
 } from '@libraz/mejiro';
-import { onScopeDispose, type Ref, ref, watch } from 'vue';
+import { onScopeDispose, type Ref, shallowRef, watch } from 'vue';
 import {
   createPendingWrite,
   flushOnPageHide,
@@ -33,7 +33,9 @@ export interface UseAnnotationsOptions {
   key: Ref<string> | string;
   /** Storage backend. Defaults to `window.localStorage`. */
   storage?: AnnotationsStorage;
-  /** Throttle ms between writes. @defaultValue 250 */
+  /**
+   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and scope dispose. @defaultValue 250
+   */
   throttleMs?: number;
   /**
    * Called immediately after each mutation (`add` / `remove` / `update` /
@@ -77,7 +79,9 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   const { throttleMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
-  const annotations = ref<readonly Annotation[]>(
+  // The list is always replaced wholesale; a shallow ref keeps elements plain
+  // (structured-cloneable) for `onChange` and consumers.
+  const annotations = shallowRef<readonly Annotation[]>(
     readStorage(storage, unwrapKey(options.key), parseSorted, []),
   );
   const pending = createPendingWrite();
@@ -91,7 +95,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
     },
   );
 
-  // Closing the tab or disposing the scope mid-throttle must not lose the last mutation.
+  // Closing the tab or disposing the scope mid-debounce must not lose the last mutation.
   const detachPageHide = flushOnPageHide(pending.flush);
   onScopeDispose(() => {
     detachPageHide();
@@ -145,6 +149,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
   }
 
   function clear(): void {
+    if (annotations.value.length === 0) return;
     annotations.value = [];
     pending.cancel();
     removeStorage(storage, unwrapKey(options.key));

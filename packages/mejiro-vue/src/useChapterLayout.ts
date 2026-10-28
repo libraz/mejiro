@@ -7,6 +7,7 @@ import type {
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
 import { onScopeDispose, type Ref, shallowRef, unref, watch } from 'vue';
 import { toError } from './errors.js';
+import { createRequestToken } from './useRequestToken.js';
 
 /** Options for {@link useChapterLayout}. */
 export interface UseChapterLayoutOptions {
@@ -141,7 +142,7 @@ export function useChapterLayout(
   const pageHeight = shallowRef(0);
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
-  let layoutRequestId = 0;
+  const request = createRequestToken();
   // Client box the page size was last computed from; an observation reporting
   // the same box needs no re-layout.
   let measuredBox: { width: number; height: number } | null = null;
@@ -153,7 +154,7 @@ export function useChapterLayout(
 
   async function recompute(opts: RecomputeOptions = {}): Promise<void> {
     const blank = opts.blank ?? true;
-    const requestId = ++layoutRequestId;
+    const token = request.begin();
     const chapter = currentChapter();
     if (!(chapter && surface.value)) {
       measuredBox = null;
@@ -165,9 +166,9 @@ export function useChapterLayout(
       return;
     }
     try {
-      await layOut(requestId, blank, chapter, surface.value);
+      await layOut(token, blank, chapter, surface.value);
     } catch (err) {
-      if (requestId !== layoutRequestId) return;
+      if (!request.isCurrent(token)) return;
       if (!options.onError) throw err;
       options.onError(toError(err));
     }
@@ -179,7 +180,7 @@ export function useChapterLayout(
   }
 
   async function layOut(
-    requestId: number,
+    token: number,
     blank: boolean,
     chapter: EpubChapter,
     el: HTMLElement,
@@ -201,7 +202,7 @@ export function useChapterLayout(
 
     const t0 = performance.now();
     const nextLayout = await currentBook.layoutChapter(chapter);
-    if (requestId !== layoutRequestId) return;
+    if (!request.isCurrent(token)) return;
     layout.value = nextLayout;
     elapsedMs.value = performance.now() - t0;
     if (captured && options.restorePosition) {

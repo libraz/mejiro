@@ -57,7 +57,7 @@ const hooks = [
 ];
 
 /** Local modules the hooks import, copied alongside them so the probe compiles whole. */
-const supportFiles = ['useSurfaceLayout.ts', 'errors.ts'];
+const supportFiles = ['useSurfaceLayout.ts', 'useRequestToken.ts', 'errors.ts'];
 
 describe('pendingRestore recipe under @types/react@18', () => {
   it('accepts assignment to pendingRestore.current', async () => {

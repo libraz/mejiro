@@ -23,7 +23,9 @@ import {
   type WatchStopHandle,
   watch,
 } from 'vue';
+import { markBookIdentity } from './bookIdentity.js';
 import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
+import { createRequestToken } from './useRequestToken.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
@@ -107,7 +109,8 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   const error = shallowRef<Error | null>(null);
   const revision = ref(0);
   const selection = ref<EditableEpubSelection>({ chapter: 0, paragraph: 0 });
-  let requestId = 0;
+  const request = createRequestToken();
+  let exportsInFlight = 0;
   const book = computed(() => editor.value?.book ?? null);
   const selectedParagraph = computed(() => {
     // Edits, undo and redo replace the paragraph mirror in place, so the
@@ -119,7 +122,9 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   });
   const previewBook = computed(() => {
     void revision.value;
-    return book.value ? cloneEditableEpubBook(book.value) : null;
+    return book.value && editor.value
+      ? markBookIdentity(cloneEditableEpubBook(book.value), editor.value)
+      : null;
   });
   const history = computed(() => {
     void revision.value;
@@ -134,36 +139,36 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     error.value = null;
     try {
       const next = await EditableEpub.load(buffer, { limits: options.limits });
-      if (currentRequest !== requestId) return null;
+      if (!request.isCurrent(currentRequest)) return null;
       editor.value = next;
       selection.value = { chapter: 0, paragraph: 0 };
       revision.value++;
       options.onLoad?.(next);
       return next;
     } catch (err) {
-      if (currentRequest === requestId) {
+      if (request.isCurrent(currentRequest)) {
         error.value = toError(err);
         options.onError?.(error.value);
       }
       return null;
     } finally {
-      if (currentRequest === requestId) loading.value = false;
+      if (request.isCurrent(currentRequest)) loading.value = false;
     }
   }
 
   async function loadBuffer(buffer: ArrayBuffer): Promise<EditableEpub | null> {
-    const currentRequest = ++requestId;
+    const currentRequest = request.begin();
     return loadBufferWithRequest(buffer, currentRequest);
   }
 
   async function loadFile(file: File): Promise<EditableEpub | null> {
-    const currentRequest = ++requestId;
+    const currentRequest = request.begin();
     loading.value = true;
     error.value = null;
     try {
       return await loadBufferWithRequest(await readEpubFile(file, options.limits), currentRequest);
     } catch (err) {
-      if (currentRequest === requestId) {
+      if (request.isCurrent(currentRequest)) {
         error.value = toError(err);
         options.onError?.(error.value);
         loading.value = false;
@@ -173,13 +178,13 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   }
 
   async function loadUrl(url: string): Promise<EditableEpub | null> {
-    const currentRequest = ++requestId;
+    const currentRequest = request.begin();
     loading.value = true;
     error.value = null;
     try {
       return await loadBufferWithRequest(await fetchEpubBuffer(url), currentRequest);
     } catch (err) {
-      if (currentRequest === requestId) {
+      if (request.isCurrent(currentRequest)) {
         error.value = toError(err);
         options.onError?.(error.value);
         loading.value = false;
@@ -193,8 +198,16 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
   onMounted(() => {
     stopDefaultUrlWatch = watch(
       () => options.defaultUrl,
-      (url) => {
-        if (url) void loadUrl(url);
+      (url, _previous, onCleanup) => {
+        if (!url) return;
+        void loadUrl(url);
+        const urlRequest = request.current();
+        // A URL load still in flight when the URL changes or clears is abandoned.
+        onCleanup(() => {
+          if (!request.isCurrent(urlRequest)) return;
+          request.invalidate();
+          loading.value = false;
+        });
       },
       { immediate: true },
     );
@@ -248,6 +261,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
 
   async function exportEpub(exportOptions?: EpubExportOptions): Promise<ArrayBuffer | null> {
     if (!editor.value) return null;
+    exportsInFlight++;
     exporting.value = true;
     try {
       const buffer = await editor.value.export(
@@ -256,7 +270,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       options.onExport?.(buffer);
       return buffer;
     } finally {
-      exporting.value = false;
+      exporting.value = --exportsInFlight > 0;
     }
   }
 

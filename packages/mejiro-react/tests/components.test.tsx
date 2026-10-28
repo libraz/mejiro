@@ -878,7 +878,7 @@ describe('MejiroSettingsPanel (React)', () => {
     const { container } = render(
       <MejiroSettingsPanel open settings={baseSettings} onChange={onChange} />,
     );
-    const sizeInput = container.querySelector('#mejiro-reader-font-size') as HTMLInputElement;
+    const sizeInput = container.querySelector('[id$="-font-size"]') as HTMLInputElement;
     fireEvent.change(sizeInput, { target: { value: '20' } });
     expect(onChange).toHaveBeenCalledWith({ ...baseSettings, fontSize: 20 });
   });
@@ -889,13 +889,13 @@ describe('MejiroSettingsPanel (React)', () => {
       <MejiroSettingsPanel open settings={baseSettings} onChange={onChange} />,
     );
 
-    const sizeInput = container.querySelector('#mejiro-reader-font-size') as HTMLInputElement;
+    const sizeInput = container.querySelector('[id$="-font-size"]') as HTMLInputElement;
     fireEvent.change(sizeInput, { target: { value: '' } });
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, fontSize: baseSettings.fontSize });
     fireEvent.change(sizeInput, { target: { value: '999' } });
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, fontSize: 48 });
 
-    const spacingInput = container.querySelector('#mejiro-reader-line-spacing') as HTMLInputElement;
+    const spacingInput = container.querySelector('[id$="-line-spacing"]') as HTMLInputElement;
     fireEvent.change(spacingInput, { target: { value: '0' } });
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, lineSpacing: 1 });
     fireEvent.change(spacingInput, { target: { value: '4' } });
@@ -924,7 +924,7 @@ describe('MejiroSettingsPanel (React)', () => {
         maxFontSize={28}
       />,
     );
-    const sizeInput = container.querySelector('#mejiro-reader-font-size') as HTMLInputElement;
+    const sizeInput = container.querySelector('[id$="-font-size"]') as HTMLInputElement;
     expect(sizeInput.min).toBe('12');
     expect(sizeInput.max).toBe('28');
   });
@@ -934,11 +934,11 @@ describe('MejiroSettingsPanel (React)', () => {
     const { container } = render(
       <MejiroSettingsPanel open settings={baseSettings} onChange={onChange} />,
     );
-    const kinsoku = container.querySelector('#mejiro-reader-kinsoku') as HTMLSelectElement;
+    const kinsoku = container.querySelector('[id$="-kinsoku"]') as HTMLSelectElement;
     fireEvent.change(kinsoku, { target: { value: 'loose' } });
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, mode: 'loose' });
 
-    const hanging = container.querySelector('#mejiro-reader-hanging') as HTMLSelectElement;
+    const hanging = container.querySelector('[id$="-hanging"]') as HTMLSelectElement;
     fireEvent.change(hanging, { target: { value: 'false' } });
     expect(onChange).toHaveBeenLastCalledWith({ ...baseSettings, enableHanging: false });
   });

@@ -9,11 +9,13 @@ import {
   exportEditableEpub,
 } from '@libraz/mejiro/epub';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { markBookIdentity } from './bookIdentity.js';
 import { fetchEpubBuffer, readEpubFile, toError, withErrorReporting } from './errors.js';
 import { format, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
 import { MejiroReader, type MejiroReaderHandle } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
+import { useRequestToken } from './useRequestToken.js';
 
 /** Props for {@link MejiroEditor}. */
 export interface MejiroEditorProps {
@@ -22,7 +24,9 @@ export interface MejiroEditorProps {
   /** Font choices passed to the preview reader. */
   fonts?: FontChoice[];
   /**
-   * Allow editing paragraph text (the "Proofread" section).
+   * Allow editing paragraph text (the "Proofread" section). When `false` and
+   * `enableRuby` is on, the paragraph text stays visible read-only so a ruby
+   * base range can still be selected.
    * @defaultValue true
    */
   enableProofread?: boolean;
@@ -73,8 +77,9 @@ export interface MejiroEditorProps {
   /** Called after export completes. */
   onExport?: (buffer: ArrayBuffer) => void;
   /**
-   * Called when loading, image insertion or export fails. The error is also
-   * shown in the editor.
+   * Called when loading, image insertion, export or the preview reader fails.
+   * The error is also shown in the editor until a later load, image insertion
+   * or export succeeds.
    */
   onError?: (error: Error) => void;
 }
@@ -215,12 +220,23 @@ const WATERMARK_BLOCK_ID = 'mejiro-watermark';
 /**
  * Returns an export-only copy of `book` carrying a watermark paragraph at the
  * top of every chapter. The editor's own document is left untouched, so the
- * watermark cannot accumulate across repeated exports.
+ * watermark cannot accumulate across repeated exports, and a chapter the user
+ * did not edit stays verbatim apart from that paragraph.
  */
 function watermarkedBook(book: EditableEpubBook, watermark: { text: string }): EditableEpubBook {
   const copy = cloneEditableEpubBook(book);
   const text = `${WATERMARK_PREFIX} ${watermark.text}`;
   for (const chapter of copy.chapters) {
+    // An untouched chapter is written back verbatim, so its XHTML gets the
+    // paragraph instead of being rebuilt (which rejects constructs the block model drops).
+    if (!chapter.isDirty && chapter.originalXhtml) {
+      const injected = injectWatermarkXhtml(chapter.originalXhtml, text);
+      if (injected) {
+        chapter.originalXhtml = injected;
+        continue;
+      }
+      chapter.isDirty = true;
+    }
     chapter.blocks.unshift({
       kind: 'paragraph',
       id: watermarkBlockId(chapter),
@@ -228,9 +244,23 @@ function watermarkedBook(book: EditableEpubBook, watermark: { text: string }): E
       inlineAnnotations: [],
     });
     chapter.paragraphs.unshift({ text, inlineAnnotations: [] });
-    chapter.isDirty = true;
   }
   return copy;
+}
+
+/**
+ * Inserts a paragraph right after the opening `<body>` tag of namespaced
+ * XHTML. Returns `null` when the markup is not shaped that way.
+ */
+function injectWatermarkXhtml(xhtml: string, text: string): string | null {
+  if (!/<html\b[^>]*\sxmlns\s*=\s*["']http:\/\/www\.w3\.org\/1999\/xhtml["']/i.test(xhtml)) {
+    return null;
+  }
+  const body = /<body\b(?:[^>]*[^/>])?>/i.exec(xhtml);
+  if (!body) return null;
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const end = body.index + body[0].length;
+  return `${xhtml.slice(0, end)}<p>${escaped}</p>${xhtml.slice(end)}`;
 }
 
 /** Picks a block id for the watermark paragraph that the chapter does not use. */
@@ -271,7 +301,7 @@ export function MejiroEditor({
   const [rubyStart, setRubyStart] = useState(0);
   const [rubyEnd, setRubyEnd] = useState(1);
   const [rubyText, setRubyText] = useState('');
-  const loadRequestIdRef = useRef(0);
+  const request = useRequestToken();
   const onLoadRef = useRef(onLoad);
   const onErrorRef = useRef(onError);
   const limitsRef = useRef(limits);
@@ -285,10 +315,11 @@ export function MejiroEditor({
     ? paragraphBlock(chapter, selection.paragraph)?.paragraphKind === 'sceneBreak'
     : false;
   const rubyRange = clampRubyRange(rubyStart, rubyEnd, [...text].length);
+  // Each copy is tagged with the loaded editor, so an edit is not a book swap to the reader.
   const previewBook = useMemo(() => {
     void revision;
-    return book ? cloneEditableEpubBook(book) : null;
-  }, [book, revision]);
+    return book && editor ? markBookIdentity(cloneEditableEpubBook(book), editor) : null;
+  }, [book, editor, revision]);
 
   useEffect(() => {
     onLoadRef.current = onLoad;
@@ -304,61 +335,67 @@ export function MejiroEditor({
     onErrorRef.current?.(nextError);
   }, []);
 
+  /** Removes the error banner once a later operation has succeeded or started. */
+  const clearError = useCallback(() => setError(null), []);
+
   const loadBufferForRequest = useCallback(
-    async (buffer: ArrayBuffer, requestId: number) => {
+    async (buffer: ArrayBuffer, token: number) => {
       setLoading(true);
-      setError(null);
+      clearError();
       try {
         const next = await EditableEpub.load(buffer, { limits: limitsRef.current });
-        if (requestId !== loadRequestIdRef.current) return;
+        if (!request.isCurrent(token)) return;
         setEditor(next);
         setSelection({ chapter: 0, paragraph: 0 });
         setRevision((value) => value + 1);
         onLoadRef.current?.(next);
       } catch (err) {
-        if (requestId === loadRequestIdRef.current) reportError(toError(err));
+        if (request.isCurrent(token)) reportError(toError(err));
       } finally {
-        if (requestId === loadRequestIdRef.current) setLoading(false);
+        if (request.isCurrent(token)) setLoading(false);
       }
     },
-    [reportError],
+    [clearError, reportError, request],
   );
 
   async function loadFile(file: File): Promise<void> {
-    const requestId = ++loadRequestIdRef.current;
+    const token = request.begin();
     setLoading(true);
-    setError(null);
+    clearError();
     try {
-      await loadBufferForRequest(await readEpubFile(file, limitsRef.current), requestId);
+      await loadBufferForRequest(await readEpubFile(file, limitsRef.current), token);
     } catch (err) {
-      if (requestId === loadRequestIdRef.current) {
+      if (request.isCurrent(token)) {
         reportError(toError(err));
         setLoading(false);
       }
     }
   }
 
+  // A URL load still in flight when the URL changes or clears, or the editor
+  // unmounts, is abandoned.
   useEffect(() => {
     if (!epubUrl) return;
-    let cancelled = false;
-    const requestId = ++loadRequestIdRef.current;
+    const token = request.begin();
     void (async () => {
       setLoading(true);
-      setError(null);
+      clearError();
       try {
         const buffer = await fetchEpubBuffer(epubUrl);
-        if (cancelled || requestId !== loadRequestIdRef.current) return;
-        await loadBufferForRequest(buffer, requestId);
+        if (!request.isCurrent(token)) return;
+        await loadBufferForRequest(buffer, token);
       } catch (err) {
-        if (!cancelled && requestId === loadRequestIdRef.current) reportError(toError(err));
+        if (request.isCurrent(token)) reportError(toError(err));
       } finally {
-        if (!cancelled && requestId === loadRequestIdRef.current) setLoading(false);
+        if (request.isCurrent(token)) setLoading(false);
       }
     })();
     return () => {
-      cancelled = true;
+      if (!request.isCurrent(token)) return;
+      request.invalidate();
+      setLoading(false);
     };
-  }, [epubUrl, loadBufferForRequest, reportError]);
+  }, [epubUrl, clearError, loadBufferForRequest, reportError, request]);
 
   // The proofread buffer resets only when the edit target moves. A document
   // regenerated under the same target (image insert, apply) keeps unapplied text.
@@ -445,6 +482,7 @@ export function MejiroEditor({
         afterBlockId,
       });
       setRevision((value) => value + 1);
+      clearError();
     }, reportError);
   }
 
@@ -462,10 +500,21 @@ export function MejiroEditor({
       const allowDownload = exportPolicy
         ? exportPolicy.allowDownload !== false
         : decision !== false;
-      if (!allowDownload) return;
-      downloadEpub(buffer, `${editor.title || 'edited'}.epub`);
+      if (allowDownload) downloadEpub(buffer, `${editor.title || 'edited'}.epub`);
+      clearError();
     }, reportError);
   }
+
+  // Shown by the Proofread section, or read-only in the Ruby section so a base range can still be selected.
+  const paragraphText = (
+    <textarea
+      ref={textareaRef}
+      value={text}
+      readOnly={sceneBreak || !enableProofread}
+      onChange={(event) => setText(event.target.value)}
+      onSelect={captureRubyRange}
+    />
+  );
 
   return (
     <div className="mejiro-editor">
@@ -476,6 +525,7 @@ export function MejiroEditor({
             epub={previewBook}
             chapter={selection.chapter}
             onChapterChange={(index) => selectParagraph(index, 0)}
+            onError={reportError}
             fonts={fonts}
             subtitle={messages.editorPreviewSubtitle}
             chapterNavMode="panel"
@@ -521,13 +571,7 @@ export function MejiroEditor({
             {enableProofread && (
               <div className="mejiro-editor-section">
                 <span className="mejiro-editor-label">{messages.editorProofread}</span>
-                <textarea
-                  ref={textareaRef}
-                  value={text}
-                  readOnly={sceneBreak}
-                  onChange={(event) => setText(event.target.value)}
-                  onSelect={captureRubyRange}
-                />
+                {paragraphText}
                 <button
                   type="button"
                   className="mejiro-editor-primary"
@@ -542,6 +586,7 @@ export function MejiroEditor({
               <div className="mejiro-editor-section">
                 <span className="mejiro-editor-label">{messages.editorRuby}</span>
                 <p className="mejiro-editor-hint">{messages.editorRubyHint}</p>
+                {!enableProofread && paragraphText}
                 <p className="mejiro-editor-range">
                   {format(messages.editorRubyRange, {
                     start: rubyRange?.start ?? 0,

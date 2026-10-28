@@ -5,7 +5,7 @@ import type {
   MejiroBook,
 } from '@libraz/mejiro/book';
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
-import { type MutableRefObject, type RefObject, useMemo } from 'react';
+import { type MutableRefObject, type RefObject, useMemo, useRef } from 'react';
 import { type SurfaceLayoutSource, useSurfaceLayout } from './useSurfaceLayout.js';
 
 /** Options for {@link useManuscriptLayout}. */
@@ -86,6 +86,11 @@ export interface UseManuscriptLayoutReturn {
   pendingRestore: MutableRefObject<InChapterAnchor | null>;
 }
 
+/** Content key of a chapter: changes exactly when its id, title or body does. */
+function chapterSignature(chapter: ManuscriptChapter | null): string | null {
+  return chapter ? JSON.stringify([chapter.id, chapter.title, chapter.body]) : null;
+}
+
 /**
  * React hook that lays out a single manuscript chapter directly, skipping the
  * EPUB ZIP round-trip used by {@link useChapterLayout}.
@@ -94,7 +99,8 @@ export interface UseManuscriptLayoutReturn {
  * {@link useManuscriptDraft} for the chapter array and feed the resulting
  * {@link ChapterLayout} into {@link MejiroSpread} or {@link MejiroScrollView}.
  *
- * Re-layouts whenever `chapter`, `dialect`, or `book` change. The surface is
+ * Re-layouts whenever the chapter's id, title or body, `dialect`, or `book`
+ * change; a new chapter object with the same content does not. The surface is
  * observed with {@link ResizeObserver}; size changes trigger a full re-layout
  * so pagination stays correct after non-trivial container changes.
  *
@@ -115,16 +121,24 @@ export function useManuscriptLayout(
 ): UseManuscriptLayoutReturn {
   const dialect = options.dialect ?? 'mejiro';
 
+  // The source is keyed on content, so a freshly built but equal chapter object
+  // does not start another layout.
+  const signature = chapterSignature(chapter);
+  const chapterRef = useRef(chapter);
+  chapterRef.current = chapter;
+
   const source = useMemo<SurfaceLayoutSource | null>(() => {
-    if (!chapter) return null;
+    if (signature === null) return null;
     return {
       measure: (el) => book.computePageSize(el),
       layout: async () => {
-        const layouts = await book.layoutManuscript({ chapters: [chapter], dialect });
+        const current = chapterRef.current;
+        if (!current) return null;
+        const layouts = await book.layoutManuscript({ chapters: [current], dialect });
         return layouts.values().next().value ?? null;
       },
     };
-  }, [book, chapter, dialect]);
+  }, [book, signature, dialect]);
 
   return useSurfaceLayout(source, surface, {
     ...options,

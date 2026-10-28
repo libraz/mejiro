@@ -39,7 +39,10 @@ export const MejiroI18nProvider = defineComponent({
 
 /** Options for {@link useI18n}. */
 export interface UseI18nOptions {
-  /** Built-in locale to use as the base catalog. @defaultValue 'en' */
+  /**
+   * Built-in locale to use as the base catalog. Defaults to the nearest
+   * `MejiroI18nProvider` locale, or `'en'` without one.
+   */
   locale?: MejiroLocale;
   /** Overrides merged on top of the built-in catalog. */
   messages?: Partial<MejiroMessages>;

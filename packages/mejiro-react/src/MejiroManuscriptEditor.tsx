@@ -9,6 +9,7 @@ import { MejiroNotationHighlighter } from './MejiroNotationHighlighter.js';
 import { MejiroReader, type MejiroReaderSettingsSlot, type MejiroTheme } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
 import { mergeDefined } from './persistence.js';
+import { createPackageIdentifier } from './useEpubProject.js';
 import { useManuscriptDraft } from './useManuscriptDraft.js';
 
 /** One chapter of the manuscript being edited. */
@@ -135,7 +136,7 @@ export interface MejiroManuscriptEditorProps {
   onExport?: (buffer: ArrayBuffer) => void;
   /**
    * Called when the EPUB export fails (asset resolution, cover reading, or
-   * packaging). The same error is shown in the editor panel, so hosts only
+   * packaging) or the preview reader fails. The same error is shown in the editor panel, so hosts only
    * need this to log or report it.
    */
   onError?: (error: Error) => void;
@@ -268,6 +269,16 @@ export function MejiroManuscriptEditor({
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const [exportError, setExportError] = useState<Error | null>(null);
 
+  /** Shows `error` in the panel and forwards it to `onError`. */
+  const reportError = useCallback(
+    (error: Error) => {
+      setExportError(error);
+      onError?.(error);
+    },
+    [onError],
+  );
+  const clearError = useCallback(() => setExportError(null), []);
+
   /**
    * Wraps the current textarea selection in the given notation. When no
    * range is selected, the markers are inserted at the caret with the caret
@@ -292,39 +303,33 @@ export function MejiroManuscriptEditor({
   }
 
   // One package identifier per editor instance, so re-exports stay one publication.
-  const [identifier] = useState(() => `urn:uuid:${crypto.randomUUID()}`);
+  const [identifier] = useState(createPackageIdentifier);
 
   // Every way an export can fail — cover bytes, asset resolution, packaging —
   // reports through the same channel the panel already uses for autosave.
   const exportEpub = useCallback(async () => {
-    await withErrorReporting(
-      async () => {
-        const project = EpubProject.fromManuscript({
-          metadata: { title, author: author || undefined, identifier },
-          dialect,
-          chapters: chapters.map((chapter) => ({
-            id: chapter.id,
-            title: chapter.title || messages.untitled,
-            body: chapter.body,
-          })),
+    await withErrorReporting(async () => {
+      const project = EpubProject.fromManuscript({
+        metadata: { title, author: author || undefined, identifier },
+        dialect,
+        chapters: chapters.map((chapter) => ({
+          id: chapter.id,
+          title: chapter.title || messages.untitled,
+          body: chapter.body,
+        })),
+      });
+      if (cover) {
+        project.setCover({
+          href: coverAssetHref(cover),
+          mediaType: cover.type || undefined,
+          data: await cover.arrayBuffer(),
         });
-        if (cover) {
-          project.setCover({
-            href: coverAssetHref(cover),
-            mediaType: cover.type || undefined,
-            data: await cover.arrayBuffer(),
-          });
-        }
-        const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
-        setExportError(null);
-        onExport?.(buffer);
-        downloadEpub(buffer, `${title || 'book'}.epub`);
-      },
-      (error) => {
-        setExportError(error);
-        onError?.(error);
-      },
-    );
+      }
+      const buffer = await project.export(assetResolver ? { assetResolver } : undefined);
+      clearError();
+      onExport?.(buffer);
+      downloadEpub(buffer, `${title || 'book'}.epub`);
+    }, reportError);
   }, [
     assetResolver,
     author,
@@ -333,8 +338,9 @@ export function MejiroManuscriptEditor({
     dialect,
     identifier,
     messages.untitled,
-    onError,
     onExport,
+    clearError,
+    reportError,
     title,
   ]);
 
@@ -365,6 +371,7 @@ export function MejiroManuscriptEditor({
           fonts={fonts}
           chapter={selected}
           onChapterChange={setSelected}
+          onError={reportError}
           enableImageOverlay={false}
         />
       </main>
@@ -390,7 +397,12 @@ export function MejiroManuscriptEditor({
             type="file"
             accept="image/*"
             hidden
-            onChange={(event) => setCover(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              // Cleared so picking the same path again still fires `change`.
+              event.target.value = '';
+              setCover(file);
+            }}
           />
         </div>
         <div className="mejiro-editor-section">
@@ -409,6 +421,8 @@ export function MejiroManuscriptEditor({
                 onDragStart={(event) => {
                   setDraggingIndex(index);
                   event.dataTransfer.effectAllowed = 'move';
+                  // Firefox starts a drag only when the transfer carries data.
+                  event.dataTransfer.setData('text/plain', chapter.id);
                 }}
                 onDragEnd={() => setDraggingIndex(null)}
                 onDragOver={(event) => {

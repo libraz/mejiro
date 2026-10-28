@@ -7,6 +7,7 @@ import type {
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
 import { onScopeDispose, type Ref, shallowRef, unref, watch } from 'vue';
 import { toError } from './errors.js';
+import { createRequestToken } from './useRequestToken.js';
 
 /** Options for {@link useManuscriptLayout}. */
 export interface UseManuscriptLayoutOptions {
@@ -99,6 +100,11 @@ function unwrap<T>(value: Ref<T> | T): T {
     : (value as T);
 }
 
+/** Content key of a chapter: changes exactly when its id, title or body does. */
+function chapterSignature(chapter: ManuscriptChapter | null): string | null {
+  return chapter ? JSON.stringify([chapter.id, chapter.title, chapter.body]) : null;
+}
+
 /**
  * Vue composable that lays out a single manuscript chapter directly, skipping
  * the EPUB ZIP round-trip used by {@link useChapterLayout}.
@@ -107,7 +113,8 @@ function unwrap<T>(value: Ref<T> | T): T {
  * chapter array from your own draft store and feed the resulting
  * {@link ChapterLayout} into {@link MejiroSpread} or {@link MejiroScrollView}.
  *
- * Re-layouts whenever `book`, `chapter`, or `dialect` change. The `surface`
+ * Re-layouts whenever `book`, `dialect`, or the chapter's id, title or body
+ * change — by replacing the chapter or by mutating it in place. The `surface`
  * element is observed with a {@link ResizeObserver}: the first observation runs
  * immediately (so a preview mounted before its container had a final box is
  * still sized correctly on first paint), and later size changes trigger a
@@ -145,7 +152,7 @@ export function useManuscriptLayout(
   const pageHeight = shallowRef(0);
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
-  let layoutRequestId = 0;
+  const request = createRequestToken();
   // Client box the page size was last computed from; an observation reporting
   // the same box needs no re-layout.
   let measuredBox: { width: number; height: number } | null = null;
@@ -153,7 +160,7 @@ export function useManuscriptLayout(
 
   async function recompute(opts: ManuscriptRecomputeOptions = {}): Promise<void> {
     const blank = opts.blank ?? true;
-    const requestId = ++layoutRequestId;
+    const token = request.begin();
     const current = chapter.value;
     if (!(current && surface.value)) {
       measuredBox = null;
@@ -165,9 +172,9 @@ export function useManuscriptLayout(
       return;
     }
     try {
-      await layOut(requestId, blank, current, surface.value);
+      await layOut(token, blank, current, surface.value);
     } catch (err) {
-      if (requestId !== layoutRequestId) return;
+      if (!request.isCurrent(token)) return;
       if (!options.onError) throw err;
       options.onError(toError(err));
     }
@@ -179,7 +186,7 @@ export function useManuscriptLayout(
   }
 
   async function layOut(
-    requestId: number,
+    token: number,
     blank: boolean,
     current: ManuscriptChapter,
     el: HTMLElement,
@@ -202,7 +209,7 @@ export function useManuscriptLayout(
     const dialect = unwrap(options.dialect) ?? 'mejiro';
     const t0 = performance.now();
     const layouts = await currentBook.layoutManuscript({ chapters: [current], dialect });
-    if (requestId !== layoutRequestId) return;
+    if (!request.isCurrent(token)) return;
     const nextLayout = layouts.values().next().value ?? null;
     layout.value = nextLayout;
     elapsedMs.value = performance.now() - t0;
@@ -212,7 +219,7 @@ export function useManuscriptLayout(
     }
   }
 
-  watch([() => unref(book), chapter, surface], () => trigger(), {
+  watch([() => unref(book), () => chapterSignature(chapter.value), surface], () => trigger(), {
     immediate: true,
     flush: 'sync',
   });

@@ -1,6 +1,6 @@
 import type { EditableSettings, FontChoice } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useI18n } from './i18n.js';
 
 export type { EditableSettings, FontChoice };
@@ -119,6 +119,8 @@ export function MejiroSettingsPanel({
   maxFontSize = 48,
 }: MejiroSettingsPanelProps): ReactNode {
   const messages = useI18n();
+  // Per-instance ids keep label associations valid when two panels share a page.
+  const uid = useId();
   const patch = (next: Partial<EditableSettings>) => onChange({ ...settings, ...next });
 
   // Show the active font even when the host's `fonts` list doesn't include it,
@@ -136,7 +138,11 @@ export function MejiroSettingsPanel({
           <div className="mejiro-reader-settings-group">
             <span className="mejiro-reader-settings-group-title">{messages.settingsFont}</span>
             <div className="mejiro-reader-control">
-              <select value={currentFont} onChange={(e) => patch({ fontFamily: e.target.value })}>
+              <select
+                aria-label={messages.settingsFont}
+                value={currentFont}
+                onChange={(e) => patch({ fontFamily: e.target.value })}
+              >
                 {fontOptions.map((f) => (
                   <option key={f.value} value={f.value}>
                     {f.label}
@@ -145,7 +151,7 @@ export function MejiroSettingsPanel({
               </select>
             </div>
             <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-font-size">
+              <label className="mejiro-reader-control-label" htmlFor={`${uid}-font-size`}>
                 {messages.settingsSize}
               </label>
               <button
@@ -166,7 +172,7 @@ export function MejiroSettingsPanel({
                 A−
               </button>
               <CommittedNumberInput
-                id="mejiro-reader-font-size"
+                id={`${uid}-font-size`}
                 value={settings.fontSize}
                 min={minFontSize}
                 max={maxFontSize}
@@ -194,11 +200,11 @@ export function MejiroSettingsPanel({
           <div className="mejiro-reader-settings-group">
             <span className="mejiro-reader-settings-group-title">{messages.settingsLayout}</span>
             <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-kinsoku">
+              <label className="mejiro-reader-control-label" htmlFor={`${uid}-kinsoku`}>
                 {messages.settingsKinsoku}
               </label>
               <select
-                id="mejiro-reader-kinsoku"
+                id={`${uid}-kinsoku`}
                 value={settings.mode ?? 'strict'}
                 onChange={(e) => patch({ mode: e.target.value as 'strict' | 'loose' })}
               >
@@ -207,11 +213,11 @@ export function MejiroSettingsPanel({
               </select>
             </div>
             <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-hanging">
+              <label className="mejiro-reader-control-label" htmlFor={`${uid}-hanging`}>
                 {messages.settingsHanging}
               </label>
               <select
-                id="mejiro-reader-hanging"
+                id={`${uid}-hanging`}
                 value={String(settings.enableHanging ?? true)}
                 onChange={(e) => patch({ enableHanging: e.target.value === 'true' })}
               >
@@ -220,11 +226,11 @@ export function MejiroSettingsPanel({
               </select>
             </div>
             <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor="mejiro-reader-line-spacing">
+              <label className="mejiro-reader-control-label" htmlFor={`${uid}-line-spacing`}>
                 {messages.settingsLineSpacing}
               </label>
               <CommittedNumberInput
-                id="mejiro-reader-line-spacing"
+                id={`${uid}-line-spacing`}
                 className="mejiro-reader-control--wide"
                 value={settings.lineSpacing ?? 1.8}
                 min={1.0}

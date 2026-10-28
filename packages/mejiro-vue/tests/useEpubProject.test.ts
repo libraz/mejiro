@@ -87,6 +87,30 @@ describe('useEpubProject (Vue)', () => {
     expect(result.current.selectedChapter.value).toBe(0);
   });
 
+  it('leaves the chapter list untouched when reorderChapters gets an out-of-range from', () => {
+    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+
+    result.current.setSelectedChapter(1);
+    result.current.reorderChapters(5, 0);
+    result.current.reorderChapters(-1, 2);
+
+    expect(result.current.chapters.value.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c']);
+    expect(result.current.selectedChapter.value).toBe(1);
+  });
+
+  it('clamps an out-of-range to in reorderChapters and keeps the selected chapter', () => {
+    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+
+    result.current.setSelectedChapter(0);
+    result.current.reorderChapters(0, 99);
+    expect(result.current.chapters.value.map((chapter) => chapter.id)).toEqual(['b', 'c', 'a']);
+    expect(result.current.currentChapter.value?.id).toBe('a');
+
+    result.current.reorderChapters(2, -5);
+    expect(result.current.chapters.value.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c']);
+    expect(result.current.currentChapter.value?.id).toBe('a');
+  });
+
   it('does not let undefined addChapter fields erase generated chapter data', () => {
     const { result } = harness(() => useEpubProject({ debounceMs: 10_000 }));
 
