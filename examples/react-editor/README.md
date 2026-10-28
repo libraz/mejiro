@@ -28,6 +28,10 @@ yarn dev
 The bundled demo EPUB (`/neko.epub`) loads on mount. Select a paragraph in
 the right-hand panel, edit the text or ruby, then click **Export EPUB**.
 
+## Sample EPUB
+
+The example loads `/neko.epub`, which is generated rather than checked in. In the monorepo, run `yarn fetch-demo-epub` once from the repo root (it downloads the text from Aozora Bunko). A degit copy has no such file: put your own EPUB at `public/neko.epub`, or point the example at another URL.
+
 ## Use this as a starter
 
 ```bash

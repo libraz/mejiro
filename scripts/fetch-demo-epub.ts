@@ -7,7 +7,7 @@
  * Output: packages/mejiro-demo/public/neko.epub
  */
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
@@ -47,6 +47,7 @@ async function main(): Promise<void> {
   const epub = buildEpub(xhtml);
   const epubBuf = await epub.generateAsync({ type: 'nodebuffer' });
 
+  mkdirSync(dirname(OUTPUT_PATH), { recursive: true });
   writeFileSync(OUTPUT_PATH, epubBuf);
   console.info(`Written to ${OUTPUT_PATH} (${epubBuf.length} bytes)`);
 }

@@ -19,6 +19,10 @@ yarn install
 yarn workspace @mejiro/example-vue-embed dev
 ```
 
+## Sample EPUB
+
+The example loads `/neko.epub`, which is generated rather than checked in. In the monorepo, run `yarn fetch-demo-epub` once from the repo root (it downloads the text from Aozora Bunko). A degit copy has no such file: put your own EPUB at `public/neko.epub`, or point the example at another URL.
+
 ## Use this as a starter
 
 ```bash
@@ -32,4 +36,4 @@ npm run dev
 ## Reading further
 
 - [`examples/vue`](../vue) — the minimal full-screen variant.
-- [`@libraz/mejiro-vue` API reference](../../docs/en/10-api-reference.md#librazmejiro-vue--vue-component) — full prop / composable reference.
+- [`@libraz/mejiro-vue` API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-vue--vue-component) — full prop / composable reference.

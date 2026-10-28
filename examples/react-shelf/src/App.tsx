@@ -27,7 +27,7 @@ export default function App() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const { loadBuffer, loadFile, loading } = useEpub();
+  const { loadBuffer, loadFile, loading, error } = useEpub();
 
   // The active library cursor is independent of the active *reading* state:
   // pickers move the cursor, opening a volume sets `activeId`.
@@ -47,26 +47,39 @@ export default function App() {
     ]);
   }, []);
 
+  // useEpub loads one book at a time, so every load (sample and picks) runs through one queue.
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const enqueue = useCallback(
+    (load: () => Promise<EpubBook | null>): void => {
+      queueRef.current = queueRef.current.then(async () => {
+        const book = await load();
+        if (book) addBook(book);
+      });
+    },
+    [addBook],
+  );
+
   // Pre-populate from the bundled sample if it exists (monorepo demo only).
+  const sampleRequestedRef = useRef(false);
   useEffect(() => {
-    void (async () => {
+    if (sampleRequestedRef.current) return;
+    sampleRequestedRef.current = true;
+    enqueue(async () => {
       try {
         const res = await fetch('/neko.epub');
-        if (!res.ok) return;
-        const book = await loadBuffer(await res.arrayBuffer());
-        if (book) addBook(book);
+        // A dev server answers a missing file with index.html; that is "no sample".
+        if (!res.ok || res.headers.get('content-type')?.includes('text/html')) return null;
+        return await loadBuffer(await res.arrayBuffer());
       } catch {
-        /* shelf starts empty */
+        return null; // shelf starts empty
       }
-    })();
-  }, [addBook, loadBuffer]);
+    });
+  }, [enqueue, loadBuffer]);
 
-  const onPickFile = async (e: ChangeEvent<HTMLInputElement>): Promise<void> => {
+  const onPickFile = (e: ChangeEvent<HTMLInputElement>): void => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
-    const book = await loadFile(file);
-    if (book) addBook(book);
+    if (file) enqueue(() => loadFile(file));
   };
 
   const activeBook = active?.meta?.epub;
@@ -103,6 +116,11 @@ export default function App() {
         >
           {loading ? 'Loading…' : '+ Add EPUB'}
         </button>
+        {error && (
+          <p className="shelf-error" role="alert">
+            {error.message}
+          </p>
+        )}
       </div>
       <input ref={fileRef} type="file" accept=".epub" hidden onChange={onPickFile} />
     </div>

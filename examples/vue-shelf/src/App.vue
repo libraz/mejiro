@@ -8,7 +8,7 @@ import {
   useLibrary,
   type VolumeInfo,
 } from '@libraz/mejiro-vue';
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
 
 /*
  * v0.5 ships `MejiroShelf` (visual bookshelf) and `useLibrary` (headless
@@ -20,11 +20,12 @@ interface BookMeta {
   epub: EpubBook;
 }
 
-const volumes = ref<VolumeInfo<BookMeta>[]>([]);
+// Shallow: parsed books are large and must not be wrapped in deep reactive proxies.
+const volumes = shallowRef<VolumeInfo<BookMeta>[]>([]);
 const activeId = ref<string | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-const { loadBuffer, loadFile, loading } = useEpub();
+const { loadBuffer, loadFile, loading, error } = useEpub();
 const library = useLibrary({ volumes });
 const active = computed(() => volumes.value.find((v) => v.id === activeId.value) ?? null);
 
@@ -32,32 +33,45 @@ let nextId = 0;
 
 function addBook(book: EpubBook): void {
   nextId += 1;
-  volumes.value.push({
-    id: `book-${nextId}`,
-    label: book.title,
-    author: book.author ?? '',
-    meta: { epub: book },
+  volumes.value = [
+    ...volumes.value,
+    {
+      id: `book-${nextId}`,
+      label: book.title,
+      author: book.author ?? '',
+      meta: { epub: book },
+    },
+  ];
+}
+
+// useEpub loads one book at a time, so every load (sample and picks) runs through one queue.
+let queue: Promise<void> = Promise.resolve();
+function enqueue(load: () => Promise<EpubBook | null>): void {
+  queue = queue.then(async () => {
+    const book = await load();
+    if (book) addBook(book);
   });
 }
 
-onMounted(async () => {
-  try {
-    const res = await fetch('/neko.epub');
-    if (!res.ok) return;
-    const book = await loadBuffer(await res.arrayBuffer());
-    if (book) addBook(book);
-  } catch {
-    /* shelf starts empty */
-  }
+// Pre-populate from the bundled sample if it exists (monorepo demo only).
+onMounted(() => {
+  enqueue(async () => {
+    try {
+      const res = await fetch('/neko.epub');
+      // A dev server answers a missing file with index.html; that is "no sample".
+      if (!res.ok || res.headers.get('content-type')?.includes('text/html')) return null;
+      return await loadBuffer(await res.arrayBuffer());
+    } catch {
+      return null; // shelf starts empty
+    }
+  });
 });
 
-async function onPickFile(e: Event): Promise<void> {
+function onPickFile(e: Event): void {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = '';
-  if (!file) return;
-  const book = await loadFile(file);
-  if (book) addBook(book);
+  if (file) enqueue(() => loadFile(file));
 }
 </script>
 
@@ -78,6 +92,7 @@ async function onPickFile(e: Event): Promise<void> {
       >
         {{ loading ? 'Loading…' : '+ Add EPUB' }}
       </button>
+      <p v-if="error" class="shelf-error" role="alert">{{ error.message }}</p>
     </div>
     <input ref="fileInput" type="file" accept=".epub" hidden @change="onPickFile" />
   </div>
@@ -113,6 +128,13 @@ async function onPickFile(e: Event): Promise<void> {
   margin: 32px auto 0;
   display: flex;
   justify-content: center;
+}
+
+.shelf-error {
+  margin: 0 0 0 16px;
+  align-self: center;
+  color: #e0a39a;
+  font-size: 0.8rem;
 }
 
 .add-btn {

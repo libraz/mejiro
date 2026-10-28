@@ -21,7 +21,7 @@ export default function App() {
     fontSize: 18,
     lineSpacing: 2.0,
   });
-  const { epub } = useEpub({ defaultUrl: '/neko.epub' });
+  const { epub, error } = useEpub({ defaultUrl: '/neko.epub' });
   const layoutCtx = useChapterLayout(book, epub, chapter, surfaceRef);
   const spreadCtx = useSpread(layoutCtx.layout, { enableKeyboard: true });
 
@@ -57,6 +57,10 @@ export default function App() {
             onPrev={spreadCtx.prev}
             onNext={spreadCtx.next}
           />
+        ) : error ? (
+          <p className="loading" role="alert">
+            {error.message}
+          </p>
         ) : (
           <p className="loading">Loading…</p>
         )}

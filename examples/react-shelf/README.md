@@ -30,6 +30,10 @@ yarn install
 yarn workspace @mejiro/example-react-shelf dev
 ```
 
+## Sample EPUB
+
+The example loads `/neko.epub`, which is generated rather than checked in. In the monorepo, run `yarn fetch-demo-epub` once from the repo root (it downloads the text from Aozora Bunko). A degit copy has no such file: put your own EPUB at `public/neko.epub`, or point the example at another URL.
+
 ## Use this as a starter
 
 ```bash
@@ -47,4 +51,4 @@ this monorepo.
 ## Reading further
 
 - [`examples/react`](../react) — the minimal one-component variant.
-- [`@libraz/mejiro-react` API reference](../../docs/en/10-api-reference.md#librazmejiro-react--react-component) — full prop / hook reference.
+- [`@libraz/mejiro-react` API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md#librazmejiro-react--react-component) — full prop / hook reference.

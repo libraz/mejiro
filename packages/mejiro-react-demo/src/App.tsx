@@ -115,6 +115,7 @@ export default function App() {
   const [rubyEnd, setRubyEnd] = useState(0);
   const [rubyText, setRubyText] = useState('');
   const [paragraphFilter, setParagraphFilter] = useState('');
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const project = useEpubProject({
     metadata: { title: '新しい作品', author: '作者名' },
@@ -125,6 +126,12 @@ export default function App() {
   // cycle that `epubUrl` would re-run on every remount.
   const sample = useEpub({ defaultUrl: '/neko.epub' });
   const editable = useEditableEpub({ defaultUrl: '/neko.epub' });
+  const exportAndDownload = (run: () => Promise<ArrayBuffer | null>, title: string): void => {
+    setExportError(null);
+    run()
+      .then((buffer) => buffer && downloadEpub(buffer, title))
+      .catch((err: unknown) => setExportError(err instanceof Error ? err.message : String(err)));
+  };
   const customDraft = useManuscriptDraft({
     initialChapters: [
       {
@@ -319,6 +326,13 @@ export default function App() {
             </button>
           ))}
         </div>
+
+        {mode === 'viewer' && sample.error && (
+          <div className="demo-error">{sample.error.message}</div>
+        )}
+        {(mode === 'create' || mode === 'edit') && exportError && (
+          <div className="demo-error">{exportError}</div>
+        )}
 
         {mode === 'viewer' && (
           <>
@@ -531,11 +545,7 @@ export default function App() {
             <button
               type="button"
               className="mejiro-editor-export"
-              onClick={() =>
-                void project
-                  .exportEpub()
-                  .then((buffer) => downloadEpub(buffer, project.metadata.title))
-              }
+              onClick={() => exportAndDownload(project.exportEpub, project.metadata.title)}
             >
               Export EPUB{project.previewing ? ' (previewing)' : ''}
             </button>
@@ -655,12 +665,10 @@ export default function App() {
                   type="button"
                   className="mejiro-editor-export"
                   onClick={() =>
-                    void editable
-                      .exportEpub()
-                      .then(
-                        (buffer) =>
-                          buffer && downloadEpub(buffer, editable.editor?.title || 'edited'),
-                      )
+                    exportAndDownload(
+                      () => editable.exportEpub(),
+                      editable.editor?.title || 'edited',
+                    )
                   }
                 >
                   Export EPUB

@@ -177,6 +177,17 @@ onMounted(() => {
   void editable.loadUrl('/neko.epub');
 });
 
+const exportError = ref<string | null>(null);
+
+function exportAndDownload(run: () => Promise<ArrayBuffer | null>, title: string): void {
+  exportError.value = null;
+  run()
+    .then((buffer) => buffer && downloadEpub(buffer, title))
+    .catch((err: unknown) => {
+      exportError.value = err instanceof Error ? err.message : String(err);
+    });
+}
+
 function downloadEpub(buffer: ArrayBuffer, title: string): void {
   const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
   const a = document.createElement('a');
@@ -344,6 +355,13 @@ function setPreviewChapter(nextChapter: number): void {
         </button>
       </div>
 
+      <div v-if="mode === 'viewer' && sample.error.value" class="demo-error">
+        {{ sample.error.value.message }}
+      </div>
+      <div v-if="(mode === 'create' || mode === 'edit') && exportError" class="demo-error">
+        {{ exportError }}
+      </div>
+
       <template v-if="mode === 'viewer'">
         <div class="demo-options-head">
           <span>Reader props</span>
@@ -480,11 +498,7 @@ function setPreviewChapter(nextChapter: number): void {
         <button
           type="button"
           class="mejiro-editor-export"
-          @click="
-            project
-              .exportEpub()
-              .then((buffer) => downloadEpub(buffer, projectMetadata.title))
-          "
+          @click="exportAndDownload(() => project.exportEpub(), projectMetadata.title)"
         >
           Export EPUB{{ projectPreviewing ? ' (previewing)' : '' }}
         </button>
@@ -577,12 +591,7 @@ function setPreviewChapter(nextChapter: number): void {
             type="button"
             class="mejiro-editor-export"
             @click="
-              editable
-                .exportEpub()
-                .then(
-                  (buffer) =>
-                    buffer && downloadEpub(buffer, editableEditor?.title || 'edited'),
-                )
+              exportAndDownload(() => editable.exportEpub(), editableEditor?.title || 'edited')
             "
           >
             Export EPUB

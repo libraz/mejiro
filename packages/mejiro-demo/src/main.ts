@@ -942,21 +942,36 @@ async function loadEpubBuffer(buffer: ArrayBuffer): Promise<void> {
 }
 
 // ── Full layout + pagination ──
+let renderGeneration = 0;
+
+/** Re-lays out the current chapter; a failure is shown in the stats line, never left unhandled. */
 async function render(): Promise<void> {
+  try {
+    await renderChapter();
+  } catch (err) {
+    console.error('Failed to render:', err);
+    stats.textContent = `Render failed: ${err instanceof Error ? err.message : err}`;
+  }
+}
+
+async function renderChapter(): Promise<void> {
   if (!currentBook) return;
+  const generation = ++renderGeneration;
 
   const chapter = currentBook.chapters[currentChapter];
   if (!chapter) return;
 
   const fontSize = Number(fontSizeInput.value);
 
-  book.setOptions({
+  // Staged font options only apply once the font has loaded; measure after that.
+  await book.setOptions({
     fontFamily: fontFamilySelect.value,
     fontSize,
     lineSpacing: Number(lineSpacingInput.value),
     mode: modeSelect.value as 'strict' | 'loose',
     enableHanging: hangingSelect.value === 'true',
   });
+  if (generation !== renderGeneration) return;
 
   // computePageSize calculates dimensions, sets page size internally, and returns metrics
   applyPageSize();
@@ -975,7 +990,9 @@ async function render(): Promise<void> {
       : null;
 
   const t0 = performance.now();
-  layout = await book.layoutChapter(chapter);
+  const laidOut = await book.layoutChapter(chapter);
+  if (generation !== renderGeneration) return;
+  layout = laidOut;
   layoutChapterIndex = currentChapter;
 
   if (spreadImageMap.size > 0) {
@@ -1024,7 +1041,8 @@ window.addEventListener('resize', () => {
 // ── Load default EPUB if available ──
 fetch('/neko.epub')
   .then((res) => {
-    if (!res.ok) return;
+    // A dev server answers a missing file with index.html; that is "no default book".
+    if (!res.ok || res.headers.get('content-type')?.includes('text/html')) return;
     return res.arrayBuffer();
   })
   .then((buf) => {
