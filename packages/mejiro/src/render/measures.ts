@@ -373,11 +373,11 @@ function slotColumnIndices(slots: readonly ColumnSlot[]): number[] {
  * the slot positions to account for heading lines being wider and inter-paragraph
  * spacing.
  *
- * Slots arrive in reading order, so a column split into several gaps by an
- * image is revisited later in the array rather than occupying a contiguous run.
- * The offset of a column is therefore established the first time that column is
- * seen and replayed on every later slot of the same column, keeping all gaps of
- * one column on a single physical x position.
+ * Slots arrive in reading order. A page an image divides across its full width
+ * is read tier by tier, so each column is revisited once per tier rather than
+ * occupying a contiguous run. The offset of a column is therefore established
+ * the first time that column is seen and replayed on every later slot of the
+ * same column, keeping all gaps of one column on a single physical x position.
  *
  * The exclusion engine also derives its column count from the uniform base
  * pitch (`floor(contentWidth / basePitch)`), so a spread with a wider-than-body

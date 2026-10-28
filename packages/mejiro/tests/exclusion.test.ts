@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ColumnSlot,
+  columnGapsAt,
   computeExclusionSlots,
   computeLineWidths,
   ExclusionEngine,
+  type ImageRect,
+  pageTiers,
   SpreadExclusionEngine,
 } from '../src/exclusion.js';
 import { computeBreaks } from '../src/layout.js';
@@ -316,9 +320,10 @@ describe('computeExclusionSlots', () => {
         { x: 0, y: 200, w: 150, h: 100 },
       ],
     });
-    // 5 columns × 2 gaps each = 10 slots, emitted band by band
+    // 5 columns × 2 gaps each = 10 slots; the full-width images divide the
+    // page into tiers, read top tier first
     expect(slots).toHaveLength(10);
-    // Upper band (80..200) across all five columns, then the lower band (300..400)
+    // Upper tier (80..200) across all five columns, then the lower tier (300..400)
     expect(slots.slice(0, 5)).toEqual([
       { xPos: 0, yStart: 80, height: 120, columnIndex: 0 },
       { xPos: 30, yStart: 80, height: 120, columnIndex: 1 },
@@ -345,7 +350,8 @@ describe('computeExclusionSlots', () => {
         { x: 0, y: 150, w: 150, h: 200 },
       ],
     });
-    // 5 columns × 2 gaps each = 10 slots, emitted band by band
+    // 5 columns × 2 gaps each = 10 slots; the full-width merged block divides
+    // the page into tiers, read top tier first
     expect(slots).toHaveLength(10);
     expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 50, columnIndex: 0 });
     expect(slots[4]).toEqual({ xPos: 120, yStart: 0, height: 50, columnIndex: 4 });
@@ -492,14 +498,15 @@ describe('computeExclusionSlots', () => {
       ...base,
       images: [{ x: 0, y: 100, w: 150, h: 100, inlineMargin: 20 }],
     });
-    // 5 columns × 2 gaps each = 10 slots, emitted band by band
+    // 5 columns × 2 gaps each = 10 slots; the full-width image divides the page
+    // into tiers, read top tier first
     expect(slots).toHaveLength(10);
     expect(slots[0]).toEqual({ xPos: 0, yStart: 0, height: 80, columnIndex: 0 });
     expect(slots[4]).toEqual({ xPos: 120, yStart: 0, height: 80, columnIndex: 4 });
     expect(slots[5]).toEqual({ xPos: 0, yStart: 220, height: 180, columnIndex: 0 });
   });
 
-  it('fills the band above a mid-column image before the band below it', () => {
+  it('reads each column past a mid-column image before the next column', () => {
     // 8 columns of pitch 30 over a 240px content width, lineWidth 400.
     // Columns are numbered from the right edge, so columns 2..5 span
     // x = 60..180 and the image sits across exactly those four columns.
@@ -511,19 +518,19 @@ describe('computeExclusionSlots', () => {
       images: [{ x: 60, y: 150, w: 120, h: 100 }],
     });
 
-    // Columns 0-1 and 6-7 keep a single full-height slot; columns 2-5
-    // contribute an upper and a lower band slot each.
+    // Columns 0-1 and 6-7 keep a single full-height slot; columns 2-5 are
+    // each read above and then below the image before the next column.
     expect(slots).toHaveLength(12);
     expect(slots.map((s) => [s.xPos, s.yStart, s.height])).toEqual([
       [0, 0, 400],
       [30, 0, 400],
       [60, 0, 150],
-      [90, 0, 150],
-      [120, 0, 150],
-      [150, 0, 150],
       [60, 250, 150],
+      [90, 0, 150],
       [90, 250, 150],
+      [120, 0, 150],
       [120, 250, 150],
+      [150, 0, 150],
       [150, 250, 150],
       [180, 0, 400],
       [210, 0, 400],
@@ -539,8 +546,8 @@ describe('computeExclusionSlots', () => {
       images: [{ x: 60, y: 150, w: 120, h: 100 }],
     });
 
-    // Band order revisits columns 2-5, so the array position is not the column.
-    expect(slots.map((s) => s.columnIndex)).toEqual([0, 1, 2, 3, 4, 5, 2, 3, 4, 5, 6, 7]);
+    // Split columns take two slots each, so the array position is not the column.
+    expect(slots.map((s) => s.columnIndex)).toEqual([0, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 7]);
     for (const slot of slots) {
       expect(slot.xPos).toBe((slot.columnIndex as number) * 30);
     }
@@ -797,6 +804,247 @@ describe('SpreadExclusionEngine column count', () => {
             columnsOnPage(contentW, linePitch),
           );
         }
+      }
+    }
+  });
+});
+
+describe('exclusion reading order', () => {
+  // Eight columns of pitch 30 over a 240px content width; columns 400px tall.
+  // Column c spans x = 210 - 30c .. 240 - 30c, numbered from the right edge.
+  const page = { lineWidth: 400, lineCount: 8, linePitch: 30, contentWidth: 240 };
+  const FULL = page.contentWidth;
+
+  const order = (images: ImageRect[]) =>
+    computeExclusionSlots({ ...page, images }).slots.map((s) => `${s.columnIndex}@${s.yStart}`);
+
+  it('continues a column below a partial image before opening the next column', () => {
+    // Columns 2-4 carry text above y=100 and below y=180; the rest are whole.
+    expect(order([{ x: 90, y: 100, w: 90, h: 80 }])).toEqual([
+      '0@0',
+      '1@0',
+      '2@0',
+      '2@180',
+      '3@0',
+      '3@180',
+      '4@0',
+      '4@180',
+      '5@0',
+      '6@0',
+      '7@0',
+    ]);
+  });
+
+  it('reads the tier above a full-width image across the page before the tier below', () => {
+    const slots = order([{ x: 0, y: 100, w: FULL, h: 80 }]);
+    expect(slots).toEqual([
+      ...Array.from({ length: 8 }, (_, c) => `${c}@0`),
+      ...Array.from({ length: 8 }, (_, c) => `${c}@180`),
+    ]);
+  });
+
+  it('keeps a page one tier when the image leaves a single edge column whole', () => {
+    // Columns 0-6 are split; column 7 (x = 0..30) runs the full height, so
+    // no inline range is blocked in every column.
+    const slots = order([{ x: 30, y: 100, w: FULL - 30, h: 80 }]);
+    expect(slots.slice(0, 4)).toEqual(['0@0', '0@180', '1@0', '1@180']);
+    expect(slots.at(-1)).toBe('7@0');
+  });
+
+  it('reads each column past a partial image inside the lower tier', () => {
+    // A full-width band divides the page; a second image splits columns 1-2
+    // of the lower tier again, and the reader steps over it column by column.
+    expect(
+      order([
+        { x: 0, y: 100, w: FULL, h: 40 },
+        { x: 150, y: 250, w: 60, h: 50 },
+      ]),
+    ).toEqual([
+      ...Array.from({ length: 8 }, (_, c) => `${c}@0`),
+      '0@140',
+      '1@140',
+      '1@300',
+      '2@140',
+      '2@300',
+      '3@140',
+      '4@140',
+      '5@140',
+      '6@140',
+      '7@140',
+    ]);
+  });
+
+  it('reads three tiers top to bottom under two full-width images', () => {
+    const slots = order([
+      { x: 0, y: 80, w: FULL, h: 40 },
+      { x: 0, y: 220, w: FULL, h: 40 },
+    ]);
+    const tops = slots.map((s) => Number(s.split('@')[1]));
+    expect(tops).toEqual([...Array(8).fill(0), ...Array(8).fill(120), ...Array(8).fill(260)]);
+  });
+
+  it('ignores a fully blocked column when deciding whether a band divides the page', () => {
+    // Column 0 is blocked top to bottom; every other column is split by the band.
+    const slots = order([
+      { x: 210, y: 0, w: 30, h: 400 },
+      { x: 0, y: 100, w: FULL, h: 80 },
+    ]);
+    expect(slots).toEqual([
+      ...Array.from({ length: 7 }, (_, c) => `${c + 1}@0`),
+      ...Array.from({ length: 7 }, (_, c) => `${c + 1}@180`),
+    ]);
+  });
+
+  it('does not divide the page when a column has text only on one side of the band', () => {
+    // The band crosses the page, but column 3 is also blocked below it, so the
+    // reader could not finish an upper tier there; the page stays one tier.
+    const slots = order([
+      { x: 0, y: 100, w: FULL, h: 80 },
+      { x: 120, y: 180, w: 30, h: 220 },
+    ]);
+    expect(slots.slice(0, 7)).toEqual(['0@0', '0@180', '1@0', '1@180', '2@0', '2@180', '3@0']);
+    expect(slots[7]).toBe('4@0');
+  });
+
+  it('orders slots the same way in each page of a spread', () => {
+    // 160px content per page, five 32px columns; left-page content x = image x + 180.
+    const engine = new SpreadExclusionEngine({
+      pageWidth: 200,
+      pagePaddingX: 20,
+      pagePaddingY: 0,
+      lineWidth: 400,
+      linePitch: 32,
+    });
+    // A partial image on the right page, a full-width band on the left page.
+    engine.addImage({ x: 60, y: 100, w: 60, h: 80 });
+    engine.addImage({ x: -180, y: 100, w: 160, h: 80 });
+    const { rightSlots, leftSlots } = engine.compute();
+
+    const right = rightSlots.map((s) => s.columnIndex as number);
+    expect(new Set(right).size).toBeLessThan(right.length);
+    for (let i = 1; i < right.length; i++) {
+      expect(right[i]).toBeGreaterThanOrEqual(right[i - 1]);
+    }
+    const leftTops = leftSlots.map((s) => s.yStart);
+    const firstLower = leftTops.findIndex((y) => y > 0);
+    expect(firstLower).toBeGreaterThan(0);
+    expect(leftTops.slice(firstLower).every((y) => y > 0)).toBe(true);
+  });
+});
+
+describe('pageTiers', () => {
+  const gap = (yStart: number, height: number): ColumnSlot => ({ xPos: 0, yStart, height });
+
+  it('returns one tier over the line width when nothing divides the page', () => {
+    expect(pageTiers([], 400)).toEqual([{ top: 0, bottom: 400 }]);
+    expect(pageTiers([[gap(0, 400)], [gap(0, 100), gap(200, 200)]], 400)).toEqual([
+      { top: 0, bottom: 400 },
+    ]);
+  });
+
+  it('cuts at the range every texted column is blocked in', () => {
+    const split = [gap(0, 100), gap(180, 220)];
+    expect(pageTiers([split, split, [], split], 400)).toEqual([
+      { top: 0, bottom: 100 },
+      { top: 180, bottom: 400 },
+    ]);
+  });
+
+  it('cuts at the narrowest common range when columns are blocked unevenly', () => {
+    expect(
+      pageTiers(
+        [
+          [gap(0, 100), gap(180, 220)],
+          [gap(0, 120), gap(160, 240)],
+        ],
+        400,
+      ),
+    ).toEqual([
+      { top: 0, bottom: 120 },
+      { top: 160, bottom: 400 },
+    ]);
+  });
+
+  it('does not cut between staggered images', () => {
+    // Column 0 has text only below, column 1 only above: no shared tier boundary.
+    expect(pageTiers([[gap(200, 200)], [gap(0, 100)]], 400)).toEqual([{ top: 0, bottom: 400 }]);
+  });
+});
+
+describe('exclusion reading order invariants', () => {
+  /** Deterministic PRNG so a failure reproduces from its seed. */
+  function lcg(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      return state / 2 ** 32;
+    };
+  }
+
+  const page = { lineWidth: 400, lineCount: 8, linePitch: 30, contentWidth: 240 };
+
+  it('emits every gap once, tier by tier, column by column, top to bottom', () => {
+    for (let seed = 1; seed <= 400; seed++) {
+      const rand = lcg(seed);
+      const images: ImageRect[] = Array.from({ length: 1 + Math.floor(rand() * 3) }, () => {
+        const fullWidth = rand() < 0.3;
+        const x = fullWidth ? 0 : Math.floor(rand() * 200);
+        const w = fullWidth ? page.contentWidth : 20 + Math.floor(rand() * (page.contentWidth - x));
+        return { x, y: Math.floor(rand() * 340), w, h: 20 + Math.floor(rand() * 120) };
+      });
+      const { slots } = computeExclusionSlots({ ...page, images });
+      const columns = Array.from(
+        { length: page.lineCount },
+        (_, c) =>
+          columnGapsAt(
+            c * page.linePitch,
+            page.linePitch,
+            c,
+            page.contentWidth,
+            page.lineWidth,
+            images,
+            page.linePitch,
+          ).gaps,
+      );
+      const context = `seed ${seed}: ${JSON.stringify(images)}`;
+
+      // No gap lost or duplicated.
+      const key = (g: ColumnSlot) => `${g.columnIndex}@${g.yStart}+${g.height}`;
+      expect(slots.map(key).sort(), context).toEqual(columns.flat().map(key).sort());
+
+      // Every tier boundary is blocked in every texted column, with text on both sides.
+      const tiers = pageTiers(columns, page.lineWidth);
+      for (let t = 1; t < tiers.length; t++) {
+        const cutTop = tiers[t - 1].bottom;
+        const cutBottom = tiers[t].top;
+        expect(cutBottom, context).toBeGreaterThan(cutTop);
+        for (const gaps of columns.filter((g) => g.length > 0)) {
+          for (const g of gaps) {
+            const end = g.yStart + g.height;
+            expect(end <= cutTop || g.yStart >= cutBottom, context).toBe(true);
+          }
+          expect(
+            gaps.some((g) => g.yStart + g.height <= cutTop),
+            context,
+          ).toBe(true);
+          expect(
+            gaps.some((g) => g.yStart >= cutBottom),
+            context,
+          ).toBe(true);
+        }
+      }
+
+      // Reading order: tier, then column from the right, then top to bottom.
+      const tierOf = (g: ColumnSlot) => tiers.findIndex((t) => g.yStart < t.bottom);
+      for (let i = 1; i < slots.length; i++) {
+        const a = slots[i - 1];
+        const b = slots[i];
+        const [ta, tb] = [tierOf(a), tierOf(b)];
+        expect(tb, context).toBeGreaterThanOrEqual(ta);
+        if (ta !== tb) continue;
+        const [ca, cb] = [a.columnIndex as number, b.columnIndex as number];
+        expect(cb, context).toBeGreaterThanOrEqual(ca);
+        if (ca === cb) expect(b.yStart, context).toBeGreaterThan(a.yStart);
       }
     }
   });

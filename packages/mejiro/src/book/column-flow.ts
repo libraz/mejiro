@@ -8,17 +8,20 @@
  * a paragraph's line widths on a copy of the flow, break the paragraph once,
  * and then commit its lines: a single deterministic pass with no re-break.
  *
- * Columns split identically by an image form a band group read band by band,
- * as the exclusion engine orders them; a column blocked from top to bottom
- * is skipped at the pitch of the line that tried to enter it.
+ * Reading order matches the exclusion engine: a page an image divides across
+ * its full width is filled tier by tier, each tier restarting at the right
+ * edge; within a tier a column is read through all of its gaps, top to bottom,
+ * before the next column opens. A column blocked from top to bottom is skipped
+ * at the pitch of the line that tried to enter it.
  */
 
 import {
   type ColumnSlot,
   columnGapsAt,
   type ImageRect,
+  type PageTier,
+  pageTiers,
   type SpreadPageImages,
-  sameGapPartition,
 } from '../exclusion.js';
 import type { LineMetric } from '../render/types.js';
 
@@ -56,16 +59,8 @@ interface FlowColumn {
   gaps: readonly ColumnSlot[];
   /** Pitch the column was cut for; no wider line enters it. */
   width: number;
-}
-
-interface BandGroup {
-  columns: FlowColumn[];
-  /** Band being filled, top to bottom. */
-  band: number;
-  /** Next column of {@link BandGroup.band} to fill. */
+  /** Next gap to fill, top to bottom. */
   next: number;
-  /** Whether band 0 still accepts columns. */
-  open: boolean;
 }
 
 /** Deterministic line placement over the spreads of one chapter. */
@@ -84,10 +79,14 @@ export class ColumnFlow {
   private leftSlots: ColumnSlot[] = [];
   private pageImages: readonly ImageRect[] = [];
   private pageLines = 0;
-  /** Block-direction extent used by the columns closed so far on this page. */
+  /** Tiers of the current page, top to bottom. */
+  private tiers: readonly PageTier[] = [];
+  private tier = 0;
+  private tierLines = 0;
+  /** Block-direction extent used by the columns closed so far in this tier. */
   private edge = 0;
   private nextIndex = 0;
-  private group: BandGroup | null = null;
+  private column: FlowColumn | null = null;
 
   /**
    * @param geometry - Page geometry shared by every page.
@@ -102,7 +101,7 @@ export class ColumnFlow {
     }
     this.lastImageSpread = last;
     this.spreads = [];
-    this.pageImages = this.imagesOf(0, 'right');
+    this.enterPage();
   }
 
   /** Whether every later line lands on an image-free page at full line width. */
@@ -114,10 +113,7 @@ export class ColumnFlow {
   probe(): ColumnFlow {
     const copy: ColumnFlow = Object.create(ColumnFlow.prototype);
     Object.assign(copy, this, { spreads: null, rightSlots: [], leftSlots: [] });
-    const group = this.group;
-    if (group) {
-      copy.group = { ...group, columns: group.columns.map((column) => ({ ...column })) };
-    }
+    if (this.column) copy.column = { ...this.column };
     return copy;
   }
 
@@ -128,37 +124,23 @@ export class ColumnFlow {
    */
   place(metric: LineMetric): number {
     for (;;) {
-      const group = this.group;
-      if (group) {
-        if (group.band === 0 && group.open) {
-          const column = this.joinColumn(group, metric);
-          if (column) return this.emit(column.gaps[0]);
-          group.band = 1;
-          group.next = 0;
+      const current = this.column;
+      if (current) {
+        // A line wider than the column ends it: its gaps were cut for a narrower one.
+        if (current.next < current.gaps.length && metric.pitch <= current.width) {
+          return this.emit(current.gaps[current.next++]);
         }
-        const reference = group.columns[0].gaps;
-        if (group.next === group.columns.length) {
-          group.band++;
-          group.next = 0;
-        }
-        // A line wider than the column it would enter ends the group: the
-        // column's gaps were cut, and its neighbour placed, for a narrower one.
-        const column = group.columns[group.next];
-        if (group.band < reference.length && metric.pitch <= column.width) {
-          group.next++;
-          return this.emit(column.gaps[group.band]);
-        }
-        const last = group.columns[group.columns.length - 1];
-        this.edge = last.x + last.width;
-        this.nextIndex = last.index + 1;
-        this.group = null;
+        this.edge = current.x + current.width;
+        this.nextIndex = current.index + 1;
+        this.column = null;
       }
       const column = this.openColumn(metric);
       if (column) {
-        this.group = { columns: [column], band: 0, next: 1, open: true };
-        return this.emit(column.gaps[0]);
+        this.column = column;
+        return this.emit(column.gaps[column.next++]);
       }
-      this.nextPage();
+      if (this.tier + 1 < this.tiers.length) this.enterTier(this.tier + 1);
+      else this.nextPage();
     }
   }
 
@@ -172,21 +154,9 @@ export class ColumnFlow {
     return this.images.get(spread)?.[side] ?? [];
   }
 
-  /** Extends band 0 of `group` with the next column when it is cut into the same gaps. */
-  private joinColumn(group: BandGroup, metric: LineMetric): FlowColumn | null {
-    const last = group.columns[group.columns.length - 1];
-    const column = this.findColumn(last.x + last.width + metric.gapBefore, last.index + 1, metric);
-    if (column && sameGapPartition(column.gaps, group.columns[0].gaps)) {
-      group.columns.push(column);
-      return column;
-    }
-    group.open = false;
-    return null;
-  }
-
-  /** First column with a usable gap at or after the page's closed extent. */
+  /** First column with a usable gap at or after the tier's closed extent. */
   private openColumn(metric: LineMetric): FlowColumn | null {
-    const x = this.pageLines > 0 ? this.edge + metric.gapBefore : this.edge;
+    const x = this.tierLines > 0 ? this.edge + metric.gapBefore : this.edge;
     return this.findColumn(x, this.nextIndex, metric);
   }
 
@@ -196,26 +166,71 @@ export class ColumnFlow {
     for (;;) {
       // The page's first column is kept even when it overflows, so layout always progresses.
       if (x + pitch > contentWidth + 0.5 && !(x === 0 && this.pageLines === 0)) return null;
-      const { gaps } = columnGapsAt(
-        x,
-        pitch,
-        index,
-        contentWidth,
-        lineWidth,
-        this.pageImages,
-        basePitch,
+      const gaps = this.tierGaps(
+        columnGapsAt(x, pitch, index, contentWidth, lineWidth, this.pageImages, basePitch).gaps,
       );
-      if (gaps.length > 0) return { x, index, gaps, width: pitch };
+      if (gaps.length > 0) return { x, index, gaps, width: pitch, next: 0 };
       x += pitch;
       index++;
     }
   }
 
+  /** The parts of `gaps` inside the current tier that still fit a body line. */
+  private tierGaps(gaps: readonly ColumnSlot[]): ColumnSlot[] {
+    if (this.tiers.length === 1) return gaps as ColumnSlot[];
+    const { top, bottom } = this.tiers[this.tier];
+    const inside: ColumnSlot[] = [];
+    for (const gap of gaps) {
+      const start = Math.max(gap.yStart, top);
+      const end = Math.min(gap.yStart + gap.height, bottom);
+      if (end - start >= this.geometry.basePitch) {
+        inside.push({ ...gap, yStart: start, height: end - start });
+      }
+    }
+    return inside;
+  }
+
   private emit(gap: ColumnSlot): number {
     if (this.spreads) (this.side === 'right' ? this.rightSlots : this.leftSlots).push(gap);
     this.pageLines++;
+    this.tierLines++;
     this.lines++;
     return gap.height;
+  }
+
+  /** Loads the current page's images and tiers and starts its first tier. */
+  private enterPage(): void {
+    this.pageImages = this.imagesOf(this.spread, this.side);
+    this.pageLines = 0;
+    this.tiers =
+      this.pageImages.length > 0 ? this.cutTiers() : [{ top: 0, bottom: this.geometry.lineWidth }];
+    this.enterTier(0);
+  }
+
+  private enterTier(tier: number): void {
+    this.tier = tier;
+    this.tierLines = 0;
+    this.edge = 0;
+    this.nextIndex = 0;
+  }
+
+  /** Tiers of the current page, judged on body-pitch columns as the exclusion engine cuts them. */
+  private cutTiers(): PageTier[] {
+    const { contentWidth, lineWidth, basePitch } = this.geometry;
+    const columns: ColumnSlot[][] = [];
+    for (let i = 0; (i + 1) * basePitch <= contentWidth + 0.5; i++) {
+      const { gaps } = columnGapsAt(
+        i * basePitch,
+        basePitch,
+        i,
+        contentWidth,
+        lineWidth,
+        this.pageImages,
+        basePitch,
+      );
+      columns.push(gaps);
+    }
+    return pageTiers(columns, lineWidth);
   }
 
   private nextPage(): void {
@@ -229,10 +244,7 @@ export class ColumnFlow {
       this.rightSlots = [];
       this.leftSlots = [];
     }
-    this.pageImages = this.imagesOf(this.spread, this.side);
-    this.pageLines = 0;
-    this.edge = 0;
-    this.nextIndex = 0;
+    this.enterPage();
   }
 
   private currentSpread(): SpreadLayoutInfo {

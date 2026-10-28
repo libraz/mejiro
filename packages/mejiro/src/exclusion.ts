@@ -167,10 +167,11 @@ export interface ExclusionPageGeometry {
  *
  * For a column partially blocked by an image, the engine produces
  * multiple slots (e.g. one above and one below the image), each with
- * its own line width entry. Slots are emitted in reading order: a run
- * of adjacent columns split the same way by an image forms a band
- * group, and text fills the band above the image across the whole
- * group before wrapping back to the band below it.
+ * its own line width entry. Slots are emitted in reading order: column
+ * by column from the right, and within a column from the gap above the
+ * image to the gap below it, so a column interrupted by an image is
+ * read through before the next column starts. An image spanning the full
+ * page width divides the page into tiers instead, read top tier first.
  *
  * @example
  * ```ts
@@ -255,9 +256,10 @@ export class ExclusionEngine {
    * and a slot cannot be looked up by column index — read
    * {@link ColumnSlot.columnIndex} to recover the physical column.
    *
-   * Slots come out in reading order, not column order: adjacent columns
-   * split identically by an image form a band group whose upper band is
-   * filled across every column of the group before the band below it.
+   * Slots come out in reading order: column by column from the right,
+   * and every gap of a column top to bottom before the next column. A
+   * page an image divides across its full width is read tier by tier
+   * (see {@link pageTiers}).
    *
    * Every `lineWidths` entry is strictly positive: a gap with no usable
    * height produces no slot rather than a zero-width one.
@@ -286,7 +288,7 @@ export class ExclusionEngine {
       columns.push(column);
     }
 
-    const slots = orderGapsForReading(columns);
+    const slots = orderGapsForReading(columns, lineWidth);
     const widths = new Float32Array(slots.length);
     for (let i = 0; i < slots.length; i++) {
       widths[i] = slots[i].height;
@@ -329,49 +331,79 @@ export interface ColumnGaps {
   obstructed: boolean;
 }
 
-/** True when two columns are split into the same vertical gaps. */
-export function sameGapPartition(a: readonly ColumnSlot[], b: readonly ColumnSlot[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i].yStart !== b[i].yStart || a[i].height !== b[i].height) return false;
+/** A horizontal tier of a page, between full-width cuts (inline px). */
+export interface PageTier {
+  /** Inline start of the tier. */
+  top: number;
+  /** Inline end of the tier. */
+  bottom: number;
+}
+
+/**
+ * Splits a page into tiers at the inline ranges images block in every column.
+ *
+ * A range divides the page only when every column with text has a gap on both
+ * sides of it, as a figure spanning the full page width does; images that are
+ * merely staggered across columns leave the page one tier.
+ *
+ * @param columns - Gaps of each physical column, top to bottom.
+ * @param lineWidth - Full inline size of a column (px).
+ * @returns Tiers top to bottom; a single tier over `lineWidth` when nothing divides the page.
+ */
+export function pageTiers(
+  columns: readonly (readonly ColumnSlot[])[],
+  lineWidth: number,
+): PageTier[] {
+  const texted = columns.filter((gaps) => gaps.length > 0);
+  const spans = texted
+    .flat()
+    .map((gap) => [gap.yStart, gap.yStart + gap.height] as const)
+    .sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [start, end] of spans) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
   }
-  return true;
+
+  const tiers: PageTier[] = [];
+  let top = 0;
+  for (let i = 0; i + 1 < merged.length; i++) {
+    const cutTop = merged[i][1];
+    const cutBottom = merged[i + 1][0];
+    const divides = texted.every(
+      (gaps) =>
+        gaps.some((gap) => gap.yStart + gap.height <= cutTop) &&
+        gaps.some((gap) => gap.yStart >= cutBottom),
+    );
+    if (!divides) continue;
+    tiers.push({ top, bottom: cutTop });
+    top = cutBottom;
+  }
+  tiers.push({ top, bottom: lineWidth });
+  return tiers;
 }
 
 /**
  * Flattens per-column gaps into the order a reader traverses them.
  *
- * Adjacent columns cut into the same gaps by an image form a band group. Within
- * a group the gaps are emitted band by band — the whole band above the image
- * across every column of the group, then the band below it — which is how text
- * wraps around a figure placed in the middle of a run of columns. Columns whose
- * gaps differ start a new group, so a column is never read before a column to
- * its right. A fully blocked column contributes nothing and does not split the
- * group around it.
+ * Tiers are read top to bottom. Within a tier, columns are read from the right
+ * and each column through all of its gaps before the next, so a line an image
+ * interrupts continues past it in the same column. A fully blocked column
+ * contributes nothing.
  */
-function orderGapsForReading(columns: readonly ColumnGaps[]): ColumnSlot[] {
+function orderGapsForReading(columns: readonly ColumnGaps[], lineWidth: number): ColumnSlot[] {
+  const tiers = pageTiers(
+    columns.map((column) => column.gaps),
+    lineWidth,
+  );
   const slots: ColumnSlot[] = [];
-  let start = 0;
-  while (start < columns.length) {
-    const reference = columns[start].gaps;
-    if (reference.length === 0) {
-      start++;
-      continue;
-    }
-    let end = start + 1;
-    while (
-      end < columns.length &&
-      (columns[end].gaps.length === 0 || sameGapPartition(reference, columns[end].gaps))
-    ) {
-      end++;
-    }
-    for (let band = 0; band < reference.length; band++) {
-      for (let col = start; col < end; col++) {
-        const gap = columns[col].gaps[band];
-        if (gap) slots.push(gap);
+  for (const tier of tiers) {
+    for (const column of columns) {
+      for (const gap of column.gaps) {
+        if (gap.yStart >= tier.top && gap.yStart < tier.bottom) slots.push(gap);
       }
     }
-    start = end;
   }
   return slots;
 }

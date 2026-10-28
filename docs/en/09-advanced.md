@@ -337,7 +337,7 @@ const result = computeBreaks({
 2. Overlapping regions are merged into non-overlapping intervals.
 3. **Every** contiguous gap left between those intervals becomes a slot, as long as it is at least `minGapHeight` tall (defaults to `linePitch`). A column split by an image contributes one slot above it and one below it; a column an image covers entirely contributes none.
 4. The gap's height becomes the effective `lineWidth` for that slot, and its vertical position (`yStart`) indicates where to render the text.
-5. Slots are emitted in reading order. Adjacent columns that an image splits the same way form a band group: the band above the image is filled across every column of the group before the text wraps back to the band below it. Columns split differently start a new group, so a column is never read before a column to its right.
+5. Slots are emitted in reading order: column by column from the right, and within a column from the gap above an image to the gap below it, so a line an image interrupts continues past it in the same column before the next column starts. The exception is an image that crosses the full page width: when every column with text has text both above and below a range the images block in every column, that range divides the page into tiers, and the upper tier is read across the whole page before the lower one. Within each tier the column-by-column order applies again.
 
 Because a column may yield several slots or none, `slots.length` is unrelated to `lineCount` and `slots[columnIndex]` is not a valid lookup — a slot's index is a line index. Use `columnIndex` to recover the physical column, not `xPos`. The two-image example above produces 20 slots for 12 columns.
 

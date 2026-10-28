@@ -1127,6 +1127,143 @@ describe('ChapterLayout', () => {
         { x: 5, y: PAD_Y + 30, w: 20, h: 40, margin: 0 },
       ]);
     });
+
+    /**
+     * Places `images` on spread 0 and checks every page reads in order: tiers
+     * (split at content-y `cuts`) top to bottom, then columns right to left,
+     * then each column's gaps top to bottom. Returns how often a line continued
+     * in the same column, i.e. stepped over an image.
+     */
+    function expectReadingOrder(
+      layout: ChapterLayout,
+      images: DrawnImage[],
+      cuts: { right?: number[]; left?: number[] } = {},
+    ): number {
+      layout.setImages(0, images);
+      const spread = layout.getSpread(0);
+      let continued = 0;
+      for (const side of ['right', 'left'] as const) {
+        const { slots, lines } = spread[side];
+        const tierOf = (y: number) => (cuts[side] ?? []).filter((cut) => y >= cut).length;
+        for (let i = 1; i < slots.length; i++) {
+          const a = slots[i - 1];
+          const b = slots[i];
+          const context = `${side} line ${i}: ${JSON.stringify([a, b])}`;
+          const [ta, tb] = [tierOf(a.yStart), tierOf(b.yStart)];
+          expect(tb, context).toBeGreaterThanOrEqual(ta);
+          if (ta !== tb) continue;
+          if (Math.abs(b.xPos - a.xPos) < 1e-6) {
+            expect(b.yStart, context).toBeGreaterThan(a.yStart);
+            continued++;
+          } else {
+            // The next column starts beyond the whole of the previous one.
+            expect(b.xPos, context).toBeGreaterThanOrEqual(a.xPos + lines[i - 1].fontSize - 1e-6);
+          }
+        }
+      }
+      return continued;
+    }
+
+    /** Every character on spread 0 maps to a rect whose centre maps back to it. */
+    function expectAnchorsRoundTrip(layout: ChapterLayout): void {
+      const start = layout.anchorAt(0, 'right');
+      const end = layout.anchorAt(1, 'right');
+      expect(start).not.toBeNull();
+      for (let p = start?.paragraph ?? 0; p < (end?.paragraph ?? 0); p++) {
+        for (let c = 0; c < LENGTHS[p % LENGTHS.length]; c++) {
+          const anchor = { paragraph: p, charIndex: c };
+          const rect = layout.coordOfAnchor(anchor);
+          if (rect?.spreadIdx !== 0) continue;
+          const back = layout.anchorAtCoord(0, rect.x + rect.width / 2, rect.y + rect.height / 2);
+          expect(back, JSON.stringify(anchor)).toEqual(anchor);
+        }
+      }
+    }
+
+    describe('reading order around images', () => {
+      it('continues each column below a partial image before the next column', () => {
+        const layout = makeShortParagraphLayout();
+        const images = [{ x: 40, y: PAD_Y + 30, w: 40, h: 30, margin: 0 }];
+        expect(expectReadingOrder(layout, images)).toBeGreaterThan(0);
+        expectTextClear(layout, 0, images);
+        expectAnchorsRoundTrip(layout);
+      });
+
+      it('reads the tier above a full-width image across the page first', () => {
+        const layout = makeShortParagraphLayout();
+        const images = [{ x: PAD_X, y: PAD_Y + 40, w: CONTENT_WIDTH, h: 20, margin: 0 }];
+        expect(expectReadingOrder(layout, images, { right: [50] })).toBe(0);
+        const { slots } = layout.getSpread(0).right;
+        const upper = slots.filter((slot) => slot.yStart < 50).length;
+        expect(upper).toBeGreaterThan(1);
+        expect(slots.length - upper).toBeGreaterThan(1);
+        expectTextClear(layout, 0, images);
+        expectAnchorsRoundTrip(layout);
+      });
+
+      it('splits both pages into tiers under an image spanning the spine', () => {
+        const layout = makeShortParagraphLayout();
+        const images = [
+          {
+            x: -PAD_X - CONTENT_WIDTH,
+            y: PAD_Y + 40,
+            w: 2 * (PAD_X + CONTENT_WIDTH),
+            h: 20,
+            margin: 0,
+          },
+        ];
+        expectReadingOrder(layout, images, { right: [50], left: [50] });
+        for (const side of ['right', 'left'] as const) {
+          const tops = layout.getSpread(0)[side].slots.map((slot) => slot.yStart >= 50);
+          expect(tops.indexOf(true), side).toBeGreaterThan(0);
+          expect(tops.slice(tops.indexOf(true)).every(Boolean), side).toBe(true);
+        }
+        expectAnchorsRoundTrip(layout);
+      });
+
+      it('keeps one tier when staggered images block no range in every column', () => {
+        // The right half is blocked at the top and the left half at the bottom;
+        // the two overlap in y, but no column has text on both sides of it.
+        const layout = makeShortParagraphLayout();
+        const images = [
+          { x: 60, y: PAD_Y, w: 50, h: 55, margin: 0 },
+          { x: PAD_X, y: PAD_Y + 45, w: 50, h: 55, margin: 0 },
+        ];
+        expectReadingOrder(layout, images);
+        expectTextClear(layout, 0, images);
+        expectAnchorsRoundTrip(layout);
+      });
+
+      it('reads past a partial image in the lower tier of a divided page', () => {
+        const layout = makeShortParagraphLayout();
+        const images = [
+          { x: PAD_X, y: PAD_Y + 20, w: CONTENT_WIDTH, h: 10, margin: 0 },
+          { x: 50, y: PAD_Y + 60, w: 30, h: 20, margin: 0 },
+        ];
+        expect(expectReadingOrder(layout, images, { right: [25] })).toBeGreaterThan(0);
+        expectTextClear(layout, 0, images);
+        expectAnchorsRoundTrip(layout);
+      });
+
+      it('keeps wider heading columns in order around a partial image', () => {
+        const layout = makeShortParagraphLayout(3);
+        const images = [{ x: 30, y: PAD_Y + 30, w: 50, h: 30, margin: 0 }];
+        expectReadingOrder(layout, images);
+        expectTextClear(layout, 0, images);
+        expectAnchorsRoundTrip(layout);
+      });
+
+      it('lays out the same spread on a fresh layout as after a relayout', () => {
+        const images = [{ x: 40, y: PAD_Y + 30, w: 40, h: 30, margin: 0 }];
+        const fresh = makeShortParagraphLayout();
+        fresh.setImages(0, images);
+        const relaid = makeShortParagraphLayout();
+        relaid.setImages(0, [{ x: PAD_X, y: PAD_Y + 40, w: CONTENT_WIDTH, h: 20, margin: 0 }]);
+        relaid.getSpread(0);
+        relaid.setImages(0, images);
+        expect(relaid.getSpread(0)).toEqual(fresh.getSpread(0));
+      });
+    });
   });
 
   describe('paragraph kind across re-breaks', () => {
