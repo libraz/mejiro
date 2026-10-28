@@ -33,6 +33,27 @@ export function parsePositiveNumber(
 }
 
 /**
+ * Parses a flag value that has to be a positive integer, such as a count.
+ *
+ * @param value - The raw value, or `undefined` when the flag was not given.
+ * @param defaultValue - The value to use when the flag was not given.
+ * @param name - The flag name, used in the error message.
+ * @returns The parsed integer.
+ * @throws When the value is present but is not a positive integer.
+ */
+export function parsePositiveInteger(
+  value: string | undefined,
+  defaultValue: number,
+  name: string,
+): number {
+  const parsed = value == null ? defaultValue : Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+/**
  * Collects the arguments that are neither a flag nor a flag value.
  *
  * @param args - Command arguments, after the command name.

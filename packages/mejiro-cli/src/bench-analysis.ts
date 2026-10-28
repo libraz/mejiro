@@ -6,7 +6,7 @@ import {
   toCodepoints,
 } from '@libraz/mejiro';
 import { createSuzumeAnalyzer, type TextAnalyzer } from '@libraz/mejiro/analysis';
-import { parseFlag, parsePositiveNumber } from './args.js';
+import { parseFlag, parsePositiveInteger, parsePositiveNumber } from './args.js';
 import { buildCorpusParagraphs } from './corpus.js';
 
 /** Where the benchmark writes its report. */
@@ -122,8 +122,8 @@ interface Slice {
  * @returns The process exit code.
  */
 export async function runBenchAnalysis(args: string[], io: BenchIO): Promise<number> {
-  const chars = parsePositiveNumber(parseFlag(args, '--chars'), 20000, '--chars');
-  const iterations = parsePositiveNumber(parseFlag(args, '--iterations'), 20, '--iterations');
+  const chars = parsePositiveInteger(parseFlag(args, '--chars'), 20000, '--chars');
+  const iterations = parsePositiveInteger(parseFlag(args, '--iterations'), 20, '--iterations');
   const lineWidthEm = parsePositiveNumber(
     parseFlag(args, '--line-width-em'),
     40,

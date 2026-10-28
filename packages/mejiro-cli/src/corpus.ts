@@ -117,6 +117,15 @@ const DIALOGUE: readonly string[] = [
   '「……分かりました」ようやくそう答えたとき、雨は上がっていた。',
 ];
 
+/** Every sentence pool the corpus draws from. */
+export const SENTENCE_POOLS: readonly (readonly string[])[] = [
+  NARRATIVE,
+  NUMERALS,
+  PREFIXED,
+  LATIN,
+  DIALOGUE,
+];
+
 /**
  * The order categories are drawn in, repeated for as long as text is needed.
  * Narrative dominates; the other four appear at the rate they do in prose that
@@ -172,15 +181,18 @@ export function buildCorpusParagraphs(minChars: number): string[] {
   let total = 0;
   let sentenceIndex = 0;
   let paragraphIndex = 0;
+  const poolDraws = new Map<readonly string[], number>();
 
   while (total < minChars) {
     const sentenceCount = PARAGRAPH_LENGTHS[paragraphIndex % PARAGRAPH_LENGTHS.length];
     let paragraph = '';
     for (let i = 0; i < sentenceCount; i++) {
       const pool = CATEGORY_CYCLE[sentenceIndex % CATEGORY_CYCLE.length];
-      // The stride is coprime with every pool size, so a pool is walked in full
-      // before it repeats and consecutive draws never pick the same sentence.
-      paragraph += pool[(sentenceIndex * 7) % pool.length];
+      // The stride is coprime with every pool size, so each pool, counted on its
+      // own, is walked in full before it repeats and never repeats back to back.
+      const draw = poolDraws.get(pool) ?? 0;
+      poolDraws.set(pool, draw + 1);
+      paragraph += pool[(draw * 7) % pool.length];
       sentenceIndex++;
     }
     paragraphs.push(paragraph);

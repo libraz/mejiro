@@ -1,6 +1,7 @@
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
-import { parseFlag, parsePositiveNumber, positionalArgs } from './args.js';
+import { parseFlag, parsePositiveInteger, parsePositiveNumber, positionalArgs } from './args.js';
 import { runBenchAnalysis } from './bench-analysis.js';
 
 interface CliIO {
@@ -76,8 +77,8 @@ function runLayout(args: string[], io: CliIO): number {
 }
 
 function runBench(args: string[], io: CliIO): number {
-  const numChars = parsePositiveNumber(parseFlag(args, '--chars'), 10000, '--chars');
-  const iterations = parsePositiveNumber(parseFlag(args, '--iterations'), 1000, '--iterations');
+  const numChars = parsePositiveInteger(parseFlag(args, '--chars'), 10000, '--chars');
+  const iterations = parsePositiveInteger(parseFlag(args, '--iterations'), 1000, '--iterations');
 
   const text = new Uint32Array(numChars);
   const advances = new Float32Array(numChars);
@@ -140,6 +141,7 @@ function codepointsToString(cps: Uint32Array, start: number, end: number): strin
   return s;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// The bin is usually a symlink; import.meta.url is the resolved file.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   process.exitCode = await runCli(process.argv.slice(2));
 }
