@@ -119,8 +119,9 @@ function isRegionalIndicator(cp: number): boolean {
 /**
  * Joins an annotation preprocessor's own clusters with the caller's, as their
  * transitive closure, so a caller cluster reaching past an annotation span
- * stays joined to it. Each class keeps the caller's ID of its first position,
- * so a caller cluster no annotation touches comes back with its ID unchanged.
+ * stays joined to it. Each class keeps the caller's ID of its first position
+ * unless another class already holds that ID, in which case it gets a fresh
+ * one; a caller cluster no annotation touches comes back with its ID unchanged.
  *
  * @param existing - Caller-supplied cluster IDs, or `undefined`.
  * @param own - Cluster IDs the preprocessor derived from its annotations alone.
@@ -133,7 +134,20 @@ export function mergeAnnotationClusters(
   // A length mismatch describes other text and is ignored, as mergeClusterIds does.
   if (existing?.length !== own.length) return own;
   const merged = mergeClusterIds(own.length, existing, own) ?? own;
-  // mergeClusterIds labels each class by its lowest position.
-  for (let i = 0; i < merged.length; i++) merged[i] = existing[merged[i]];
+  // mergeClusterIds labels each class by its lowest position; relabel with the
+  // caller's ID unless another class already holds it, so classes stay distinct.
+  let nextFresh = existing.reduce((max, id) => Math.max(max, id), 0) + 1;
+  const labelOf = new Map<number, number>();
+  const claimed = new Set<number>();
+  for (let i = 0; i < merged.length; i++) {
+    const root = merged[i];
+    let label = labelOf.get(root);
+    if (label === undefined) {
+      label = claimed.has(existing[root]) ? nextFresh++ : existing[root];
+      claimed.add(label);
+      labelOf.set(root, label);
+    }
+    merged[i] = label;
+  }
   return merged;
 }

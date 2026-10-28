@@ -6,6 +6,7 @@ import {
   SpreadExclusionEngine,
 } from '../src/exclusion.js';
 import { computeBreaks } from '../src/layout.js';
+import { paginate } from '../src/paginate.js';
 import { toCodepoints, uniformAdvances } from './helpers.js';
 
 describe('computeLineWidths', () => {
@@ -757,6 +758,46 @@ describe('SpreadExclusionEngine', () => {
     // Left portion
     for (let i = 0; i < leftSlots.length; i++) {
       expect(lineWidths[rightSlotCount + i]).toBe(leftSlots[i].height);
+    }
+  });
+});
+
+describe('SpreadExclusionEngine column count', () => {
+  const columnsOnPage = (contentWidth: number, linePitch: number): number =>
+    paginate(contentWidth, [{ lineCount: 100, linePitch, gapBefore: 0 }])[0].reduce(
+      (n, slice) => n + slice.lineEnd - slice.lineStart,
+      0,
+    );
+
+  it('keeps the last column when the content width is an exact multiple of the pitch', () => {
+    const engine = new SpreadExclusionEngine({
+      pageWidth: 328,
+      pagePaddingX: 52,
+      pagePaddingY: 10,
+      lineWidth: 400,
+      linePitch: 14 * 1.6,
+    });
+    expect(engine.compute().rightSlotCount).toBe(10);
+  });
+
+  it('fits the same number of columns as paginate across common font sizes and line heights', () => {
+    for (let fontSize = 14; fontSize <= 20; fontSize++) {
+      for (let lh = 1.6; lh <= 2.001; lh += 0.1) {
+        const linePitch = fontSize * lh;
+        for (let columns = 5; columns <= 12; columns++) {
+          const contentW = Math.round(columns * linePitch * 10) / 10;
+          const engine = new SpreadExclusionEngine({
+            pageWidth: contentW + 40,
+            pagePaddingX: 20,
+            pagePaddingY: 10,
+            lineWidth: 400,
+            linePitch,
+          });
+          expect(engine.compute().rightSlotCount, `${fontSize}px x ${lh} x ${columns}`).toBe(
+            columnsOnPage(contentW, linePitch),
+          );
+        }
+      }
     }
   });
 });

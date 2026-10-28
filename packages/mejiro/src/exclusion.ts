@@ -670,7 +670,8 @@ export class SpreadExclusionEngine {
   compute(): SpreadExclusionResult {
     const { pageWidth, pagePaddingX, lineWidth, linePitch } = this.geometry;
     const contentW = pageWidth - pagePaddingX * 2;
-    const slotsPerPage = Math.floor(contentW / linePitch);
+    // Same 0.5px tolerance as paginate(), so float error cannot lose a column.
+    const slotsPerPage = Math.floor((contentW + 0.5) / linePitch);
 
     const pageGeometry: ExclusionPageGeometry = {
       lineWidth,

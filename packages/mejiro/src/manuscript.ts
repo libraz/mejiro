@@ -30,7 +30,7 @@ export interface ParseManuscriptOptions {
  * position.
  */
 export const AUTO_RUBY =
-  /(?=[\p{Script=Han}々〆ヶ])(?<![\p{Script=Han}々〆ヶ][\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]*)((?:[\p{Script=Han}々〆ヶ][\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]*)+)《([^《》]+)》/uy;
+  /(?=[\p{Script=Han}々〆ヶ])(?<![\p{Script=Han}々〆ヶ][\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]*)((?:[\p{Script=Han}々〆ヶ][\u{FE00}-\u{FE0F}\u{E0100}-\u{E01EF}]*)+)《([^《》\n]+)》/uy;
 const TCY_BODY = /^[A-Za-z0-9!?]+$/;
 
 /** Locates manuscript markers ahead of a forward-only walk over one source string. */
@@ -114,7 +114,12 @@ export function parseManuscript(
       const closeRuby = closeBase >= 0 ? scanner.find('》', closeBase + 1) : -1;
       const rubyText = closeRuby > closeBase ? text.slice(closeBase + 1, closeRuby) : '';
       if (closeBase > i && rubyText && !rubyText.includes('《')) {
-        addRuby(text.slice(i + 1, closeBase), rubyText);
+        if (closeBase === i + 1) {
+          // An empty base is the site escape for showing 《…》 literally.
+          emit(`《${rubyText}》`);
+        } else {
+          addRuby(text.slice(i + 1, closeBase), rubyText);
+        }
         i = closeRuby + 1;
         continue;
       }
@@ -184,7 +189,7 @@ export function parseManuscript(
       if (text[i] === '[') {
         const closeLabel = scanner.find(']', i + 1);
         const openTarget = closeLabel >= 0 ? closeLabel + 1 : -1;
-        if (closeLabel > i && text[openTarget] === '(') {
+        if (closeLabel > i + 1 && text[openTarget] === '(') {
           const closeTarget = scanner.find(')', openTarget + 1);
           if (closeTarget > openTarget + 1) {
             const target = parseLinkTarget(text.slice(openTarget + 1, closeTarget));

@@ -240,6 +240,43 @@ describe('buildParagraphMeasures paragraph kinds', () => {
   });
 });
 
+describe('annotated paragraph pitch', () => {
+  const annotated = (kind: 'ruby' | 'emphasis' | 'em'): RenderEntry => ({
+    ...makeEntry(20, 2),
+    inlineAnnotations: [
+      kind === 'ruby'
+        ? { kind, startIndex: 0, endIndex: 2, rubyText: 'あい', type: 'group' }
+        : kind === 'emphasis'
+          ? { kind, startIndex: 0, endIndex: 2, style: 'sesame' }
+          : { kind, startIndex: 0, endIndex: 2 },
+    ],
+  });
+
+  it('budgets the annotation overflow at line spacing 1.0 and 1.2', () => {
+    for (const lineSpacing of [1.0, 1.2, 1.4]) {
+      for (const kind of ['ruby', 'emphasis'] as const) {
+        const [measure] = buildParagraphMeasures([annotated(kind)], { fontSize: 16, lineSpacing });
+        expect(measure.linePitch, `${kind} @ ${lineSpacing}`).toBe(16 * 1.5);
+        const { metrics } = buildLineMetrics([annotated(kind)], { fontSize: 16, lineSpacing });
+        for (const m of metrics) expect(m.pitch).toBe(measure.linePitch);
+      }
+    }
+  });
+
+  it('leaves roomy line spacing and unannotated paragraphs alone', () => {
+    const [roomy] = buildParagraphMeasures([annotated('ruby')], { fontSize: 16, lineSpacing: 1.8 });
+    expect(roomy.linePitch).toBe(16 * 1.8);
+    const [plain] = buildParagraphMeasures([annotated('em')], { fontSize: 16, lineSpacing: 1.0 });
+    expect(plain.linePitch).toBe(16);
+  });
+
+  it('scales the annotation allowance with a heading', () => {
+    const entry = { ...annotated('ruby'), headingLevel: 2 };
+    const [measure] = buildParagraphMeasures([entry], { fontSize: 16, lineSpacing: 1.0 });
+    expect(measure.linePitch).toBe(Math.round(16 * 1.4) * 1.5);
+  });
+});
+
 // ── Exclusion layout helpers ──
 
 const baseOpts = { fontSize: 16, lineHeight: 1.8 };

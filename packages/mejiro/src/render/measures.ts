@@ -163,11 +163,26 @@ const KIND_GAP_BEFORE_EM: Partial<Record<ParagraphKind, number>> = {
 };
 const BLOCKQUOTE_GAP_AFTER_EM = 1;
 
+/**
+ * Line spacing below which a line with ruby or emphasis marks is drawn taller
+ * than requested: the base line plus the annotation at half its size.
+ */
+const ANNOTATED_LINE_SPACING = 1.5;
+
+/** Whether any line of the paragraph may hold ruby or emphasis marks. */
+function carriesAnnotationLines(entry: RenderEntry): boolean {
+  return entry.inlineAnnotations.some((a) => a.kind === 'ruby' || a.kind === 'emphasis');
+}
+
 /** Per-paragraph pitch and gap resolution shared by the measure builders. */
 export interface ParagraphMetrics {
   /** Body line pitch (font size × line spacing). */
   basePitch: number;
-  /** Column pitch of every line of `entry`. */
+  /**
+   * Column pitch of every line of `entry`. A paragraph with ruby or emphasis
+   * budgets at least `1.5` em per line, the height the browser draws such a
+   * line at when the line spacing leaves no room for the annotation.
+   */
   pitch(entry: RenderEntry): number;
   /** Gap before the first line of `entry` when `prev` precedes it. */
   gapBefore(entry: RenderEntry, prev: RenderEntry | undefined): number;
@@ -184,10 +199,14 @@ export function paragraphMetrics(options: MeasureOptions): ParagraphMetrics {
 
   return {
     basePitch,
-    pitch: (entry) =>
-      isHeadingParagraph(entry)
-        ? Math.round(fontSize * resolveHeadingScale(entry, options)) * lineSpacing
-        : basePitch,
+    pitch: (entry) => {
+      const spacing = carriesAnnotationLines(entry)
+        ? Math.max(lineSpacing, ANNOTATED_LINE_SPACING)
+        : lineSpacing;
+      return isHeadingParagraph(entry)
+        ? Math.round(fontSize * resolveHeadingScale(entry, options)) * spacing
+        : fontSize * spacing;
+    },
     gapBefore: (entry, prev) => {
       if (prev == null) return fontSize * paragraphGapEm;
       if (isHeadingParagraph(prev)) return fontSize * headingGapAfterEm(prev, options);

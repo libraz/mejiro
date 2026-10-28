@@ -1,52 +1,24 @@
 /**
- * Representative character per Unicode range mejiro measures.
+ * Representative character per Unicode range, asked about when the caller does
+ * not name the text it is about to measure.
  *
  * Webfont services split Japanese families into subsets, so a family can
  * report itself loaded while only its Latin subset has arrived — measuring CJK
- * then silently falls back to another font. Probing one character per range
- * keeps the readiness answer honest without pushing whole paragraphs through
- * `document.fonts.check()`.
+ * then silently falls back to another font.
  */
-const COVERAGE_PROBES: ReadonlyArray<{ sample: string; covers: (cp: number) => boolean }> = [
-  { sample: 'A', covers: (cp) => cp < 0x0100 },
-  { sample: '、', covers: (cp) => cp >= 0x3000 && cp <= 0x303f },
-  { sample: 'あ', covers: (cp) => cp >= 0x3040 && cp <= 0x309f },
-  { sample: 'ア', covers: (cp) => cp >= 0x30a0 && cp <= 0x30ff },
-  {
-    sample: '漢',
-    covers: (cp) => (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x4e00 && cp <= 0x9fff),
-  },
-  { sample: 'Ａ', covers: (cp) => cp >= 0xff00 && cp <= 0xffef },
-];
-
-/** Sample used when the caller does not name the text it is about to measure. */
-const FULL_COVERAGE_SAMPLE = COVERAGE_PROBES.map((probe) => probe.sample).join('');
+const FULL_COVERAGE_SAMPLE = 'A、あア漢Ａ';
 
 /**
- * Reduces text to one representative character per Unicode range it touches,
- * so readiness is asked about the ranges that will actually be measured while
- * the number of distinct answers stays bounded.
+ * Reduces text to its distinct characters, in order of first appearance.
+ *
+ * Subsets are split by frequency, so one character per range proves nothing
+ * about the slice holding another kanji or an ellipsis; every distinct
+ * character the measurer will read is asked about, bounded by the size of the
+ * character set rather than the text.
  */
 function coverageSample(text?: string): string {
   if (text === undefined) return FULL_COVERAGE_SAMPLE;
-  const hit = COVERAGE_PROBES.map(() => false);
-  let remaining = COVERAGE_PROBES.length;
-  for (const ch of text) {
-    const cp = ch.codePointAt(0);
-    if (cp === undefined) continue;
-    for (let i = 0; i < COVERAGE_PROBES.length; i++) {
-      if (hit[i] || !COVERAGE_PROBES[i].covers(cp)) continue;
-      hit[i] = true;
-      if (--remaining === 0) return FULL_COVERAGE_SAMPLE;
-      break;
-    }
-  }
-  const sample = COVERAGE_PROBES.filter((_, i) => hit[i])
-    .map((probe) => probe.sample)
-    .join('');
-  // Text outside every known range still has to be covered by something.
-  if (sample) return sample;
-  return [...text][0] ?? '';
+  return [...new Set(text)].join('');
 }
 
 /**
@@ -139,7 +111,8 @@ export class FontLoader {
    * traffic. A failed load is not cached, so the next call retries.
    *
    * @param fontSpec - CSS font specification (e.g. '16px "Noto Serif JP"').
-   * @param text - Text about to be measured with this spec. Defaults to a
+   * @param text - Text about to be measured with this spec; every distinct
+   *   character in it must be renderable before this resolves. Defaults to a
    *   representative sample spanning every range mejiro measures.
    * @throws If the font fails to load. Resolves at once when the runtime has
    *   no `document.fonts`.

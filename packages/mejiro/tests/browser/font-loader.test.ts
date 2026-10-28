@@ -88,6 +88,26 @@ describe('FontLoader', () => {
     expect(fetched.has('cjk')).toBe(true);
   });
 
+  it('resolves only after the slice holding each measured character has loaded', async () => {
+    // Slices split by codepoint, like a frequency-ordered unicode-range webfont.
+    const slices = [['漢', '字'], ['…', '—'], ['猫']];
+    const fetched = new Set<number>();
+    const sliceOf = (ch: string) => slices.findIndex((slice) => slice.includes(ch));
+    vi.spyOn(document.fonts, 'check').mockImplementation((_spec: string, text?: string) =>
+      [...(text ?? '')].every((ch) => sliceOf(ch) < 0 || fetched.has(sliceOf(ch))),
+    );
+    vi.spyOn(document.fonts, 'load').mockImplementation(async (_spec: string, text?: string) => {
+      for (const ch of text ?? '') if (sliceOf(ch) >= 0) fetched.add(sliceOf(ch));
+      return [];
+    });
+
+    const loader = new FontLoader();
+    const text = '漢字を読む…猫—';
+    await loader.ensureLoaded('16px "Split"', text);
+    expect([...fetched].sort()).toEqual([0, 1, 2]);
+    expect(loader.isLoaded('16px "Split"', text)).toBe(true);
+  });
+
   it('keeps readiness per coverage, not per font spec', async () => {
     vi.spyOn(document.fonts, 'check').mockReturnValue(true);
     const loader = new FontLoader();

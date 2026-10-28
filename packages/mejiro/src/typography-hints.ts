@@ -172,13 +172,10 @@ function usableIds(ids: Uint32Array | undefined, length: number): Uint32Array | 
   return ids !== undefined && ids.length === length ? ids : undefined;
 }
 
-/** Unions every position sharing a cluster ID with the first position holding it. */
+/** Unions each position with its predecessor when both carry the same ID. */
 function joinSharedIds(parent: Uint32Array, ids: Uint32Array): void {
-  const firstOfId = new Map<number, number>();
-  for (let i = 0; i < ids.length; i++) {
-    const seen = firstOfId.get(ids[i]);
-    if (seen === undefined) firstOfId.set(ids[i], i);
-    else union(parent, seen, i);
+  for (let i = 1; i < ids.length; i++) {
+    if (ids[i] === ids[i - 1]) union(parent, i - 1, i);
   }
 }
 

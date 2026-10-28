@@ -265,4 +265,31 @@ describe('parseManuscript cost and offsets', () => {
     // Recounting the output per annotation would roughly quadruple here.
     expectElapsedUnder(fullElapsed, halfElapsed * 3 + 5);
   });
+
+  it('shows an empty-base pipe escape and an empty link label literally, with no zero-width annotation', () => {
+    const escaped = parseManuscript('本文｜《かな》です');
+    expect(escaped.text).toBe('本文《かな》です');
+    expect(escaped.inlineAnnotations).toEqual([]);
+    expect(tokenizeManuscriptSource('本文｜《かな》です')).toEqual([]);
+
+    const link = parseManuscript('[](https://x)あ');
+    expect(link.text).toBe('[](https://x)あ');
+    expect(link.inlineAnnotations).toEqual([]);
+    expect(tokenizeManuscriptSource('[](https://x)あ')).toEqual([]);
+
+    for (const src of ['本文｜《かな》です', '[](https://x)あ', '|《a》|b《c》']) {
+      for (const ann of parseManuscript(src).inlineAnnotations) {
+        expect(ann.endIndex).toBeGreaterThan(ann.startIndex);
+      }
+    }
+  });
+
+  it('does not let auto ruby span a line feed', () => {
+    for (const src of ['漢字《かな\nつづき》です', '｜漢字《かな\nつづき》です']) {
+      const parsed = parseManuscript(src);
+      expect(parsed.text).toBe(src);
+      expect(parsed.inlineAnnotations).toEqual([]);
+      expect(tokenizeManuscriptSource(src)).toEqual([]);
+    }
+  });
 });

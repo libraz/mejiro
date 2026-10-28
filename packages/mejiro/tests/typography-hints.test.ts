@@ -593,6 +593,12 @@ describe('mergeClusterIds', () => {
     expect([...(mergeClusterIds(4, a, b) as Uint32Array)]).toEqual([0, 0, 2, 2]);
   });
 
+  it('does not join non-adjacent positions that reuse a label', () => {
+    const a = new Uint32Array([0, 0, 1, 1, 0, 0, 1, 1]);
+    const b = new Uint32Array([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect([...(mergeClusterIds(8, a, b) as Uint32Array)]).toEqual([0, 0, 2, 2, 4, 4, 6, 6]);
+  });
+
   it('ignores an input describing text of a different length', () => {
     const usable = new Uint32Array([0, 0, 2]);
     const other = new Uint32Array([0, 0]);

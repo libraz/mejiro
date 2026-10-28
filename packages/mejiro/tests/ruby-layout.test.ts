@@ -249,3 +249,24 @@ describe('computeBreaks with ruby', () => {
     expect(result.breakPoints.length).toBe(0);
   });
 });
+
+describe('computeBreaks with caller cluster IDs that reuse labels', () => {
+  it('breaks like distinct labels when non-adjacent runs share an ID', () => {
+    const text = toCodepoints('あいうえおかきく');
+    const advances = uniformAdvances(text.length, 16);
+    const ann = makeAnnotation(3, 5, 'えお', 8, 'group');
+    const run = (clusterIds: number[]) =>
+      computeBreaks({
+        text,
+        advances,
+        lineWidth: 64,
+        rubyAnnotations: [ann],
+        clusterIds: new Uint32Array(clusterIds),
+      }).breakPoints;
+
+    const distinct = run([0, 0, 1, 1, 2, 2, 3, 3]);
+    const reused = run([0, 0, 1, 1, 0, 0, 1, 1]);
+    expect([...reused]).toEqual([...distinct]);
+    for (const point of reused) expect(point <= 3 || point >= 5).toBe(true);
+  });
+});

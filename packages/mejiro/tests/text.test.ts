@@ -88,4 +88,20 @@ describe('formatDialogueLineBreaks', () => {
       '「ええ」…と言った。彼は\n「はい」\nと言った。',
     );
   });
+
+  it('keeps paragraph indentation and existing line structure', () => {
+    expect(formatDialogueLineBreaks('　吾輩は猫である。\n　名前はまだ無い。')).toBe(
+      '　吾輩は猫である。\n　名前はまだ無い。',
+    );
+    expect(formatDialogueLineBreaks('前文。\n　「台詞」')).toBe('前文。\n　「台詞」');
+    expect(formatDialogueLineBreaks('　「台詞」')).toBe('　「台詞」');
+    expect(formatDialogueLineBreaks('「台詞」　\n次の文')).toBe('「台詞」　\n次の文');
+    expect(formatDialogueLineBreaks('「台詞」　')).toBe('「台詞」　');
+  });
+
+  it('keeps the indent of an indented dialogue line that follows prose on its own line', () => {
+    expect(formatDialogueLineBreaks('　地の文。\n　「台詞」と言った。')).toBe(
+      '　地の文。\n　「台詞」\nと言った。',
+    );
+  });
 });

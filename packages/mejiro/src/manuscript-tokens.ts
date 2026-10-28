@@ -53,7 +53,8 @@ export function tokenizeManuscriptSource(
       const closeBase = scanner.find('《', i + 1);
       const closeRuby = closeBase >= 0 ? scanner.find('》', closeBase + 1) : -1;
       const rubyText = closeRuby > closeBase ? text.slice(closeBase + 1, closeRuby) : '';
-      if (closeBase > i && rubyText && !rubyText.includes('《')) {
+      // An empty base (`｜《…》`) is a literal escape, not ruby.
+      if (closeBase > i + 1 && rubyText && !rubyText.includes('《')) {
         tokens.push({ kind: 'ruby', start: i, end: closeRuby + 1 });
         i = closeRuby + 1;
         continue;
@@ -102,7 +103,7 @@ export function tokenizeManuscriptSource(
       if (text[i] === '[') {
         const closeLabel = scanner.find(']', i + 1);
         const openTarget = closeLabel >= 0 ? closeLabel + 1 : -1;
-        if (closeLabel > i && text[openTarget] === '(') {
+        if (closeLabel > i + 1 && text[openTarget] === '(') {
           const closeTarget = scanner.find(')', openTarget + 1);
           if (
             closeTarget > openTarget + 1 &&

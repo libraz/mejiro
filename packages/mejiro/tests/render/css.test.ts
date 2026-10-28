@@ -135,6 +135,17 @@ describe('render CSS', () => {
     );
   });
 
+  it('draws pre paragraphs in the font they are measured with', () => {
+    for (const file of ['mejiro.css', 'mejiro-reader.css']) {
+      const rules = cssRules(readCss(file), '');
+      for (const [selector, declarations] of rules) {
+        if (selector.includes('mejiro-paragraph--pre')) {
+          expect(declarations.has('font-family'), `${file} ${selector}`).toBe(false);
+        }
+      }
+    }
+  });
+
   it('declares every token the shelf rules read on a shelf mounted outside a reader', () => {
     const css = readCss('mejiro-reader.css');
     const standalone = '.mejiro-shelf:not(.mejiro-reader .mejiro-shelf)';

@@ -578,6 +578,13 @@
     bottom: 6px;
   }
 
+  /* In scroll mode the indicator is a sibling of the scroll container, so it
+     floats over the bottom edge of the surface. */
+  .mejiro-reader-scroll ~ .mejiro-reader-page-indicator {
+    bottom: 6px;
+    pointer-events: none;
+  }
+
   .mejiro-reader-surface::before {
     content: "";
     position: absolute;
@@ -970,7 +977,6 @@
   }
 
   .mejiro-reader-page-content .mejiro-paragraph--pre {
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     white-space: pre;
   }
 
