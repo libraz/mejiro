@@ -115,7 +115,8 @@ export interface PageSize {
 export interface ComputePageSizeOptions {
   /**
    * Per-page padding overrides applied via {@link MejiroBook.setPageSize}.
-   * Defaults to {@link DEFAULT_PAGE_PADDING}.
+   * Defaults to the `--mejiro-page-pad-*` custom properties the container
+   * inherits from the reader stylesheet, then {@link DEFAULT_PAGE_PADDING}.
    */
   padding?: { x?: number; y?: number; bottom?: number };
   /** Page aspect ratio (height / width). @defaultValue 1.45 */

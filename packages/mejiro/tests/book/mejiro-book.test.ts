@@ -146,6 +146,56 @@ describe('MejiroBook', () => {
     expect(single.pageWidth).toBeGreaterThan(double.pageWidth);
   });
 
+  describe('computePageSize padding', () => {
+    /**
+     * A surface whose computed style carries the reader's page-padding
+     * properties. They are set on the surface itself because happy-dom does
+     * not inherit custom properties into computed style; browsers do.
+     */
+    function surfaceWithin(vars: Record<string, string>): HTMLElement {
+      const surface = document.createElement('div');
+      for (const [name, value] of Object.entries(vars)) surface.style.setProperty(name, value);
+      Object.defineProperty(surface, 'clientWidth', { value: 1200, configurable: true });
+      Object.defineProperty(surface, 'clientHeight', { value: 700, configurable: true });
+      document.body.append(surface);
+      return surface;
+    }
+
+    async function laidOutPadding(): Promise<{ x: number; y: number }> {
+      const { size } = (await book.layoutChapter({ paragraphs: [] })).snapshot();
+      return { x: size.pagePaddingX ?? 0, y: size.pagePaddingY ?? 0 };
+    }
+
+    it('lays out for the padding the reader stylesheet draws', async () => {
+      const surface = surfaceWithin({
+        '--mejiro-page-pad-x': '28px',
+        '--mejiro-page-pad-y': '40px',
+        '--mejiro-page-pad-bottom': '30px',
+      });
+      const dims = book.computePageSize(surface);
+
+      expect(dims.contentHeight).toBe(dims.pageHeight - 40 - 30);
+      expect(await laidOutPadding()).toEqual({ x: 28, y: 40 });
+    });
+
+    it('prefers padding passed in options over the stylesheet', async () => {
+      const surface = surfaceWithin({
+        '--mejiro-page-pad-x': '28px',
+        '--mejiro-page-pad-y': '40px',
+      });
+      book.computePageSize(surface, { padding: { x: 12, y: 16 } });
+
+      expect(await laidOutPadding()).toEqual({ x: 12, y: 16 });
+    });
+
+    it('falls back to the default padding without the stylesheet', async () => {
+      const dims = book.computePageSize(surfaceWithin({}));
+
+      expect(dims.contentHeight).toBe(dims.pageHeight - 56 - 40);
+      expect(await laidOutPadding()).toEqual({ x: 52, y: 56 });
+    });
+  });
+
   it('clearCache(spec) drops that font only and clearCache() drops all', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });

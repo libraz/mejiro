@@ -537,18 +537,27 @@ export class MejiroBook {
    * gutter reservation. All of these are overridable via the second
    * argument; see {@link ComputePageSizeOptions}.
    *
+   * Padding not given in `options` follows the `--mejiro-page-pad-x`,
+   * `--mejiro-page-pad-y` and `--mejiro-page-pad-bottom` custom properties the
+   * container inherits, so the layout matches the inset the reader stylesheet
+   * draws (it narrows on small screens); without the stylesheet it falls back
+   * to {@link DEFAULT_PAGE_PADDING}.
+   *
    * @param container - DOM element representing the reading surface.
    * @param options - Page geometry and padding overrides. Defaults to
-   *   {@link DEFAULT_PAGE_GEOMETRY} + {@link DEFAULT_PAGE_PADDING}.
+   *   {@link DEFAULT_PAGE_GEOMETRY} + the drawn page padding.
    * @returns Computed page width, page height, and content height.
    */
   computePageSize(
     container: HTMLElement,
     options?: ComputePageSizeOptions,
   ): { pageWidth: number; pageHeight: number; contentHeight: number } {
-    const padX = options?.padding?.x ?? DEFAULT_PAGE_PADDING.x;
-    const padY = options?.padding?.y ?? DEFAULT_PAGE_PADDING.y;
-    const padBottom = options?.padding?.bottom ?? DEFAULT_PAGE_PADDING.bottom;
+    // The reader stylesheet draws the page inset; laying out for another one
+    // would place text and image exclusion off the drawn page.
+    const drawn = stylesheetPagePadding(container);
+    const padX = options?.padding?.x ?? drawn.x ?? DEFAULT_PAGE_PADDING.x;
+    const padY = options?.padding?.y ?? drawn.y ?? DEFAULT_PAGE_PADDING.y;
+    const padBottom = options?.padding?.bottom ?? drawn.bottom ?? DEFAULT_PAGE_PADDING.bottom;
     const aspect = options?.aspect ?? DEFAULT_PAGE_GEOMETRY.aspect;
     const minWidth = options?.minWidth ?? DEFAULT_PAGE_GEOMETRY.minWidth;
     const minHeight = options?.minHeight ?? DEFAULT_PAGE_GEOMETRY.minHeight;
@@ -836,4 +845,26 @@ export class MejiroBook {
   cacheStats(): { fonts: number; codepoints: number } {
     return this.browser.cacheStats();
   }
+}
+
+/**
+ * Page padding the reader stylesheet applies around `container`, read from the
+ * `--mejiro-page-pad-*` custom properties it inherits. A side is `undefined`
+ * when no stylesheet sets it.
+ */
+function stylesheetPagePadding(container: HTMLElement): {
+  x?: number;
+  y?: number;
+  bottom?: number;
+} {
+  const style = getComputedStyle(container);
+  const read = (name: string): number | undefined => {
+    const value = Number.parseFloat(style.getPropertyValue(name));
+    return Number.isFinite(value) ? value : undefined;
+  };
+  return {
+    x: read('--mejiro-page-pad-x'),
+    y: read('--mejiro-page-pad-y'),
+    bottom: read('--mejiro-page-pad-bottom'),
+  };
 }
