@@ -57,7 +57,7 @@ The example loads `/neko.epub`, which is generated rather than checked in. In th
 ```bash
 npx degit libraz/mejiro/examples/embed-iframe my-widget
 cd my-widget
-node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.9.2\"'));"
+node -e "const fs = require('node:fs'); const p = 'package.json'; fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replaceAll('\"workspace:*\"', '\"^0.10.0\"'));"
 npm install
 npm run dev
 ```
