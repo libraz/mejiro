@@ -58,7 +58,7 @@ const measures = buildParagraphMeasures(entries, {
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `fontSize` | `number` | (required) | Base font size in px. |
-| `lineSpacing` | `number` | `1` | Line spacing multiplier. |
+| `lineSpacing` | `number` | `1` | Line spacing multiplier. A paragraph containing ruby or emphasis budgets at least `1.5` em per line whatever the value, the height the browser draws such a line at. |
 | `lineHeight` | `number` | -- | Deprecated alias for `lineSpacing`, used only when `lineSpacing` is absent. |
 | `headingScale` | `number` | `1.4` | Heading font scale. A heading without a level takes it as is (`16 * 1.4 = 22.4`); levels 1--6 scale their `DEFAULT_HEADING_STYLES` size (1.6 / 1.4 / 1.2 / 1.1 / 1 / 1, the sizes the stylesheet draws) in proportion to it, so `2.8` doubles every level. A level's own `headingStyles` scale wins. |
 | `paragraphGapEm` | `number` | `0.4` | Gap before body paragraphs in em units. |
@@ -176,6 +176,7 @@ import '@libraz/mejiro/render/mejiro.css';
 | `.mejiro-paragraph:first-child` | Removes the block-start margin (`margin-right: 0`) on the first paragraph. |
 | `.mejiro-paragraph--heading` | Heading style. `--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`. `--h1` to `--h6` set the scale to 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1, the default heading sizes. A page built by `ChapterLayout` carries the scale it measured each heading at in `RenderParagraph.scale`, and the page components set it as an inline `--mejiro-paragraph-scale`, so a non-default `headingScale` or `headingStyles` is drawn at the measured size. |
 | `.mejiro-paragraph--heading + .mejiro-paragraph` | Gap after a heading (`margin-right: calc(1.2em / var(--mejiro-paragraph-scale))`, 1.2 base em). |
+| `.mejiro-paragraph--pre` | Preformatted paragraph. Sets `white-space: pre` only; the body font is kept. |
 | `.mejiro-page--static .mejiro-paragraph` | Set on `renderEpubStatic()` output, which has no per-line breaks: `display: block; white-space: normal`, so paragraphs wrap within the page. `pre` paragraphs keep `white-space: pre`. |
 | `.mejiro-page ruby` | `ruby-align: center`. |
 | `.mejiro-page rt` | `font-size: 0.5em; font-weight: 400`. |

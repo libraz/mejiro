@@ -155,7 +155,7 @@ Combines two cluster ID arrays over the same text into their transitive closure,
 | `formatDialogueLineBreaks` | `(text: string) => string` |
 | `tokenizeManuscriptSource` | `(text: string, dialect?: ManuscriptDialect) => ManuscriptToken[]` |
 
-`formatDialogueLineBreaks` normalizes manuscript line breaks around Japanese dialogue quotes without creating extra blank lines. It never inserts a break that would violate kinsoku: no break leaves a line-start-prohibited character (`、`, `）`, …) at the start of a line or a line-end-prohibited one (`（`, …) at the end of one.
+`formatDialogueLineBreaks` normalizes manuscript line breaks around Japanese dialogue quotes without creating extra blank lines. Existing line feeds and indentation are preserved; whitespace is trimmed only beside the breaks it inserts. It never inserts a break that would violate kinsoku: no break leaves a line-start-prohibited character (`、`, `）`, …) at the start of a line or a line-end-prohibited one (`（`, …) at the end of one.
 
 `tokenizeManuscriptSource` reports notation token ranges (ruby, emphasis, TCY, em, strong, link, footnote) in **source positions**, unlike `parseManuscript` whose annotation positions are in the rendered plain text. Powers the bundled `MejiroNotationHighlighter`.
 
@@ -456,9 +456,9 @@ Slots come out in reading order, and a column may contribute several slots or no
 
 | Export | Signature |
 |---|---|
-| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, inlineAnnotations?, tokenBoundaries? }) => Promise<BreakResult>` |
+| `layoutText` | `(options: { text, fontFamily, fontSize, lineWidth, mode?, enableHanging?, inlineAnnotations?, tokenBoundaries?, hints?, breakCost? }) => Promise<BreakResult>` |
 
-Standalone one-shot layout function. Creates a temporary `MejiroBrowser` instance, measures the text, and computes breaks in a single call.
+Standalone one-shot layout function that does not require creating a `MejiroBrowser` instance. It creates its own measurer internally, so there is no caching across calls, then measures the text and computes breaks in a single call.
 
 | Export | Signature |
 |---|---|
@@ -646,11 +646,11 @@ Extracts paragraphs and ruby annotations from an XHTML document string.
 - `transaction<T>(fn: () => T): T` — Group a sequence of edits into one history entry. Nested calls fold into the outermost transaction; a throw inside `fn` rewinds the buffered changes
 - `undo(): boolean` / `redo(): boolean` — Revert or re-apply one committed change (or transaction). `false` when the corresponding stack is empty
 - `history: { canUndo: boolean; canRedo: boolean; depth: number; redoDepth: number }` — Snapshot of the undo/redo state (getter)
-- `updateParagraph(chapterIndex: number, paragraphIndex: number, next: Partial<AnnotatedParagraph>): void` — `paragraphIndex` counts the paragraph projection, excluding image blocks. When `text` changes without new `inlineAnnotations`, existing annotations are re-anchored onto the new text: each one either keeps covering exactly the same base characters or is dropped
+- `updateParagraph(chapterIndex: number, paragraphIndex: number, next: Partial<AnnotatedParagraph>): void` — `paragraphIndex` counts the paragraph projection, excluding image blocks. When `text` changes without new `inlineAnnotations`, existing annotations are re-anchored onto the new text: each one either keeps covering exactly the same base characters or is dropped. A `headingLevel` that is not an integer from 1 to 6 throws
 - `setInlineAnnotations(chapterIndex: number, paragraphIndex: number, inlineAnnotations: readonly InlineAnnotation[]): void` — Replace a paragraph's annotations; entries outside the current text are dropped
-- `insertParagraph(chapterIndex: number, atIndex: number, paragraph: Omit<EditableParagraphBlock, 'kind' | 'id'>): string` — `atIndex` is a position in `chapter.blocks`; pass `chapter.blocks.length` to append. Returns the generated block id
+- `insertParagraph(chapterIndex: number, atIndex: number, paragraph: Omit<EditableParagraphBlock, 'kind' | 'id'>): string` — `atIndex` is a position in `chapter.blocks`; pass `chapter.blocks.length` to append. Returns the generated block id. Throws when `headingLevel` is not an integer from 1 to 6 or a heading has none; annotations outside `text` are dropped
 - `deleteBlock(chapterIndex: number, blockId: string): void` — Remove a paragraph or image block. An image's asset goes with it when no other block references it
-- `splitParagraph(chapterIndex: number, blockId: string, charIndex: number): [string, string]` — Split at a code point index; annotations straddling the cut are dropped. Returns the two block ids
+- `splitParagraph(chapterIndex: number, blockId: string, charIndex: number): [string, string]` — Split at a code point index; a fractional index is truncated, an out-of-range one is clamped and a non-finite one throws. Annotations straddling the cut are dropped. Returns the two block ids
 - `mergeParagraphs(chapterIndex: number, leftId: string, rightId: string): string` — `leftId` must immediately precede `rightId`. Returns the surviving (left) block id
 - `moveBlock(chapterIndex: number, blockId: string, toIndex: number): void` — Move a block to a new index in `chapter.blocks`
 - `addImage(chapterIndex: number, image: AddImageInput | EditableEpubImage): string` — Add an image asset and an image block referencing it. Returns the generated `assetKey`
@@ -772,7 +772,7 @@ Extracts paragraphs and ruby annotations from an XHTML document string.
 |---|---|
 | `buildParagraphMeasures` | `(entries: RenderEntry[], options: MeasureOptions) => ParagraphMeasure[]` |
 
-Computes paragraph measures for pagination.
+Computes paragraph measures for pagination. A paragraph containing ruby or emphasis budgets at least `1.5` em per line, whatever `lineSpacing` is; `buildLineMetrics` applies the same rule.
 
 | Export | Signature |
 |---|---|
@@ -785,6 +785,7 @@ Computes paragraph measures for pagination.
 | `getImageXOffset` | `(offsets: Float32Array, spreadStartLine: number, col: number) => number` |
 | `findPhysicalColumn` | `(offsets: Float32Array, spreadStartLine: number, fromRight: number, basePitch: number) => number` |
 | `paragraphClassName` | `(kind: ParagraphKind \| undefined, headingLevel?: number) => string` |
+| `pageNumberFor` | `(pageNumbers: PageNumberDisplay, pageIdx: number) => number \| null` |
 
 Converts page slices + entries into a renderable page structure. `renderEpubStatic`
 returns framework-agnostic HTML for a single chapter, suitable for SSR fallback
@@ -798,6 +799,7 @@ whose column is widened by a heading can overflow the page edge.
 `paragraphClassName` builds the `mejiro-paragraph …` class string the bundled stylesheets
 expect from a paragraph's `kind` and `headingLevel` — use it instead of assembling the
 modifier names by hand.
+`pageNumberFor` returns the one-based page number that the running head of the page at zero-based `pageIdx` prints, or `null` when `pageNumbers` (`PageNumberDisplay`: `'both' | 'right' | 'left' | 'none'`) hides it. Even indices are right-hand pages. Paginated and scroll readers share this rule.
 `StaticChapter` is the minimal chapter shape `renderEpubStatic` needs — `{ paragraphs: readonly BookParagraph[] }` — so an `EpubChapter` or a hand-built object both satisfy it.
 
 ### Inline Segment Rendering
@@ -931,13 +933,13 @@ The recommended entry point for most applications. Orchestrates font loading, la
 **`MejiroBook`** — Main orchestrator class:
 
 - `constructor(options: BookOptions)` — Create with font, spacing, and heading configuration
-- `getOptions(): BookOptions` — Currently committed options
-- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. `lineSpacing` / `mode` / `enableHanging` apply synchronously and the returned promise is already resolved. `fontFamily` / `fontSize` / `headingStyles` / `headingScale` need re-measurement: the values are staged and become visible to `getOptions()` only after the font has loaded, so every live layout always holds advances measured with the font recorded in its own config. Overlapping calls converge on the last one. A live layout re-breaks on its next read, so one replaced before it is read never re-breaks. With `strictFontCheck`, a staged font that measures as a fallback rejects and leaves the previous options in place; without it, a font that fails to load is committed and measured as the host resolves it
+- `getOptions(): BookOptions` — Currently committed options, including the construction-time `analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and `breakCost`
+- `setOptions(options: Partial<BookOptions>): Promise<void>` — Update options and propagate changes to live layouts. `lineSpacing` / `mode` / `enableHanging` apply synchronously and the returned promise is already resolved. `fontFamily` / `fontSize` / `headingStyles` / `headingScale` need re-measurement: the values are staged and become visible to `getOptions()` only after the font has loaded, so every live layout always holds advances measured with the font recorded in its own config. `analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and `breakCost` are fixed at construction: `setOptions` ignores them. Overlapping calls converge on the last one. A live layout re-breaks on its next read, so one replaced before it is read never re-breaks. With `strictFontCheck`, a staged font that measures as a fallback rejects and leaves the previous options in place; without it, a font that fails to load is committed and measured as the host resolves it
 - `setPageSize(size: PageSize): void` — Set page geometry (must be called before `layoutChapter`)
 - `computePageSize(container: HTMLElement, options?: ComputePageSizeOptions): { pageWidth, pageHeight, contentHeight }` — Compute page dimensions from a container element and apply them via `setPageSize`. Uses a 1.45 aspect ratio with min 280×400, max height 780, default padding, and overridable header/gutter reservations.
 - `layoutChapter(chapter: { paragraphs: BookParagraph[] }): Promise<ChapterLayout>` — Lay out a chapter (compatible with `EpubChapter`)
-- `layoutManuscript(options: LayoutManuscriptOptions): Promise<Map<string, ChapterLayout>>` — Lay out manuscript chapters directly, skipping the EPUB ZIP round-trip. Each body is split into paragraphs on blank lines and parsed with `parseManuscript()`; the map is keyed by `chapter.id` (or `chapter-<n>` when missing)
-- `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — Restore a layout snapshot without measuring again. The restored layout keeps the snapshot's config and page geometry, and its advances are taken to be measured in this book's font family, which the snapshot does not record. The next `setOptions` re-measures it when the snapshot's font size or heading scales differ from the book's. Throws on an unsupported format version or a malformed snapshot: an advance array whose length is not the paragraph's codepoint count, break points that are not strictly increasing inside the paragraph, an annotation span outside it, or a missing or non-finite field
+- `layoutManuscript(options: LayoutManuscriptOptions): Promise<Map<string, ChapterLayout>>` — Lay out manuscript chapters directly, skipping the EPUB ZIP round-trip. Each body is split into paragraphs on blank lines, the same way EPUB export splits it, and parsed with `parseManuscript()`. U+3000 indents and U+3000-only scene dividers are kept, and blocks that are inline-image markers are skipped, so paragraph indices match the exported EPUB. The map is keyed by `chapter.id`, or by `chapter-<n>` (the one-based position) when the chapter has no id
+- `layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout` — Restore a layout snapshot without measuring again. The restored layout keeps the snapshot's config and page geometry, and its advances are taken to be measured in this book's font family, which the snapshot does not record. The next `setOptions` re-measures it when the snapshot's font size or heading scales differ from the book's. Throws on an unsupported format version or a malformed snapshot: an advance array whose length is not the paragraph's codepoint count, break points that are not strictly increasing inside the paragraph, an annotation span outside it, a missing or non-finite field, text that is not NFC-normalized, a `headingLevel` outside the integers 1 to 6, an unknown `kind`, or malformed `headingStyles` (`scale`, `gapAfterEm`), `breakCost` or `analyzer` in the config. A later font load re-measures the layout but keeps the snapshot's config
 - `clearCache(fontKey?: string): void` — Clear the character width measurement cache
 - `cacheStats(): { fonts: number; codepoints: number }` — Current measurement cache size, for capacity monitoring across long reader sessions
 - `dispose(): void` — Release the book's `document.fonts` subscription so the book, its width cache and its layouts can be collected once the host drops them. The book stays usable and subscribes again on its next layout or font change, re-measuring its widths once on that reuse. Idempotent; `useMejiroBook` calls it on unmount
@@ -981,7 +983,7 @@ The recommended entry point for most applications. Orchestrates font loading, la
 - `enableHanging?: boolean` — Hanging punctuation (default: `true`)
 - `headingStyles?: Record<number, HeadingStyle>` — Per-level heading overrides; a level left out keeps its `DEFAULT_HEADING_STYLES` style, scaled by `headingScale`
 - `headingScale?: number` — Heading scale (default: 1.4). Levels 1–6 scale their default size in proportion to it unless `headingStyles` sets the level's `scale`; a heading without a level takes it as is
-- `analyzer?: TextAnalyzer` — Morphological analyzer used to derive line breaking hints. Consulted only when `wordAwareBreaking` asks for hints, and once per paragraph at layout time; a re-break (resize, font change, exclusion reflow) replays what the first pass produced. Read when a chapter is laid out, and not changeable through `setOptions()`
+- `analyzer?: TextAnalyzer` — Morphological analyzer used to derive line breaking hints. Consulted only when `wordAwareBreaking` asks for hints, and once per paragraph at layout time; a re-break (resize, font change, exclusion reflow) replays what the first pass produced. Read when a chapter is laid out. Fixed at construction, like `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and `breakCost`: `setOptions()` ignores all five
 - `wordAwareBreaking?: 'off' | 'clusters' | 'full'` — How far the analyzer's findings reach into line breaking (default: `'off'`). `'clusters'` keeps break positions as the character-class rules would choose them, except where a break would have split a unit it is a typesetting error to split; `'full'` adds per-position penalties, which do move break positions
 - `keepWholePos?: readonly string[]` — Parts of speech a break should avoid landing inside, forwarded to `deriveTypographyHints()` as `TypographyHintOptions.keepWholePos` (default: `DEFAULT_KEEP_WHOLE_POS`). Read only under `'full'`, the only stage that emits penalties
 - `keepWholePenalty?: number` — Price of a break inside one of `keepWholePos`, forwarded to `deriveTypographyHints()` as `TypographyHintOptions.keepWholePenalty` (default: `4`)
@@ -1175,7 +1177,7 @@ Every component exports a matching props type; `MejiroSettingsPanel` additionall
 ### MejiroReader types
 
 - **`MejiroReaderProps`** — Discriminated union of the four source modes, so TypeScript rejects passing more than one source at once: `MejiroReaderControlledProps` (`epub: EpubBook | null`), `MejiroReaderUrlProps` (`epubUrl: string`), `MejiroReaderFileProps` (no source; the reader exposes its drop zone / file picker), and `MejiroReaderManuscriptProps` (`manuscript: readonly ManuscriptChapter[]`, `dialect?: ManuscriptDialect`). Each variant extends **`MejiroReaderCommonProps`**, which carries everything else. A controlled source (`epub` or `manuscript`) owns the book, so the reader then hides its drop zone, its Open button and, in Vue, the `dropZone` slot, even with `enableDropZone`.
-- **`MejiroReaderCommonProps.options`** — `Partial<MejiroBookOptions>`, the initial book options; unset fields take `DEFAULT_BOOK_OPTIONS`. `strictFontCheck` is read once, when the reader mounts.
+- **`MejiroReaderCommonProps.options`** — `Partial<MejiroBookOptions>`, the initial book options; unset fields take `DEFAULT_BOOK_OPTIONS`. `strictFontCheck` is read once, when the reader mounts, and so are `analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and `breakCost`: a later change to them keeps the construction values.
 - **`MejiroReaderHandle`** — Imperative handle from `ref`: `goToSpread`, `next`, `prev`, `goToChapter`, `getReadingPosition(): ReadingPosition`, `goToAnchor(): Promise<void>`, `getAnchor()`, `getVisibleRange()`, `setOptions(): Promise<void>`, `subscribe()`.
 - **`MejiroReaderEventMap`** — Payloads for `subscribe`: `spreadChanged({ chapter, spreadIdx })`, `turnStart({ from })`, `turnEnd({ to })`, `chapterFinished({ chapter })`.
 - **`ReadingPosition`** — `{ chapter, spreadIdx, totalPages, totalSpreads }` returned by `getReadingPosition()`.
@@ -1201,9 +1203,9 @@ Common headless editor returns:
 - `useManuscriptDraft({ initialChapters?, onAutosave?, autosaveDelay? })` returns draft chapter state plus add/remove/reorder/patch helpers.
 - `useChapterLayout(book, epub, chapterIndex, surfaceRef, { enableResize?, resizeDebounce?, pageGeometry?, capturePosition?, restorePosition?, onError? })` lays out the selected chapter and lays it out again when the surface resizes; a resize observation reporting the box the current layout was measured with does not re-flow. Returns `{ layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore }`. A re-layout replays the line-breaking hints the book already derived, so it never re-runs the analyzer. For the reading position across a re-flow, see [Keeping the reading position across a re-flow](./08-react-and-vue.md#keeping-the-reading-position-across-a-re-flow). `onError(error)` is called once when a layout of the current request fails, whichever path started it (source change, resize or `recompute`); a superseded layout reports nothing. With `onError`, `recompute` resolves; without it, an awaited `recompute` rejects and the hook's own triggers drop the failure.
 - `useManuscriptLayout(book, chapter, surfaceRef, { dialect?, enableResize?, resizeDebounce?, capturePosition?, restorePosition?, onError? })` lays out a single manuscript chapter directly, with no EPUB ZIP round-trip. Returns the same shape as `useChapterLayout` and reports failures through `onError` the same way. Designed for live preview surfaces.
-- `useMejiroBook(initial, { debounceMs?, onError? })` owns one `MejiroBook` and returns `{ book, options, setOptions }`. `setOptions` updates the `options` snapshot synchronously; once the latest change settles, the snapshot resets to the options the book applied, so a rejected change rolls back. With `onError`, a failed application is reported there and `setOptions` resolves instead of rejecting.
-- `useAnnotations({ key, storage?, throttleMs?, onChange? })` persists highlights / bookmarks / comments. Returns `{ annotations, add, remove, update, clear }`. `storage` follows the same `getItem` / `setItem` / `removeItem` interface as `useReadingPosition`. `onChange(next)` fires synchronously after `add` / `remove` / `update` / `clear` (skipped on initial hydration and no-ops) — handy for forwarding each mutation to a server.
-- `useReadingPosition({ key, storage?, throttleMs?, onChange? })` exposes the same `onChange(next | null)` hook, fired right after `save` / `clear`.
+- `useMejiroBook(initial, { debounceMs?, onError? })` owns one `MejiroBook` and returns `{ book, options, setOptions }`. `setOptions` updates the `options` snapshot synchronously; once the latest change settles, the snapshot resets to the options the book applied, so a rejected change rolls back. `analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and `breakCost` keep their construction values: the book ignores a change to them, and the snapshot returns to the constructed value. With `onError`, a failed application is reported there and `setOptions` resolves instead of rejecting.
+- `useAnnotations({ key, storage?, throttleMs?, onChange? })` persists highlights / bookmarks / comments. Returns `{ annotations, add, remove, update, clear }`. `storage` follows the same `getItem` / `setItem` / `removeItem` interface as `useReadingPosition`. `onChange(next)` fires synchronously after `add` / `remove` / `update` / `clear` (skipped on initial hydration and `key` changes, and on no-ops such as `clear()` on an empty list) — handy for forwarding each mutation to a server. `throttleMs` (default 250) is a debounce delay: the latest value is written that long after the last change, and a pending write is flushed on page hide, `key` change and unmount.
+- `useReadingPosition({ key, storage?, throttleMs?, onChange? })` exposes the same `onChange(next | null)` hook, fired right after `save` / `clear`. `throttleMs` (default 250) is the same debounce delay as in `useAnnotations`.
 
 **`MejiroReader` manuscript source** -- A fourth source mode alongside `epub` / `epubUrl`. Pass `manuscript: ManuscriptChapter[]` plus `dialect?: ManuscriptDialect` and the Reader renders the chapters directly, skipping the EPUB ZIP entirely.
 
@@ -1211,7 +1213,7 @@ Common headless editor returns:
 
 In single-page mode (`'single'`, or `'auto'` on a portrait surface) the reader shows one page at a time, and every spread index counts pages: `spreadIdx`, `goToSpread`, `next` / `prev`, `onSpreadIdxChange`, the `spreadChanged` event and `ReadingPosition.totalSpreads`. When `'auto'` switches mode, the index is converted so the page on screen stays visible. `useSpread` implements this rule through its `single` option and reports the page shown as `firstPage`, `layoutSpreadIdx` and `singleSide`, which `MejiroSpread` takes as `singlePage` / `singleSide`. Image overlay rectangles stay relative to the right page; in single-page mode `MejiroSpread` draws only those whose centre lies on the page shown, and the reader's image button adds a new one on that page.
 
-**`MejiroScrollView`** -- The page stack behind `mode="scroll"`. It draws highlights and image overlays like `MejiroSpread`: `selectionRects` are painted on the page each entry's `pageIdx` addresses, and `images` (the overlays of the spread at `spreadIdx`) each render on the page containing their centre, with `onImagePointerDown`, `onImageResizePointerDown` and `onImageClose` for the handles. A new `images` array is also what makes the view re-read reflowed pages; `useMultiImageOverlay`'s `currentImages` provides one on every change.
+**`MejiroScrollView`** -- The page stack behind `mode="scroll"`. It draws highlights and image overlays like `MejiroSpread`: `selectionRects` are painted on the page each entry's `pageIdx` addresses, and `images` (the overlays of the spread at `spreadIdx`) each render on the page containing their centre, with `onImagePointerDown`, `onImageResizePointerDown` and `onImageClose` for the handles. A new `images` array is also what makes the view re-read reflowed pages; `useMultiImageOverlay`'s `currentImages` provides one on every change. `pageNumbers?: PageNumberDisplay` (default `'both'`) chooses which pages print their number, by the same rule as `pageNumberFor`.
 
 **`MejiroReader` `annotations` prop** -- Pass an array of `{ chapter, start, end, color? }` and the Reader converts entries on the current chapter into highlight rectangles via `ChapterLayout.selectionRects`, forwarding them to `MejiroSpread`. Typically paired with `useAnnotations`, but any shape that satisfies the structural type works.
 
@@ -1304,7 +1306,7 @@ The same set as React, declared as Vue props, except `fallbackHtml`, which is Vu
 - `mode?: MejiroReaderMode` (default `'paginated'`) — `'scroll'` stacks every page of the chapter in a vertical scroller
 - `spreadMode?: MejiroSpreadMode` (default `'double'`) — `'single'` shows one page at a time, and `spreadIdx`, `goToSpread`, `spread-idx-change` and the `spreadChanged` event then count pages; `'auto'` switches to single for portrait viewports, observed with a `ResizeObserver`, and converts the index so the page on screen stays visible
 - `fit?: MejiroReaderFit` (default `'fill'`) — `'width'` makes the reader self-size from its width and the page aspect, and defaults the reserved `gutterOffset` / `headerOffset` to 0 so the spread fills edge-to-edge
-- `pageNumbers?: PageNumberDisplay` (default `'both'`) — which page of a spread shows its number in the running head; the "n / total" indicator is independent
+- `pageNumbers?: PageNumberDisplay` (default `'both'`) — which page of a spread shows its number in the running head, in paginated and scroll mode alike; the "n / total" indicator is independent and shows in both modes
 - `chapterNavMode?: MejiroChapterNavMode` (default `'select'`) — where the built-in chapter navigation renders
 - `locale?: MejiroLocale` and `messages?: Partial<MejiroMessages>` — UI strings
 - `title` / `subtitle` — header logo text

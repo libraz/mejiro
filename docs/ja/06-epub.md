@@ -243,10 +243,10 @@ const nextBuffer = await editor.export({
 
 | v0.4 / 旧 API | v0.5 推奨 API | 備考 |
 |---------------|---------------|------|
-| `chapter.paragraphs[i]` の直接書き換え | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` は画像ブロックを除いた段落投影のインデックス。`sceneBreak` はテキストを持てないため、テキストを与える patch は例外を投げます。ただし `headingLevel` も指定した場合はブロックが見出しになり、テキストを持てます。 |
-| `chapter.paragraphs.splice(i, 0, p)` で挿入 | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` は `chapter.blocks` のインデックス。末尾は `chapter.blocks.length`。テキスト付きの `sceneBreak` を挿入すると例外を投げます。 |
+| `chapter.paragraphs[i]` の直接書き換え | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` は画像ブロックを除いた段落投影のインデックス。`sceneBreak` はテキストを持てないため、テキストを与える patch は例外を投げます。ただし `headingLevel` も指定した場合はブロックが見出しになり、テキストを持てます。1〜6 の整数でない `headingLevel` は例外を投げます。 |
+| `chapter.paragraphs.splice(i, 0, p)` で挿入 | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` は `chapter.blocks` のインデックス。末尾は `chapter.blocks.length`。テキスト付きの `sceneBreak` を挿入した場合、1〜6 の整数でない `headingLevel` を渡した場合、`headingLevel` のない見出しを渡した場合も例外を投げます。`text` の範囲外にある注釈は破棄されます。 |
 | `chapter.paragraphs.splice(i, 1)` で削除 | `editor.deleteBlock(chapterIdx, blockId)` | 段落・画像どちらも削除可能。画像の場合、最後の参照が消えれば `imageAssets` も削除されます。 |
-| 段落の途中で分割 | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | 戻り値は `[leftId, rightId]`。境界をまたぐ注釈は破棄されます。 |
+| 段落の途中で分割 | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | 戻り値は `[leftId, rightId]`。小数の `charIndex` は切り捨てられ、範囲外の値は範囲内に丸められます。有限でない値は例外を投げます。境界をまたぐ注釈は破棄されます。 |
 | 隣接段落のマージ | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` は `leftId` の直後でなければなりません。マージで `sceneBreak` がテキストを持つことになる場合は例外を投げます。 |
 | `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | 戻り値は `assetKey`。v0.4 シェイプ（`{ href, mediaType, ... }`）も受け付けます。削除は将来のメジャーリリースに先送りされています。 |
 | `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | block id でも asset key でも指定可能。 |
@@ -277,7 +277,7 @@ for (const block of editor.book.chapters[0].blocks) {
 
 `v0.5` では `editor.transaction(fn)` で複数操作を1ステップとしてまとめ、`editor.undo()` / `editor.redo()` / `editor.history` で履歴を扱えます。`editor.export({ onProgress, signal })` は進捗コールバックと `AbortSignal` を受け付けるため、ブラウザ上で大きな EPUB を書き出す際の UX 改善や中断にそのまま使えます。
 
-未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link、章全体を包むラッパー（本文を囲む `section` / `article` / `main` / `div` とその属性）、章タイトル要素（`id="chapter-title"`。`chapter.title` から書き直します）を保持し、その内側でブロックを再生成します。段落内の画像は独立した画像ブロックとして取り込まれ、段落はその前後で分割されます。元の XHTML にリスト・テーブル（`ul` / `ol` / `dl` / `table` / `thead` / `tbody`）、埋め込みコンテンツ（`svg` / `math` / `video` / `audio` / `iframe` / `object` / `embed` / `canvas`）、章タイトル以外の要素 `id`、非表示要素や描画されない要素（`script`、`style` など）内のテキストがある章は、内容を黙って失わないよう export 時に例外を投げます。
+未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link、章全体を包むラッパー（本文を囲む `section` / `article` / `main` / `div` とその属性）、章タイトル要素（`id="chapter-title"`。`chapter.title` から書き直します）を保持し、その内側でブロックを再生成します。段落内の画像は独立した画像ブロックとして取り込まれ、段落はその前後で分割されます。元の XHTML にリスト・テーブル（`ul` / `ol` / `dl` / `table` / `thead` / `tbody`）、埋め込みコンテンツ（`svg` / `math` / `video` / `audio` / `iframe` / `object` / `embed` / `canvas`）、章タイトル以外の要素 `id`、非表示要素や描画されない要素（`script`、`style` など）内のテキスト、`src` がアーカイブ内のファイルに解決されない画像（`data:` URI を含む）、画像が複数ある、または画像とキャプション以外の内容を含む `figure`、段落以外を囲む `blockquote` がある章は、内容を黙って失わないよう export 時に例外を投げます。
 
 #### URL ベースの画像登録（assetResolver）
 
@@ -359,11 +359,12 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 ### 記法の挙動と制約
 
 - **自動ルビ**: 親文字は `Script=Han`（漢字）または `々〆ヶ` の連続のみ対象です。ひらがな・カタカナ・記号には自動ルビが付きません。明示的にルビを付けたい場合は `｜...《...》`（パイプ式）を使ってください。
-- **パイプ式ルビ**: 親文字に制約はありません。括弧の優先順位は「パイプ式 → 自動ルビ」の順なので、ひらがな等にルビを振りたい場合は `｜` を先頭に置きます。
+- **パイプ式ルビ**: 親文字に制約はありません。括弧の優先順位は「パイプ式 → 自動ルビ」の順なので、ひらがな等にルビを振りたい場合は `｜` を先頭に置きます。親文字が空の `｜《かな》` では、`｜` が取り除かれ、`《かな》` が注釈なしでそのまま表示されます。
+- **改行**: 閉じ括弧は開き括弧と同じ行になければならないため、自動ルビ（`漢字《…》`）を含め、記法は改行をまたぎません。
 - **傍点（圏点）**: `《《...》》` の対応する閉じ括弧が見つからない場合は本文としてそのまま残ります。出力は `style: 'sesame'`（ゴマ点）です。他のスタイル（黒丸 `dot` 等）を使う場合は直接 `InlineAnnotation` を構築してください。
 - **縦中横**: 内容は半角英数字と `!`、`?` のみで構成され、括弧の中身が 5 文字以内（括弧を含めて 7 文字以内）であることが条件です。`〔12345〕` は注釈になりますが `〔123456〕` はなりません。日本語混在や長い文字列はそのまま本文に残ります。
 - **脚注参照**: 出力本文には `*<id>`（例: `*note-1`）が挿入され、対応する `kind: 'footnote'` 注釈が付与されます。脚注本体（参照先）の管理はアプリ側で行ってください。
-- **リンク**: `[label](href)` および `[label](href "title")` を受け付けます。`href` は空白を含まないトークン1つで、`title` 部分はダブルクォートで囲みます。
+- **リンク**: `[label](href)` および `[label](href "title")` を受け付けます。`href` は空白を含まないトークン1つで、`title` 部分はダブルクォートで囲みます。リンクテキストが空の `[](url)` は本文としてそのまま残ります。
 - **強調 / 弱強調**: `**` が `*` より優先されます。`***text***`（混在）は素直にはネストされない（外側の `**` で `strong` になり、内側に余分な `*` が残る）ため、複合表現は `InlineAnnotation` を直接構築してください。
 
 ### 受信した原稿からインライン注釈だけ取り出す

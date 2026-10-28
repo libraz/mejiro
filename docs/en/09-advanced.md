@@ -609,6 +609,8 @@ const { position, save } = useReadingPosition({
 });
 ```
 
+`throttleMs` is a debounce delay: `storage.setItem` receives the latest value this long after the last `save()`, and a pending write is flushed on page hide, `key` change and unmount.
+
 For multi-device sync, prefer to compare against the server's latest `updatedAt` inside `storage.setItem` so the conflict logic stays self-contained.
 
 ### 7.4 Delivering image assets (assetResolver)
@@ -667,7 +669,7 @@ const resolver: AssetResolver = async ({ assetKey, asset, url, signal }) => {
 Notes:
 
 - If both `data` and `url` are set on an asset, `data` wins and `url` is ignored.
-- Trying to export an asset with neither field set throws `… has neither 'data' nor 'url'` (catches missing wiring early).
+- Trying to export an asset with neither field set throws ``Image asset "<assetKey>" has neither `data` nor `url` `` (catches missing wiring early), where `<assetKey>` is the asset's `assetKey`.
 - The same export-level `AbortSignal` is forwarded to the resolver, so long-running fetches can be interrupted.
 
 ### 7.5 Cross-work search

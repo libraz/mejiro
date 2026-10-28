@@ -76,7 +76,7 @@ reader.current?.goToSpread(12);
 | `prev` | `() => void` | Go back one spread. |
 | `goToChapter` | `(index: number) => void` | Switch chapter (clamped to the book's chapters); resets the spread index to 0. |
 | `getReadingPosition` | `() => ReadingPosition` | Returns `{ chapter, spreadIdx, totalPages, totalSpreads }`. |
-| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`; switches chapters first if needed. A call made before the book has loaded is applied once it has. The promise resolves once the spread is applied, or without moving when the anchor's chapter or position does not exist in the book. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
+| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`, without the page-turn animation; switches chapters first if needed. A call made before the book has loaded is applied once it has. The promise resolves once the spread is applied, or without moving when the anchor's chapter or position does not exist in the book. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
 | `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the text on the current spread, or `null` before layout is ready. When an image covers a whole page, the anchor comes from the next page with text. |
 | `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the text on the next spread that has any (or the end of the chapter). |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
@@ -91,7 +91,7 @@ Lifecycle events available via `subscribe`:
 | `turnEnd` | `{ to }` | When a turn animation completes. |
 | `chapterFinished` | `{ chapter }` | When the reader reaches the last spread of a chapter. Mirrors the `onChapterCompleted` prop. |
 
-The first position the reader settles on after loading is the baseline and fires nothing. After that, each change of chapter or spread index fires `spreadChanged` once, then `chapterFinished` if the new index is the last one in the chapter, and a re-layout that keeps the index fires nothing. The `onPageRead(anchor, dwellMs)` prop fires on the same transitions, for the spread that was left. React and Vue emit the same sequence.
+The first position the reader settles on after loading is the baseline and fires nothing. After that, each change of chapter or spread index fires `spreadChanged` once, then `chapterFinished` if the new index is the last one in the chapter, and a re-layout that keeps the index fires nothing. The `onPageRead(anchor, dwellMs)` prop fires on the same transitions, for the spread that was left; a book swap and unmount do not fire it. When an uncontrolled reader on another chapter resets to chapter 0 on a book swap, `onChapterChange` fires with `0`. React and Vue emit the same sequence.
 
 In single-page mode (`spreadMode="single"`, or `"auto"` on a portrait surface) the reader shows one page at a time, and every spread index above counts pages instead: `goToSpread`, `next` / `prev`, `spreadIdx` / `totalSpreads`, the `spreadChanged` payload and `onSpreadIdxChange`. `getAnchor` and `getVisibleRange` then cover the current page. When `"auto"` switches mode, the index is converted so the page on screen stays visible.
 
@@ -617,8 +617,8 @@ When adopting mejiro for a posting site, the two editors trade off across the sa
 
 | Axis | `MejiroEditor` | `MejiroManuscriptEditor` |
 |---|---|---|
-| Input | A parsed `EpubBook` (or URL) | Manuscript text (chapter `body` array) |
-| Edit granularity | Paragraphs, inline annotations (ruby), chapter metadata, image insertion | Chapter body text (mejiro notation), title, author, cover |
+| Input | An EPUB URL (`epubUrl`) or a dropped file; the buffer is parsed into an editable book | Manuscript text (chapter `body` array) |
+| Edit granularity | Paragraphs, inline annotations (ruby), image insertion | Chapter body text (mejiro notation), title, author, cover |
 | Output | A re-serialized EPUB (bytes) | Manuscript chapter array → exported to EPUB |
 | State hook | `useEditableEpub` | `useManuscriptDraft` |
 | Preview | Paragraph list + Reader synced to selection | Chapter body textarea + Reader driven by the manuscript |
@@ -767,7 +767,7 @@ width.
 ### Page numbers (`pageNumbers`)
 
 Each page of a spread prints its own page number in the running head — the right
-page odd, the left page even. Use `pageNumbers` to choose which pages show one:
+page odd, the left page even. Use `pageNumbers` to choose which pages show one. It applies in every reader mode: `mode="scroll"` numbers its page stack by the same rule, with the first page on the right, and shows the `enablePageIndicator` badge as well.
 
 | Value | Effect |
 |---|---|
@@ -902,7 +902,7 @@ function Reader({ bookId, epub }) {
 
 `annotations` is an array of `{ chapter, start, end, color? }`. The Reader filters by current chapter, computes highlight rectangles via `ChapterLayout.selectionRects`, and forwards them to `MejiroSpread`. The `storage` option follows the same interface as `useReadingPosition`, so swapping `localStorage` for a server-backed store is a drop-in change.
 
-For asynchronous server sync, use `onChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration). As with the reading position, send the bytes produced by `serializeAnnotations` so `parseAnnotations` accepts them on the next visit:
+For asynchronous server sync, use `onChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration or `key` changes; `clear()` on an empty list is a no-op and does not fire it). As with the reading position, send the bytes produced by `serializeAnnotations` so `parseAnnotations` accepts them on the next visit:
 
 ```tsx
 import { serializeAnnotations } from '@libraz/mejiro';

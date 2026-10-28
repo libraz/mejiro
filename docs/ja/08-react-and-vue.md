@@ -74,7 +74,7 @@ reader.current?.goToSpread(12);
 | `prev` | `() => void` | 1 見開き戻す。 |
 | `goToChapter` | `(index: number) => void` | 章へ移動し（インデックスは書籍の章の範囲に丸める）、見開きを 0 にリセット。 |
 | `getReadingPosition` | `() => ReadingPosition` | 現在の `{ chapter, spreadIdx, totalPages, totalSpreads }` を取得。 |
-| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | `ReadingAnchor` へ移動。章が異なれば章を切り替えてからアンカー解決。書籍の読み込み前に呼んだ場合は、読み込み後に適用されます。Promise は見開きが適用された時点で resolve し、アンカーの章や位置が書籍に存在しない場合は移動せずに resolve します。続けて別の `goToAnchor` が呼ばれた場合、先の Promise は即座に resolve（supersede）。アンマウント時も resolve するので `await` がハングしません。 |
+| `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | `ReadingAnchor` へ、ページめくりのアニメーションなしで移動。章が異なれば章を切り替えてからアンカー解決。書籍の読み込み前に呼んだ場合は、読み込み後に適用されます。Promise は見開きが適用された時点で resolve し、アンカーの章や位置が書籍に存在しない場合は移動せずに resolve します。続けて別の `goToAnchor` が呼ばれた場合、先の Promise は即座に resolve（supersede）。アンマウント時も resolve するので `await` がハングしません。 |
 | `getAnchor` | `() => ReadingAnchor \| null` | 現在の見開きに表示中の本文の先頭の `ReadingAnchor`。レイアウト未確定時は `null`。画像がページ全体を覆っているときは、本文のある次のページから取ります。 |
 | `getVisibleRange` | `() => { start, end } \| null` | 見開きに表示中のアンカー半開区間（`end` は本文のある次の見開きの本文先頭、なければ章末）。 |
 | `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | フォントや行間などを実行時変更。再計測・再レイアウトを伴います。 |
@@ -89,7 +89,7 @@ reader.current?.goToSpread(12);
 | `turnEnd` | `{ to }` | めくりアニメーション完了時。 |
 | `chapterFinished` | `{ chapter }` | 章の最終見開きに到達したとき。`onChapterCompleted` プロップと同等。 |
 
-読み込み後に最初に落ち着いた位置は基準点として扱い、イベントは発火しません。以降は章か見開きインデックスが変わるたびに `spreadChanged` が 1 回発火し、新しいインデックスが章の最後であれば続けて `chapterFinished` が発火します。インデックスが変わらない再レイアウトでは何も発火しません。`onPageRead(anchor, dwellMs)` プロップも同じ遷移で呼ばれ、離れた側の見開きを受け取ります。React と Vue は同じ順序でイベントを発火します。
+読み込み後に最初に落ち着いた位置は基準点として扱い、イベントは発火しません。以降は章か見開きインデックスが変わるたびに `spreadChanged` が 1 回発火し、新しいインデックスが章の最後であれば続けて `chapterFinished` が発火します。インデックスが変わらない再レイアウトでは何も発火しません。`onPageRead(anchor, dwellMs)` プロップも同じ遷移で呼ばれ、離れた側の見開きを受け取ります。書籍の差し替えとアンマウントでは呼ばれません。非制御のリーダーが別の章にいるときに書籍を差し替えると、章 0 へリセットされ、`onChapterChange` が `0` で発火します。React と Vue は同じ順序でイベントを発火します。
 
 単ページ表示（`spreadMode="single"`、または縦長の表示面での `"auto"`）では 1 ページずつ表示し、上記の見開きインデックスはすべてページ単位になります。対象は `goToSpread`・`next` / `prev`・`spreadIdx` / `totalSpreads`・`spreadChanged` のペイロード・`onSpreadIdxChange` です。`getAnchor` と `getVisibleRange` も現在のページを対象にします。`"auto"` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。
 
@@ -153,7 +153,7 @@ const restored = parseReadingPosition(await loadPositionFromServer(bookId));
 if (restored) reader.current?.goToAnchor(restored);
 ```
 
-`onChange` は `save()` / `clear()` の直後に同期的に呼ばれます（初回ハイドレートでは発火しません）。ローカル永続化（`storage`）は debounce されたままなので、サーバ側で別レートに調整したい場合はこちらに任せます。
+`onChange` は `save()` / `clear()` の直後に同期的に呼ばれます（初回ハイドレートと `key` の変更では発火しません）。ローカル永続化（`storage`）は debounce されたままなので、サーバ側で別レートに調整したい場合はこちらに任せます。
 
 ### MejiroPageView（推奨）
 
@@ -615,8 +615,8 @@ const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerD
 
 | 観点 | `MejiroEditor` | `MejiroManuscriptEditor` |
 |---|---|---|
-| 入力 | 既存の EPUB（パース済み `EpubBook` または URL） | 原稿テキスト（章の `body` 配列） |
-| 編集の単位 | 段落・インライン注釈（ルビ等）・章メタデータ・画像差し込み | 章本文（mejiro 記法のテキスト）・タイトル・著者・カバー |
+| 入力 | 既存の EPUB（URL `epubUrl` またはドロップしたファイル。バッファは編集可能な書籍にパースされる） | 原稿テキスト（章の `body` 配列） |
+| 編集の単位 | 段落・インライン注釈（ルビ等）・画像差し込み | 章本文（mejiro 記法のテキスト）・タイトル・著者・カバー |
 | 出力 | 編集後の EPUB（バイト） | 原稿チャプター配列 → EPUB へエクスポート |
 | 状態管理フック | `useEditableEpub` | `useManuscriptDraft` |
 | プレビュー | 段落単位のリスト + Reader 同期 | 章単位のテキストエディタ + 装飾付き `MejiroReader` |
@@ -748,7 +748,7 @@ button, input, optgroup, select, textarea { padding: 0; ... }  /* レイヤー�
 
 ### ページ番号（`pageNumbers`）
 
-見開きの各ページは、柱（ランニングヘッド）にそのページ自身のノンブルを表示します（右ページが奇数、左ページが偶数）。どのページに番号を出すかは `pageNumbers` で切り替えます。
+見開きの各ページは、柱（ランニングヘッド）にそのページ自身のノンブルを表示します（右ページが奇数、左ページが偶数）。どのページに番号を出すかは `pageNumbers` で切り替えます。設定はすべてのリーダーモードに効きます。`mode="scroll"` でも同じ規則（先頭ページが右）でページ番号を付け、`enablePageIndicator` の表示も出ます。
 
 | 値 | 効果 |
 |---|---|
@@ -883,7 +883,7 @@ function Reader({ bookId, epub }) {
 
 `annotations` は `{ chapter, start, end, color? }` の配列です。Reader は現在の章のエントリだけを `ChapterLayout.selectionRects` でハイライト矩形に変換し、`MejiroSpread` に渡します。`storage` オプションは `useReadingPosition` と同じインターフェースなので、`localStorage` をサーバー側のストアに差し替えるだけで済みます。
 
-サーバーと非同期に同期するには、`onChange` で変更を 1 件ずつ転送します。`onChange` は `add` / `remove` / `update` / `clear` の直後に同期的に呼ばれ、初回のハイドレーションでは呼ばれません。読書位置と同様に、送信するバイト列は `serializeAnnotations` で作ってください。次回の訪問時に `parseAnnotations` がそのまま受け付けます。
+サーバーと非同期に同期するには、`onChange` で変更を 1 件ずつ転送します。`onChange` は `add` / `remove` / `update` / `clear` の直後に同期的に呼ばれ、初回のハイドレーションと `key` の変更では呼ばれません。空のリストへの `clear()` は何もせず、`onChange` も呼ばれません。読書位置と同様に、送信するバイト列は `serializeAnnotations` で作ってください。次回の訪問時に `parseAnnotations` がそのまま受け付けます。
 
 ```tsx
 import { serializeAnnotations } from '@libraz/mejiro';

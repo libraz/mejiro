@@ -606,6 +606,8 @@ const { position, save } = useReadingPosition({
 });
 ```
 
+`throttleMs` は debounce の待ち時間です。最後の `save()` からこの時間が経つと、`storage.setItem` に最新の値が渡されます。保留中の書き込みは、ページを隠すとき・`key` の変更時・アンマウント時にまとめて書き出されます。
+
 複数デバイス同期は「`setItem` で書く前にサーバの最新 `updatedAt` と比較する」など、`storage` 側で完結させるのが扱いやすいです。
 
 ### 7.4 画像アセットの配信（assetResolver）
@@ -659,7 +661,7 @@ const resolver: AssetResolver = async ({ assetKey, asset, url, signal }) => {
 注意点:
 
 - `data` と `url` の両方が登録されている場合、`data` を優先し `url` は無視されます。
-- どちらも未登録のアセットを書き出そうとすると `has neither 'data' nor 'url'` のエラーが投げられます（呼び出し側のバグ検知）。
+- どちらも未登録のアセットを書き出そうとすると ``Image asset "<assetKey>" has neither `data` nor `url` `` のエラーが投げられます（呼び出し側のバグ検知）。`<assetKey>` はそのアセットの `assetKey` です。
 - `assetResolver` には export と同じ `AbortSignal` がそのまま渡るため、長時間 fetch を停止可能です。
 
 ### 7.5 サイト横断検索

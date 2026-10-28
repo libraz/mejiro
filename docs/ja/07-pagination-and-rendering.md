@@ -58,7 +58,7 @@ const measures = buildParagraphMeasures(entries, {
 | オプション | 型 | デフォルト | 説明 |
 |--------|------|---------|-------------|
 | `fontSize` | `number` | （必須） | 基準フォントサイズ（px）。 |
-| `lineSpacing` | `number` | `1` | 行間の倍率。 |
+| `lineSpacing` | `number` | `1` | 行間の倍率。ルビまたは傍点を含む段落は、この値にかかわらず 1 行あたり最低 `1.5`em を確保します。ブラウザがそのような行を描く高さに合わせた値です。 |
 | `lineHeight` | `number` | -- | `lineSpacing` の非推奨エイリアス。`lineSpacing` が無いときだけ使われる。 |
 | `headingScale` | `number` | `1.4` | 見出しフォントのスケール。レベルのない見出しはこの値をそのまま使う（`16 * 1.4 = 22.4`）。レベル 1〜6 は `DEFAULT_HEADING_STYLES` のサイズ（1.6 / 1.4 / 1.2 / 1.1 / 1 / 1。スタイルシートが描くサイズと同じ）をこの値に比例して拡縮するので、`2.8` にすると全レベルが 2 倍になる。レベル別の `headingStyles` の `scale` が優先される。 |
 | `paragraphGapEm` | `number` | `0.4` | 本文段落前の間隔（em単位）。 |
@@ -176,6 +176,7 @@ import '@libraz/mejiro/render/mejiro.css';
 | `.mejiro-paragraph:first-child` | 最初の段落のブロック開始側マージンを除去（`margin-right: 0`）。 |
 | `.mejiro-paragraph--heading` | 見出しスタイル。`--mejiro-paragraph-scale: 1.4; font-weight: 700; height: 100%`。`--h1`〜`--h6` はスケールをそれぞれ既定の見出しサイズ 1.6 / 1.4 / 1.2 / 1.1 / 1 / 1 にする。`ChapterLayout` が作るページは各見出しを計測したスケールを `RenderParagraph.scale` に持ち、ページコンポーネントがそれをインラインの `--mejiro-paragraph-scale` に設定する。そのため既定外の `headingScale` や `headingStyles` も計測どおりのサイズで描かれる。 |
 | `.mejiro-paragraph--heading + .mejiro-paragraph` | 見出し後の間隔（`margin-right: calc(1.2em / var(--mejiro-paragraph-scale))`、基準 em で 1.2）。 |
+| `.mejiro-paragraph--pre` | 整形済みの段落。設定するのは `white-space: pre` だけで、書体は本文のままです。 |
 | `.mejiro-page--static .mejiro-paragraph` | 行ごとの改行を持たない `renderEpubStatic()` の出力に付く。`display: block; white-space: normal` で、段落はページ内で折り返す。`pre` 段落は `white-space: pre` のまま。 |
 | `.mejiro-page ruby` | `ruby-align: center`。 |
 | `.mejiro-page rt` | `font-size: 0.5em; font-weight: 400`。 |
