@@ -37,7 +37,7 @@ function makeAnnotation(
   endIndex: number,
   rubyText: string,
   rubyAdvanceWidth: number,
-  type?: RubyAnnotation['type'],
+  rubyType?: RubyAnnotation['rubyType'],
   jukugoSplitPoints?: number[],
 ): RubyAnnotation {
   const cps = toCodepoints(rubyText);
@@ -46,7 +46,7 @@ function makeAnnotation(
     endIndex,
     rubyText: cps,
     rubyAdvances: uniformAdvances(cps.length, rubyAdvanceWidth),
-    type,
+    rubyType,
     jukugoSplitPoints,
   };
 }

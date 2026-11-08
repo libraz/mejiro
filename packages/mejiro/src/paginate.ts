@@ -68,7 +68,10 @@ export interface PageSlice {
  * @returns Array of pages, each containing an array of paragraph slices.
  *   Always at least one page, empty when nothing could be placed.
  */
-export function paginate(pageBlockSize: number, paragraphs: ParagraphMeasure[]): PageSlice[][] {
+export function paginate(
+  pageBlockSize: number,
+  paragraphs: readonly ParagraphMeasure[],
+): PageSlice[][] {
   const pages: PageSlice[][] = [];
   let currentPage: PageSlice[] = [];
   let usedBlock = 0;

@@ -1,12 +1,22 @@
 import {
   type Annotation,
   createAnnotationId,
+  type MejiroError,
   type MejiroStorage,
   parseAnnotations,
   serializeAnnotations,
-  sortAnnotations,
+  toSortedAnnotations,
 } from '@libraz/mejiro';
-import { onScopeDispose, type Ref, shallowRef, watch } from 'vue';
+import {
+  type MaybeRefOrGetter,
+  onScopeDispose,
+  type Ref,
+  shallowReadonly,
+  shallowRef,
+  toValue,
+  watch,
+} from 'vue';
+import { nonFatalReporter } from './errors.js';
 import {
   createPendingWrite,
   flushOnPageHide,
@@ -14,6 +24,7 @@ import {
   readStorage,
   removeStorage,
   resolveDefaultStorage,
+  writeStorage,
 } from './persistence.js';
 
 /**
@@ -24,32 +35,42 @@ import {
  */
 export type { Annotation };
 
-/** Minimal storage interface required by {@link useAnnotations}. */
-export type AnnotationsStorage = MejiroStorage;
-
 /** Options for {@link useAnnotations}. */
 export interface UseAnnotationsOptions {
-  /** Storage key — usually scoped per-book. */
-  key: Ref<string> | string;
-  /** Storage backend. Defaults to `window.localStorage`. */
-  storage?: AnnotationsStorage;
   /**
-   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and scope dispose. @defaultValue 250
+   * Storage key — usually scoped per-book. A ref or getter re-hydrates the list
+   * when the key changes; a plain string is read once.
    */
-  throttleMs?: number;
+  key: MaybeRefOrGetter<string>;
+  /** Storage backend. Defaults to `window.localStorage`. */
+  storage?: MejiroStorage;
+  /**
+   * Debounce delay (ms): the latest value is written this long after the last
+   * change. A pending write is flushed on page hide, key change and scope
+   * dispose. @defaultValue 250
+   */
+  debounceMs?: number;
   /**
    * Called immediately after each mutation (`add` / `remove` / `update` /
    * `clear`) with the new annotation list. Use to mirror state to a server
    * — `storage` only covers the local persistence side. Not invoked on
    * initial hydration or when the `key` changes.
    */
-  onChange?: (next: readonly Annotation[]) => void;
+  onAnnotationsChange?: (next: readonly Annotation[]) => void;
+  /**
+   * Called when the storage throws (`storage-read-failed` /
+   * `storage-write-failed`) or holds data that cannot be read back
+   * (`storage-corrupt`). The list stays usable in memory; unreadable data is
+   * left in place until the first mutation overwrites it. Without it the
+   * failure goes to `console.warn`.
+   */
+  onError?: (error: MejiroError) => void;
 }
 
 /** Return value of {@link useAnnotations}. */
 export interface UseAnnotationsReturn {
-  /** Currently saved annotations. */
-  annotations: Ref<readonly Annotation[]>;
+  /** Currently saved annotations. Change them through the methods below. */
+  annotations: Readonly<Ref<readonly Annotation[]>>;
   /** Add a new annotation. `id` and `createdAt` are auto-filled when omitted. */
   add(
     input: Omit<Annotation, 'id' | 'createdAt'> & Partial<Pick<Annotation, 'id' | 'createdAt'>>,
@@ -62,13 +83,10 @@ export interface UseAnnotationsReturn {
   clear(): void;
 }
 
-function unwrapKey(key: Ref<string> | string): string {
-  return typeof key === 'string' ? key : key.value;
-}
-
-/** Parses and sorts a stored annotation list. */
-function parseSorted(raw: string | null): readonly Annotation[] {
-  return sortAnnotations(parseAnnotations(raw));
+/** Parses and sorts a stored annotation list; `null` when it is unreadable. */
+function parseSorted(raw: string | null): readonly Annotation[] | null {
+  const parsed = parseAnnotations(raw);
+  return parsed ? toSortedAnnotations(parsed) : null;
 }
 
 /**
@@ -76,22 +94,23 @@ function parseSorted(raw: string | null): readonly Annotation[] {
  * of the same name.
  */
 export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsReturn {
-  const { throttleMs = 250 } = options;
+  const { debounceMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
+  const report = nonFatalReporter(options.onError);
 
   // The list is always replaced wholesale; a shallow ref keeps elements plain
-  // (structured-cloneable) for `onChange` and consumers.
+  // (structured-cloneable) for `onAnnotationsChange` and consumers.
   const annotations = shallowRef<readonly Annotation[]>(
-    readStorage(storage, unwrapKey(options.key), parseSorted, []),
+    readStorage(storage, toValue(options.key), parseSorted, [], report),
   );
   const pending = createPendingWrite();
 
   watch(
-    () => unwrapKey(options.key),
+    () => toValue(options.key),
     (next) => {
       // A write scheduled under the previous key must land there, not in the new book's slot.
       pending.flush();
-      annotations.value = readStorage(storage, next, parseSorted, []);
+      annotations.value = readStorage(storage, next, parseSorted, [], report);
     },
   );
 
@@ -104,12 +123,12 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
 
   function commit(next: readonly Annotation[]): void {
     if (storage) {
-      const keyAtCommit = unwrapKey(options.key);
+      const keyAtCommit = toValue(options.key);
       pending.schedule(() => {
-        storage.setItem(keyAtCommit, serializeAnnotations(next));
-      }, throttleMs);
+        writeStorage(storage, keyAtCommit, serializeAnnotations(next), report);
+      }, debounceMs);
     }
-    options.onChange?.(next);
+    options.onAnnotationsChange?.(next);
   }
 
   function add(
@@ -120,7 +139,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       id: input.id ?? createAnnotationId(),
       createdAt: input.createdAt ?? Date.now(),
     };
-    const next = sortAnnotations([...annotations.value, annotation]);
+    const next = toSortedAnnotations([...annotations.value, annotation]);
     annotations.value = next;
     commit(next);
     return annotation;
@@ -142,7 +161,7 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
       return { ...mergeDefined(annotation, patch), id };
     });
     if (changed) {
-      const sorted = sortAnnotations(next);
+      const sorted = toSortedAnnotations(next);
       annotations.value = sorted;
       commit(sorted);
     }
@@ -152,9 +171,9 @@ export function useAnnotations(options: UseAnnotationsOptions): UseAnnotationsRe
     if (annotations.value.length === 0) return;
     annotations.value = [];
     pending.cancel();
-    removeStorage(storage, unwrapKey(options.key));
-    options.onChange?.([]);
+    removeStorage(storage, toValue(options.key), report);
+    options.onAnnotationsChange?.([]);
   }
 
-  return { annotations, add, remove, update, clear };
+  return { annotations: shallowReadonly(annotations), add, remove, update, clear };
 }

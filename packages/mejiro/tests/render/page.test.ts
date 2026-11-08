@@ -7,7 +7,7 @@ import type { RenderEntry } from '../../src/render/types.js';
 function makeEntry(
   text: string,
   breakPoints: number[],
-  isHeading = false,
+  heading = false,
   inlineAnnotations: RenderEntry['inlineAnnotations'] = [],
   headingLevel?: number,
 ): RenderEntry {
@@ -15,7 +15,7 @@ function makeEntry(
     chars: [...text],
     breakPoints: new Uint32Array(breakPoints),
     inlineAnnotations,
-    isHeading,
+    kind: heading ? 'heading' : undefined,
     headingLevel,
   };
 }
@@ -24,14 +24,14 @@ describe('buildRenderPage', () => {
   it('drops only the anchor of a link whose URL is rejected, keeping nested ruby', () => {
     const entries = [
       makeEntry('漢字です', [], false, [
-        { kind: 'link', startIndex: 0, endIndex: 4, href: 'javascript:alert(1)' },
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
+        { type: 'link', startIndex: 0, endIndex: 4, href: 'javascript:alert(1)' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
       ]),
     ];
     const page = buildRenderPage([{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }], entries);
 
     expect(page.paragraphs[0].lines[0].segments).toEqual([
-      { type: 'ruby', base: '漢字', rubyText: 'かんじ', children: undefined },
+      { type: 'ruby', text: '漢字', rubyText: 'かんじ', children: undefined },
       { type: 'text', text: 'です' },
     ]);
   });
@@ -43,7 +43,7 @@ describe('buildRenderPage', () => {
     const page = buildRenderPage(slices, entries);
 
     expect(page.paragraphs).toHaveLength(1);
-    expect(page.paragraphs[0].isHeading).toBe(false);
+    expect(page.paragraphs[0].kind).toBeUndefined();
     expect(page.paragraphs[0].lines).toHaveLength(2);
     expect(page.paragraphs[0].lines[0].segments).toEqual([{ type: 'text', text: 'あいう' }]);
     expect(page.paragraphs[0].lines[1].segments).toEqual([{ type: 'text', text: 'えお' }]);
@@ -55,17 +55,16 @@ describe('buildRenderPage', () => {
 
     const page = buildRenderPage(slices, entries);
 
-    expect(page.paragraphs[0].isHeading).toBe(true);
     expect(page.paragraphs[0].headingLevel).toBe(2);
   });
 
-  it('marks heading paragraphs with legacy isHeading', () => {
+  it('marks a heading classified only by kind', () => {
     const entries = [makeEntry('タイトル', [], true)];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
 
     const page = buildRenderPage(slices, entries);
 
-    expect(page.paragraphs[0].isHeading).toBe(true);
+    expect(page.paragraphs[0].kind).toBe('heading');
     expect(page.paragraphs[0].headingLevel).toBeUndefined();
   });
 
@@ -92,7 +91,6 @@ describe('buildRenderPage', () => {
       'mejiro-paragraph',
     ]);
     for (const p of page.paragraphs.slice(0, 3)) {
-      expect(p.isHeading).toBe(true);
       expect(p.kind === 'heading' || p.headingLevel != null).toBe(true);
     }
   });
@@ -101,7 +99,7 @@ describe('buildRenderPage', () => {
     // 漢字 with ruby かんじ at indices [0,2)
     const entries = [
       makeEntry('漢字です', [], false, [
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
@@ -109,7 +107,7 @@ describe('buildRenderPage', () => {
     const page = buildRenderPage(slices, entries);
 
     expect(page.paragraphs[0].lines[0].segments).toEqual([
-      { type: 'ruby', base: '漢字', rubyText: 'かんじ' },
+      { type: 'ruby', text: '漢字', rubyText: 'かんじ' },
       { type: 'text', text: 'です' },
     ]);
   });
@@ -118,8 +116,8 @@ describe('buildRenderPage', () => {
     // あ[漢字]い[文字]う
     const entries = [
       makeEntry('あ漢字い文字う', [], false, [
-        { kind: 'ruby', startIndex: 1, endIndex: 3, rubyText: 'かんじ' },
-        { kind: 'ruby', startIndex: 4, endIndex: 6, rubyText: 'もじ' },
+        { type: 'ruby', startIndex: 1, endIndex: 3, rubyText: 'かんじ' },
+        { type: 'ruby', startIndex: 4, endIndex: 6, rubyText: 'もじ' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
@@ -128,9 +126,9 @@ describe('buildRenderPage', () => {
 
     expect(page.paragraphs[0].lines[0].segments).toEqual([
       { type: 'text', text: 'あ' },
-      { type: 'ruby', base: '漢字', rubyText: 'かんじ' },
+      { type: 'ruby', text: '漢字', rubyText: 'かんじ' },
       { type: 'text', text: 'い' },
-      { type: 'ruby', base: '文字', rubyText: 'もじ' },
+      { type: 'ruby', text: '文字', rubyText: 'もじ' },
       { type: 'text', text: 'う' },
     ]);
   });
@@ -165,14 +163,14 @@ describe('buildRenderPage', () => {
   it('skips a jukugo aggregate whose parts already carry the ruby text', () => {
     const entries = [
       makeEntry('漢字です', [], false, [
-        { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', type: 'mono' },
-        { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'じ', type: 'mono' },
+        { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', rubyType: 'mono' },
+        { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'じ', rubyType: 'mono' },
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 0,
           endIndex: 2,
           rubyText: 'かんじ',
-          type: 'jukugo',
+          rubyType: 'jukugo',
           jukugoSplitPoints: [1],
         },
       ]),
@@ -182,8 +180,8 @@ describe('buildRenderPage', () => {
     const page = buildRenderPage(slices, entries);
 
     expect(page.paragraphs[0].lines[0].segments).toEqual([
-      { type: 'ruby', base: '漢', rubyText: 'かん', children: undefined },
-      { type: 'ruby', base: '字', rubyText: 'じ', children: undefined },
+      { type: 'ruby', text: '漢', rubyText: 'かん', children: undefined },
+      { type: 'ruby', text: '字', rubyText: 'じ', children: undefined },
       { type: 'text', text: 'です' },
     ]);
   });
@@ -192,11 +190,11 @@ describe('buildRenderPage', () => {
     const entries = [
       makeEntry('漢字です', [], false, [
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 0,
           endIndex: 2,
           rubyText: 'かんじ',
-          type: 'jukugo',
+          rubyType: 'jukugo',
           jukugoSplitPoints: [1],
         },
       ]),
@@ -206,7 +204,7 @@ describe('buildRenderPage', () => {
     const page = buildRenderPage(slices, entries);
 
     expect(page.paragraphs[0].lines[0].segments).toEqual([
-      { type: 'ruby', base: '漢字', rubyText: 'かんじ', children: undefined },
+      { type: 'ruby', text: '漢字', rubyText: 'かんじ', children: undefined },
       { type: 'text', text: 'です' },
     ]);
   });
@@ -214,7 +212,7 @@ describe('buildRenderPage', () => {
   it('renders unsafe links as plain text', () => {
     const entries = [
       makeEntry('unsafe', [], false, [
-        { kind: 'link', startIndex: 0, endIndex: 6, href: 'javascript:alert(1)' },
+        { type: 'link', startIndex: 0, endIndex: 6, href: 'javascript:alert(1)' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
@@ -227,8 +225,8 @@ describe('buildRenderPage', () => {
   it('preserves contained annotations such as ruby inside links', () => {
     const entries = [
       makeEntry('漢字', [], false, [
-        { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+        { type: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
@@ -240,7 +238,7 @@ describe('buildRenderPage', () => {
         type: 'link',
         text: '漢字',
         href: 'https://example.test',
-        children: [{ type: 'ruby', base: '漢字', rubyText: 'かんじ' }],
+        children: [{ type: 'ruby', text: '漢字', rubyText: 'かんじ' }],
       },
     ]);
   });
@@ -248,7 +246,7 @@ describe('buildRenderPage', () => {
   it('does not hang on zero-length annotations', () => {
     const entries = [
       makeEntry('本文', [], false, [
-        { kind: 'emphasis', startIndex: 1, endIndex: 1, style: 'sesame' },
+        { type: 'emphasis', startIndex: 1, endIndex: 1, style: 'sesame' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }];
@@ -263,7 +261,7 @@ describe('buildRenderPage', () => {
     const entries = [
       makeEntry('あいうえおかきくけこさし', [7], false, [
         {
-          kind: 'link',
+          type: 'link',
           startIndex: 5,
           endIndex: 10,
           href: 'https://example.test',
@@ -300,10 +298,10 @@ describe('buildRenderPage', () => {
   it('splits emphasis, tcy and footnote spans across a line boundary', () => {
     const entries = [
       makeEntry('あいうえおかきくけこさし', [7], false, [
-        { kind: 'emphasis', startIndex: 0, endIndex: 9, style: 'dot' },
-        { kind: 'footnote', startIndex: 10, endIndex: 12, noteId: 'fn-1' },
+        { type: 'emphasis', startIndex: 0, endIndex: 9, style: 'dot' },
+        { type: 'footnote-ref', startIndex: 10, endIndex: 12, noteId: 'fn-1' },
       ]),
-      makeEntry('あいうえおかきくけこ', [7], false, [{ kind: 'tcy', startIndex: 6, endIndex: 10 }]),
+      makeEntry('あいうえおかきくけこ', [7], false, [{ type: 'tcy', startIndex: 6, endIndex: 10 }]),
     ];
     const slices: PageSlice[] = [
       { paragraphIndex: 0, lineStart: 0, lineEnd: 2 },
@@ -332,7 +330,7 @@ describe('buildRenderPage', () => {
   it('concatenates the segments of a split annotation back to the original base text', () => {
     const entries = [
       makeEntry('あいうえおかきくけこ', [4], false, [
-        { kind: 'strong', startIndex: 2, endIndex: 8 },
+        { type: 'strong', startIndex: 2, endIndex: 8 },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 2 }];
@@ -351,7 +349,7 @@ describe('buildRenderPage', () => {
   it('keeps a ruby reading on the line owning its start and leaves the rest as text', () => {
     const entries = [
       makeEntry('あ漢字熟語い', [2], false, [
-        { kind: 'ruby', startIndex: 1, endIndex: 5, rubyText: 'かんじじゅくご', type: 'group' },
+        { type: 'ruby', startIndex: 1, endIndex: 5, rubyText: 'かんじじゅくご', rubyType: 'group' },
       ]),
     ];
     const slices: PageSlice[] = [{ paragraphIndex: 0, lineStart: 0, lineEnd: 2 }];
@@ -360,7 +358,7 @@ describe('buildRenderPage', () => {
 
     expect(page.paragraphs[0].lines[0].segments).toEqual([
       { type: 'text', text: 'あ' },
-      { type: 'ruby', base: '漢字', rubyText: 'かんじじゅくご', children: undefined },
+      { type: 'ruby', text: '漢字', rubyText: 'かんじじゅくご', children: undefined },
     ]);
     expect(page.paragraphs[0].lines[1].segments).toEqual([{ type: 'text', text: '熟語い' }]);
   });

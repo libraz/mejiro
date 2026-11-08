@@ -2,6 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { chapterLayoutChannel } from '../../src/book/chapter-layout.js';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookParagraph } from '../../src/book/types.js';
 
@@ -45,7 +46,7 @@ const HEADING_WITH_RUBY: BookParagraph[] = [
     text: '東京都と大阪府',
     headingLevel: 1,
     inlineAnnotations: [
-      { kind: 'ruby', startIndex: 0, endIndex: 3, rubyText: 'とうきょうとふう', type: 'group' },
+      { type: 'ruby', startIndex: 0, endIndex: 3, rubyText: 'とうきょうとふう', rubyType: 'group' },
     ],
   },
 ];
@@ -134,7 +135,7 @@ describe('MejiroBook measurement', () => {
     const stepped = new MejiroBook({ fontFamily: 'serif', fontSize: 14 });
     stepped.setPageSize({ pageWidth: 400, lineWidth: 160 });
     const viaSetOptions = await stepped.layoutChapter({ paragraphs: HEADING_WITH_RUBY });
-    await stepped.setOptions({ fontSize: 16 });
+    await stepped.updateOptions({ fontSize: 16 });
 
     const expected = fromScratch.snapshot().paragraphs[0].breakPoints;
     // Guard against a vacuous comparison: the heading must actually wrap.
@@ -161,14 +162,14 @@ describe('MejiroBook measurement', () => {
     expect(snapshot.paragraphs[0].breakPoints).toEqual(expected.paragraphs[0].breakPoints);
   });
 
-  it('converges on the last setOptions when two font changes overlap', async () => {
+  it('converges on the last updateOptions when two font changes overlap', async () => {
     const fonts = installFontsStub({ slowFamily: 'monospace' });
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
     book.setPageSize({ pageWidth: 400, lineWidth: 320 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
 
-    const slow = book.setOptions({ fontFamily: 'monospace', fontSize: 20 });
-    const fast = book.setOptions({ fontFamily: 'sans-serif', fontSize: 28 });
+    const slow = book.updateOptions({ fontFamily: 'monospace', fontSize: 20 });
+    const fast = book.updateOptions({ fontFamily: 'sans-serif', fontSize: 28 });
     await fast;
     fonts.release();
     await slow;
@@ -190,8 +191,11 @@ describe('MejiroBook measurement', () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 320 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
 
-    await expect(book.setOptions({ fontFamily: 'fantasy', fontSize: 40 })).rejects.toThrow(
-      /Font not available \(possible fallback\)/,
+    await expect(book.updateOptions({ fontFamily: 'fantasy', fontSize: 40 })).rejects.toMatchObject(
+      {
+        name: 'MejiroError',
+        code: 'font-unavailable',
+      },
     );
 
     expect(book.getOptions().fontFamily).toBe('sans-serif');
@@ -208,7 +212,7 @@ describe('MejiroBook measurement', () => {
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
 
     await expect(
-      book.setOptions({ fontFamily: 'monospace', fontSize: 40 }),
+      book.updateOptions({ fontFamily: 'monospace', fontSize: 40 }),
     ).resolves.toBeUndefined();
 
     expect(book.getOptions().fontFamily).toBe('monospace');
@@ -220,7 +224,7 @@ describe('MejiroBook measurement', () => {
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
     book.setPageSize({ pageWidth: 400, lineWidth: 320 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
-    const recompute = vi.spyOn(layout, 'recomputeAfterMeasurement');
+    const recompute = vi.spyOn(chapterLayoutChannel(layout), 'recomputeAfterMeasurement');
 
     // Fonts may finish loading while the book holds no subscription.
     book.dispose();
@@ -236,12 +240,12 @@ describe('MejiroBook measurement', () => {
 
     // The layout waits on the slow family while a font change commits.
     const pending = book.layoutChapter({ paragraphs: HEADING_WITH_RUBY });
-    await book.setOptions({ fontFamily: 'serif', fontSize: 20 });
-    await book.setOptions({ mode: 'loose' });
+    await book.updateOptions({ fontFamily: 'serif', fontSize: 20 });
+    await book.updateOptions({ kinsoku: 'loose' });
     fonts.release();
     const layout = await pending;
 
-    const control = new MejiroBook({ fontFamily: 'serif', fontSize: 20, mode: 'loose' });
+    const control = new MejiroBook({ fontFamily: 'serif', fontSize: 20, kinsoku: 'loose' });
     control.setPageSize({ pageWidth: 400, lineWidth: 320 });
     const expected = (await control.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
 
@@ -265,14 +269,14 @@ describe('MejiroBook measurement', () => {
     // Restored as taken, until the book's options are applied to it.
     expect(restored.snapshot().paragraphs[0].advances).toEqual(snapshot.paragraphs[0].advances);
 
-    await book.setOptions({ mode: 'loose' });
+    await book.updateOptions({ kinsoku: 'loose' });
 
-    const control = new MejiroBook({ fontFamily: 'serif', fontSize: 16, mode: 'loose' });
+    const control = new MejiroBook({ fontFamily: 'serif', fontSize: 16, kinsoku: 'loose' });
     control.setPageSize({ pageWidth: 400, lineWidth: 160 });
     const expected = (await control.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
     const after = restored.snapshot();
     expect(after.config.fontSize).toBe(16);
-    expect(after.config.mode).toBe('loose');
+    expect(after.config.kinsoku).toBe('loose');
     expect(after.paragraphs[0].advances).toEqual(expected.paragraphs[0].advances);
     expect(after.paragraphs[0].layoutRubyAnnotations).toEqual(
       expected.paragraphs[0].layoutRubyAnnotations,
@@ -281,7 +285,7 @@ describe('MejiroBook measurement', () => {
 
   it('keeps a restored layout config through a font load and refreshes its advances', async () => {
     const fonts = installFontsStub();
-    const source = new MejiroBook({ fontFamily: 'serif', fontSize: 20, mode: 'loose' });
+    const source = new MejiroBook({ fontFamily: 'serif', fontSize: 20, kinsoku: 'loose' });
     source.setPageSize({ pageWidth: 400, lineWidth: 160 });
     const snapshot = (await source.layoutChapter({ paragraphs: HEADING_WITH_RUBY })).snapshot();
 
@@ -289,7 +293,7 @@ describe('MejiroBook measurement', () => {
     const restored = book.layoutFromSnapshot(snapshot);
     restored.getPage(0);
     // The host's glyphs change under the layout: a stale-width marker to refresh.
-    restored.getCachedParagraphs()[0].advances = new Float32Array(7).fill(1);
+    chapterLayoutChannel(restored).cachedParagraphs()[0].advances = new Float32Array(7).fill(1);
 
     fonts.fireLoadingDone();
 
@@ -316,11 +320,11 @@ describe('MejiroBook measurement', () => {
       headingStyles: { 1: { scale: 2 } },
     });
     const restored = book.layoutFromSnapshot(snapshot);
-    const recompute = vi.spyOn(restored, 'recomputeAfterMeasurement');
+    const recompute = vi.spyOn(chapterLayoutChannel(restored), 'recomputeAfterMeasurement');
 
-    await book.setOptions({ mode: 'loose' });
+    await book.updateOptions({ kinsoku: 'loose' });
 
     expect(recompute).not.toHaveBeenCalled();
-    expect(restored.snapshot().config.mode).toBe('loose');
+    expect(restored.snapshot().config.kinsoku).toBe('loose');
   });
 });

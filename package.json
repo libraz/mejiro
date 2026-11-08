@@ -14,7 +14,7 @@
     "lint:fix": "biome check --write .",
     "check:docs": "node scripts/check-doc-facts.mjs",
     "format": "biome format --write .",
-    "typecheck": "yarn build && tsc -b --noEmit",
+    "typecheck": "yarn build && tsc -b --noEmit && node scripts/typecheck-consumers.mjs",
     "dev": "yarn workspace @mejiro/demo dev",
     "dev:react": "yarn workspace @mejiro/react-demo dev",
     "dev:vue": "yarn workspace @mejiro/vue-demo dev",
@@ -30,6 +30,7 @@
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "vue-tsc": "^3.3.14"
   }
 }

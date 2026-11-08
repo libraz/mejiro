@@ -4,15 +4,15 @@
 
 ## parseEpub()
 
-`parseEpub()` は EPUB 解析の基本 API です。EPUB ファイル（ZIP アーカイブ）を含む `ArrayBuffer` を受け取り、`EpubBook` を返します。
+`parseEpub()` は EPUB 解析の基本 API です。EPUB ファイル（ZIP アーカイブ）を `BinaryInput`（`ArrayBuffer` または `Uint8Array`。Node の `Buffer` を含む）として受け取り、`EpubBook` を返します。入力はそのビューの範囲だけを読み、保持も変更もしません。
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
 
-const book = await parseEpub(epubArrayBuffer);
-console.log(book.title);   // OPFメタデータから取得した書名
-console.log(book.author);  // 著者（省略可）
-console.log(book.chapters.length);
+const epub = await parseEpub(epubBytes);
+console.log(epub.title);   // OPFメタデータから取得した書名
+console.log(epub.author);  // 著者（省略可）
+console.log(epub.chapters.length);
 ```
 
 ## 内部フロー
@@ -34,12 +34,30 @@ console.log(book.chapters.length);
 
 段落が 1 つもない章は結果から除外されます。
 
-### 未信頼 EPUB の読込上限
-
-`parseEpub()` と `EditableEpub.load()` は、圧縮入力サイズ、entry 数、entry ごとの展開サイズ、合計展開サイズ、圧縮率の安全な既定上限を超える archive を拒否します。信頼できる環境だけで上限を変更してください。
+失敗は `MejiroError` で、`code` が原因を表します。読める ZIP アーカイブでない入力は `epub-invalid-archive`、コンテナ・パッケージ文書・章が不正（または読める章がない）なら `epub-invalid-package`、下記の上限を超えたアーカイブは `epub-limit-exceeded`、DOM 実装のないホストでは `dom-unavailable` です。
 
 ```ts
-const book = await parseEpub(data, {
+import { MejiroError, parseEpub } from '@libraz/mejiro/epub';
+
+try {
+  await parseEpub(bytes);
+} catch (error) {
+  if (error instanceof MejiroError && error.code === 'epub-invalid-archive') {
+    showMessage('EPUB ファイルではありません。');
+  } else {
+    throw error;
+  }
+}
+```
+
+解析を中断するには `signal` を渡します。`parseEpub(bytes, { signal })` はシグナルが発火すると `signal.reason` で reject します。
+
+### 未信頼 EPUB の読込上限
+
+`parseEpub()` と `parseEditableEpub()` は、圧縮入力サイズ、entry 数、entry ごとの展開サイズ、合計展開サイズ、圧縮率の安全な既定上限を超える archive を拒否します。信頼できる環境だけで上限を変更してください。
+
+```ts
+const epub = await parseEpub(data, {
   limits: { maxTotalBytes: 300 * 1024 * 1024 },
 });
 ```
@@ -67,16 +85,16 @@ interface AnnotatedParagraph {
 }
 ```
 
-ルビは `@libraz/mejiro/browser` の `InlineAnnotation` 判別共用体のうち、`kind: 'ruby'` バリアントとして表現されます。
+ルビは `@libraz/mejiro/browser` の `InlineAnnotation` 判別共用体のうち、`type: 'ruby'` バリアントとして表現されます。
 
 ```ts
 interface InlineRubyAnnotation {
-  kind: 'ruby';
+  type: 'ruby';
   startIndex: number;                  // 文字インデックス（バイトではない）
   endIndex: number;                    // 排他的
   rubyText: string;
-  type?: 'mono' | 'group' | 'jukugo';
-  jukugoSplitPoints?: number[];
+  rubyType?: 'mono' | 'group' | 'jukugo';
+  jukugoSplitPoints?: readonly number[];
 }
 ```
 
@@ -98,7 +116,7 @@ const xhtml = `<html><body>
 const paragraphs = extractRubyContent(xhtml);
 // paragraphs[0].text === '漢字を読む'
 // paragraphs[0].inlineAnnotations === [
-//   { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' }
+//   { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' }
 // ]
 // paragraphs[1].text === '第二章'
 // paragraphs[1].headingLevel === 2
@@ -139,7 +157,7 @@ input.addEventListener('change', async () => {
   const file = input.files?.[0];
   if (!file) return;
   const buffer = await file.arrayBuffer();
-  const book = await parseEpub(buffer);
+  const epub = await parseEpub(buffer);
 });
 ```
 
@@ -151,7 +169,7 @@ document.addEventListener('drop', async (e) => {
   const file = e.dataTransfer?.files[0];
   if (!file?.name.endsWith('.epub')) return;
   const buffer = await file.arrayBuffer();
-  const book = await parseEpub(buffer);
+  const epub = await parseEpub(buffer);
 });
 ```
 
@@ -160,7 +178,7 @@ document.addEventListener('drop', async (e) => {
 ```ts
 const response = await fetch('/books/example.epub');
 const buffer = await response.arrayBuffer();
-const book = await parseEpub(buffer);
+const epub = await parseEpub(buffer);
 ```
 
 ## EPUBとレイアウトの組み合わせ
@@ -177,19 +195,19 @@ import { buildParagraphMeasures, buildRenderPage, type RenderEntry } from '@libr
 
 const fontSize = 16;
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: fontSize,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: fontSize,
 });
 
-const book = await parseEpub(buffer);
-const chapter = book.chapters[0];
+const epub = await parseEpub(buffer);
+const chapter = epub.chapters[0];
 
 // 見出しは buildParagraphMeasures() が計測するサイズ（レベルごとの
 // DEFAULT_HEADING_STYLES の倍率を整数ピクセルに丸めたもの）で改行する
 const headingSize = (level: number) =>
   Math.round(fontSize * (DEFAULT_HEADING_STYLES[level]?.scale ?? 1));
 
-const result = await mejiro.layoutChapter({
+const result = await mejiro.layoutParagraphs({
   paragraphs: chapter.paragraphs.map((p) => ({
     text: p.text,
     inlineAnnotations: p.inlineAnnotations,
@@ -220,11 +238,14 @@ import { parseEditableEpub } from '@libraz/mejiro/epub';
 
 const editor = await parseEditableEpub(buffer);
 
-editor.updateParagraph(0, 2, {
+// 既存のブロックは id で指定します。
+const [, , block] = editor.epub.chapters[0].blocks;
+
+editor.updateParagraph(0, block.id, {
   text: '差し替え後の本文',
   inlineAnnotations: [
     // 「本文」はインデックス 6 と 7。startIndex は含み、endIndex は含まない
-    { kind: 'ruby', startIndex: 6, endIndex: 8, rubyText: 'ほんぶん', type: 'group' },
+    { type: 'ruby', startIndex: 6, endIndex: 8, rubyText: 'ほんぶん', rubyType: 'group' },
   ],
 });
 
@@ -235,49 +256,38 @@ const nextBuffer = await editor.export({
 });
 ```
 
-編集可能な章は `chapter.blocks` にブロック単位の本文を持ち、段落ブロックと画像ブロックが同じ階層に並びます。旧来の段落配列は読み取り互換のために投影されますが、新しいエディタコードでは `EditableEpub` のメソッド経由でブロックを更新してください。
+編集可能な章は本文を `chapter.blocks` に持ち、段落ブロックと画像ブロックが同じ階層に並びます。どの変更メソッドも、既存のブロックを `(chapterIndex, blockId)` で指定します。添字を使うのはブロックを置く位置だけです。存在しない章の添字やブロック id、種類の違うブロックの id を渡すと `RangeError` を投げ、例外を投げた編集は何も変更せず履歴にも残しません。
 
-### v0.5: blocks 主体 API への移行ガイド
+| やりたいこと | 呼び出し | 補足 |
+|---|---|---|
+| 段落を変更する | `editor.updateParagraph(chapterIndex, blockId, patch)` | `patch` は `ParagraphPatch`。`paragraphKind` がなければ種類はそのまま。種類を変えるときは、新しい種類に必要なフィールドを一緒に渡す（`'heading'` には `headingLevel`、`'sceneBreak'` はテキストなし）。新しい注釈なしでテキストを変えると、各注釈は同じ親文字を覆い続けるか、捨てられる |
+| 段落を挿入する | `editor.insertParagraph(chapterIndex, index, paragraph)` | `index` は `chapter.blocks` 上の位置。末尾には `chapter.blocks.length`。`paragraph` は `NewParagraph` なので `{ text }` で本文の段落になる。生成した `id` を持つ保存済みのブロックを返す |
+| 注釈を置き換える | `editor.setInlineAnnotations(chapterIndex, blockId, annotations)` | 現在のテキストの外に出る注釈は捨てる |
+| ブロックを削除する | `editor.deleteBlock(chapterIndex, blockId)` | 段落でも画像でもよい。画像の資産を参照する最後のブロックを消すと資産も消える |
+| 段落を分割する | `editor.splitParagraph(chapterIndex, blockId, charIndex)` | 元のブロックは id と分割前のテキストを保ち、後ろの新しいブロックを返す。小数の `charIndex` は切り捨て、範囲外は丸め、非有限は例外。分割位置をまたぐ注釈は捨てる |
+| 2 つの段落を結合する | `editor.mergeParagraphs(chapterIndex, { leftId, rightId })` | `rightId` は `leftId` の直後でなければならない。結合後のブロックを返す |
+| 画像を追加する | `editor.addImage(chapterIndex, { filename, data, alt?, caption?, placement?, afterBlockId? })` | 画像ブロックを返し、`block.assetKey` が新しい資産の名前。`data` の代わりに `url` を渡すと、バイト列の取得を書き出し時まで遅らせる（後述） |
+| 画像の資産を削除する | `editor.removeImageAsset(assetKey)` | 資産と、それを表示するすべてのブロックを 1 つの履歴エントリとして削除する |
+| 画像ブロックを変更する | `editor.updateImage(chapterIndex, blockId, patch)` / `editor.setImageCaption(chapterIndex, blockId, caption)` | `updateImage` では `undefined` を渡したフィールドを削除し、省略したフィールドは変えない。`setImageCaption(…, null)` でキャプションを消す |
+| ブロックを移動する | `editor.moveBlock(chapterIndex, blockId, toIndex)` | `toIndex` は `blocks` 上の移動先（範囲内に丸める） |
 
-`v0.5` で `EditableEpubChapter` の正本は `blocks: EditableBlock[]`（段落ブロック `EditableParagraphBlock` と画像ブロック `EditableImageBlock` の混在配列）になりました。`paragraphs` / `paragraphRefs` / `images` は読み取り互換用の deprecated プロパティで、各ミューテーションの後に `blocks` から自動再生成されます。削除は将来のメジャーリリースに先送りされており、削除バージョンは決まっていません。それでも新規実装では下表のとおり `blocks` ベースの API に置き換えてください。
+#### ブロックをたどる
 
-| v0.4 / 旧 API | v0.5 推奨 API | 備考 |
-|---------------|---------------|------|
-| `chapter.paragraphs[i]` の直接書き換え | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` は画像ブロックを除いた段落投影のインデックス。`sceneBreak` はテキストを持てないため、テキストを与える patch は例外を投げます。ただし `headingLevel` も指定した場合はブロックが見出しになり、テキストを持てます。1〜6 の整数でない `headingLevel` は例外を投げます。 |
-| `chapter.paragraphs.splice(i, 0, p)` で挿入 | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` は `chapter.blocks` のインデックス。末尾は `chapter.blocks.length`。テキスト付きの `sceneBreak` を挿入した場合、1〜6 の整数でない `headingLevel` を渡した場合、`headingLevel` のない見出しを渡した場合も例外を投げます。`text` の範囲外にある注釈は破棄されます。 |
-| `chapter.paragraphs.splice(i, 1)` で削除 | `editor.deleteBlock(chapterIdx, blockId)` | 段落・画像どちらも削除可能。画像の場合、最後の参照が消えれば `imageAssets` も削除されます。 |
-| 段落の途中で分割 | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | 戻り値は `[leftId, rightId]`。小数の `charIndex` は切り捨てられ、範囲外の値は範囲内に丸められます。有限でない値は例外を投げます。境界をまたぐ注釈は破棄されます。 |
-| 隣接段落のマージ | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` は `leftId` の直後でなければなりません。マージで `sceneBreak` がテキストを持つことになる場合は例外を投げます。 |
-| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | 戻り値は `assetKey`。v0.4 シェイプ（`{ href, mediaType, ... }`）も受け付けます。削除は将来のメジャーリリースに先送りされています。 |
-| `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | block id でも asset key でも指定可能。 |
-| 画像 alt / caption の書き換え | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | `undefined` を渡したフィールドは削除され、patch に含めないフィールドはそのままです。`setImageCaption(chapterIdx, blockId, undefined)` はキャプションを削除します。 |
-| 段落/画像の並べ替え | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` は移動先の `blocks` インデックス。 |
-| `paragraphRefs[i].tagName` 参照 | （廃止） | 元 XHTML タグの追跡は廃止。書き戻し時のタグは `paragraphKind` / `headingLevel` から決定されます。 |
-
-#### 段落投影 vs blocks インデックスの違い
-
-`updateParagraph` / `setInlineAnnotations` は「段落のみを数えた連番」を受け取ります。一方 `insertParagraph` / `moveBlock` などは「画像も含めた `blocks` 配列のインデックス」を受け取ります。両者が混在する操作では `chapter.blocks` を直接走査するのが確実です。
+ブロックの id は編集をまたいで変わらないので、`chapter.blocks` をループしながら、たどったブロックを編集できます:
 
 <!-- doc-example: 06-epub-editing.ts#walk-blocks -->
 ```ts
-// updateParagraph() は画像ブロックを数えない段落インデックスを受け取る
-let paragraphIndex = 0;
-for (const block of editor.book.chapters[0].blocks) {
-  if (block.kind !== 'paragraph') continue;
-  if (block.text.includes(query)) {
-    editor.updateParagraph(0, paragraphIndex, {
-      text: block.text.replaceAll(query, replacement),
-    });
-  }
-  paragraphIndex++;
+for (const block of editor.epub.chapters[0].blocks) {
+  if (block.kind !== 'paragraph' || !block.text.includes(query)) continue;
+  editor.updateParagraph(0, block.id, { text: block.text.replaceAll(query, replacement) });
 }
 ```
 
-#### Undo/redo・トランザクション・進捗
+#### Undo/redo・トランザクション・変更通知・進捗
 
-`v0.5` では `editor.transaction(fn)` で複数操作を1ステップとしてまとめ、`editor.undo()` / `editor.redo()` / `editor.history` で履歴を扱えます。`editor.export({ onProgress, signal })` は進捗コールバックと `AbortSignal` を受け付けるため、ブラウザ上で大きな EPUB を書き出す際の UX 改善や中断にそのまま使えます。
+`editor.transaction(fn)` は複数の編集を 1 つの履歴エントリにまとめ、`fn` 内で例外が出ると巻き戻します。`fn` は同期的に実行され、promise を返すコールバックは型で拒否されます。履歴は `editor.undo()` / `editor.redo()` / `editor.history` で扱います。`editor.subscribe(listener)` は変更のたび（各編集、完了したトランザクションごとに 1 回、各 undo と redo）に `listener` を呼び、リスナーを外す関数を返します。`useEditableEpub` はこれを使っているので、エディタを直接編集しても再描画されます。`editor.export({ onProgress, signal, assetResolver, watermark })` は `Uint8Array` で解決します。`onProgress(phase, ratio)` の `ratio` は各フェーズ（`'serialize'`、続いて `'zip'`）の中で 0 から 1 へ進みます。`signal` は書き出しを中断し、promise は `signal.reason` で reject します。`watermark` は、編集中の文書には触れずに、書き出す各章の先頭に段落を入れます。
 
-未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link、章全体を包むラッパー（本文を囲む `section` / `article` / `main` / `div` とその属性）、章タイトル要素（`id="chapter-title"`。`chapter.title` から書き直します）を保持し、その内側でブロックを再生成します。段落内の画像は独立した画像ブロックとして取り込まれ、段落はその前後で分割されます。元の XHTML にリスト・テーブル（`ul` / `ol` / `dl` / `table` / `thead` / `tbody`）、埋め込みコンテンツ（`svg` / `math` / `video` / `audio` / `iframe` / `object` / `embed` / `canvas`）、章タイトル以外の要素 `id`、非表示要素や描画されない要素（`script`、`style` など）内のテキスト、`src` がアーカイブ内のファイルに解決されない画像（`data:` URI を含む）、画像が複数ある、または画像とキャプション以外の内容を含む `figure`、段落以外を囲む `blockquote` がある章は、内容を黙って失わないよう export 時に例外を投げます。
+未編集の章は元の XHTML をそのまま書き戻すため、stylesheet link、リスト、テーブルなどの元構造は保持されます。編集済みの章は `html` / `head` / `body` と stylesheet link、章全体を包むラッパー（本文を囲む `section` / `article` / `main` / `div` とその属性）、章タイトル要素（`id="chapter-title"`。`chapter.title` から書き直します）を保持し、その内側でブロックを再生成します。段落内の画像は独立した画像ブロックとして取り込まれ、段落はその前後で分割されます。元の XHTML にリスト・テーブル（`ul` / `ol` / `dl` / `table` / `thead` / `tbody`）、埋め込みコンテンツ（`svg` / `math` / `video` / `audio` / `iframe` / `object` / `embed` / `canvas`）、章タイトル以外の要素 `id`、非表示要素や描画されない要素（`script`、`style` など）内のテキスト、`src` がアーカイブ内のファイルに解決されない画像（`data:` URI を含む）、画像が複数ある、または画像とキャプション以外の内容を含む `figure`、段落以外を囲む `blockquote` がある章は、内容を黙って失わないよう export 時に `MejiroError` `epub-unsupported-content` で reject します。
 
 #### URL ベースの画像登録（assetResolver）
 
@@ -290,20 +300,20 @@ editor.addImage(0, {
   alt: '挿絵',
 });
 
-const buffer = await editor.export({
-  assetResolver: async ({ assetKey, url, signal }) => {
+const bytes = await editor.export({
+  assetResolver: async ({ href, url, signal }) => {
     const res = await fetch(url, { signal });
-    if (!res.ok) throw new Error(`asset ${assetKey} failed: ${res.status}`);
-    return res.arrayBuffer();
+    if (!res.ok) throw new Error(`asset ${href} failed: ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
   },
 });
 ```
 
-`assetResolver` を省略すると、ランタイムの `fetch(url, { signal })` が暗黙に使われます。投稿サイト全体の流し込みパターンは [09-advanced.md §7.4](09-advanced.md#74-画像アセットの配信assetresolver) を参照してください。
+`assetResolver` を省略すると、ランタイムの `fetch(url, { signal })` が使われ、失敗のステータスは `MejiroError` `asset-fetch-failed` で書き出しを reject させます。投稿サイト全体の流し込みパターンは [09-advanced.md §7.4](09-advanced.md#74-画像アセットの配信assetresolver) を参照してください。
 
 ## 原稿テキストからEPUBを生成
 
-`EpubProject` は章ドラフトから新しい EPUB 3 パッケージを生成します。原稿内のルビは `｜漢字《かんじ》` のような青空文庫風記法で書けます。
+`EpubProject` は `ManuscriptChapter`（`{ id?, title, body }`）の章ドラフトから新しい EPUB 3 パッケージを生成します。原稿内のルビは `｜漢字《かんじ》` のような青空文庫風記法で書けます。
 
 ```ts
 import { EpubProject } from '@libraz/mejiro/epub';
@@ -324,8 +334,10 @@ const project = new EpubProject({
 });
 
 project.addChapter({ title: '第二話', body: '続きの本文です。' });
-const epubBuffer = await project.export();
+const epubBytes = await project.export(); // Uint8Array
 ```
+
+プロジェクトの状態は外からは読み取り専用です。変更はメソッドで行います: `updateMetadata(patch)`、`setStylesheet(css)`、`addChapter` / `updateChapter` / `removeChapter` / `reorderChapters`、`addImage(chapterIndex, { filename, data, atParagraphIndex, alt? })`（保存先 `OPS/Images/<filename>` はクラスが決める）、`setCover({ data, mediaType, filename? })`、`addAsset`。`addChapter`・`addImage`・`setCover`・`addAsset` は保存したものを返します。章のないプロジェクトの `export()` は `MejiroError` `epub-invalid-package` で reject します。
 
 ## 原稿記法（parseManuscript）の方言対応表
 
@@ -345,14 +357,14 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 
 | 記法 | 入力例 | 出力される注釈 | `mejiro`（既定） | `narou` | `kakuyomu` |
 |------|--------|---------------|:--:|:--:|:--:|
-| パイプ式ルビ | `｜漢字《かんじ》` | `kind: 'ruby'` | ✅ | ✅ | ✅ |
-| 自動ルビ（漢字直後の《》） | `漢字《かんじ》` | `kind: 'ruby'` | ✅ | ✅ | ✅ |
-| 傍点（圏点） | `《《重要》》` | `kind: 'emphasis'`（`style: 'sesame'`） | ✅ | — | — |
-| 縦中横 | `〔20〕` | `kind: 'tcy'` | ✅ | — | — |
-| 脚注参照 | `[[#note-1]]` | `kind: 'footnote'` | ✅ | — | — |
-| リンク | `[本書](https://example.com)` | `kind: 'link'` | ✅ | — | — |
-| 強調 | `**強い**` | `kind: 'strong'` | ✅ | — | — |
-| 弱強調 | `*斜体*` | `kind: 'em'` | ✅ | — | — |
+| パイプ式ルビ | `｜漢字《かんじ》` | `type: 'ruby'` | ✅ | ✅ | ✅ |
+| 自動ルビ（漢字直後の《》） | `漢字《かんじ》` | `type: 'ruby'` | ✅ | ✅ | ✅ |
+| 傍点（圏点） | `《《重要》》` | `type: 'emphasis'`（`style: 'sesame'`） | ✅ | — | — |
+| 縦中横 | `〔20〕` | `type: 'tcy'` | ✅ | — | — |
+| 脚注参照 | `[[#note-1]]` | `type: 'footnote-ref'` | ✅ | — | — |
+| リンク | `[本書](https://example.com)` | `type: 'link'` | ✅ | — | — |
+| 強調 | `**強い**` | `type: 'strong'` | ✅ | — | — |
+| 弱強調 | `*斜体*` | `type: 'em'` | ✅ | — | — |
 
 `narou` / `kakuyomu` は両方とも「青空文庫互換のルビのみ」を解釈する設定で、両者の挙動は現状同一です。投稿サイトからコピーされた原稿をそのまま EPUB 化したい場合や、`*` や `[]` を本文記号として残したい場合に選択してください。`narou` / `kakuyomu` で `**text**` や `〔20〕` を書いた場合、本文文字としてそのまま残ります（注釈は付きません）。
 
@@ -363,26 +375,26 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 - **改行**: 閉じ括弧は開き括弧と同じ行になければならないため、自動ルビ（`漢字《…》`）を含め、記法は改行をまたぎません。
 - **傍点（圏点）**: `《《...》》` の対応する閉じ括弧が見つからない場合は本文としてそのまま残ります。出力は `style: 'sesame'`（ゴマ点）です。他のスタイル（黒丸 `dot` 等）を使う場合は直接 `InlineAnnotation` を構築してください。
 - **縦中横**: 内容は半角英数字と `!`、`?` のみで構成され、括弧の中身が 5 文字以内（括弧を含めて 7 文字以内）であることが条件です。`〔12345〕` は注釈になりますが `〔123456〕` はなりません。日本語混在や長い文字列はそのまま本文に残ります。
-- **脚注参照**: 出力本文には `*<id>`（例: `*note-1`）が挿入され、対応する `kind: 'footnote'` 注釈が付与されます。脚注本体（参照先）の管理はアプリ側で行ってください。
+- **脚注参照**: 出力本文には `*<id>`（例: `*note-1`）が挿入され、対応する `type: 'footnote-ref'` 注釈が付与されます。脚注本体（参照先）の管理はアプリ側で行ってください。
 - **リンク**: `[label](href)` および `[label](href "title")` を受け付けます。`href` は空白を含まないトークン1つで、`title` 部分はダブルクォートで囲みます。リンクテキストが空の `[](url)` は本文としてそのまま残ります。
 - **強調 / 弱強調**: `**` が `*` より優先されます。`***text***`（混在）は素直にはネストされない（外側の `**` で `strong` になり、内側に余分な `*` が残る）ため、複合表現は `InlineAnnotation` を直接構築してください。
 
 ### 受信した原稿からインライン注釈だけ取り出す
 
-旧 API の `parseManuscriptRuby()` はルビのみを返す薄いラッパーで、非推奨です。削除は将来のメジャーリリースに先送りされており、削除バージョンは決まっていません。新規コードでは `parseManuscript()` の結果から必要な `kind` を絞り込んでください。
+一部の注釈だけを残すには、`parseManuscript()` の結果を `type` で絞り込みます。
 
 ```ts
 import { parseManuscript } from '@libraz/mejiro/epub';
 
 const { text, inlineAnnotations } = parseManuscript(rawText, { dialect: 'narou' });
-const rubyOnly = inlineAnnotations.filter((ann) => ann.kind === 'ruby');
+const rubyOnly = inlineAnnotations.filter((ann) => ann.type === 'ruby');
 ```
 
 ## 依存関係
 
 `@libraz/mejiro/epub` は、ZIP 展開に [JSZip](https://stuk.github.io/jszip/) を使い、XML / XHTML 解析に `DOMParser` を使います。`DOMParser` はブラウザのほか、happy-dom や jsdom などの DOM 実装を入れたサーバーサイドランタイムでも使えます。
 
-使うグローバルは `DOMParser` / `XMLSerializer` / `Node` の 3 つで、素の Node にはいずれもありません。登録されていない場合、`parseEpub()` と `EditableEpub.load()` は素の `ReferenceError` ではなく、不足しているものを名指ししたエラーを投げます。登録方法は [応用 -- SSR でのファーストペイント](./09-advanced.md#722-ssr-でのファーストペイント) を参照してください。
+使うグローバルは `DOMParser` / `XMLSerializer` / `Node` の 3 つで、素の Node にはいずれもありません。登録されていない場合、`parseEpub()`・`parseEditableEpub()`・`extractRubyContent()` は素の `ReferenceError` ではなく、不足しているものを名指しした `MejiroError` `dom-unavailable` を投げます。登録方法は [応用 -- SSR でのファーストペイント](./09-advanced.md#722-ssr-でのファーストペイント) を参照してください。
 
 ---
 

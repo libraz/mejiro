@@ -5,6 +5,9 @@ import { render } from '@testing-library/vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import { MejiroReader } from '../src/MejiroReader.js';
+import { giveElementsAClientBox } from './helpers/fixtures.js';
+
+giveElementsAClientBox();
 
 function longEpub(): EpubBook {
   return {
@@ -73,7 +76,7 @@ describe('MejiroReader (Vue) — scroll mode chrome', () => {
   it('renders the n / total indicator when enabled and omits it when disabled', async () => {
     vi.useFakeTimers();
     const on = render(MejiroReader, {
-      props: { epub: longEpub(), mode: 'scroll', enablePageIndicator: true },
+      props: { epub: longEpub(), mode: 'scroll', showPageIndicator: true },
     });
     await settle();
     expect(on.container.querySelector('.mejiro-reader-page-indicator')?.textContent).toMatch(
@@ -82,7 +85,7 @@ describe('MejiroReader (Vue) — scroll mode chrome', () => {
     on.unmount();
 
     const off = render(MejiroReader, {
-      props: { epub: longEpub(), mode: 'scroll', enablePageIndicator: false },
+      props: { epub: longEpub(), mode: 'scroll', showPageIndicator: false },
     });
     await settle();
     expect(off.container.querySelector('.mejiro-reader-page-indicator')).toBeNull();

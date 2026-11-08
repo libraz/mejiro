@@ -1,4 +1,4 @@
-import type { BookOptions } from './book/types.js';
+import type { KinsokuMode } from './types.js';
 
 /** A font choice shown in reader settings UIs. */
 export interface FontChoice {
@@ -8,11 +8,19 @@ export interface FontChoice {
   label: string;
 }
 
-/** Subset of {@link BookOptions} editable from bundled settings panels. */
-export type EditableSettings = Pick<
-  BookOptions,
-  'fontFamily' | 'fontSize' | 'lineSpacing' | 'mode' | 'enableHanging'
->;
+/** Settings a bundled settings panel edits; each field mirrors the book option of the same name. */
+export interface EditableSettings {
+  /** CSS font family: a CSS-ready string, or an array of family names. */
+  fontFamily: string | readonly string[];
+  /** Base font size in pixels. */
+  fontSize: number;
+  /** Line spacing multiplier. */
+  lineSpacing?: number;
+  /** Kinsoku processing mode. */
+  kinsoku?: KinsokuMode;
+  /** Whether hanging punctuation is enabled. */
+  enableHanging?: boolean;
+}
 
 /** Per-page header data used to render the running title and page number. */
 export interface PageHeaderData {

@@ -7,9 +7,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { MejiroManuscriptEditor } from '../src/MejiroManuscriptEditor.js';
 
 /** Entry names of a zip archive, read from its local file headers. */
-function zipEntryNames(buffer: ArrayBuffer): string[] {
-  const bytes = new Uint8Array(buffer);
-  const view = new DataView(buffer);
+function zipEntryNames(bytes: Uint8Array): string[] {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const decoder = new TextDecoder();
   const names: string[] = [];
   for (let i = 0; i + 30 <= bytes.length; i++) {
@@ -67,8 +66,8 @@ describe('MejiroManuscriptEditor asset resolution (React)', () => {
 });
 
 /** The `dc:identifier` text of an exported package. */
-async function packageIdentifier(buffer: ArrayBuffer): Promise<string | undefined> {
-  const zip = await JSZip.loadAsync(buffer);
+async function packageIdentifier(bytes: Uint8Array): Promise<string | undefined> {
+  const zip = await JSZip.loadAsync(bytes);
   const opf = Object.keys(zip.files).find((name) => name.endsWith('.opf'));
   const xml = opf ? await zip.file(opf)?.async('string') : undefined;
   return xml?.match(/<dc:identifier[^>]*>([^<]+)<\/dc:identifier>/u)?.[1];

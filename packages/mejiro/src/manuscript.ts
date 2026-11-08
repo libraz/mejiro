@@ -1,5 +1,5 @@
-import type { InlineAnnotation, InlineRubyAnnotation } from './browser/types.js';
 import { normalizeText } from './text.js';
+import type { InlineAnnotation } from './types.js';
 import { sanitizeUrl } from './url.js';
 
 /**
@@ -15,8 +15,16 @@ export type ManuscriptDialect = 'narou' | 'kakuyomu' | 'mejiro';
 
 /** Options for parseManuscript. */
 export interface ParseManuscriptOptions {
-  /** Notation dialect. Defaults to `'mejiro'`. */
+  /** Notation dialect. @defaultValue 'mejiro' */
   dialect?: ManuscriptDialect;
+}
+
+/** A manuscript paragraph parsed into plain text and the annotations that address it. */
+export interface ParsedManuscript {
+  /** Base text with the notation markers removed. */
+  text: string;
+  /** Annotations indexed by code point offset into {@link ParsedManuscript.text}. */
+  inlineAnnotations: readonly InlineAnnotation[];
 }
 
 /**
@@ -92,7 +100,7 @@ export function createMarkerScanner(text: string): ManuscriptMarkerScanner {
 export function parseManuscript(
   text: string,
   options: ParseManuscriptOptions = {},
-): { text: string; inlineAnnotations: InlineAnnotation[] } {
+): ParsedManuscript {
   text = normalizeText(text);
   const dialect = options.dialect ?? 'mejiro';
   const scanner = createMarkerScanner(text);
@@ -132,7 +140,7 @@ export function parseManuscript(
         const startIndex = outLength;
         emit(body);
         inlineAnnotations.push({
-          kind: 'emphasis',
+          type: 'emphasis',
           startIndex,
           endIndex: outLength,
           style: 'sesame',
@@ -159,7 +167,7 @@ export function parseManuscript(
             const startIndex = outLength;
             emit(body);
             inlineAnnotations.push({
-              kind: 'tcy',
+              type: 'tcy',
               startIndex,
               endIndex: outLength,
             });
@@ -176,7 +184,7 @@ export function parseManuscript(
           const startIndex = outLength;
           emit(`*${id}`);
           inlineAnnotations.push({
-            kind: 'footnote',
+            type: 'footnote-ref',
             startIndex,
             endIndex: outLength,
             noteId: id,
@@ -198,7 +206,7 @@ export function parseManuscript(
               const startIndex = outLength;
               emit(body);
               inlineAnnotations.push({
-                kind: 'link',
+                type: 'link',
                 startIndex,
                 endIndex: outLength,
                 href: target.href,
@@ -218,7 +226,7 @@ export function parseManuscript(
           const startIndex = outLength;
           emit(body);
           inlineAnnotations.push({
-            kind: 'strong',
+            type: 'strong',
             startIndex,
             endIndex: outLength,
           });
@@ -235,7 +243,7 @@ export function parseManuscript(
             const startIndex = outLength;
             emit(body);
             inlineAnnotations.push({
-              kind: 'em',
+              type: 'em',
               startIndex,
               endIndex: outLength,
             });
@@ -260,11 +268,11 @@ export function parseManuscript(
     emit(base);
     const endIndex = outLength;
     inlineAnnotations.push({
-      kind: 'ruby',
+      type: 'ruby',
       startIndex,
       endIndex,
       rubyText,
-      type: endIndex - startIndex === 1 ? 'mono' : 'group',
+      rubyType: endIndex - startIndex === 1 ? 'mono' : 'group',
     });
   }
 }
@@ -296,25 +304,4 @@ export function parseLinkTarget(raw: string): { href: string; title?: string } |
   const href = sanitizeUrl(match[1]);
   if (!href) return null;
   return match[2] ? { href, title: match[2] } : { href };
-}
-
-/**
- * Aozora-style ruby parser kept for compatibility with callers written against
- * the ruby-only manuscript API. Equivalent to
- * `parseManuscript(text, { dialect: 'narou' })` filtered to ruby annotations.
- *
- * @deprecated Use `parseManuscript`. Removal is deferred to a future major
- * release; no removal version is scheduled.
- */
-export function parseManuscriptRuby(text: string): {
-  text: string;
-  inlineAnnotations: InlineRubyAnnotation[];
-} {
-  const result = parseManuscript(text, { dialect: 'narou' });
-  return {
-    text: result.text,
-    inlineAnnotations: result.inlineAnnotations.filter(
-      (ann): ann is InlineRubyAnnotation => ann.kind === 'ruby',
-    ),
-  };
 }

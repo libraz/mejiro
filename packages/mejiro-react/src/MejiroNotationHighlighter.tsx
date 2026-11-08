@@ -13,13 +13,16 @@ import {
   useState,
 } from 'react';
 
-/** Props for {@link MejiroNotationHighlighter}. */
+/**
+ * Props for {@link MejiroNotationHighlighter}; other `textarea` attributes,
+ * the native `onChange` included, go to the textarea.
+ */
 export interface MejiroNotationHighlighterProps
-  extends Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value' | 'onChange'> {
+  extends Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'value'> {
   /** Source manuscript text. */
   value: string;
-  /** Called whenever the textarea content changes. */
-  onChange: (next: string) => void;
+  /** Called with the new text whenever the textarea content changes, and when an IME composition ends. */
+  onValueChange: (next: string) => void;
   /** Manuscript notation dialect. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
   /** Class applied to the wrapper element. */
@@ -45,6 +48,7 @@ export const MejiroNotationHighlighter = forwardRef<
 >(function MejiroNotationHighlighter(
   {
     value,
+    onValueChange,
     onChange,
     dialect = 'mejiro',
     wrapperClassName,
@@ -64,7 +68,7 @@ export const MejiroNotationHighlighter = forwardRef<
 
   // IME composition freeze: while an IME session is open the textarea is bound
   // to the text the browser itself holds, so a host normalizing `value` in
-  // `onChange` cannot overwrite the uncommitted string.
+  // `onValueChange` cannot overwrite the uncommitted string.
   const [isComposing, setIsComposing] = useState(false);
   const [composingValue, setComposingValue] = useState('');
   const lastSegmentsRef = useRef<Segment[] | null>(null);
@@ -108,7 +112,8 @@ export const MejiroNotationHighlighter = forwardRef<
         value={isComposing ? composingValue : value}
         onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
           if (isComposing) setComposingValue(event.target.value);
-          onChange(event.target.value);
+          onChange?.(event);
+          onValueChange(event.target.value);
         }}
         onCompositionStart={(event) => {
           setComposingValue(event.currentTarget.value);
@@ -117,7 +122,7 @@ export const MejiroNotationHighlighter = forwardRef<
         }}
         onCompositionEnd={(event) => {
           setIsComposing(false);
-          onChange(event.currentTarget.value);
+          onValueChange(event.currentTarget.value);
           onCompositionEnd?.(event);
         }}
         onScroll={(event) => {
@@ -144,15 +149,15 @@ function buildSegments(text: string, dialect: ManuscriptDialect): Segment[] {
   const segments: Segment[] = [];
   let cursor = 0;
   for (const [i, token] of tokens.entries()) {
-    if (token.start > cursor) {
-      segments.push({ key: `t-${i}-pre`, text: text.slice(cursor, token.start) });
+    if (token.startOffset > cursor) {
+      segments.push({ key: `t-${i}-pre`, text: text.slice(cursor, token.startOffset) });
     }
     segments.push({
       key: `t-${i}`,
-      text: text.slice(token.start, token.end),
+      text: text.slice(token.startOffset, token.endOffset),
       kind: token.kind,
     });
-    cursor = token.end;
+    cursor = token.endOffset;
   }
   if (cursor < text.length) {
     segments.push({ key: 'tail', text: text.slice(cursor) });

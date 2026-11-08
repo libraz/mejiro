@@ -1,5 +1,7 @@
+import type { ManuscriptChapter } from '@libraz/mejiro';
 import {
   type AssetResolver,
+  type CoverInput,
   type EpubBook,
   type EpubExportOptions,
   EpubProject,
@@ -10,10 +12,11 @@ import {
 import {
   type ComputedRef,
   computed,
+  markRaw,
   onMounted,
   onScopeDispose,
   type Ref,
-  ref,
+  shallowReadonly,
   shallowRef,
   type WatchStopHandle,
   watch,
@@ -22,34 +25,24 @@ import { toError } from './errors.js';
 import { mergeDefined, uniqueChapterId } from './persistence.js';
 import { createRequestToken } from './useRequestToken.js';
 
-/** One chapter of the manuscript draft the composable keeps in reactive state. */
-export interface EpubProjectChapterDraft {
-  /** Stable chapter identifier. */
-  id: string;
-  /** Chapter title. */
-  title: string;
-  /** Chapter body in the manuscript notation. */
-  body: string;
-}
-
 /** Options for {@link useEpubProject}. */
 export interface UseEpubProjectOptions {
-  /** Initial package metadata, merged over the composable's Japanese defaults. */
-  metadata?: Partial<EpubProjectMetadata>;
-  /** Initial chapter drafts. A single generated chapter is used when empty. */
-  chapters?: EpubProjectChapterDraft[];
+  /** Initial package metadata, merged over an empty title. */
+  initialMetadata?: Partial<EpubProjectMetadata>;
+  /** Initial chapters. A single generated chapter is used when empty. */
+  initialChapters?: readonly ManuscriptChapter[];
   /** Preview rebuild debounce in milliseconds. @defaultValue 250 */
   debounceMs?: number;
   /**
-   * Initial cover asset. Pass `{ href, url }` to keep the bytes remote until
-   * export, or `{ href, data }` to embed them straight away.
+   * Initial cover image. Pass `{ url, mediaType }` to keep the bytes remote
+   * until export, or `{ data, mediaType }` to embed them straight away.
    */
-  cover?: EpubProjectAsset;
+  initialCover?: CoverInput;
   /**
    * Initial non-cover assets (illustrations, extra stylesheets). Same
-   * `data` / `url` choice as {@link UseEpubProjectOptions.cover}.
+   * `data` / `url` choice as {@link UseEpubProjectOptions.initialCover}.
    */
-  assets?: EpubProjectAsset[];
+  initialAssets?: readonly EpubProjectAsset[];
   /**
    * Resolves URL-only project assets into bytes when the preview or export
    * pipeline materializes them. Forwarded to `project.export()`. Register the
@@ -58,91 +51,112 @@ export interface UseEpubProjectOptions {
    * provide auth headers here.
    */
   assetResolver?: AssetResolver;
-  /** Called with each successfully rebuilt preview book. */
-  onPreview?: (book: EpubBook) => void;
+  /** Called with each successfully rebuilt preview. */
+  onPreview?: (epub: EpubBook) => void;
   /** Called with the EPUB bytes produced by {@link UseEpubProjectReturn.exportEpub}. */
-  onExport?: (buffer: ArrayBuffer) => void;
-  /** Creates the default title for a generated chapter. */
+  onExport?: (bytes: Uint8Array<ArrayBuffer>) => void;
+  /**
+   * Called when an export fails. The failure also lands in `error`, and the
+   * promise `exportEpub` returned still rejects. A `MejiroError` arrives as
+   * thrown. Preview failures go to `previewError` instead.
+   */
+  onError?: (error: Error) => void;
+  /** Creates the title for a generated chapter. @defaultValue `''` */
   defaultChapterTitle?: (index: number) => string;
-  /** Creates the default body for a generated chapter. */
+  /** Creates the body for a generated chapter. @defaultValue `''` */
   defaultChapterBody?: (index: number) => string;
 }
 
 /** State and actions returned by {@link useEpubProject}. */
 export interface UseEpubProjectReturn {
-  /** Current book metadata. */
-  metadata: Ref<EpubProjectMetadata>;
-  /** Current chapter drafts, in reading order. */
-  chapters: Ref<EpubProjectChapterDraft[]>;
-  /** Index of the chapter being edited. */
-  selectedChapter: Ref<number>;
-  /** The chapter at `selectedChapter`, or `null` when there is none. */
-  currentChapter: ComputedRef<EpubProjectChapterDraft | null>;
-  /** Current cover asset, or `null` when the project has no cover. */
-  cover: Ref<EpubProjectAsset | null>;
+  /** Current book metadata. Change it through `updateMetadata`. */
+  metadata: Readonly<Ref<EpubProjectMetadata>>;
+  /** Current chapters, in reading order. Change them through the chapter methods. */
+  chapters: Readonly<Ref<readonly ManuscriptChapter[]>>;
+  /** Index of the chapter being edited. Change it through `setSelectedChapterIndex`. */
+  selectedChapterIndex: Readonly<Ref<number>>;
+  /** The chapter at `selectedChapterIndex`, or `null` when there is none. */
+  currentChapter: ComputedRef<ManuscriptChapter | null>;
+  /** Current cover image, or `null` when the project has no cover. */
+  cover: Readonly<Ref<CoverInput | null>>;
   /** Current non-cover assets, in registration order. */
-  assets: Ref<EpubProjectAsset[]>;
+  assets: Readonly<Ref<readonly EpubProjectAsset[]>>;
   /** Parsed EPUB built from the current project, refreshed after each debounced change. */
-  previewBook: Ref<EpubBook | null>;
+  previewEpub: Readonly<Ref<EpubBook | null>>;
   /** Last preview build failure, if any. */
-  previewError: Ref<Error | null>;
+  previewError: Readonly<Ref<Error | null>>;
   /** Whether a preview build is pending or running. */
-  previewing: Ref<boolean>;
+  previewing: Readonly<Ref<boolean>>;
+  /** Whether an export is in progress. */
+  exporting: Readonly<Ref<boolean>>;
+  /** Last export failure, if any; cleared when an export starts. */
+  error: Readonly<Ref<Error | null>>;
   /**
    * Merges `patch` into the metadata. A missing or blank `identifier` keeps the
    * current one.
    */
-  setMetadata: (patch: Partial<EpubProjectMetadata>) => void;
+  updateMetadata: (patch: Partial<EpubProjectMetadata>) => void;
   /** Replaces every chapter; an empty list becomes one generated chapter. */
-  setChapters: (chapters: EpubProjectChapterDraft[]) => void;
+  setChapters: (chapters: readonly ManuscriptChapter[]) => void;
   /** Selects a chapter, clamped to the chapter range. */
-  setSelectedChapter: (index: number) => void;
+  setSelectedChapterIndex: (index: number) => void;
   /**
-   * Replaces the cover asset, or drops it when passed `null`. The new cover is
+   * Replaces the cover image, or drops it when passed `null`. The new cover is
    * reflected by both the debounced preview and {@link UseEpubProjectReturn.exportEpub}.
    */
-  setCover: (asset: EpubProjectAsset | null) => void;
+  setCover: (cover: CoverInput | null) => void;
   /**
    * Replaces the non-cover asset list. Assets are registered on every rebuilt
    * project, so URL-only entries reach `assetResolver` at export time.
    */
-  setAssets: (assets: EpubProjectAsset[]) => void;
+  setAssets: (assets: readonly EpubProjectAsset[]) => void;
   /** Merges `patch` into the chapter at `index`. */
-  patchChapter: (index: number, patch: Partial<EpubProjectChapterDraft>) => void;
+  updateChapter: (index: number, patch: Partial<ManuscriptChapter>) => void;
   /** Appends a chapter (generated defaults fill omitted fields) and selects it. */
-  addChapter: (chapter?: Partial<EpubProjectChapterDraft>) => void;
-  /**
-   * Removes the chapter at `index` (the selected one by default); the last chapter is never
-   * removed.
-   */
-  removeChapter: (index?: number) => void;
+  addChapter: (chapter?: Partial<ManuscriptChapter>) => void;
+  /** Removes the chapter at `index`; the last remaining chapter is never removed. */
+  removeChapter: (index: number) => void;
   /** Moves the chapter at `from` to `to`, keeping the same chapter selected. */
   reorderChapters: (from: number, to: number) => void;
   /** Builds an `EpubProject` from the current state. */
   buildProject: () => EpubProject;
-  /** Packages the current project as an EPUB buffer. */
-  exportEpub: () => Promise<ArrayBuffer>;
+  /**
+   * Packages the current project as EPUB bytes. A failure lands in `error` and
+   * `onError`, and the promise rejects.
+   */
+  exportEpub: () => Promise<Uint8Array<ArrayBuffer>>;
 }
 
-/** Vue composable for custom manuscript-to-EPUB authoring UIs. */
+/**
+ * Vue composable for custom manuscript-to-EPUB authoring UIs.
+ *
+ * Holds no sample content: an empty project has an empty title and one empty
+ * chapter. Supply visible defaults through `initialMetadata`,
+ * `defaultChapterTitle` and `defaultChapterBody`.
+ */
 export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProjectReturn {
   const defaultTitle = options.defaultChapterTitle;
   const defaultBody = options.defaultChapterBody;
-  const metadata = ref<EpubProjectMetadata>(initialMetadata(options.metadata));
-  const chapters = ref<EpubProjectChapterDraft[]>(
-    options.chapters?.length ? options.chapters : [defaultChapter([], defaultTitle, defaultBody)],
+  const metadata = shallowRef<EpubProjectMetadata>(initialMetadata(options.initialMetadata));
+  const chapters = shallowRef<readonly ManuscriptChapter[]>(
+    options.initialChapters?.length
+      ? [...options.initialChapters]
+      : [defaultChapter([], defaultTitle, defaultBody)],
   );
-  const selectedChapter = ref(0);
+  const selectedChapterIndex = shallowRef(0);
   // Assets carry binary payloads and are always replaced wholesale, so they are
   // held shallowly — deep reactivity would proxy every byte.
-  const cover = shallowRef<EpubProjectAsset | null>(options.cover ?? null);
-  const assets = shallowRef<EpubProjectAsset[]>(options.assets ?? []);
-  const previewBook = shallowRef<EpubBook | null>(null);
+  const cover = shallowRef<CoverInput | null>(options.initialCover ?? null);
+  const assets = shallowRef<readonly EpubProjectAsset[]>(options.initialAssets ?? []);
+  const previewEpub = shallowRef<EpubBook | null>(null);
   const previewError = shallowRef<Error | null>(null);
-  const previewing = ref(false);
+  const previewing = shallowRef(false);
+  const exporting = shallowRef(false);
+  const error = shallowRef<Error | null>(null);
   const previewRequest = createRequestToken();
+  let exportsInFlight = 0;
   const currentChapter = computed(
-    () => chapters.value[selectedChapter.value] ?? chapters.value[0] ?? null,
+    () => chapters.value[selectedChapterIndex.value] ?? chapters.value[0] ?? null,
   );
 
   function buildProject(): EpubProject {
@@ -151,14 +165,13 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
       includeTitlePage: false,
       includeTitleInFirstChapter: true,
       chapters: chapters.value.map((chapter) => ({
-        id: chapter.id,
+        ...chapter,
         title: chapter.title || 'Untitled',
-        body: chapter.body,
       })),
       ...(cover.value ? { cover: cover.value } : {}),
     });
     for (const asset of assets.value) project.addAsset(asset);
-    return project;
+    return markRaw(project);
   }
 
   function exportOptions(signal?: AbortSignal): EpubExportOptions {
@@ -166,17 +179,12 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     return { ...(resolver ? { assetResolver: resolver } : {}), ...(signal ? { signal } : {}) };
   }
 
-  // Asset changes rebuild the preview through this counter rather than through
-  // the deep watch below, which would otherwise walk the asset bytes on every
-  // keystroke.
-  const assetGeneration = ref(0);
-  watch([cover, assets], () => assetGeneration.value++, { flush: 'sync' });
-
-  // Deferred to mount so server-side setup never schedules a build.
+  // Deferred to mount so server-side setup never schedules a build. Every state
+  // ref is replaced wholesale, so a shallow watch sees each change.
   let stopPreviewWatch: WatchStopHandle | undefined;
   onMounted(() => {
     stopPreviewWatch = watch(
-      [metadata, chapters, assetGeneration],
+      [metadata, chapters, cover, assets],
       (_values, _oldValues, onCleanup) => {
         const token = previewRequest.begin();
         const controller = new AbortController();
@@ -186,9 +194,10 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
             try {
               const book = await parseEpub(
                 await buildProject().export(exportOptions(controller.signal)),
+                { signal: controller.signal },
               );
               if (!previewRequest.isCurrent(token)) return;
-              previewBook.value = book;
+              previewEpub.value = book;
               previewError.value = null;
               options.onPreview?.(book);
             } catch (err) {
@@ -204,48 +213,49 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
           controller.abort();
         });
       },
-      { deep: true, immediate: true },
+      { immediate: true },
     );
   });
   onScopeDispose(() => {
     stopPreviewWatch?.();
   });
 
-  function setMetadata(patch: Partial<EpubProjectMetadata>): void {
+  function updateMetadata(patch: Partial<EpubProjectMetadata>): void {
     metadata.value = mergeMetadata(metadata.value, patch);
   }
 
-  function setChapters(next: EpubProjectChapterDraft[]): void {
-    const selectedId = chapters.value[selectedChapter.value]?.id;
-    chapters.value = next.length ? next : [defaultChapter([], defaultTitle, defaultBody)];
-    const nextIndex = selectedId
-      ? chapters.value.findIndex((chapter) => chapter.id === selectedId)
-      : -1;
-    selectedChapter.value =
+  function setChapters(next: readonly ManuscriptChapter[]): void {
+    const selectedId = chapters.value[selectedChapterIndex.value]?.id;
+    chapters.value = next.length ? [...next] : [defaultChapter([], defaultTitle, defaultBody)];
+    const nextIndex =
+      selectedId !== undefined
+        ? chapters.value.findIndex((chapter) => chapter.id === selectedId)
+        : -1;
+    selectedChapterIndex.value =
       nextIndex >= 0
         ? nextIndex
-        : Math.max(0, Math.min(selectedChapter.value, chapters.value.length - 1));
+        : Math.max(0, Math.min(selectedChapterIndex.value, chapters.value.length - 1));
   }
 
-  function setCover(asset: EpubProjectAsset | null): void {
-    cover.value = asset;
+  function setCover(next: CoverInput | null): void {
+    cover.value = next;
   }
 
-  function setAssets(next: EpubProjectAsset[]): void {
-    assets.value = next;
+  function setAssets(next: readonly EpubProjectAsset[]): void {
+    assets.value = [...next];
   }
 
-  function setSelectedChapter(index: number): void {
-    selectedChapter.value = Math.max(0, Math.min(index, chapters.value.length - 1));
+  function setSelectedChapterIndex(index: number): void {
+    selectedChapterIndex.value = Math.max(0, Math.min(index, chapters.value.length - 1));
   }
 
-  function patchChapter(index: number, patch: Partial<EpubProjectChapterDraft>): void {
+  function updateChapter(index: number, patch: Partial<ManuscriptChapter>): void {
     chapters.value = chapters.value.map((chapter, chapterIndex) =>
       chapterIndex === index ? { ...chapter, ...patch } : chapter,
     );
   }
 
-  function addChapter(chapter: Partial<EpubProjectChapterDraft> = {}): void {
+  function addChapter(chapter: Partial<ManuscriptChapter> = {}): void {
     const generated = defaultChapter(chapters.value, defaultTitle, defaultBody);
     chapters.value = [
       ...chapters.value,
@@ -255,20 +265,20 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
         body: chapter.body ?? generated.body,
       },
     ];
-    selectedChapter.value = chapters.value.length - 1;
+    selectedChapterIndex.value = chapters.value.length - 1;
   }
 
-  function removeChapter(index = selectedChapter.value): void {
+  function removeChapter(index: number): void {
     if (chapters.value.length <= 1) return;
     chapters.value = chapters.value.filter((_, chapterIndex) => chapterIndex !== index);
-    if (selectedChapter.value === index) {
-      selectedChapter.value = Math.max(0, Math.min(index, chapters.value.length - 1));
-    } else if (index < selectedChapter.value) {
-      selectedChapter.value--;
+    if (selectedChapterIndex.value === index) {
+      selectedChapterIndex.value = Math.max(0, Math.min(index, chapters.value.length - 1));
+    } else if (index < selectedChapterIndex.value) {
+      selectedChapterIndex.value--;
     } else {
-      selectedChapter.value = Math.max(
+      selectedChapterIndex.value = Math.max(
         0,
-        Math.min(selectedChapter.value, chapters.value.length - 1),
+        Math.min(selectedChapterIndex.value, chapters.value.length - 1),
       );
     }
   }
@@ -280,37 +290,50 @@ export function useEpubProject(options: UseEpubProjectOptions = {}): UseEpubProj
     const target = Math.max(0, Math.min(next.length, to));
     next.splice(target, 0, moved);
     chapters.value = next;
-    if (selectedChapter.value === from) {
-      selectedChapter.value = target;
-    } else if (from < selectedChapter.value && target >= selectedChapter.value) {
-      selectedChapter.value--;
-    } else if (from > selectedChapter.value && target <= selectedChapter.value) {
-      selectedChapter.value++;
+    if (selectedChapterIndex.value === from) {
+      selectedChapterIndex.value = target;
+    } else if (from < selectedChapterIndex.value && target >= selectedChapterIndex.value) {
+      selectedChapterIndex.value--;
+    } else if (from > selectedChapterIndex.value && target <= selectedChapterIndex.value) {
+      selectedChapterIndex.value++;
     }
   }
 
-  async function exportEpub(): Promise<ArrayBuffer> {
-    const buffer = await buildProject().export(exportOptions());
-    options.onExport?.(buffer);
-    return buffer;
+  async function exportEpub(): Promise<Uint8Array<ArrayBuffer>> {
+    exportsInFlight++;
+    exporting.value = true;
+    error.value = null;
+    try {
+      const bytes = await buildProject().export(exportOptions());
+      options.onExport?.(bytes);
+      return bytes;
+    } catch (err) {
+      error.value = toError(err);
+      options.onError?.(error.value);
+      throw err;
+    } finally {
+      exporting.value = --exportsInFlight > 0;
+    }
   }
 
   return {
-    metadata,
-    chapters,
-    selectedChapter,
+    metadata: shallowReadonly(metadata),
+    chapters: shallowReadonly(chapters),
+    selectedChapterIndex: shallowReadonly(selectedChapterIndex),
     currentChapter,
-    cover,
-    assets,
-    previewBook,
-    previewError,
-    previewing,
-    setMetadata,
+    cover: shallowReadonly(cover),
+    assets: shallowReadonly(assets),
+    previewEpub: shallowReadonly(previewEpub),
+    previewError: shallowReadonly(previewError),
+    previewing: shallowReadonly(previewing),
+    exporting: shallowReadonly(exporting),
+    error: shallowReadonly(error),
+    updateMetadata,
     setChapters,
-    setSelectedChapter,
+    setSelectedChapterIndex,
     setCover,
     setAssets,
-    patchChapter,
+    updateChapter,
     addChapter,
     removeChapter,
     reorderChapters,
@@ -350,20 +373,16 @@ export function createPackageIdentifier(): string {
 
 /** Seeds the metadata with an identifier, so every build of one project shares it. */
 function initialMetadata(patch: Partial<EpubProjectMetadata> = {}): EpubProjectMetadata {
-  const metadata = mergeDefined<EpubProjectMetadata>(
-    { title: '新しい作品', language: 'ja' },
-    patch,
-  );
+  const metadata = mergeDefined<EpubProjectMetadata>({ title: '', language: 'ja' }, patch);
   if (!metadata.identifier?.trim()) metadata.identifier = createPackageIdentifier();
   return metadata;
 }
 
 function defaultChapter(
-  existing: readonly EpubProjectChapterDraft[],
-  titleFor: (index: number) => string = (i) => (i === 0 ? '第一話' : `第${i + 1}話`),
-  bodyFor: (index: number) => string = (i) =>
-    i === 0 ? 'これは｜漢字《かんじ》のルビ例です。\n\n本文をここに貼り付けます。' : '',
-): EpubProjectChapterDraft {
+  existing: readonly ManuscriptChapter[],
+  titleFor: (index: number) => string = () => '',
+  bodyFor: (index: number) => string = () => '',
+): ManuscriptChapter {
   const index = existing.length;
   return { id: uniqueChapterId(existing), title: titleFor(index), body: bodyFor(index) };
 }

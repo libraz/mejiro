@@ -1,14 +1,13 @@
 // @vitest-environment happy-dom
 /** @jsxImportSource react */
 
-import { parseAnnotations, serializeAnnotations } from '@libraz/mejiro';
+import { type MejiroStorage, parseAnnotations, serializeAnnotations } from '@libraz/mejiro';
 import { act, renderHook } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AnnotationsStorage } from '../src/useAnnotations.js';
 import { useAnnotations } from '../src/useAnnotations.js';
 
-function memoryStorage(): AnnotationsStorage & { data: Map<string, string> } {
+function memoryStorage(): MejiroStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {
     data,
@@ -25,13 +24,13 @@ function memoryStorage(): AnnotationsStorage & { data: Map<string, string> } {
 /** Serialized payload holding a single annotation with the given id. */
 function storedAnnotation(id: string): string {
   return JSON.stringify({
-    version: 1,
+    version: 3,
     annotations: [
       {
         id,
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       },
     ],
   });
@@ -45,109 +44,109 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('useAnnotations (React) — onChange', () => {
+describe('useAnnotations (React) — onAnnotationsChange', () => {
   it('fires on add() with the new sorted list', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }));
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onAnnotationsChange }));
     let added: { id: string } | undefined;
     act(() => {
       added = result.current.add({
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 3 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 3 },
       });
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toHaveLength(1);
-    expect(onChange.mock.calls[0][0][0].id).toBe(added?.id);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange.mock.calls[0][0]).toHaveLength(1);
+    expect(onAnnotationsChange.mock.calls[0][0][0].id).toBe(added?.id);
   });
 
   it('fires on remove() / update() / clear()', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }));
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onAnnotationsChange }));
     let id = '';
     act(() => {
       id = result.current.add({
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       }).id;
     });
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
 
     act(() => {
       result.current.update(id, { color: 'yellow' });
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0][0].color).toBe('yellow');
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange.mock.calls[0][0][0].color).toBe('yellow');
 
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     act(() => {
       result.current.remove(id);
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toHaveLength(0);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange.mock.calls[0][0]).toHaveLength(0);
 
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     act(() => {
       result.current.add({
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     act(() => {
       result.current.clear();
     });
-    expect(onChange).toHaveBeenCalledWith([]);
+    expect(onAnnotationsChange).toHaveBeenCalledWith([]);
   });
 
   it('does not fire on initial hydration', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
     storage.setItem(
       'k',
       JSON.stringify({
-        version: 1,
+        version: 3,
         annotations: [
           {
             id: 'a',
-            chapter: 0,
-            start: { paragraph: 0, charIndex: 0 },
-            end: { paragraph: 0, charIndex: 1 },
+            chapterIndex: 0,
+            start: { paragraphIndex: 0, charIndex: 0 },
+            end: { paragraphIndex: 0, charIndex: 1 },
           },
         ],
       }),
     );
-    renderHook(() => useAnnotations({ key: 'k', storage, onChange }));
-    expect(onChange).not.toHaveBeenCalled();
+    renderHook(() => useAnnotations({ key: 'k', storage, onAnnotationsChange }));
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
   });
 
   it('drops only the malformed entries and keeps the valid ones', () => {
     const storage = memoryStorage();
-    const valid = (id: string, chapter: number) => ({
+    const valid = (id: string, chapterIndex: number) => ({
       id,
-      chapter,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     storage.setItem(
       'k',
       JSON.stringify({
-        version: 1,
+        version: 3,
         annotations: [
           valid('good-1', 0),
           {},
           null,
           7,
-          { ...valid('bad-range', 1), end: { paragraph: 0, charIndex: 'x' } },
+          { ...valid('bad-range', 1), end: { paragraphIndex: 0, charIndex: 'x' } },
           valid('good-2', 2),
           valid('good-1', 3),
           valid('', 1),
-          { ...valid('reversed', 1), start: { paragraph: 1, charIndex: 0 } },
+          { ...valid('reversed', 1), start: { paragraphIndex: 1, charIndex: 0 } },
         ],
       }),
     );
@@ -162,7 +161,7 @@ describe('useAnnotations (React) — onChange', () => {
 
   it('exposes an empty list when every stored entry is malformed', () => {
     const storage = memoryStorage();
-    storage.setItem('k', JSON.stringify({ version: 1, annotations: [{}] }));
+    storage.setItem('k', JSON.stringify({ version: 3, annotations: [{}] }));
 
     const { result } = renderHook(() => useAnnotations({ key: 'k', storage }));
 
@@ -170,25 +169,25 @@ describe('useAnnotations (React) — onChange', () => {
   });
 
   it('does not fire on no-op remove() / update()', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }));
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onAnnotationsChange }));
     act(() => {
       result.current.remove('does-not-exist');
       result.current.update('does-not-exist', { color: 'red' });
     });
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
   });
 });
 
 describe('useAnnotations (React) — server round-trip', () => {
-  it('round-trips through a server mirror fed by onChange', () => {
+  it('round-trips through a server mirror fed by onAnnotationsChange', () => {
     let server: string | null = null;
     const first = renderHook(() =>
       useAnnotations({
         key: 'k',
         storage: memoryStorage(),
-        onChange: (next) => {
+        onAnnotationsChange: (next) => {
           server = serializeAnnotations(next);
         },
       }),
@@ -197,9 +196,9 @@ describe('useAnnotations (React) — server round-trip', () => {
     let added: { id: string } | undefined;
     act(() => {
       added = first.result.current.add({
-        chapter: 2,
-        start: { paragraph: 1, charIndex: 0 },
-        end: { paragraph: 1, charIndex: 8 },
+        chapterIndex: 2,
+        start: { paragraphIndex: 1, charIndex: 0 },
+        end: { paragraphIndex: 1, charIndex: 8 },
         color: 'yellow',
       });
     });
@@ -222,59 +221,65 @@ describe('useAnnotations (React) — server round-trip', () => {
 });
 
 describe('useAnnotations (React) — StrictMode', () => {
-  it('fires onChange once per add() under StrictMode', () => {
-    const onChange = vi.fn();
+  it('fires onAnnotationsChange once per add() under StrictMode', () => {
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }), {
-      wrapper: StrictMode,
-    });
+    const { result } = renderHook(
+      () => useAnnotations({ key: 'k', storage, onAnnotationsChange }),
+      {
+        wrapper: StrictMode,
+      },
+    );
 
     act(() => {
       result.current.add({
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 3 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 3 },
       });
     });
 
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
     expect(result.current.annotations).toHaveLength(1);
   });
 
-  it('fires onChange once per remove() / update() / clear() under StrictMode', () => {
-    const onChange = vi.fn();
+  it('fires onAnnotationsChange once per remove() / update() / clear() under StrictMode', () => {
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }), {
-      wrapper: StrictMode,
-    });
+    const { result } = renderHook(
+      () => useAnnotations({ key: 'k', storage, onAnnotationsChange }),
+      {
+        wrapper: StrictMode,
+      },
+    );
 
     let id = '';
     act(() => {
       id = result.current.add({
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       }).id;
     });
 
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     act(() => {
       result.current.update(id, { color: 'yellow' });
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
 
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     act(() => {
       result.current.remove(id);
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
 
     // The list is empty again, so clear() is a no-op and does not notify.
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     act(() => {
       result.current.clear();
     });
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
   });
 
   it('composes consecutive add() calls made in the same tick', () => {
@@ -286,15 +291,15 @@ describe('useAnnotations (React) — StrictMode', () => {
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
       result.current.add({
         id: 'a2',
-        chapter: 1,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 1,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
 
@@ -306,15 +311,15 @@ describe('useAnnotations (React) — pending writes', () => {
   it('flushes a pending mutation when the hook unmounts inside the throttle window', () => {
     const storage = memoryStorage();
     const { result, unmount } = renderHook(() =>
-      useAnnotations({ key: 'k', storage, throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage, debounceMs: 100 }),
     );
 
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
     expect(storage.data.get('k')).toBeUndefined();
@@ -328,14 +333,14 @@ describe('useAnnotations (React) — pending writes', () => {
 
   it('writes to storage once the throttle window elapses', () => {
     const storage = memoryStorage();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, throttleMs: 250 }));
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, debounceMs: 250 }));
 
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
     act(() => {
@@ -352,20 +357,20 @@ describe('useAnnotations (React) — pending writes', () => {
   it('collapses several mutations inside one throttle window into a single write', () => {
     const storage = memoryStorage();
     const setItem = vi.spyOn(storage, 'setItem');
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, throttleMs: 100 }));
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, debounceMs: 100 }));
 
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
       result.current.add({
         id: 'a2',
-        chapter: 1,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 1,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
     act(() => {
@@ -379,14 +384,14 @@ describe('useAnnotations (React) — pending writes', () => {
   it('does not resurrect cleared annotations when the hook unmounts', () => {
     const storage = memoryStorage();
     const { result, unmount } = renderHook(() =>
-      useAnnotations({ key: 'k', storage, throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage, debounceMs: 100 }),
     );
 
     act(() => {
       result.current.add({
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
       result.current.clear();
     });
@@ -399,16 +404,16 @@ describe('useAnnotations (React) — pending writes', () => {
     const storage = memoryStorage();
     storage.setItem('b', storedAnnotation('b1'));
     const { result, rerender } = renderHook(
-      ({ key }) => useAnnotations({ key, storage, throttleMs: 100 }),
+      ({ key }) => useAnnotations({ key, storage, debounceMs: 100 }),
       { initialProps: { key: 'a' } },
     );
 
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
     rerender({ key: 'b' });
@@ -424,11 +429,19 @@ describe('useAnnotations (React) — pending writes', () => {
 });
 
 describe('useAnnotations (React) — throwing storage', () => {
+  // Without onError the hook reports each failure to console.warn.
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   /** Storage whose named operations throw, as a disabled or full one does. */
   function throwingStorage(
     failing: ReadonlyArray<'getItem' | 'setItem' | 'removeItem'>,
     seed?: string,
-  ): AnnotationsStorage {
+  ): MejiroStorage {
     const fail = (op: string) => {
       throw new Error(`storage ${op} unavailable`);
     };
@@ -455,7 +468,7 @@ describe('useAnnotations (React) — throwing storage', () => {
   });
 
   it('degrades to an empty list when getItem throws on a key change', () => {
-    const storage: AnnotationsStorage = {
+    const storage: MejiroStorage = {
       getItem: (k) => {
         if (k === 'b') throw new Error('storage disabled');
         return storedAnnotation('a1');
@@ -474,15 +487,15 @@ describe('useAnnotations (React) — throwing storage', () => {
 
   it('keeps the in-memory copy when the throttled setItem throws', () => {
     const { result } = renderHook(() =>
-      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), debounceMs: 100 }),
     );
 
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
     expect(() => {
@@ -496,15 +509,15 @@ describe('useAnnotations (React) — throwing storage', () => {
 
   it('keeps the in-memory copy when a flush on unmount hits a throwing setItem', () => {
     const { result, unmount } = renderHook(() =>
-      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), debounceMs: 100 }),
     );
 
     act(() => {
       result.current.add({
         id: 'a1',
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       });
     });
 
@@ -619,10 +632,10 @@ describe('useAnnotations (React) — key change and clear', () => {
   it('clear() on an empty list neither notifies nor touches storage', () => {
     const storage = memoryStorage();
     const removeItem = vi.spyOn(storage, 'removeItem');
-    const onChange = vi.fn();
-    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onChange }));
+    const onAnnotationsChange = vi.fn();
+    const { result } = renderHook(() => useAnnotations({ key: 'k', storage, onAnnotationsChange }));
     act(() => result.current.clear());
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
   });
 });

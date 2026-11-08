@@ -1,3 +1,4 @@
+import { MejiroError } from '../errors.js';
 import { type FontFamily, normalizeFontFamily } from './types.js';
 import { WidthCache } from './width-cache.js';
 
@@ -18,8 +19,38 @@ const PROBE_FONTS = ['1px serif', '2px serif'] as const;
 
 function contextOf(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Failed to get 2d context');
+  if (!ctx) {
+    throw new MejiroError('environment-unsupported', 'The canvas has no 2d rendering context.');
+  }
   return ctx;
+}
+
+function createCanvas(): HTMLCanvasElement {
+  if (typeof document === 'undefined') {
+    throw new MejiroError(
+      'environment-unsupported',
+      'Measuring text needs a DOM canvas; pass a canvas to CharMeasurer or run in a browser.',
+    );
+  }
+  return document.createElement('canvas');
+}
+
+/** Collaborators of a {@link CharMeasurer}. */
+export interface CharMeasurerOptions {
+  /**
+   * Canvas to measure against. Validated eagerly, so a canvas that yields no 2D
+   * context throws at construction rather than at first measurement. When
+   * omitted, a canvas is created lazily on the first uncached measurement,
+   * which keeps construction DOM-free.
+   */
+  canvas?: HTMLCanvasElement;
+  /**
+   * Width cache to read and populate. Pass a shared cache to reuse measurements
+   * across measurers; the cache is then shared state, so a caller that swaps
+   * fonts at runtime must invalidate it.
+   * @defaultValue a private unbounded {@link WidthCache}
+   */
+  cache?: WidthCache;
 }
 
 /**
@@ -39,18 +70,11 @@ export class CharMeasurer {
   private appliedFont = '';
 
   /**
-   * @param options - Optional collaborators.
-   * @param options.canvas - Canvas to measure against. Validated eagerly, so a
-   *   canvas that yields no 2D context throws here rather than at first
-   *   measurement. When omitted, a canvas is created lazily on the first
-   *   uncached measurement, which keeps construction DOM-free.
-   * @param options.cache - Width cache to read and populate. Pass a shared cache
-   *   to reuse measurements across measurers, and note that the cache is then
-   *   shared state: a caller that swaps fonts at runtime must invalidate it.
-   *   @defaultValue a private unbounded {@link WidthCache}
-   * @throws When `options.canvas` is supplied but has no 2D rendering context.
+   * @param options - See {@link CharMeasurerOptions}.
+   * @throws {@link MejiroError} `environment-unsupported` when `options.canvas` is
+   *   supplied but has no 2D rendering context.
    */
-  constructor(options?: { canvas?: HTMLCanvasElement; cache?: WidthCache }) {
+  constructor(options?: CharMeasurerOptions) {
     // An injected canvas is validated eagerly: the caller already owns it, so
     // there is nothing to defer and a broken one is worth reporting up front.
     if (options?.canvas) this.ctx = contextOf(options.canvas);
@@ -108,7 +132,7 @@ export class CharMeasurer {
   }
 
   private context(): CanvasRenderingContext2D {
-    this.ctx ??= contextOf(document.createElement('canvas'));
+    this.ctx ??= contextOf(createCanvas());
     return this.ctx;
   }
 
@@ -116,7 +140,8 @@ export class CharMeasurer {
    * Puts `fontSpec` on the context, verified by reading it back: a canvas
    * silently ignores a spec it cannot parse, and resets its font when resized.
    *
-   * @throws When the canvas rejects `fontSpec`, so no width is cached under it.
+   * @throws {@link MejiroError} `font-unavailable` when the canvas rejects
+   *   `fontSpec`, so no width is cached under it.
    */
   private setFont(ctx: CanvasRenderingContext2D, fontSpec: string): void {
     if (this.currentFont === fontSpec && ctx.font === this.appliedFont) return;
@@ -131,7 +156,10 @@ export class CharMeasurer {
       ctx.font = fontSpec;
       if (ctx.font === probe) {
         this.currentFont = '';
-        throw new Error(`Font spec rejected by the canvas: ${fontSpec}`);
+        throw new MejiroError(
+          'font-unavailable',
+          `The canvas rejected the font specification: ${fontSpec}`,
+        );
       }
     }
     this.currentFont = fontSpec;

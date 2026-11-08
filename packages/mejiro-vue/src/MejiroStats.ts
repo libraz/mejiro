@@ -1,6 +1,7 @@
 import { estimateReadingTime, formatReadingTime } from '@libraz/mejiro/book';
 import type { EpubChapter } from '@libraz/mejiro/epub';
 import { computed, defineComponent, h, type PropType } from 'vue';
+import { type MejiroLocale, resolveMessages, useI18n } from './i18n.js';
 
 /**
  * Compact reading stats line: characters, page count, ruby count,
@@ -11,20 +12,27 @@ export const MejiroStats = defineComponent({
   props: {
     /** Chapter currently displayed. */
     chapter: { type: Object as PropType<EpubChapter | null>, default: null },
-    /** Total page count for the current layout. */
-    totalPages: { type: Number, default: 0 },
+    /** Number of pages in the current layout. */
+    pageCount: { type: Number, default: 0 },
     /** Most recent layout time in ms. */
     elapsedMs: { type: Number, default: 0 },
     /** Optional label for the current font (e.g. "Noto Serif JP 16px"). */
     fontLabel: { type: String, default: '' },
     /** Show estimated reading time in the stats line. @defaultValue false */
     showReadingTime: { type: Boolean, default: false },
-    /** Characters-per-minute used for the reading-time estimate. @defaultValue 600 */
-    cpm: { type: Number, default: 600 },
-    /** Locale used to format the reading-time label. @defaultValue 'ja' */
-    readingTimeLocale: { type: String as PropType<'ja' | 'en'>, default: 'ja' },
+    /** Reading rate, in characters per minute, of the reading-time estimate. @defaultValue 600 */
+    charsPerMinute: { type: Number, default: 600 },
+    /**
+     * Locale whose catalog spells the reading-time units. Defaults to the
+     * catalog of the nearest `MejiroI18nProvider`.
+     */
+    locale: { type: String as PropType<MejiroLocale>, default: undefined },
   },
   setup(props) {
+    const provided = useI18n();
+    const messages = computed(() =>
+      props.locale ? resolveMessages(props.locale, undefined) : provided.value,
+    );
     const text = computed(() => {
       const ch = props.chapter;
       if (!ch) return '';
@@ -35,15 +43,17 @@ export const MejiroStats = defineComponent({
         0,
       );
       const totalRuby = ch.paragraphs.reduce(
-        (s, p) => s + p.inlineAnnotations.filter((a) => a.kind === 'ruby').length,
+        (s, p) => s + p.inlineAnnotations.filter((a) => a.type === 'ruby').length,
         0,
       );
       const readingTimeLabel = props.showReadingTime
-        ? formatReadingTime(estimateReadingTime(ch, { cpm: props.cpm }), props.readingTimeLocale)
+        ? formatReadingTime(estimateReadingTime(ch, { charsPerMinute: props.charsPerMinute }), {
+            messages: messages.value,
+          })
         : null;
       const parts = [
         `${totalChars}ch`,
-        `${props.totalPages}pp`,
+        `${props.pageCount}pp`,
         totalRuby > 0 ? `${totalRuby}ruby` : null,
         readingTimeLabel,
         props.fontLabel ? props.fontLabel : null,

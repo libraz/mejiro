@@ -1,46 +1,21 @@
-/**
- * A position within a single chapter, expressed as a paragraph index and a
- * Unicode code point offset into that paragraph's `text` after NFC
- * normalization — the text the layout works from. Slicing a paragraph's
- * original `text` by an anchor addresses the same characters only when that
- * text is already NFC.
- *
- * Code point offsets are stable under reflow (font / size / line-width changes),
- * which is what makes them suitable for cross-device reading-position resume.
- */
-export interface InChapterAnchor {
-  /** Zero-based paragraph index within the chapter. */
-  paragraph: number;
-  /** Unicode code point offset into the paragraph's NFC-normalized `text`. */
-  charIndex: number;
-}
+import type { InChapterAnchor } from '../types.js';
 
-/**
- * A full reading position across an entire book — a chapter index combined
- * with an {@link InChapterAnchor}.
- *
- * Persist this struct (e.g. via `useReadingPosition`) to restore the user's
- * exact position even after a layout change that invalidates spread indices.
- */
-export interface ReadingAnchor extends InChapterAnchor {
-  /** Zero-based chapter index. */
-  chapter: number;
-}
+export type { InChapterAnchor, ReadingAnchor } from '../types.js';
 
 /**
  * Layout location for an in-chapter anchor, identified by spread + page + line.
  */
 export interface AnchorLocation {
   /** Zero-based spread index. */
-  spreadIdx: number;
-  /** Zero-based page index (= spreadIdx*2 + 0 for right, +1 for left). */
-  pageIdx: number;
+  spreadIndex: number;
+  /** Zero-based page index (= spreadIndex*2 + 0 for right, +1 for left). */
+  pageIndex: number;
   /**
    * Zero-based line index across the chapter's flattened line list (i.e. the
-   * same index used by {@link LineMetricsResult.metrics}). Equal to
-   * `paraLineStarts[paragraph] + inParagraphLine`.
+   * same index used by {@link LineMetricsResult.metrics}): the lines of every
+   * earlier paragraph plus the line within this one.
    */
-  lineIdx: number;
+  lineIndex: number;
   /** Side of the spread the anchor falls on. */
   side: 'right' | 'left';
 }
@@ -75,9 +50,9 @@ export interface AnchorRange {
  */
 export interface AnchorRect {
   /** Zero-based spread index. */
-  spreadIdx: number;
+  spreadIndex: number;
   /** Zero-based page index. */
-  pageIdx: number;
+  pageIndex: number;
   /** Side of the spread the character falls on. */
   side: 'right' | 'left';
   /** Top-left x of the character bounding box (spread-local, content frame). */

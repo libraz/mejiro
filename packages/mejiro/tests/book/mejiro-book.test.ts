@@ -2,7 +2,6 @@
  * @vitest-environment happy-dom
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChapterLayout } from '../../src/book/chapter-layout.js';
 import { DEFAULT_HEADING_STYLES } from '../../src/book/constants.js';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookOptions } from '../../src/book/types.js';
@@ -34,10 +33,11 @@ describe('MejiroBook', () => {
     book = new MejiroBook(baseOptions);
   });
 
-  it('layoutChapter throws when setPageSize has not been called', async () => {
-    await expect(book.layoutChapter({ paragraphs: [] })).rejects.toThrow(
-      'Page size not set. Call setPageSize() first.',
-    );
+  it('layoutChapter rejects when no page size has been given', async () => {
+    await expect(book.layoutChapter({ paragraphs: [] })).rejects.toMatchObject({
+      name: 'MejiroError',
+      code: 'page-size-unset',
+    });
   });
 
   it('getOptions returns defaults filled in for omitted fields', () => {
@@ -45,12 +45,12 @@ describe('MejiroBook', () => {
     expect(opts.fontFamily).toBe('serif');
     expect(opts.fontSize).toBe(16);
     expect(opts.lineSpacing).toBe(1.8);
-    expect(opts.mode).toBe('strict');
+    expect(opts.kinsoku).toBe('strict');
     expect(opts.enableHanging).toBe(true);
     expect(opts.headingScale).toBe(1.4);
   });
 
-  it('getOptions reports construction-time options and setOptions leaves them as built', async () => {
+  it('getOptions reports construction-time options and updateOptions leaves them as built', async () => {
     const analyzer = { identity: { name: 'a', version: '1' }, analyze: () => ({ morphemes: [] }) };
     const built = new MejiroBook({
       ...baseOptions,
@@ -68,13 +68,13 @@ describe('MejiroBook', () => {
       breakCost: { shortfallWeight: 2 },
     });
 
-    await built.setOptions({
+    await built.updateOptions({
       analyzer: undefined,
       wordAwareBreaking: 'full',
       keepWholePos: ['動詞'],
       keepWholePenalty: 1,
       breakCost: { shortfallWeight: 9 },
-    });
+    } as never);
     expect(built.getOptions()).toMatchObject({
       analyzer,
       wordAwareBreaking: 'clusters',
@@ -91,36 +91,42 @@ describe('MejiroBook', () => {
     expect(DEFAULT_HEADING_STYLES[6]).toEqual({ scale: 1.0, gapAfterEm: 0.6 });
   });
 
-  it('setOptions patches only provided fields', async () => {
+  it('updateOptions patches only provided fields', async () => {
     // fontSize needs re-measurement, so the patch lands once the font resolves.
-    await book.setOptions({ fontSize: 24, mode: 'loose' });
+    await book.updateOptions({ fontSize: 24, kinsoku: 'loose' });
     const opts = book.getOptions();
     expect(opts.fontSize).toBe(24);
-    expect(opts.mode).toBe('loose');
+    expect(opts.kinsoku).toBe('loose');
     // Untouched fields keep their previous value
     expect(opts.fontFamily).toBe('serif');
     expect(opts.enableHanging).toBe(true);
   });
 
-  it('setPageSize fills pagePaddingX/Y with zero when omitted', async () => {
+  it('setPageSize fills paddingX/Y with zero when omitted', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     // Empty chapter still resolves now that the page is sized
     const layout = await book.layoutChapter({ paragraphs: [] });
     expect(layout).toBeDefined();
   });
 
-  it('computePageSize honours minimum sizes and computes lineWidth', () => {
-    // happy-dom containers have 0 dimensions → minimum clamps apply.
+  /** A container measuring `width` × `height`; happy-dom lays nothing out. */
+  function sized(width: number, height: number): HTMLElement {
     const container = document.createElement('div');
-    const dims = book.computePageSize(container);
+    Object.defineProperty(container, 'clientWidth', { value: width, configurable: true });
+    Object.defineProperty(container, 'clientHeight', { value: height, configurable: true });
+    return container;
+  }
+
+  it('fitPageSize honours minimum sizes and computes lineWidth', () => {
+    // A container smaller than the minimums → the minimum clamps apply.
+    const dims = book.fitPageSize(sized(100, 100));
     expect(dims.pageWidth).toBeGreaterThanOrEqual(280);
     expect(dims.pageHeight).toBeGreaterThanOrEqual(400);
     expect(dims.contentHeight).toBeGreaterThan(0);
   });
 
-  it('computePageSize honours custom min/max overrides', () => {
-    const container = document.createElement('div');
-    const dims = book.computePageSize(container, {
+  it('fitPageSize honours custom min/max overrides', () => {
+    const dims = book.fitPageSize(sized(100, 100), {
       minWidth: 200,
       minHeight: 300,
       aspect: 1.6,
@@ -129,15 +135,15 @@ describe('MejiroBook', () => {
     expect(dims.pageHeight).toBe(300);
   });
 
-  it('computePageSize gives a single-page reader the full container width', () => {
+  it('fitPageSize gives a single-page reader the full container width', () => {
     // Portrait-ish container where a two-page spread would be width-bound and
     // therefore halved. A single page should instead fill the width.
     const container = document.createElement('div');
     Object.defineProperty(container, 'clientWidth', { value: 600, configurable: true });
     Object.defineProperty(container, 'clientHeight', { value: 900, configurable: true });
 
-    const double = book.computePageSize(container); // columns defaults to 2
-    const single = book.computePageSize(container, { columns: 1 });
+    const double = book.fitPageSize(container); // columns defaults to 2
+    const single = book.fitPageSize(container, { columns: 1 });
 
     // Two-page spread is halved (width-bound, then clamped up to the 280 min);
     // a single page is height-bound and ends up markedly wider.
@@ -146,7 +152,7 @@ describe('MejiroBook', () => {
     expect(single.pageWidth).toBeGreaterThan(double.pageWidth);
   });
 
-  describe('computePageSize padding', () => {
+  describe('fitPageSize padding', () => {
     /**
      * A surface whose computed style carries the reader's page-padding
      * properties. They are set on the surface itself because happy-dom does
@@ -163,7 +169,7 @@ describe('MejiroBook', () => {
 
     async function laidOutPadding(): Promise<{ x: number; y: number }> {
       const { size } = (await book.layoutChapter({ paragraphs: [] })).snapshot();
-      return { x: size.pagePaddingX ?? 0, y: size.pagePaddingY ?? 0 };
+      return { x: size.paddingX, y: size.paddingY };
     }
 
     it('lays out for the padding the reader stylesheet draws', async () => {
@@ -172,7 +178,7 @@ describe('MejiroBook', () => {
         '--mejiro-page-pad-y': '40px',
         '--mejiro-page-pad-bottom': '30px',
       });
-      const dims = book.computePageSize(surface);
+      const dims = book.fitPageSize(surface);
 
       expect(dims.contentHeight).toBe(dims.pageHeight - 40 - 30);
       expect(await laidOutPadding()).toEqual({ x: 28, y: 40 });
@@ -183,13 +189,13 @@ describe('MejiroBook', () => {
         '--mejiro-page-pad-x': '28px',
         '--mejiro-page-pad-y': '40px',
       });
-      book.computePageSize(surface, { padding: { x: 12, y: 16 } });
+      book.fitPageSize(surface, { paddingX: 12, paddingY: 16 });
 
       expect(await laidOutPadding()).toEqual({ x: 12, y: 16 });
     });
 
     it('falls back to the default padding without the stylesheet', async () => {
-      const dims = book.computePageSize(surfaceWithin({}));
+      const dims = book.fitPageSize(surfaceWithin({}));
 
       expect(dims.contentHeight).toBe(dims.pageHeight - 56 - 40);
       expect(await laidOutPadding()).toEqual({ x: 52, y: 56 });
@@ -199,7 +205,7 @@ describe('MejiroBook', () => {
   it('clearCache(spec) drops that font only and clearCache() drops all', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
-    await book.setOptions({ fontSize: 32 });
+    await book.updateOptions({ fontSize: 32 });
     const before = book.cacheStats();
     expect(before.fonts).toBe(2);
 
@@ -246,7 +252,7 @@ describe('MejiroBook', () => {
     ]);
   });
 
-  it('setOptions propagates lineSpacing changes to live layouts', async () => {
+  it('updateOptions propagates lineSpacing changes to live layouts', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layout = await book.layoutChapter({
       paragraphs: [{ text: 'あいうえお' }, { text: 'かきくけこ' }],
@@ -254,7 +260,7 @@ describe('MejiroBook', () => {
     const beforeSlots = layout.getSpread(0).right.slots.map((s) => s.xPos);
     expect(layout.snapshot().config.lineSpacing).toBe(1.8);
 
-    await book.setOptions({ lineSpacing: 3.0 });
+    await book.updateOptions({ lineSpacing: 3.0 });
 
     expect(layout.snapshot().config.lineSpacing).toBe(3);
     const afterSlots = layout.getSpread(0).right.slots.map((s) => s.xPos);
@@ -262,11 +268,11 @@ describe('MejiroBook', () => {
     expect(afterSlots).not.toEqual(beforeSlots);
   });
 
-  it('setOptions propagates fontSize changes by re-measuring live layouts', async () => {
+  it('updateOptions propagates fontSize changes by re-measuring live layouts', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
     const beforeStats = book.cacheStats();
-    await book.setOptions({ fontSize: 32 });
+    await book.updateOptions({ fontSize: 32 });
     const afterStats = book.cacheStats();
     // A new font size means a new fontSpec key in the cache.
     expect(afterStats.fonts).toBeGreaterThan(beforeStats.fonts);
@@ -274,13 +280,13 @@ describe('MejiroBook', () => {
     expect(layout.getSpread(0)).toBeDefined();
   });
 
-  it('setOptions re-breaks a live layout once, on its next read', async () => {
+  it('updateOptions re-breaks a live layout once, on its next read', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layout = await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
     // biome-ignore lint/suspicious/noExplicitAny: private method spy verifies an internal regression.
     const rebreak = vi.spyOn(layout as any, 'breakEntries');
 
-    await book.setOptions({ fontSize: 32 });
+    await book.updateOptions({ fontSize: 32 });
     expect(rebreak).not.toHaveBeenCalled();
 
     layout.getSpread(0);
@@ -297,22 +303,23 @@ describe('MejiroBook', () => {
     // The reflow the framework hooks run: change options, then lay the chapter
     // out again and render only the replacement.
     breakCalls.count = 0;
-    await book.setOptions({ fontSize: 32, mode: 'loose' });
+    await book.updateOptions({ fontSize: 32, kinsoku: 'loose' });
     const replacement = await book.layoutChapter({ paragraphs });
     replacement.getSpread(0);
 
     expect(breakCalls.count).toBe(paragraphs.length);
   });
 
-  it('setOptions re-measures live heading paragraphs when headingScale changes', async () => {
+  it('updateOptions re-measures live heading paragraphs when headingScale changes', async () => {
     const headed = new MejiroBook({ ...baseOptions, headingScale: 1 });
     headed.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layout = await headed.layoutChapter({
       paragraphs: [{ text: '見出し', headingLevel: 1 }],
     });
-    const recompute = vi.spyOn(layout, 'recomputeAfterMeasurement');
+    // biome-ignore lint/suspicious/noExplicitAny: private method spy verifies an internal regression.
+    const recompute = vi.spyOn(layout as any, 'recomputeAfterMeasurement');
 
-    await headed.setOptions({ headingScale: 2 });
+    await headed.updateOptions({ headingScale: 2 });
 
     expect(recompute).toHaveBeenCalledTimes(1);
   });
@@ -326,7 +333,7 @@ describe('MejiroBook', () => {
       ],
     });
     const snapshot = layout.snapshot();
-    expect(snapshot.version).toBe(2);
+    expect(snapshot.version).toBe(3);
     expect(snapshot.paragraphs).toHaveLength(2);
     expect(snapshot.paragraphs[0].text).toBe('あいうえおかきくけこ');
     expect(snapshot.paragraphs[0].advances.length).toBeGreaterThan(0);
@@ -339,7 +346,7 @@ describe('MejiroBook', () => {
     expect(after.fonts).toBe(before.fonts);
     expect(after.codepoints).toBe(before.codepoints);
     // The restored layout serves data identical to the original.
-    expect(restored.totalPages).toBe(layout.totalPages);
+    expect(restored.pageCount).toBe(layout.pageCount);
     expect(restored.getSpread(0)).toBeDefined();
   });
 
@@ -366,12 +373,12 @@ describe('MejiroBook', () => {
     const layout = await book.layoutChapter({
       paragraphs: [{ text: 'あ'.repeat(240) }],
     });
-    layout.setImages(0, [{ x: 20, y: 10, w: 40, h: 60, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 10, width: 40, height: 60, margin: 0 }]);
     const originalSpread = layout.getSpread(0);
     const snapshot = layout.snapshot();
 
     expect(snapshot.images).toEqual([
-      { spreadIndex: 0, images: [{ x: 20, y: 10, w: 40, h: 60, margin: 0 }] },
+      { spreadIndex: 0, images: [{ x: 20, y: 10, width: 40, height: 60, margin: 0 }] },
     ]);
 
     const fresh = new MejiroBook(baseOptions);
@@ -379,7 +386,7 @@ describe('MejiroBook', () => {
     const restoredSpread = restored.getSpread(0);
 
     expect(restored.hasImages).toBe(true);
-    expect(restored.totalPages).toBe(layout.totalPages);
+    expect(restored.pageCount).toBe(layout.pageCount);
     expect(restoredSpread.right.hasImages).toBe(originalSpread.right.hasImages);
     expect(restoredSpread.right.slots).toEqual(originalSpread.right.slots);
   });
@@ -393,13 +400,13 @@ describe('MejiroBook', () => {
           fontSize: 16,
           lineSpacing: 1.8,
           headingScale: 1.4,
-          mode: 'strict',
+          kinsoku: 'strict',
           enableHanging: true,
         },
-        size: { pageWidth: 400, lineWidth: 600, pagePaddingX: 0, pagePaddingY: 0 },
+        size: { pageWidth: 400, lineWidth: 600, paddingX: 0, paddingY: 0 },
         paragraphs: [],
       }),
-    ).toThrow('Unsupported ChapterLayoutSnapshot version');
+    ).toThrow(expect.objectContaining({ name: 'MejiroError', code: 'snapshot-invalid' }));
   });
 
   it('layoutManuscript lays out the paragraphs the EPUB export path yields', async () => {
@@ -414,9 +421,7 @@ describe('MejiroBook', () => {
       '末尾の段落。',
     ].join('\n\n');
     const layouts = await book.layoutManuscript({ chapters: [{ title: '題', body }] });
-    const texts = (layouts.get('chapter-1') as ChapterLayout)
-      .snapshot()
-      .paragraphs.map((p) => p.text);
+    const texts = layouts[0].snapshot().paragraphs.map((p) => p.text);
 
     const expected = manuscriptParagraphs(body)
       .filter((block) => parseInlineImageMarker(block) === null)
@@ -428,7 +433,7 @@ describe('MejiroBook', () => {
     expect(texts.some((t) => t.includes('mejiro-image'))).toBe(false);
   });
 
-  it('layoutManuscript parses manuscript markup and returns layouts keyed by chapter id', async () => {
+  it('layoutManuscript parses manuscript markup and returns the layouts in chapter order', async () => {
     book.setPageSize({ pageWidth: 400, lineWidth: 600 });
     const layouts = await book.layoutManuscript({
       chapters: [
@@ -436,8 +441,12 @@ describe('MejiroBook', () => {
         { title: '第二話', body: '本文。' },
       ],
     });
-    expect(layouts.size).toBe(2);
-    expect(layouts.has('ch-1')).toBe(true);
-    expect(layouts.has('chapter-2')).toBe(true);
+    expect(layouts).toHaveLength(2);
+    expect(layouts[0].snapshot().paragraphs.map((p) => p.text)).toEqual([
+      '第一話',
+      '漢字です。',
+      '次の段落です。',
+    ]);
+    expect(layouts[1].snapshot().paragraphs.map((p) => p.text)).toEqual(['第二話', '本文。']);
   });
 });

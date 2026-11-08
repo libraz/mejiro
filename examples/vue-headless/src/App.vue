@@ -16,8 +16,8 @@ const surface = ref<HTMLDivElement | null>(null);
 const chapter = ref(0);
 
 const { book } = useMejiroBook({ ...DEFAULT_BOOK_OPTIONS, fontSize: 18, lineSpacing: 2.0 });
-const { epub, error } = useEpub({ defaultUrl: '/neko.epub' });
-const layoutCtx = useChapterLayout(book, epub, chapter, surface);
+const { epub, error } = useEpub({ url: '/neko.epub' });
+const layoutCtx = useChapterLayout(book, { epub, chapterIndex: chapter, surface });
 const spreadCtx = useSpread(layoutCtx.layout, { enableKeyboard: true });
 
 const heading = computed(() => {
@@ -32,7 +32,7 @@ const heading = computed(() => {
     <header class="bar">
       <span class="title">{{ heading }}</span>
       <span class="nav-info" v-if="spreadCtx.spread.value">
-        {{ spreadCtx.spreadIdx.value + 1 }} / {{ spreadCtx.totalSpreads.value }}
+        {{ spreadCtx.index.value + 1 }} / {{ spreadCtx.count.value }}
       </span>
     </header>
 

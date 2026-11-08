@@ -3,17 +3,17 @@ import {
   type Annotation,
   parseAnnotations,
   parseReadingPosition,
-  type ReadingPositionValue,
   serializeAnnotations,
   serializeReadingPosition,
 } from '../src/persistence.js';
+import type { ReadingAnchor } from '../src/types.js';
 
 /** Position a reader resumes at when nothing usable was persisted. */
-const START_OF_BOOK: ReadingPositionValue = { chapter: 0, paragraph: 0, charIndex: 0 };
+const START_OF_BOOK: ReadingAnchor = { chapterIndex: 0, paragraphIndex: 0, charIndex: 0 };
 
 describe('parseReadingPosition', () => {
   it('round-trips a serialized position', () => {
-    const value: ReadingPositionValue = { chapter: 3, paragraph: 12, charIndex: 40 };
+    const value: ReadingAnchor = { chapterIndex: 3, paragraphIndex: 12, charIndex: 40 };
 
     expect(parseReadingPosition(serializeReadingPosition(value))).toEqual(value);
   });
@@ -56,8 +56,8 @@ describe('parseReadingPosition', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     expect(parseReadingPosition('{"chapter":2,"spreadIdx":4}')).toEqual({
-      chapter: 2,
-      paragraph: 0,
+      chapterIndex: 2,
+      paragraphIndex: 0,
       charIndex: 0,
     });
 
@@ -73,23 +73,25 @@ describe('parseReadingPosition', () => {
   });
 
   it('accepts a bare anchor object with valid fields', () => {
-    const value: ReadingPositionValue = { chapter: 3, paragraph: 12, charIndex: 40 };
+    const value: ReadingAnchor = { chapterIndex: 3, paragraphIndex: 12, charIndex: 40 };
 
     expect(parseReadingPosition(JSON.stringify(value))).toEqual(value);
   });
 
   it('rejects a bare anchor object with invalid fields', () => {
-    expect(parseReadingPosition('{"chapter":0,"paragraph":-1,"charIndex":0}')).toBeNull();
-    expect(parseReadingPosition('{"chapter":0,"paragraph":0,"charIndex":1.5}')).toBeNull();
+    expect(parseReadingPosition('{"chapterIndex":0,"paragraphIndex":-1,"charIndex":0}')).toBeNull();
+    expect(
+      parseReadingPosition('{"chapterIndex":0,"paragraphIndex":0,"charIndex":1.5}'),
+    ).toBeNull();
   });
 });
 
 describe('parseAnnotations', () => {
   const annotation: Annotation = {
     id: 'a1',
-    chapter: 2,
-    start: { paragraph: 1, charIndex: 0 },
-    end: { paragraph: 1, charIndex: 8 },
+    chapterIndex: 2,
+    start: { paragraphIndex: 1, charIndex: 0 },
+    end: { paragraphIndex: 1, charIndex: 8 },
     color: 'yellow',
   };
 
@@ -110,21 +112,21 @@ describe('parseAnnotations', () => {
     const reversed = {
       ...annotation,
       id: 'reversed',
-      start: { paragraph: 2, charIndex: 0 },
-      end: { paragraph: 1, charIndex: 9 },
+      start: { paragraphIndex: 2, charIndex: 0 },
+      end: { paragraphIndex: 1, charIndex: 9 },
     };
     const reversedInParagraph = {
       ...annotation,
       id: 'reversed-2',
-      start: { paragraph: 1, charIndex: 5 },
-      end: { paragraph: 1, charIndex: 4 },
+      start: { paragraphIndex: 1, charIndex: 5 },
+      end: { paragraphIndex: 1, charIndex: 4 },
     };
     const collapsed = { ...annotation, id: 'collapsed', end: annotation.start };
     const spanning = {
       ...annotation,
       id: 'spanning',
-      start: { paragraph: 1, charIndex: 9 },
-      end: { paragraph: 3, charIndex: 0 },
+      start: { paragraphIndex: 1, charIndex: 9 },
+      end: { paragraphIndex: 3, charIndex: 0 },
     };
     const entries = [
       reversed,
@@ -137,14 +139,14 @@ describe('parseAnnotations', () => {
     ];
     const expected = [annotation, collapsed, spanning];
     expect(parseAnnotations(JSON.stringify(entries))).toEqual(expected);
-    expect(parseAnnotations(JSON.stringify({ version: 1, annotations: entries }))).toEqual(
+    expect(parseAnnotations(JSON.stringify({ version: 3, annotations: entries }))).toEqual(
       expected,
     );
   });
 
-  it('returns an empty list for malformed payloads', () => {
+  it('returns null for malformed payloads and an empty list when nothing is stored', () => {
     expect(parseAnnotations(null)).toEqual([]);
-    expect(parseAnnotations('not json')).toEqual([]);
-    expect(parseAnnotations('{"version":99,"annotations":[]}')).toEqual([]);
+    expect(parseAnnotations('not json')).toBeNull();
+    expect(parseAnnotations('{"version":99,"annotations":[]}')).toBeNull();
   });
 });

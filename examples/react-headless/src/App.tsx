@@ -21,8 +21,8 @@ export default function App() {
     fontSize: 18,
     lineSpacing: 2.0,
   });
-  const { epub, error } = useEpub({ defaultUrl: '/neko.epub' });
-  const layoutCtx = useChapterLayout(book, epub, chapter, surfaceRef);
+  const { epub, error } = useEpub({ url: '/neko.epub' });
+  const layoutCtx = useChapterLayout(book, { epub, chapterIndex: chapter, surface: surfaceRef });
   const spreadCtx = useSpread(layoutCtx.layout, { enableKeyboard: true });
 
   const heading = !epub
@@ -38,7 +38,7 @@ export default function App() {
         <span className="title">{heading}</span>
         {spreadCtx.spread && (
           <span className="nav-info">
-            {spreadCtx.spreadIdx + 1} / {spreadCtx.totalSpreads}
+            {spreadCtx.index + 1} / {spreadCtx.count}
           </span>
         )}
       </header>

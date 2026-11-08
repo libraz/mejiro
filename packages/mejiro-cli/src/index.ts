@@ -53,7 +53,7 @@ function runLayout(args: string[], io: CliIO): number {
     text: codepoints,
     advances,
     lineWidth,
-    mode,
+    kinsoku: mode,
     enableHanging,
   });
 

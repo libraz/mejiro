@@ -15,25 +15,20 @@
 <!-- doc-example: 09-kinsoku.ts#kinsoku -->
 ```ts
 import {
-  buildKinsokuRules,
   computeBreaks,
+  extendKinsokuRules,
   getDefaultKinsokuRules,
   toCodepoints,
 } from '@libraz/mejiro';
 
-// デフォルトを取得してカスタマイズ
-const defaults = getDefaultKinsokuRules();
-const rules = buildKinsokuRules({
-  lineStartProhibited: [...defaults.lineStartProhibited, 0xff05], // ％ を追加
-  lineEndProhibited: defaults.lineEndProhibited,
-  unbreakablePairs: defaults.unbreakablePairs, // ‥‥ …… —— ―― を分割しない
-});
+// デフォルトの規則に、行頭禁止の ％ を加える
+const rules = extendKinsokuRules(getDefaultKinsokuRules(), { lineStartProhibited: [0xff05] });
 
 const result = computeBreaks({
   text: toCodepoints('ただいま５％引きです。'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
-  kinsokuRules: rules,
+  kinsoku: rules,
 });
 // result.breakPoints → [3, 8]: ％ が行頭に来ないよう、５ ごと次の行へ送られる
 ```
@@ -49,7 +44,7 @@ const rules = buildKinsokuRules({
 });
 ```
 
-`computeBreaks()` に `kinsokuRules` を渡すと、組み込みルールは**完全に置き換え**られます。カスタムルールが有効な場合、`mode` オプション（`'strict'` / `'loose'`）は無視されます。
+`kinsoku` に渡したカスタムルールは、組み込みルールを**完全に置き換え**ます。`kinsoku` が取るのはモード（`'strict'` / `'loose'`）かルールのどちらか一方です。
 
 ### KinsokuRules の構造
 
@@ -153,14 +148,14 @@ yarn bench  # ベンチマークを実行
 ### ヒント
 
 - **単一の `MejiroBrowser` インスタンスを再利用**して、レイアウト間で幅キャッシュを活用してください。
-- **段落ごとの文字配列も必要なら `layoutChapter()` を使用**してください。段落を 1 つずつレイアウトする点は同じインスタンスで `layout()` をループで呼ぶのと同じで、共有するのはインスタンスの幅キャッシュだけです。加わるのは、改行位置と注釈が指す NFC 形の `chars` と、段落ごとのフォント上書きです。
+- **段落ごとの文字配列も必要なら `layoutParagraphs()` を使用**してください。段落を 1 つずつレイアウトする点は同じインスタンスで `layout()` をループで呼ぶのと同じで、共有するのはインスタンスの幅キャッシュだけです。加わるのは、改行位置と注釈が指す NFC 形の `chars` と、段落ごとのフォント上書きです。
 - **初回レイアウト前に `preloadFont()` でフォントを事前計測**すると、体感パフォーマンスが向上します:
 
 <!-- doc-example: 09-preload.ts#preload -->
 ```ts
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
 });
 
 // アプリ初期化時にプリロード
@@ -205,22 +200,23 @@ const pages = paginate(400, [{ lineCount: lines.length, linePitch: 16 * 1.8, gap
 
 ```ts
 interface RenderPage {
-  paragraphs: RenderParagraph[];
+  readonly paragraphs: readonly RenderParagraph[];
 }
 
 interface RenderParagraph {
-  lines: RenderLine[];
-  isHeading: boolean;
-  headingLevel?: number;
+  readonly lines: readonly RenderLine[];
+  readonly headingLevel?: HeadingLevel;
+  readonly kind?: ParagraphKind;
+  readonly scale?: number;
 }
 
 interface RenderLine {
-  segments: RenderSegment[];
+  readonly segments: readonly RenderSegment[];
 }
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | { type: 'ruby'; text: string; rubyText: string; children?: readonly RenderSegment[] }
   | {
       type: 'emphasis';
       text: string;
@@ -234,16 +230,7 @@ type RenderSegment =
   | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
 
-`ruby` は親文字を `base` に、残り 7 バリアントは `text` に持ちます。どちらもその範囲全体のフラットなテキストなので、文字を描くだけの描画では入れ子注釈（`children`）を無視できます。
-
-```ts
-import type { RenderSegment } from '@libraz/mejiro/render';
-
-/** どのセグメント種別からもフラットなテキストを取り出します。 */
-function segmentText(segment: RenderSegment): string {
-  return segment.type === 'ruby' ? segment.base : segment.text;
-}
-```
+どのバリアントも、その範囲全体を平坦化したテキストを `text` に持ちます（`ruby` では親文字）。`children` は同じ範囲を入れ子の注釈ごとに表します。描くのはどちらか一方だけで、両方は描きません。文字を描くだけの描画では `segment.text` を読み、`children` は無視します。
 
 DOM へ出力する場合は `segmentToInlineNode()` を使ってください（[ページ分割と描画](07-pagination-and-rendering.md)を参照）。
 
@@ -259,7 +246,7 @@ function renderToCanvas(ctx: CanvasRenderingContext2D, page: RenderPage): void {
       x -= lineHeight;
       let y = 0;
       for (const segment of line.segments) {
-        for (const char of segmentText(segment)) {
+        for (const char of segment.text) {
           ctx.fillText(char, x, y + 16);
           y += 16;
         }
@@ -279,7 +266,7 @@ function renderToString(page: RenderPage): string {
       p.lines
         .map((l) =>
           l.segments
-            .map((s) => (s.type === 'ruby' ? `${s.base}(${s.rubyText})` : s.text))
+            .map((s) => (s.type === 'ruby' ? `${s.text}(${s.rubyText})` : s.text))
             .join('')
         )
         .join('\n')
@@ -308,8 +295,8 @@ const engine = new ExclusionEngine({
 });
 
 // 画像を追加（コンテンツ領域座標系）
-engine.addImage({ x: 100, y: 50, w: 120, h: 160 });
-engine.addImage({ x: 50, y: 300, w: 80, h: 100 });
+engine.addImage({ x: 100, y: 50, width: 120, height: 160 });
+engine.addImage({ x: 50, y: 300, width: 80, height: 100 });
 
 // 列スロットと行幅を計算
 const { slots, lineWidths } = engine.compute();
@@ -343,8 +330,8 @@ const result = computeBreaks({
 `writing-mode: vertical-rl` の場合:
 - **ブロック方向** = 水平（列は右から左に配置）
 - **インライン方向** = 垂直（テキストは上から下に流れる）
-- `ImageRect.x` / `.w` はブロック軸に対応
-- `ImageRect.y` / `.h` はインライン軸に対応
+- `ImageRect.x` / `.width` はブロック軸に対応
+- `ImageRect.y` / `.height` はインライン軸に対応
 - 座標は**コンテンツ領域**の原点（パディング後）からの相対値
 
 ### 動的な更新
@@ -353,7 +340,7 @@ const result = computeBreaks({
 
 ```ts
 const engine = new ExclusionEngine(geometry);
-const img = { x: 100, y: 50, w: 120, h: 160 };
+const img = { x: 100, y: 50, width: 120, height: 160 };
 engine.addImage(img);
 
 // ドラッグ時: 座標を更新して再計算
@@ -379,31 +366,31 @@ import { computeBreaks, SpreadExclusionEngine } from '@libraz/mejiro';
 
 const spread = new SpreadExclusionEngine({
   pageWidth: 537,
-  pagePaddingX: 52, // ノド側+小口側パディング
-  pagePaddingY: 56,
+  paddingX: 52, // ノド側+小口側パディング
+  paddingY: 56,
   lineWidth: 676,
   linePitch: 30.4,
 });
 
 // 画像は右ページの左上を基準に配置。
 // 負のx値は自動的にノドのオフセットを考慮して左ページにマッピングされる。
-spread.addImage({ x: 200, y: 100, w: 120, h: 160, inlineMargin: 16 });
-spread.addImage({ x: -100, y: 300, w: 80, h: 100 }); // 左ページ
+spread.addImage({ x: 200, y: 100, width: 120, height: 160, inlineMargin: 16 });
+spread.addImage({ x: -100, y: 300, width: 80, height: 100 }); // 左ページ
 
-const { rightSlots, leftSlots, lineWidths, rightSlotCount } = spread.compute();
+const { rightSlots, leftSlots, lineWidths } = spread.compute();
 
 // 見開き全体で1回のcomputeBreaks呼び出し
 const result = computeBreaks({ text, advances, lineWidth: 676, lineWidths });
 
 // 行をページごとに分割してレンダリング:
-// 行 0..rightSlotCount-1 → rightSlotsを使って右ページに描画
-// 行 rightSlotCount..     → leftSlotsを使って左ページに描画
+// 行 0..rightSlots.length-1 → rightSlotsを使って右ページに描画
+// 行 rightSlots.length..     → leftSlotsを使って左ページに描画
 ```
 
 `ExclusionEngine` との主な違い:
 - **ノドの自動処理** — 手動の座標変換が不要
 - **連続テキストフロー** — 1つの `lineWidths` 配列が両ページにまたがる
-- **分割レンダリング** — `rightSlotCount` で行をページ間で分割
+- **分割レンダリング** — 先頭の `rightSlots.length` 行が右ページ、残りが左ページ
 
 ### ワンショット便利関数
 
@@ -418,7 +405,7 @@ const { slots, lineWidths } = computeExclusionSlots({
   linePitch: 30.4,
   contentWidth: 380,
   images: [
-    { x: 100, y: 50, w: 120, h: 160 },
+    { x: 100, y: 50, width: 120, height: 160 },
   ],
 });
 ```
@@ -491,7 +478,7 @@ DB スキーマは `EpubProjectMetadata`（`title`, `creators`, `subjects`, `lan
 「URL を渡すだけ」が最短です。EPUB をサーバで保管している場合は `epubUrl` を、メタを別 API から取得して本文 EPUB をストリーミングしたい場合は `epub`（事前 `parseEpub()` 結果）を渡す方式を選びます。
 
 ```tsx
-<MejiroReader epubUrl={`/api/works/${slug}/epub`} bare enableChapterNav enableSettings />
+<MejiroReader epubUrl={`/api/works/${slug}/epub`} title={work.title} />
 ```
 
 #### 7.2.1 認証付き EPUB を渡す
@@ -537,10 +524,10 @@ import { ReaderClient } from './ReaderClient';
 export default async function ReaderPage({ params }: { params: { slug: string } }) {
   // fetchEpubBuffer() はサーバー側で EPUB のバイト列を読み込む処理を表す
   const buf = await fetchEpubBuffer(params.slug);
-  const book = await parseEpub(buf);
+  const epub = await parseEpub(buf);
   // renderEpubStatic() の出力は parseEpub の結果から組み立てたもので、
   // 本文や属性をエスケープし、リンク href も安全な URL スキームに制限する。
-  const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
+  const initialHtml = renderEpubStatic(epub.chapters[0], { ariaLabel: epub.title });
   return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
 }
 ```
@@ -578,10 +565,10 @@ export function ReaderClient({ slug, initialHtml }: Props) {
 
 ### 7.3 読書位置の永続化（サーバ同期）
 
-`useReadingPosition` は内部的に `localStorage` 互換インターフェース（`getItem` / `setItem` / `removeItem`）を要求するだけなので、サーバ DB へ非同期保存するラッパーを書けばそのまま使えます。保存される値は `ReadingAnchor`（`{ chapter, paragraph, charIndex }`）の JSON 文字列で、フォントサイズや画面サイズの変更による再ページネーションに耐えます。
+`useReadingPosition` は内部的に `localStorage` 互換インターフェース（`getItem` / `setItem` / `removeItem`）を要求するだけなので、サーバ DB へ非同期保存するラッパーを書けばそのまま使えます。保存される値は `ReadingAnchor`（`{ chapterIndex, paragraphIndex, charIndex }`）のバージョン付き JSON 文字列で、フォントサイズや画面サイズの変更による再ページネーションに耐えます。
 
 ```ts
-const remoteStorage: ReadingPositionStorage = {
+const remoteStorage: MejiroStorage = {
   getItem(k) {
     return cachedSnapshot[k] ?? null; // 起動時にプリフェッチした値を返す
   },
@@ -602,11 +589,12 @@ const remoteStorage: ReadingPositionStorage = {
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${userId}:${bookId}`,
   storage: remoteStorage,
-  throttleMs: 1000,
+  debounceMs: 1000,
+  onError: (error) => reportToMonitoring(error),
 });
 ```
 
-`throttleMs` は debounce の待ち時間です。最後の `save()` からこの時間が経つと、`storage.setItem` に最新の値が渡されます。保留中の書き込みは、ページを隠すとき・`key` の変更時・アンマウント時にまとめて書き出されます。
+`debounceMs` は debounce の待ち時間です。最後の `save()` からこの時間が経つと、`storage.setItem` に最新の値が渡されます。保留中の書き込みは、ページを隠すとき・`key` の変更時・アンマウント時にまとめて書き出されます。例外を投げたストレージは `storage-read-failed` / `storage-write-failed` として `onError` に報告され、`onError` がなければフックが `console.warn` に出します。
 
 複数デバイス同期は「`setItem` で書く前にサーバの最新 `updatedAt` と比較する」など、`storage` 側で完結させるのが扱いやすいです。
 
@@ -622,51 +610,50 @@ editor.addImage(0, {
 });
 
 // 書き出し時に外部 URL からバイトを取得
-const buffer = await editor.export({
-  assetResolver: async ({ assetKey, asset, url, signal }) => {
+const bytes = await editor.export({
+  assetResolver: async ({ href, url, signal }) => {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
       signal,
     });
-    if (!res.ok) throw new Error(`asset fetch failed: ${assetKey} (${res.status})`);
-    return res.arrayBuffer();
+    if (!res.ok) throw new Error(`asset fetch failed: ${href} (${res.status})`);
+    return new Uint8Array(await res.arrayBuffer());
   },
 });
 ```
 
 `assetResolver` を省略するとランタイムの `fetch(url, { signal })` がそのまま使われます。S3 SDK で署名付き URL を都度生成したり、IndexedDB キャッシュからオフラインで返したりといった用途では明示的にラッパーを書いてください。
 
-同じ仕組みは `EpubProject`（manuscript-to-EPUB 経路、カバー画像や挿絵を `addAsset({ href, url })` で登録）にも適用されます。`<MejiroEditor>` と `useEditableEpub` は `editor.addImage({ filename, url })`、`useEpubProject` は自身の `setCover` / `setAssets` で URL だけのアセットを登録できます。いずれも `assetResolver` をプロップ・オプションとして受け取り、内部の `editor.export()` / `project.export()` 呼び出しへ渡すため、URL の解決は EPUB 組み立て時にだけ走ります。
+同じ仕組みは `EpubProject`（manuscript-to-EPUB 経路。`addAsset`・`addImage`・`setCover` で `data` の代わりに `url` を渡す）にも適用されます。`<MejiroEditor>` と `useEditableEpub` は `editor.addImage({ filename, url })`、`useEpubProject` は自身の `setCover` / `setAssets` で URL だけのアセットを登録できます。いずれも `assetResolver` をプロップ・オプションとして受け取り、内部の `editor.export()` / `project.export()` 呼び出しへ渡すため、URL の解決は EPUB 組み立て時にだけ走ります。
 
 ```ts
 const project = useEpubProject({
   assetResolver: async ({ url, signal }) => (await fetch(url, { signal })).arrayBuffer(),
 });
 
-project.setCover({ href: 'OPS/Images/cover.jpg', url: 'https://cdn.example.com/works/1/cover.jpg' });
-const buffer = await project.exportEpub(); // ここで初めてカバー画像を取得
+project.setCover({ url: 'https://cdn.example.com/works/1/cover.jpg', mediaType: 'image/jpeg' });
+const bytes = await project.exportEpub(); // ここで初めてカバー画像を取得
 ```
 
-両方の経路が 1 つのリゾルバを共有するため、`request.asset` は `AssetResolverAsset`（`EditableImageAsset | EpubProjectAsset` の共用体）です。リゾルバが通常読むフィールド（`url` / `mediaType` / `data`）は双方に共通なので、多くのリゾルバでは絞り込みが要りません。異なるのは名前系のフィールドと `assetKey` の意味で、エディタ経路では章の `imageAssets` マップのキー、プロジェクト経路では ZIP の href になります。経路を区別したい場合は `in` で絞り込みます。
+1 つのリゾルバで両方の経路をまかなえます。`AssetResolverRequest` が持つのは、`url`、`href`（書き出した EPUB 内でバイト列を書き込む ZIP パス。どちらの経路でも同じ意味）、資産が宣言していれば `mediaType`、書き出しの `signal` です:
 
 ```ts
-const resolver: AssetResolver = async ({ assetKey, asset, url, signal }) => {
-  const label = 'filename' in asset ? asset.filename : asset.href;
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`asset fetch failed: ${label} (${assetKey}) ${res.status}`);
-  return res.arrayBuffer();
+const resolver: AssetResolver = async ({ href, url, mediaType, signal }) => {
+  const res = await fetch(url, { signal, headers: mediaType ? { Accept: mediaType } : {} });
+  if (!res.ok) throw new Error(`asset fetch failed: ${href} ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
 };
 ```
 
 注意点:
 
-- `data` と `url` の両方が登録されている場合、`data` を優先し `url` は無視されます。
-- どちらも未登録のアセットを書き出そうとすると ``Image asset "<assetKey>" has neither `data` nor `url` `` のエラーが投げられます（呼び出し側のバグ検知）。`<assetKey>` はそのアセットの `assetKey` です。
+- 資産が持つのは `data` か `url` のどちらか一方です。入力の型は両方を同時に持てない共用体になっています。どちらも持たない画像・表紙・資産を追加すると `TypeError` を投げます。
+- 既定の `fetch` は失敗のステータスを `MejiroError` `asset-fetch-failed` として報告します。独自のリゾルバが投げた例外は、そのまま書き出しを reject させます。
 - `assetResolver` には export と同じ `AbortSignal` がそのまま渡るため、長時間 fetch を停止可能です。
 
 ### 7.5 サイト横断検索
 
-`ChapterLayout.findText()` は **現在の章 1 つだけ** を検索対象とします。「作品横断 / 作者横断 / 全文検索」を実装する場合は、サーバ側で別エンジン（Meilisearch / Elasticsearch / PostgreSQL `pg_trgm` / SQLite FTS5 など）にインデックスを保持し、ヒットを `ReadingAnchor` 形（`{ chapter, paragraph, charIndex }`）に解決してからリーダーへ渡してください。MySQL を主 DB に採用している場合は、binlog レプリケーションでインメモリ n-gram 索引を同期する [MygramDB](https://github.com/libraz/mygram-db) を間に挟むと、CJK 全文検索をサブミリ秒に抑えつつ MySQL を権威データとして残せます。
+`ChapterLayout.findText()` は **現在の章 1 つだけ** を検索対象とします。「作品横断 / 作者横断 / 全文検索」を実装する場合は、サーバ側で別エンジン（Meilisearch / Elasticsearch / PostgreSQL `pg_trgm` / SQLite FTS5 など）にインデックスを保持し、ヒットを `ReadingAnchor` 形（`{ chapterIndex, paragraphIndex, charIndex }`）に解決してからリーダーへ渡してください。MySQL を主 DB に採用している場合は、binlog レプリケーションでインメモリ n-gram 索引を同期する [MygramDB](https://github.com/libraz/mygram-db) を間に挟むと、CJK 全文検索をサブミリ秒に抑えつつ MySQL を権威データとして残せます。
 
 ```ts
 // 検索 API → ReadingAnchor を返す
@@ -677,7 +664,7 @@ const reader = useRef<MejiroReaderHandle>(null);
 reader.current?.goToAnchor(hits[0].anchor);
 ```
 
-インデックス化のソースは「`EpubProjectChapterDraft.body`（パイプルビ等の記法込み）」または「`parseEpub()` で抽出済みの段落テキスト」のどちらかを採用すると、`charIndex` の整合性が取りやすくなります。
+インデックス化のソースは「`ManuscriptChapter.body`（パイプルビ等の記法込み）」または「`parseEpub()` で抽出済みの段落テキスト」のどちらかを採用すると、`charIndex` の整合性が取りやすくなります。
 
 ### 7.6 スコープ外の領域（mejiro が扱わないもの）
 

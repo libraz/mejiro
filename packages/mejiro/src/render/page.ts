@@ -1,6 +1,6 @@
-import type { InlineAnnotation } from '../browser/types.js';
 import type { PageSlice } from '../paginate.js';
 import { getLineRanges } from '../paginate.js';
+import type { InlineAnnotation } from '../types.js';
 import { sanitizeUrl } from '../url.js';
 import { buildInlineNodes, type InlineNode, inlineNodeContent } from './inline-tree.js';
 import { paragraphHeading } from './measures.js';
@@ -22,7 +22,7 @@ import type { RenderEntry, RenderLine, RenderPage, RenderSegment } from './types
  * @returns Array of render segments for the line.
  */
 function buildLineSegments(
-  chars: string[],
+  chars: readonly string[],
   annotations: readonly InlineAnnotation[],
   lineStart: number,
   lineEnd: number,
@@ -40,7 +40,7 @@ function nodeToSegments(node: InlineNode): RenderSegment[] {
     case 'text':
       return [{ type: 'text', text: node.text.replaceAll('\n', '') }];
     case 'ruby':
-      return [{ type: 'ruby', base: node.base, rubyText: node.rubyText, children: children(node) }];
+      return [{ type: 'ruby', text: node.text, rubyText: node.rubyText, children: children(node) }];
     case 'emphasis':
       return [{ type: 'emphasis', text: node.text, style: node.style, children: children(node) }];
     case 'tcy':
@@ -87,7 +87,10 @@ function children(node: Exclude<InlineNode, { type: 'text' }>): RenderSegment[] 
  * @param entries - Render entries for all paragraphs in the chapter.
  * @returns A `RenderPage` data structure for the page.
  */
-export function buildRenderPage(slices: PageSlice[], entries: RenderEntry[]): RenderPage {
+export function buildRenderPage(
+  slices: readonly PageSlice[],
+  entries: readonly RenderEntry[],
+): RenderPage {
   const paragraphs = slices.map((slice) => {
     const entry = entries[slice.paragraphIndex];
     const lineRanges = getLineRanges(entry.breakPoints, entry.chars.length);

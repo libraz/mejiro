@@ -12,7 +12,7 @@ const result = computeBreaks({
   text: toCodepoints('あいう「えお'),
   advances: new Float32Array(6).fill(16),
   lineWidth: 48,
-  kinsokuRules: rules,
+  kinsoku: rules,
 });
 
 // #endregion doc:custom-rules

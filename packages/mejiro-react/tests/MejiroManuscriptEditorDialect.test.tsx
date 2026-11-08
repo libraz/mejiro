@@ -24,8 +24,8 @@ import { MejiroManuscriptEditor } from '../src/MejiroManuscriptEditor.js';
 const chapters = [{ id: 'c1', title: 'Chapter', body: '**強調**' }];
 
 async function exportChapterXhtml(dialect: ManuscriptDialect | undefined): Promise<string> {
-  let resolveBuffer: (buffer: ArrayBuffer) => void = () => {};
-  const exported = new Promise<ArrayBuffer>((resolve) => {
+  let resolveBuffer: (bytes: Uint8Array) => void = () => {};
+  const exported = new Promise<Uint8Array>((resolve) => {
     resolveBuffer = resolve;
   });
   const { container } = render(

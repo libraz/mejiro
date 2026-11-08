@@ -7,12 +7,12 @@ export default function App() {
   // Common patterns:
   //   <MejiroReader epubUrl="/book.epub" />               // open a URL (this example)
   //   <MejiroReader epub={parsedBook} />                  // pre-parsed EPUB
-  //   <MejiroReader epubUrl="/book.epub" bare />          // bare spread
+  //   <MejiroReader epubUrl="/book.epub" />               // no title: no header (bare spread)
   //   <MejiroReader logo={<img src="/logo.svg" />} />     // swap the logo
   //   <MejiroReader enableDropZone />                     // let users drop their own EPUB
   //
   // SaaS-style defaults: drop zone + image overlay are off; the host decides
-  // which EPUB to deliver. Flip `enableDropZone` / `enableImageOverlay` when
+  // which EPUB to deliver. Flip `enableDropZone` / `showImageOverlayButton` when
   // you want a free-form viewer.
   //
   // v0.5 additions worth trying:
@@ -22,5 +22,5 @@ export default function App() {
   //   locale="ja"                                         // 'en' (default) | 'ja'
   //   fetchOptions={{ headers: { Authorization: '…' } }}  // authenticated EPUB fetch
   //   fallback={<p>Loading…</p>}                          // shown until client layout is ready
-  return <MejiroReader epubUrl="/neko.epub" subtitle="React Example" />;
+  return <MejiroReader epubUrl="/neko.epub" title="mejiro" subtitle="React Example" />;
 }

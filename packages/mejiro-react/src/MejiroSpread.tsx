@@ -1,40 +1,68 @@
 import type { PageHeaderData } from '@libraz/mejiro';
-import type { AnchorRange, AnchorRect, InChapterAnchor, SpreadResult } from '@libraz/mejiro/book';
+import type {
+  AnchorRange,
+  AnchorRect,
+  ChapterLayout,
+  InChapterAnchor,
+  SpreadPoint,
+  SpreadResult,
+} from '@libraz/mejiro/book';
 import {
   type FontFamily,
   isPrimaryPointerPress,
   normalizeFontFamily,
 } from '@libraz/mejiro/browser';
 import {
+  type ComponentPropsWithoutRef,
   type CSSProperties,
+  forwardRef,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
   useRef,
 } from 'react';
 import { useI18n } from './i18n.js';
-import { MejiroImageOverlay } from './MejiroImageOverlay.js';
+import { MejiroImagePlaceholder } from './MejiroImagePlaceholder.js';
 import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
-import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js';
+import type { Annotation } from './useAnnotations.js';
+import { type MultiImageItem, overlayPageSide } from './useImageOverlay.js';
+import type { ResolvedSpreadMode } from './useSpread.js';
 
 export type { PageHeaderData };
 
-/** Props for {@link MejiroSpread}. */
-export interface MejiroSpreadProps {
+/**
+ * A selection rectangle from `ChapterLayout.selectionRects`, optionally
+ * carrying its own CSS fill colour.
+ */
+export type SelectionRect = AnchorRect & {
+  /** CSS colour filling this rectangle; the stylesheet's selection fill when absent. */
+  color?: string;
+};
+
+/** The part of an {@link Annotation} a reader needs to draw it as a highlight. */
+export type ReaderAnnotation = Pick<Annotation, 'chapterIndex' | 'start' | 'end' | 'color'>;
+
+/** Props for {@link MejiroSpread}; other `div` attributes go to the root element. */
+export interface MejiroSpreadProps extends ComponentPropsWithoutRef<'div'> {
   /** Spread data to render. */
   spread: SpreadResult;
-  /** Page width (px). */
-  pageWidth: number;
-  /** Page height (px). */
-  pageHeight: number;
-  /** Content area height (px). */
-  contentHeight: number;
-  /** CSS font family applied to the content. */
+  /**
+   * Layout the spread comes from. When given, its `geometry` and `typography`
+   * supply every page-size and font prop left unset.
+   */
+  layout?: ChapterLayout;
+  /** Page width (px). Defaults to `layout.geometry.pageWidth`. */
+  pageWidth?: number;
+  /** Page height (px). Defaults to `layout.geometry.pageHeight`. */
+  pageHeight?: number;
+  /** Content area height (px). Defaults to `layout.geometry.contentHeight`. */
+  contentHeight?: number;
+  /** CSS font family applied to the content. Defaults to `layout.typography.fontFamily`. */
   fontFamily?: FontFamily;
-  /** Font size override (px). */
+  /** Font size (px). Defaults to `layout.typography.fontSize`. */
   fontSize?: number;
-  /** Line spacing multiplier (slot mode). */
+  /** Line spacing multiplier. Defaults to `layout.typography.lineSpacing`. */
   lineSpacing?: number;
   /** Animate the page turn. */
   turning?: boolean;
@@ -43,11 +71,10 @@ export interface MejiroSpreadProps {
   /** Header data for the left page. */
   leftHeader?: PageHeaderData;
   /**
-   * Image overlays on the current spread, relative to the right page. With
-   * {@link MejiroSpreadProps.singlePage}, only those whose centre lies on the
-   * page shown are drawn.
+   * Image overlays on the current spread, relative to the right page. In
+   * single spread mode, only those whose centre lies on the page shown are drawn.
    */
-  images?: MultiImageItem[];
+  images?: readonly MultiImageItem[];
   /**
    * Force slot-mode rendering on both pages. When omitted, each page falls
    * through to {@link MejiroPageView}'s automatic choice: slot mode for pages
@@ -69,42 +96,44 @@ export interface MejiroSpreadProps {
   /** Image overlay close button. */
   onImageClose?: (id: string) => void;
   /**
-   * Resolves a spread-local pixel coordinate to an in-chapter anchor.
-   * Typically `(x, y) => layout.anchorAtCoord(spreadIdx, x, y)`. When provided
+   * Resolves a spread-local point to an in-chapter anchor.
+   * Typically `(point) => layout.anchorAtCoord(spreadIndex, point)`. When provided
    * together with {@link MejiroSpreadProps.onSelectionChange}, the spread
    * enables pointer-drag selection on the page content area.
    */
-  anchorAtCoord?: (x: number, y: number) => InChapterAnchor | null;
+  anchorAtCoord?: (point: SpreadPoint) => InChapterAnchor | null;
   /**
    * Zero-based index of the spread being rendered. Rectangles passed through
    * {@link MejiroSpreadProps.selectionRects} carry spread-local coordinates,
    * so this is what scopes them to this spread. When omitted, every supplied
    * rectangle is painted.
    */
-  spreadIdx?: number;
+  spreadIndex?: number;
   /**
    * Selection rectangles to render as a highlight overlay. Compute via
-   * {@link ChapterLayout.selectionRects}. Entries whose `spreadIdx` differs
-   * from {@link MejiroSpreadProps.spreadIdx} are ignored. An entry may carry
+   * {@link ChapterLayout.selectionRects}. Entries whose `spreadIndex` differs
+   * from {@link MejiroSpreadProps.spreadIndex} are ignored. An entry may carry
    * a `color` that becomes that rectangle's fill.
    */
-  selectionRects?: readonly (AnchorRect & { color?: string })[];
+  selectionRects?: readonly SelectionRect[];
   /**
    * Called when the user drags-selects text on the spread.
    * Called with `null` on a single-click (caret) where start equals end.
    */
   onSelectionChange?: (range: AnchorRange | null) => void;
   /**
-   * Render only one page of the spread (centered), chosen by
-   * {@link MejiroSpreadProps.singleSide}. Use this for portrait viewports or
-   * when a reader explicitly opts into single-page mode.
+   * `'single'` renders one page of the spread (centered), chosen by
+   * {@link MejiroSpreadProps.singleSide}; `'double'` renders both. Use
+   * `'single'` for portrait viewports or when a reader opts into single-page
+   * mode. @defaultValue 'double'
    */
-  singlePage?: boolean;
+  spreadMode?: ResolvedSpreadMode;
   /**
-   * Page of the spread shown when {@link MejiroSpreadProps.singlePage} is set
-   * (`useSpread` reports it as `singleSide`). @defaultValue 'right'
+   * Page of the spread shown in single spread mode, as `useSpread` reports it
+   * in `singleSide`; `null` (what `useSpread` reports in double mode) shows the
+   * right page. @defaultValue 'right'
    */
-  singleSide?: 'right' | 'left';
+  singleSide?: 'right' | 'left' | null;
   /**
    * Called when the user makes a quick swipe gesture on the spread.
    * `direction === 'next'` means the user swiped from right to left (the
@@ -139,40 +168,56 @@ function defaultHeader(data: PageHeaderData): ReactNode {
 }
 
 /**
- * Renders a two-page spread (or one page of it in single-page mode) with the
+ * Renders a two-page spread (or one page of it in single spread mode) with the
  * book frame, page chrome, navigation zones, and image overlays. Used inside
  * `mejiro-reader-surface`.
  */
-export function MejiroSpread({
-  spread,
-  pageWidth,
-  pageHeight,
-  contentHeight,
-  fontFamily,
-  fontSize,
-  lineSpacing,
-  turning = false,
-  rightHeader = {},
-  leftHeader = {},
-  images = [],
-  slotMode,
-  renderPageHeader,
-  indicator,
-  onPrev,
-  onNext,
-  onImagePointerDown,
-  onImageResizePointerDown,
-  onImageClose,
-  anchorAtCoord,
-  spreadIdx,
-  selectionRects,
-  onSelectionChange,
-  singlePage = false,
-  singleSide = 'right',
-  onSwipe,
-  onSurfaceTap,
-}: MejiroSpreadProps): ReactNode {
+export const MejiroSpread = forwardRef<HTMLDivElement, MejiroSpreadProps>(function MejiroSpread(
+  {
+    spread,
+    layout,
+    pageWidth: pageWidthProp,
+    pageHeight: pageHeightProp,
+    contentHeight: contentHeightProp,
+    fontFamily: fontFamilyProp,
+    fontSize: fontSizeProp,
+    lineSpacing: lineSpacingProp,
+    turning = false,
+    rightHeader = {},
+    leftHeader = {},
+    images = [],
+    slotMode,
+    renderPageHeader,
+    indicator,
+    onPrev,
+    onNext,
+    onImagePointerDown,
+    onImageResizePointerDown,
+    onImageClose,
+    anchorAtCoord,
+    spreadIndex,
+    selectionRects,
+    onSelectionChange,
+    spreadMode = 'double',
+    singleSide: singleSideProp,
+    onSwipe,
+    onSurfaceTap,
+    className,
+    ...rest
+  },
+  ref,
+): ReactNode {
   const messages = useI18n();
+  const geometry = layout?.geometry;
+  const typography = layout?.typography;
+  const pageWidth = pageWidthProp ?? geometry?.pageWidth;
+  const pageHeight = pageHeightProp ?? geometry?.pageHeight;
+  const contentHeight = contentHeightProp ?? geometry?.contentHeight;
+  const fontFamily = fontFamilyProp ?? typography?.fontFamily;
+  const fontSize = fontSizeProp ?? typography?.fontSize;
+  const lineSpacing = lineSpacingProp ?? typography?.lineSpacing;
+  const singlePage = spreadMode === 'single';
+  const singleSide = singleSideProp ?? 'right';
   const selectionRef = useRef<{ start: InChapterAnchor; pointerId: number } | null>(null);
   const selectionEnabled = anchorAtCoord != null && onSelectionChange != null;
   const gestureRef = useRef<{ x: number; y: number; t: number } | null>(null);
@@ -234,7 +279,7 @@ export function MejiroSpread({
     const offsetX = e.clientX - rect.left;
     const offsetY = e.clientY - rect.top;
     const spreadX = isRight ? offsetX : offsetX - rect.width;
-    return anchorAtCoord(spreadX, offsetY);
+    return anchorAtCoord({ x: spreadX, y: offsetY });
   }
 
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>): void {
@@ -255,7 +300,7 @@ export function MejiroSpread({
     const end = resolvePointer(e);
     if (!end) return;
     const { start } = session;
-    if (end.paragraph === start.paragraph && end.charIndex === start.charIndex) return;
+    if (end.paragraphIndex === start.paragraphIndex && end.charIndex === start.charIndex) return;
     onSelectionChange?.({ start, end });
   }
 
@@ -277,8 +322,8 @@ export function MejiroSpread({
   // Selection rectangles are spread-local, so painting an entry that belongs
   // to another spread would place it over unrelated text.
   const visibleRects =
-    selectionRects && spreadIdx != null
-      ? selectionRects.filter((r) => r.spreadIdx === spreadIdx)
+    selectionRects && spreadIndex != null
+      ? selectionRects.filter((r) => r.spreadIndex === spreadIndex)
       : selectionRects;
 
   // Image rects are relative to the right page, so both pages' overlays hang off
@@ -327,9 +372,9 @@ export function MejiroSpread({
         </div>
         {hostsImages &&
           hostedImages.map((item) => (
-            <MejiroImageOverlay
+            <MejiroImagePlaceholder
               key={item.id}
-              rect={isRight ? item.rect : { ...item.rect, x: item.rect.x + pageWidth }}
+              rect={isRight ? item.rect : { ...item.rect, x: item.rect.x + (pageWidth ?? 0) }}
               onOverlayPointerDown={(e) => onImagePointerDown?.(item.id, e)}
               onResizePointerDown={(e) => onImageResizePointerDown?.(item.id, e)}
               onClose={() => onImageClose?.(item.id)}
@@ -356,7 +401,11 @@ export function MejiroSpread({
   const useCombined = selectionEnabled || gestureEnabled;
 
   return (
-    <div className="mejiro-reader-book">
+    <div
+      {...rest}
+      ref={ref}
+      className={className ? `mejiro-reader-book ${className}` : 'mejiro-reader-book'}
+    >
       <div
         className={`mejiro-reader-spread${turning ? ' is-turning' : ''}${singlePage ? ' mejiro-reader-spread--single' : ''}`}
         onPointerDown={useCombined ? combinedPointerDown : undefined}
@@ -384,4 +433,4 @@ export function MejiroSpread({
       </div>
     </div>
   );
-}
+});

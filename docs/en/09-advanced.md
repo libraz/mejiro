@@ -15,25 +15,20 @@ Use `getDefaultKinsokuRules()` to get a copy of the built-in strict rules, then 
 <!-- doc-example: 09-kinsoku.ts#kinsoku -->
 ```ts
 import {
-  buildKinsokuRules,
   computeBreaks,
+  extendKinsokuRules,
   getDefaultKinsokuRules,
   toCodepoints,
 } from '@libraz/mejiro';
 
-// Get defaults and customize
-const defaults = getDefaultKinsokuRules();
-const rules = buildKinsokuRules({
-  lineStartProhibited: [...defaults.lineStartProhibited, 0xff05], // Add ％
-  lineEndProhibited: defaults.lineEndProhibited,
-  unbreakablePairs: defaults.unbreakablePairs, // Keep ‥‥ …… —— ―― together
-});
+// The default rules, with ％ also kept off the start of a line
+const rules = extendKinsokuRules(getDefaultKinsokuRules(), { lineStartProhibited: [0xff05] });
 
 const result = computeBreaks({
   text: toCodepoints('ただいま５％引きです。'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
-  kinsokuRules: rules,
+  kinsoku: rules,
 });
 // result.breakPoints → [3, 8]: ５ moves down with ％ instead of leaving ％ at a line start
 ```
@@ -49,7 +44,7 @@ const rules = buildKinsokuRules({
 });
 ```
 
-When `kinsokuRules` is provided to `computeBreaks()`, it **replaces** the built-in rules entirely. The `mode` option (`'strict'` / `'loose'`) is ignored when custom rules are active.
+Custom rules passed as `kinsoku` **replace** the built-in rules entirely; `kinsoku` takes either a mode (`'strict'` / `'loose'`) or rules, never both.
 
 ### KinsokuRules Structure
 
@@ -153,14 +148,14 @@ yarn bench  # Runs benchmarks
 ### Tips
 
 - **Reuse a single `MejiroBrowser` instance** across layouts to benefit from the width cache.
-- **Use `layoutChapter()`** when you need each paragraph's characters alongside its breaks. It lays the paragraphs out one at a time, as a `layout()` loop on the same instance would, and shares nothing beyond the instance's width cache; what it adds is `chars` in the NFC form the break points and annotations address, and per-paragraph font overrides.
+- **Use `layoutParagraphs()`** when you need each paragraph's characters alongside its breaks. It lays the paragraphs out one at a time, as a `layout()` loop on the same instance would, and shares nothing beyond the instance's width cache; what it adds is `chars` in the NFC form the break points and annotations address, and per-paragraph font overrides.
 - **Pre-measure fonts with `preloadFont()`** before the first layout to improve perceived performance:
 
 <!-- doc-example: 09-preload.ts#preload -->
 ```ts
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
 });
 
 // Preload during app initialization
@@ -205,22 +200,23 @@ The `RenderPage` data structure is framework-agnostic. You can render it to any 
 
 ```ts
 interface RenderPage {
-  paragraphs: RenderParagraph[];
+  readonly paragraphs: readonly RenderParagraph[];
 }
 
 interface RenderParagraph {
-  lines: RenderLine[];
-  isHeading: boolean;
-  headingLevel?: number;
+  readonly lines: readonly RenderLine[];
+  readonly headingLevel?: HeadingLevel;
+  readonly kind?: ParagraphKind;
+  readonly scale?: number;
 }
 
 interface RenderLine {
-  segments: RenderSegment[];
+  readonly segments: readonly RenderSegment[];
 }
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | { type: 'ruby'; text: string; rubyText: string; children?: readonly RenderSegment[] }
   | {
       type: 'emphasis';
       text: string;
@@ -234,18 +230,7 @@ type RenderSegment =
   | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
 
-`ruby` carries its base under `base`; the other seven variants carry theirs under `text`.
-Both hold the flattened text of the whole span, so a renderer that only draws characters
-can ignore `children` (nested annotations) entirely:
-
-```ts
-import type { RenderSegment } from '@libraz/mejiro/render';
-
-/** Flattened text of any segment variant. */
-function segmentText(segment: RenderSegment): string {
-  return segment.type === 'ruby' ? segment.base : segment.text;
-}
-```
+Every variant carries the flattened text of its whole span under `text` (the base text, for `ruby`), and `children` covers the same range with the nested annotations. Draw one of the two, never both. A renderer that only draws characters reads `segment.text` and ignores `children`.
 
 For DOM output, use `segmentToInlineNode()` instead — see
 [Pagination & Rendering](07-pagination-and-rendering.md).
@@ -262,7 +247,7 @@ function renderToCanvas(ctx: CanvasRenderingContext2D, page: RenderPage): void {
       x -= lineHeight;
       let y = 0;
       for (const segment of line.segments) {
-        for (const char of segmentText(segment)) {
+        for (const char of segment.text) {
           ctx.fillText(char, x, y + 16);
           y += 16;
         }
@@ -282,7 +267,7 @@ function renderToString(page: RenderPage): string {
       p.lines
         .map((l) =>
           l.segments
-            .map((s) => (s.type === 'ruby' ? `${s.base}(${s.rubyText})` : s.text))
+            .map((s) => (s.type === 'ruby' ? `${s.text}(${s.rubyText})` : s.text))
             .join('')
         )
         .join('\n')
@@ -311,8 +296,8 @@ const engine = new ExclusionEngine({
 });
 
 // Add images (content-area coordinates)
-engine.addImage({ x: 100, y: 50, w: 120, h: 160 });
-engine.addImage({ x: 50, y: 300, w: 80, h: 100 });
+engine.addImage({ x: 100, y: 50, width: 120, height: 160 });
+engine.addImage({ x: 50, y: 300, width: 80, height: 100 });
 
 // Compute column slots and line widths
 const { slots, lineWidths } = engine.compute();
@@ -346,8 +331,8 @@ Because a column may yield several slots or none, `slots.length` is unrelated to
 In `writing-mode: vertical-rl`:
 - **Block direction** = horizontal (columns flow right-to-left)
 - **Inline direction** = vertical (text flows top-to-bottom)
-- `ImageRect.x` / `.w` correspond to the block axis
-- `ImageRect.y` / `.h` correspond to the inline axis
+- `ImageRect.x` / `.width` correspond to the block axis
+- `ImageRect.y` / `.height` correspond to the inline axis
 - Coordinates are relative to the **content area** origin (after padding)
 
 ### Dynamic Updates
@@ -356,7 +341,7 @@ In `writing-mode: vertical-rl`:
 
 ```ts
 const engine = new ExclusionEngine(geometry);
-const img = { x: 100, y: 50, w: 120, h: 160 };
+const img = { x: 100, y: 50, width: 120, height: 160 };
 engine.addImage(img);
 
 // On drag: update coordinates and recompute
@@ -382,31 +367,31 @@ import { computeBreaks, SpreadExclusionEngine } from '@libraz/mejiro';
 
 const spread = new SpreadExclusionEngine({
   pageWidth: 537,
-  pagePaddingX: 52, // Inner + outer padding
-  pagePaddingY: 56,
+  paddingX: 52, // Inner + outer padding
+  paddingY: 56,
   lineWidth: 676,
   linePitch: 30.4,
 });
 
 // Images are positioned relative to the right page's top-left corner.
 // Negative x values automatically map to the left page with gutter offset.
-spread.addImage({ x: 200, y: 100, w: 120, h: 160, inlineMargin: 16 });
-spread.addImage({ x: -100, y: 300, w: 80, h: 100 }); // left page
+spread.addImage({ x: 200, y: 100, width: 120, height: 160, inlineMargin: 16 });
+spread.addImage({ x: -100, y: 300, width: 80, height: 100 }); // left page
 
-const { rightSlots, leftSlots, lineWidths, rightSlotCount } = spread.compute();
+const { rightSlots, leftSlots, lineWidths } = spread.compute();
 
 // One computeBreaks call for the entire spread
 const result = computeBreaks({ text, advances, lineWidth: 676, lineWidths });
 
 // Split lines for rendering:
-// Lines 0..rightSlotCount-1 → render on right page using rightSlots
-// Lines rightSlotCount..     → render on left page using leftSlots
+// Lines 0..rightSlots.length-1 → render on right page using rightSlots
+// Lines rightSlots.length..     → render on left page using leftSlots
 ```
 
 Key differences from `ExclusionEngine`:
 - **Automatic gutter handling** — No manual coordinate conversion needed
 - **Continuous text flow** — Single `lineWidths` array spans both pages
-- **Split rendering** — `rightSlotCount` tells you where to split lines between pages
+- **Split rendering** — the first `rightSlots.length` lines go on the right page, the rest on the left
 
 ### One-Shot Convenience Function
 
@@ -421,7 +406,7 @@ const { slots, lineWidths } = computeExclusionSlots({
   linePitch: 30.4,
   contentWidth: 380,
   images: [
-    { x: 100, y: 50, w: 120, h: 160 },
+    { x: 100, y: 50, width: 120, height: 160 },
   ],
 });
 ```
@@ -494,7 +479,7 @@ The least surprising DB schema is to dump `EpubProjectMetadata` (`title`, `creat
 "Pass the URL" is the shortest path. When the server stores EPUBs as files, hand the URL via `epubUrl`. When metadata comes from a separate API and the EPUB is streamed, parse it first and pass the resulting `EpubBook` via `epub`.
 
 ```tsx
-<MejiroReader epubUrl={`/api/works/${slug}/epub`} bare enableChapterNav enableSettings />
+<MejiroReader epubUrl={`/api/works/${slug}/epub`} title={work.title} />
 ```
 
 #### 7.2.1 Authenticated EPUB delivery
@@ -540,10 +525,10 @@ import { ReaderClient } from './ReaderClient';
 export default async function ReaderPage({ params }: { params: { slug: string } }) {
   // fetchEpubBuffer() stands for however your server loads the EPUB bytes.
   const buf = await fetchEpubBuffer(params.slug);
-  const book = await parseEpub(buf);
+  const epub = await parseEpub(buf);
   // renderEpubStatic() output is built from parseEpub() results with text and
   // attributes escaped, and link hrefs restricted to safe URL schemes.
-  const initialHtml = renderEpubStatic(book.chapters[0], { ariaLabel: book.title });
+  const initialHtml = renderEpubStatic(epub.chapters[0], { ariaLabel: epub.title });
   return <ReaderClient slug={params.slug} initialHtml={initialHtml} />;
 }
 ```
@@ -581,10 +566,10 @@ export function ReaderClient({ slug, initialHtml }: Props) {
 
 ### 7.3 Persisting the reading position to a server
 
-`useReadingPosition` only needs a `localStorage`-shaped backend (`getItem` / `setItem` / `removeItem`), so wrapping a server endpoint is straightforward. The value stored is a `ReadingAnchor` (`{ chapter, paragraph, charIndex }`) as JSON, which survives font-size and viewport changes that would otherwise invalidate spread indices.
+`useReadingPosition` only needs a `localStorage`-shaped backend (`getItem` / `setItem` / `removeItem`), so wrapping a server endpoint is straightforward. The value stored is a `ReadingAnchor` (`{ chapterIndex, paragraphIndex, charIndex }`) as versioned JSON, which survives font-size and viewport changes that would otherwise invalidate spread indices.
 
 ```ts
-const remoteStorage: ReadingPositionStorage = {
+const remoteStorage: MejiroStorage = {
   getItem(k) {
     return cachedSnapshot[k] ?? null; // Prefetched at startup
   },
@@ -605,11 +590,12 @@ const remoteStorage: ReadingPositionStorage = {
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${userId}:${bookId}`,
   storage: remoteStorage,
-  throttleMs: 1000,
+  debounceMs: 1000,
+  onError: (error) => reportToMonitoring(error),
 });
 ```
 
-`throttleMs` is a debounce delay: `storage.setItem` receives the latest value this long after the last `save()`, and a pending write is flushed on page hide, `key` change and unmount.
+`debounceMs` is a debounce delay: `storage.setItem` receives the latest value this long after the last `save()`, and a pending write is flushed on page hide, `key` change and unmount. A storage that throws is reported to `onError` as `storage-read-failed` / `storage-write-failed`; without `onError` the hook writes it to `console.warn`.
 
 For multi-device sync, prefer to compare against the server's latest `updatedAt` inside `storage.setItem` so the conflict logic stays self-contained.
 
@@ -625,56 +611,50 @@ editor.addImage(0, {
 });
 
 // Bytes are fetched only when the EPUB is being assembled.
-const buffer = await editor.export({
-  assetResolver: async ({ assetKey, asset, url, signal }) => {
+const bytes = await editor.export({
+  assetResolver: async ({ href, url, signal }) => {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
       signal,
     });
-    if (!res.ok) throw new Error(`asset fetch failed: ${assetKey} (${res.status})`);
-    return res.arrayBuffer();
+    if (!res.ok) throw new Error(`asset fetch failed: ${href} (${res.status})`);
+    return new Uint8Array(await res.arrayBuffer());
   },
 });
 ```
 
 Omit `assetResolver` and mejiro falls back to the runtime `fetch(url, { signal })`. Write an explicit wrapper when you need to mint S3 signed URLs per request, hit an IndexedDB cache offline, or attach custom headers.
 
-The same wiring exists on the manuscript-to-EPUB path: `EpubProject` accepts `{ href, url }` via `addAsset` / `setCover`. `<MejiroEditor>` and `useEditableEpub` register URL-only images through `editor.addImage({ filename, url })`; `useEpubProject` registers them through its own `setCover` / `setAssets`. All three surface `assetResolver` as a prop / option and forward it to the internal `editor.export()` / `project.export()` call, so the URLs are resolved only while the EPUB is assembled.
+The same wiring exists on the manuscript-to-EPUB path: `EpubProject` accepts a `url` in place of `data` in `addAsset`, `addImage` and `setCover`. `<MejiroEditor>` and `useEditableEpub` register URL-only images through `editor.addImage({ filename, url })`; `useEpubProject` registers them through its own `setCover` / `setAssets`. All three surface `assetResolver` as a prop / option and forward it to the internal `editor.export()` / `project.export()` call, so the URLs are resolved only while the EPUB is assembled.
 
 ```ts
 const project = useEpubProject({
   assetResolver: async ({ url, signal }) => (await fetch(url, { signal })).arrayBuffer(),
 });
 
-project.setCover({ href: 'OPS/Images/cover.jpg', url: 'https://cdn.example.com/works/1/cover.jpg' });
-const buffer = await project.exportEpub(); // cover bytes fetched here
+project.setCover({ url: 'https://cdn.example.com/works/1/cover.jpg', mediaType: 'image/jpeg' });
+const bytes = await project.exportEpub(); // cover bytes fetched here
 ```
 
-Because both paths share one resolver, `request.asset` is `AssetResolverAsset` — an
-`EditableImageAsset | EpubProjectAsset` union. The fields a resolver normally reads (`url`,
-`mediaType`, `data`) are common to both, so most resolvers never narrow. The naming fields
-differ, and so does the meaning of `assetKey`: on the editor path it is the key inside the
-chapter's `imageAssets` map, on the project path it is the ZIP href. Narrow with an `in`
-check when the source path matters:
+One resolver serves both paths. Its `AssetResolverRequest` carries `url`, `href` — the ZIP path the bytes are written to in the exported EPUB, the same on both paths — `mediaType` when the asset declares one, and the export's `signal`:
 
 ```ts
-const resolver: AssetResolver = async ({ assetKey, asset, url, signal }) => {
-  const label = 'filename' in asset ? asset.filename : asset.href;
-  const res = await fetch(url, { signal });
-  if (!res.ok) throw new Error(`asset fetch failed: ${label} (${assetKey}) ${res.status}`);
-  return res.arrayBuffer();
+const resolver: AssetResolver = async ({ href, url, mediaType, signal }) => {
+  const res = await fetch(url, { signal, headers: mediaType ? { Accept: mediaType } : {} });
+  if (!res.ok) throw new Error(`asset fetch failed: ${href} ${res.status}`);
+  return new Uint8Array(await res.arrayBuffer());
 };
 ```
 
 Notes:
 
-- If both `data` and `url` are set on an asset, `data` wins and `url` is ignored.
-- Trying to export an asset with neither field set throws ``Image asset "<assetKey>" has neither `data` nor `url` `` (catches missing wiring early), where `<assetKey>` is the asset's `assetKey`.
+- An asset carries `data` or `url`, never both; the input types are unions that reject the pair. Adding an image, cover or asset with neither throws `TypeError`.
+- The default `fetch` reports a failure status as `MejiroError` `asset-fetch-failed`; whatever a custom resolver throws rejects the export as it is.
 - The same export-level `AbortSignal` is forwarded to the resolver, so long-running fetches can be interrupted.
 
 ### 7.5 Cross-work search
 
-`ChapterLayout.findText()` only searches **the current chapter**. To implement work-wide, author-wide, or site-wide full-text search, maintain a separate index on the server (Meilisearch / Elasticsearch / PostgreSQL `pg_trgm` / SQLite FTS5) and convert hits into `ReadingAnchor` form (`{ chapter, paragraph, charIndex }`) before handing them to the reader. If your primary store is MySQL, [MygramDB](https://github.com/libraz/mygram-db) — an in-memory n-gram index that syncs via MySQL binlog replication — keeps MySQL as the source of truth while delivering sub-millisecond CJK full-text search.
+`ChapterLayout.findText()` only searches **the current chapter**. To implement work-wide, author-wide, or site-wide full-text search, maintain a separate index on the server (Meilisearch / Elasticsearch / PostgreSQL `pg_trgm` / SQLite FTS5) and convert hits into `ReadingAnchor` form (`{ chapterIndex, paragraphIndex, charIndex }`) before handing them to the reader. If your primary store is MySQL, [MygramDB](https://github.com/libraz/mygram-db) — an in-memory n-gram index that syncs via MySQL binlog replication — keeps MySQL as the source of truth while delivering sub-millisecond CJK full-text search.
 
 ```ts
 // Search API returns ReadingAnchor hits
@@ -685,7 +665,7 @@ const reader = useRef<MejiroReaderHandle>(null);
 reader.current?.goToAnchor(hits[0].anchor);
 ```
 
-Indexing the same source the reader sees keeps `charIndex` consistent — pick either `EpubProjectChapterDraft.body` (raw manuscript notation) or the paragraph text extracted by `parseEpub()`.
+Indexing the same source the reader sees keeps `charIndex` consistent — pick either `ManuscriptChapter.body` (raw manuscript notation) or the paragraph text extracted by `parseEpub()`.
 
 ### 7.6 Out of scope
 

@@ -22,7 +22,8 @@ function matchesAccept(accept: string, file: File): boolean {
 
 /**
  * Drop zone for EPUB files. Combines a drag-and-drop target with a
- * click-to-open file picker. Emits `file` once a file is selected.
+ * click-to-open file picker. Emits `file` once an acceptable file is
+ * selected, and `reject` for one that is not.
  *
  * The root is a real button, so it is reachable with Tab, announced as a
  * control by screen readers, and opens the picker on Enter / Space.
@@ -38,26 +39,39 @@ export const MejiroDropZone = defineComponent({
       default: '.epub',
     },
     /**
-     * Predicate used to validate dropped files. Defaults to the `accept`
-     * filter, with extensions matched case-insensitively.
+     * Predicate that decides which picked or dropped files are accepted, in
+     * place of the `accept` filter. Without it the `accept` filter decides,
+     * with extensions matched case-insensitively.
      */
     validateFile: {
       type: Function as PropType<(file: File) => boolean>,
     },
   },
   emits: {
-    /** Emitted when a file is dropped or selected via the dialog. */
+    /** Emitted when an acceptable file is dropped or selected via the dialog. */
     file: (file: File) => file instanceof File,
+    /**
+     * Emitted for a dropped or selected file that is not accepted: `'type'`
+     * when it is outside the `accept` filter, `'validation'` when
+     * `validateFile` refused it.
+     */
+    reject: (file: File, _reason: 'type' | 'validation') => file instanceof File,
   },
   setup(props, { emit, slots }) {
     const messages = useI18n();
     const input = ref<HTMLInputElement | null>(null);
     const dragover = ref(false);
 
-    const isValid = (file: File): boolean => {
-      if (props.validateFile) return props.validateFile(file);
-      return matchesAccept(props.accept, file);
-    };
+    function deliver(file: File): void {
+      if (props.validateFile) {
+        if (props.validateFile(file)) emit('file', file);
+        else emit('reject', file, 'validation');
+      } else if (matchesAccept(props.accept, file)) {
+        emit('file', file);
+      } else {
+        emit('reject', file, 'type');
+      }
+    }
 
     function openPicker(): void {
       input.value?.click();
@@ -73,7 +87,7 @@ export const MejiroDropZone = defineComponent({
       const file = target.files?.[0];
       // Cleared so picking the same file again still fires `change`.
       target.value = '';
-      if (file && isValid(file)) emit('file', file);
+      if (file) deliver(file);
     }
     function onDragOver(e: DragEvent): void {
       e.preventDefault();
@@ -86,7 +100,7 @@ export const MejiroDropZone = defineComponent({
       e.preventDefault();
       dragover.value = false;
       const file = e.dataTransfer?.files[0];
-      if (file && isValid(file)) emit('file', file);
+      if (file) deliver(file);
     }
 
     return () =>

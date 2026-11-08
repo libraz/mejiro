@@ -1,11 +1,12 @@
 import JSZip from 'jszip';
+import { MejiroError } from '../errors.js';
 import {
   type ManuscriptDialect,
   type ParseManuscriptOptions,
   parseManuscript,
-  parseManuscriptRuby,
 } from '../manuscript.js';
 import { mergeDefined } from '../merge.js';
+import type { BinaryInput, ManuscriptChapter } from '../types.js';
 import {
   CHAPTER_TITLE_ID,
   chapterTitleCarrierMarkup,
@@ -14,7 +15,8 @@ import {
   figureMarkup,
   inlineContentMarkup,
 } from './chapter-markup.js';
-import { type EpubExportOptions, generateZip, resolveAssetData, throwIfAborted } from './editor.js';
+import { type EpubExportOptions, generateZip, resolveAssetData } from './editor.js';
+import { throwIfAborted } from './limits.js';
 import {
   insertManuscriptParagraph,
   manuscriptParagraphs,
@@ -28,15 +30,11 @@ import {
 } from './package-paths.js';
 
 export type { ManuscriptDialect, ParseManuscriptOptions };
-export { parseManuscript, parseManuscriptRuby };
+export { parseManuscript };
 
 /**
  * EPUB 3 package metadata. Most fields map directly onto `<dc:*>` and
- * `<meta>` entries in `package.opf`.
- *
- * `author` is kept as a convenience shortcut: when present it is folded into
- * `creators[0]` with `role: 'aut'` during export. Prefer `creators` for new
- * code.
+ * `<meta>` entries in `package.opf`. Authors are listed in `creators`.
  */
 export interface EpubProjectMetadata {
   /** Book title. Required. */
@@ -45,9 +43,9 @@ export interface EpubProjectMetadata {
   subtitle?: string;
   /** Long-form description (`<dc:description>`). */
   description?: string;
-  /** BCP-47 language tag (defaults to `'ja'`). */
+  /** BCP-47 language tag. @defaultValue 'ja' */
   language?: string;
-  /** Unique identifier (`<dc:identifier>`). Auto-generated UUID if omitted. */
+  /** Unique identifier (`<dc:identifier>`). Auto-generated UUID if omitted or blank. */
   identifier?: string;
   /** Publisher name (`<dc:publisher>`). */
   publisher?: string;
@@ -61,20 +59,13 @@ export interface EpubProjectMetadata {
    * Primary creators. Folded into `<dc:creator>` entries with optional
    * `opf:role` and `opf:file-as` refinements.
    */
-  creators?: EpubContributor[];
+  creators?: readonly EpubContributor[];
   /** Additional contributors (`<dc:contributor>`). */
-  contributors?: EpubContributor[];
+  contributors?: readonly EpubContributor[];
   /** Subject keywords / tags / genres (`<dc:subject>`). */
-  subjects?: string[];
-  /** calibre series metadata. */
-  series?: { name: string; index?: number };
+  subjects?: readonly string[];
   /** EPUB 3 collection metadata (`<meta property="belongs-to-collection">`). */
-  collections?: EpubCollection[];
-  /**
-   * Legacy single-author shortcut. Mapped to `creators[0]` with role `'aut'`
-   * during export. Prefer `creators` in new code.
-   */
-  author?: string;
+  collections?: readonly EpubCollection[];
 }
 
 /** Person responsible for the work — author, illustrator, translator, etc. */
@@ -100,65 +91,148 @@ export interface EpubCollection {
   index?: number;
 }
 
-/** A chapter authored as manuscript notation, as accepted by {@link EpubProject.addChapter}. */
-export interface ManuscriptChapterInput {
-  /**
-   * Preferred manifest / section id. Sanitized to an XML-safe id and suffixed
-   * when it collides with a reserved or already-used id, so the value stored on
-   * the project may differ from the one passed here. Defaults to
-   * `chapter-<position>`.
-   */
-  id?: string;
-  /** Chapter title. Used for the chapter `<h1>`, its `<title>` and its nav entry. */
-  title: string;
-  /**
-   * Manuscript notation source. Split into paragraphs on blank lines and parsed
-   * with the project's {@link EpubProject.dialect} at export time, so ruby and
-   * the other inline notations become real EPUB markup rather than literal text.
-   */
-  body: string;
-}
+/**
+ * A binary file packaged alongside the chapters — an extra stylesheet, an
+ * inline image, the cover. Carries its bytes in `data` or names a `url` to
+ * fetch them from at export time, never both.
+ *
+ * The copy {@link EpubProject.addAsset} returns and {@link EpubProject.assets}
+ * lists has `id`, `href` and `mediaType` resolved.
+ */
+export type EpubProjectAsset =
+  | {
+      /**
+       * Preferred manifest item id. Sanitized and de-duplicated like the id of
+       * {@link EpubProject.addChapter}; defaults to an id derived from `href`.
+       */
+      id?: string;
+      /**
+       * Destination path inside the EPUB ZIP, relative to the archive root
+       * (e.g. `'OPS/Images/figure.png'`). Must be a clean relative file path:
+       * {@link EpubProject.addAsset} throws a `TypeError` on an absolute path, a
+       * URI scheme, a `..` segment, a `#`/`?`/`\` character or a trailing slash.
+       * A path that collides with another asset or with a document `export()`
+       * generates is renamed, so read the stored href back from the value
+       * `addAsset()` returns rather than assuming this one was kept.
+       */
+      href: string;
+      /**
+       * OPF media type. Inferred from the `href` extension when omitted, falling
+       * back to `application/octet-stream` for unknown extensions.
+       */
+      mediaType?: string;
+      /**
+       * OPF manifest `properties` attribute. The cover set through
+       * {@link EpubProject.setCover} carries `'cover-image'`, which also marks
+       * it as the asset the cover `<meta>` entry points at and exempts it from
+       * unreferenced-asset cleanup.
+       */
+      properties?: string;
+      /**
+       * Binary asset data. A `Uint8Array` is read through its own view, and the
+       * project keeps a copy, so later changes to the input do not reach it.
+       */
+      data: BinaryInput;
+      /** Never set on this variant — it is what makes the union discriminate. */
+      url?: never;
+    }
+  | {
+      /** Preferred manifest item id. See the `data` variant. */
+      id?: string;
+      /** Destination path inside the EPUB ZIP. See the `data` variant. */
+      href: string;
+      /** OPF media type. See the `data` variant. */
+      mediaType?: string;
+      /** OPF manifest `properties` attribute. See the `data` variant. */
+      properties?: string;
+      /** Never set on this variant — it is what makes the union discriminate. */
+      data?: never;
+      /**
+       * External URL fetched at export time via the
+       * {@link EpubExportOptions.assetResolver} (or the runtime `fetch` when no
+       * resolver is supplied).
+       */
+      url: string;
+    };
 
-/** A binary file packaged alongside the chapters — cover, inline image, extra stylesheet. */
-export interface EpubProjectAsset {
-  /**
-   * Preferred manifest item id. Sanitized and de-duplicated like
-   * {@link ManuscriptChapterInput.id}; defaults to an id derived from `href`.
-   */
-  id?: string;
-  /**
-   * Destination path inside the EPUB ZIP, relative to the archive root
-   * (e.g. `'OPS/Images/cover.jpg'`). Must be a clean relative file path:
-   * {@link EpubProject.addAsset} and {@link EpubProject.setCover} throw on an
-   * absolute path, a URI scheme, a `..` segment, a `#`/`?`/`\` character or a
-   * trailing slash. A path that collides with another asset or with a document
-   * `export()` generates is renamed, so read the stored href back from the value
-   * `addAsset()` returns rather than assuming this one was kept.
-   */
-  href: string;
-  /**
-   * OPF media type. Inferred from the `href` extension when omitted, falling
-   * back to `application/octet-stream` for unknown extensions.
-   */
-  mediaType?: string;
-  /**
-   * Binary asset data. Either this or {@link EpubProjectAsset.url} must be
-   * set. When both are present, `data` wins.
-   */
-  data?: Uint8Array | ArrayBuffer;
-  /**
-   * External URL fetched at export time via the
-   * {@link EpubExportOptions.assetResolver} (or the runtime `fetch` when no
-   * resolver is supplied).
-   */
-  url?: string;
-  /**
-   * OPF manifest `properties` attribute. {@link EpubProject.setCover} sets
-   * `'cover-image'`, which also marks the asset as the one the cover `<meta>`
-   * entry points at and exempts it from unreferenced-asset cleanup.
-   */
-  properties?: string;
-}
+/**
+ * Cover image accepted by {@link EpubProject.setCover} and
+ * {@link EpubProjectOptions.cover}. Carries its bytes in `data` or names a
+ * `url` to fetch them from at export time, never both. The class decides the
+ * stored path, `OPS/Images/<filename>`.
+ */
+export type CoverInput =
+  | {
+      /** Image bytes. A `Uint8Array` is read through its own view and copied. */
+      data: BinaryInput;
+      /** Never set on this variant — it is what makes the union discriminate. */
+      url?: never;
+      /** OPF media type of the image (e.g. `'image/jpeg'`). */
+      mediaType: string;
+      /**
+       * File name inside `OPS/Images/`, without a directory. Renamed with a
+       * `-2`, `-3`, … suffix when taken. @defaultValue 'cover.jpg'
+       */
+      filename?: string;
+    }
+  | {
+      /** Never set on this variant — it is what makes the union discriminate. */
+      data?: never;
+      /**
+       * External URL fetched at export time via the
+       * {@link EpubExportOptions.assetResolver} (or the runtime `fetch`).
+       */
+      url: string;
+      /** OPF media type of the image (e.g. `'image/jpeg'`). */
+      mediaType: string;
+      /** File name inside `OPS/Images/`. See the `data` variant. @defaultValue 'cover.jpg' */
+      filename?: string;
+    };
+
+/**
+ * Inline image accepted by {@link EpubProject.addImage}. Carries its bytes in
+ * `data` or names a `url` to fetch them from at export time, never both. The
+ * class decides the stored path, `OPS/Images/<filename>`.
+ */
+export type EpubProjectImageInput =
+  | {
+      /**
+       * File name inside `OPS/Images/`, without a directory. Renamed with a
+       * `-2`, `-3`, … suffix when taken.
+       */
+      filename: string;
+      /** Image bytes. A `Uint8Array` is read through its own view and copied. */
+      data: BinaryInput;
+      /** Never set on this variant — it is what makes the union discriminate. */
+      url?: never;
+      /** OPF media type. Inferred from the `filename` extension when omitted. */
+      mediaType?: string;
+      /** Alternative text of the generated `<img>`. */
+      alt?: string;
+      /**
+       * Paragraph position the image is inserted at, counted in the paragraph
+       * space of the chapter body (blank-line separated blocks, images
+       * included). Values past the end append.
+       */
+      atParagraphIndex: number;
+    }
+  | {
+      /** File name inside `OPS/Images/`. See the `data` variant. */
+      filename: string;
+      /** Never set on this variant — it is what makes the union discriminate. */
+      data?: never;
+      /**
+       * External URL fetched at export time via the
+       * {@link EpubExportOptions.assetResolver} (or the runtime `fetch`).
+       */
+      url: string;
+      /** OPF media type. Inferred from the `filename` extension when omitted. */
+      mediaType?: string;
+      /** Alternative text of the generated `<img>`. */
+      alt?: string;
+      /** Paragraph position the image is inserted at. See the `data` variant. */
+      atParagraphIndex: number;
+    };
 
 /** Constructor options for {@link EpubProject}. */
 export interface EpubProjectOptions {
@@ -168,14 +242,11 @@ export interface EpubProjectOptions {
    * Initial chapters, appended in order through {@link EpubProject.addChapter}
    * — so their ids go through the same sanitizing and de-duplication.
    */
-  chapters?: ManuscriptChapterInput[];
+  chapters?: readonly ManuscriptChapter[];
   /** Manuscript notation dialect used when serializing chapters. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
-  /**
-   * Cover image, registered through {@link EpubProject.setCover} after
-   * `chapters`. Its href defaults to `'OPS/Images/cover.jpg'` when empty.
-   */
-  cover?: EpubProjectAsset;
+  /** Cover image, registered through {@link EpubProject.setCover} after `chapters`. */
+  cover?: CoverInput;
   /**
    * CSS written to `OPS/Styles/style.css` and linked from every generated
    * document. Defaults to a minimal vertical-writing stylesheet.
@@ -191,7 +262,7 @@ export interface EpubProjectOptions {
 
 /**
  * A chapter as it is stored on a project — the resolved form of
- * {@link ManuscriptChapterInput}, with the manifest id already assigned and
+ * {@link ManuscriptChapter}, with the manifest id already assigned and
  * de-duplicated. Element type of {@link EpubProject.chapters}.
  */
 export interface ProjectChapter {
@@ -245,29 +316,19 @@ function packageIdentifier(): string {
   return `urn:uuid:${uuid}`;
 }
 
+/** Directory of the ZIP that images and the cover are stored in. */
+const IMAGE_DIRECTORY = 'OPS/Images/';
+
+/** File name a cover without `filename` is stored under. */
+const DEFAULT_COVER_FILENAME = 'cover.jpg';
+
 /** Builds a new EPUB package from manuscript chapters and assets. */
 export class EpubProject {
-  /**
-   * Package metadata with the defaults already applied: `language` falls back to
-   * `'ja'`, a blank or missing `identifier` is replaced by a fresh
-   * `urn:uuid:` value, and `modified` defaults to construction time. The object
-   * itself stays mutable, so metadata can be edited in place after construction.
-   */
-  readonly metadata: EpubProjectMetadata;
-  /**
-   * Chapters in spine order, each carrying the manifest id assigned at insert
-   * time. Edit through {@link EpubProject.addChapter},
-   * {@link EpubProject.updateChapter}, {@link EpubProject.removeChapter} and
-   * {@link EpubProject.reorderChapters} so ids stay unique and inline image
-   * assets stay in sync with the bodies that reference them.
-   */
-  readonly chapters: ProjectChapter[] = [];
-  /**
-   * Manifest assets in insertion order, with the resolved id, href and media
-   * type rather than the values originally passed in. A cover set through
-   * {@link EpubProject.setCover} is always the last entry.
-   */
-  readonly assets: EpubProjectAsset[] = [];
+  private currentMetadata: EpubProjectMetadata;
+  private currentStylesheet: string;
+  private readonly chapterList: ProjectChapter[] = [];
+  private readonly assetList: EpubProjectAsset[] = [];
+
   /** Whether `export()` writes a generated title page ahead of the chapters. */
   readonly includeTitlePage: boolean;
   /**
@@ -279,17 +340,17 @@ export class EpubProject {
   readonly pageProgressionDirection: 'rtl' | 'ltr' | 'default';
   /** Manuscript notation dialect chapter bodies are parsed with during export. */
   readonly dialect: ManuscriptDialect;
-  /** CSS written to `OPS/Styles/style.css`. Replaceable at any point before export. */
-  stylesheet: string;
 
   /**
    * Applies the {@link EpubProjectOptions} defaults, then registers `chapters`
    * and `cover` through {@link EpubProject.addChapter} and
-   * {@link EpubProject.setCover} — so an invalid cover href throws here rather
-   * than at export time.
+   * {@link EpubProject.setCover} — so an invalid cover filename throws here
+   * rather than at export time.
+   *
+   * @throws {TypeError} When `cover` is not a valid {@link CoverInput}.
    */
   constructor(options: EpubProjectOptions) {
-    this.metadata = mergeDefined<EpubProjectMetadata>(
+    this.currentMetadata = mergeDefined<EpubProjectMetadata>(
       {
         title: options.metadata.title,
         language: 'ja',
@@ -298,14 +359,14 @@ export class EpubProject {
       },
       options.metadata,
     );
-    if (!this.metadata.identifier?.trim()) {
-      this.metadata.identifier = packageIdentifier();
+    if (!this.currentMetadata.identifier?.trim()) {
+      this.currentMetadata.identifier = packageIdentifier();
     }
     this.includeTitlePage = options.includeTitlePage ?? true;
     this.includeTitleInFirstChapter = options.includeTitleInFirstChapter ?? false;
     this.pageProgressionDirection = options.pageProgressionDirection ?? 'rtl';
     this.dialect = options.dialect ?? 'mejiro';
-    this.stylesheet = options.stylesheet ?? DEFAULT_STYLESHEET;
+    this.currentStylesheet = options.stylesheet ?? DEFAULT_STYLESHEET;
     for (const chapter of options.chapters ?? []) this.addChapter(chapter);
     if (options.cover) this.setCover(options.cover);
   }
@@ -320,22 +381,82 @@ export class EpubProject {
   }
 
   /**
-   * Appends a chapter to the end of the spine. Its id is sanitized to an
-   * XML-safe manifest id and suffixed when it collides with a reserved id or one
-   * already in use, so the stored id may differ from `chapter.id`.
+   * Package metadata with the defaults already applied: `language` falls back to
+   * `'ja'`, a blank or missing `identifier` is replaced by a fresh
+   * `urn:uuid:` value, and `modified` defaults to construction time. Each
+   * {@link EpubProject.updateMetadata} call replaces the object, so a reference
+   * read earlier keeps the values it had.
    */
-  addChapter(chapter: ManuscriptChapterInput): void {
-    this.chapters.push({
+  get metadata(): Readonly<EpubProjectMetadata> {
+    return this.currentMetadata;
+  }
+
+  /**
+   * Chapters in spine order, each carrying the manifest id assigned at insert
+   * time. Edit through {@link EpubProject.addChapter},
+   * {@link EpubProject.updateChapter}, {@link EpubProject.removeChapter} and
+   * {@link EpubProject.reorderChapters} so ids stay unique and inline image
+   * assets stay in sync with the bodies that reference them.
+   */
+  get chapters(): readonly Readonly<ProjectChapter>[] {
+    return this.chapterList;
+  }
+
+  /**
+   * Manifest assets in insertion order, with the resolved id, href and media
+   * type rather than the values originally passed in. A cover set through
+   * {@link EpubProject.setCover} is always the last entry.
+   */
+  get assets(): readonly Readonly<EpubProjectAsset>[] {
+    return this.assetList;
+  }
+
+  /** CSS written to `OPS/Styles/style.css`. Replace it with {@link EpubProject.setStylesheet}. */
+  get stylesheet(): string {
+    return this.currentStylesheet;
+  }
+
+  /**
+   * Merges `patch` into the package metadata. Fields left out or set to
+   * `undefined` keep their value, and a blank `identifier` is replaced by a
+   * fresh `urn:uuid:` value as in the constructor.
+   */
+  updateMetadata(patch: Partial<EpubProjectMetadata>): void {
+    const next = mergeDefined(this.currentMetadata, patch);
+    if (!next.identifier?.trim()) next.identifier = packageIdentifier();
+    this.currentMetadata = next;
+  }
+
+  /**
+   * Replaces the stylesheet written to `OPS/Styles/style.css`.
+   *
+   * @throws {TypeError} When `css` is not a string.
+   */
+  setStylesheet(css: string): void {
+    if (typeof css !== 'string') throw new TypeError('Stylesheet must be a string');
+    this.currentStylesheet = css;
+  }
+
+  /**
+   * Appends a chapter to the end of the spine and returns it as stored. Its id
+   * is sanitized to an XML-safe manifest id and suffixed when it collides with a
+   * reserved id or one already in use, so the stored id may differ from
+   * `chapter.id`.
+   */
+  addChapter(chapter: ManuscriptChapter): Readonly<ProjectChapter> {
+    const stored: ProjectChapter = {
       id: uniqueManifestId(
         toManifestId(
-          chapter.id ?? `chapter-${this.chapters.length + 1}`,
-          `chapter-${this.chapters.length + 1}`,
+          chapter.id ?? `chapter-${this.chapterList.length + 1}`,
+          `chapter-${this.chapterList.length + 1}`,
         ),
         projectManifestIds(this),
       ),
       title: chapter.title,
       body: chapter.body,
-    });
+    };
+    this.chapterList.push(stored);
+    return stored;
   }
 
   /**
@@ -343,10 +464,11 @@ export class EpubProject {
    * fields keep their previous value. Inline image assets the new body no
    * longer references are dropped from the project, exactly as
    * {@link EpubProject.removeChapter} drops them.
+   *
+   * @throws {RangeError} When `index` names no chapter.
    */
-  updateChapter(index: number, patch: Partial<Omit<ManuscriptChapterInput, 'id'>>): void {
-    const chapter = this.chapters[index];
-    if (!chapter) throw new Error(`Missing chapter: ${index}`);
+  updateChapter(index: number, patch: Partial<Omit<ManuscriptChapter, 'id'>>): void {
+    const chapter = this.requireChapter(index);
     if (patch.title !== undefined) chapter.title = patch.title;
     if (patch.body === undefined) return;
     const previousAssetHrefs = markerAssetHrefs(chapter);
@@ -354,11 +476,15 @@ export class EpubProject {
     this.removeUnreferencedAssets(previousAssetHrefs);
   }
 
-  /** Removes a chapter by index. */
+  /**
+   * Removes a chapter by index, together with the inline image assets only it
+   * referenced.
+   *
+   * @throws {RangeError} When `index` names no chapter.
+   */
   removeChapter(index: number): void {
-    if (index < 0 || index >= this.chapters.length) throw new Error(`Missing chapter: ${index}`);
-    const removedAssetHrefs = markerAssetHrefs(this.chapters[index]);
-    this.chapters.splice(index, 1);
+    const removedAssetHrefs = markerAssetHrefs(this.requireChapter(index));
+    this.chapterList.splice(index, 1);
     this.removeUnreferencedAssets(removedAssetHrefs);
   }
 
@@ -369,60 +495,70 @@ export class EpubProject {
    * error.
    */
   reorderChapters(from: number, to: number): void {
-    if (from < 0 || from >= this.chapters.length) return;
-    const [chapter] = this.chapters.splice(from, 1);
-    const target = Math.max(0, Math.min(this.chapters.length, to));
-    this.chapters.splice(target, 0, chapter);
+    if (from < 0 || from >= this.chapterList.length) return;
+    const [chapter] = this.chapterList.splice(from, 1);
+    const target = Math.max(0, Math.min(this.chapterList.length, to));
+    this.chapterList.splice(target, 0, chapter);
   }
 
   /**
-   * Inserts an inline image asset and embeds an internal manuscript reference
+   * Stores an image under `OPS/Images/<filename>` and embeds a reference to it
    * in the chapter body at `atParagraphIndex`, counted in the same paragraph
-   * space the chapter XHTML pass and `manuscriptToEpubBook()` use. The marker is
-   * rendered as a `<figure>` during the chapter XHTML pass.
+   * space the chapter XHTML pass and `manuscriptToEpubBook()` use. The
+   * reference is rendered as a `<figure>` during the chapter XHTML pass.
+   *
+   * @returns The stored asset. Its `href` is the one linked from the chapter;
+   *   it carries a `-2`, `-3`, … suffix when `filename` was taken.
+   * @throws {RangeError} When `chapterIndex` names no chapter, or
+   *   `atParagraphIndex` is not an integer.
+   * @throws {TypeError} When `filename` is not a plain file name, or the image
+   *   carries neither valid `data` nor a `url`.
    */
-  addInlineImage(
-    chapterIndex: number,
-    atParagraphIndex: number,
-    asset: EpubProjectAsset & { alt?: string },
-  ): void {
-    const chapter = this.chapters[chapterIndex];
-    if (!chapter) throw new Error(`Missing chapter: ${chapterIndex}`);
-    const storedAsset = this.addAsset(asset);
-
+  addImage(chapterIndex: number, image: EpubProjectImageInput): Readonly<EpubProjectAsset> {
+    const chapter = this.requireChapter(chapterIndex);
+    if (!Number.isInteger(image.atParagraphIndex)) {
+      throw new RangeError('Image atParagraphIndex must be an integer');
+    }
+    const stored = this.addAsset({
+      href: imageHref(image.filename),
+      ...(image.mediaType !== undefined ? { mediaType: image.mediaType } : {}),
+      ...(image.data !== undefined ? { data: image.data } : { url: image.url as string }),
+    });
     chapter.body = insertManuscriptParagraph(
       chapter.body,
-      atParagraphIndex,
-      manuscriptImageBlock({ ...asset, href: storedAsset.href }),
+      image.atParagraphIndex,
+      manuscriptImageBlock(stored.href, image.alt),
     );
+    return stored;
   }
 
   /**
-   * Registers `asset` as the cover image, replacing any previous one. The href
-   * defaults to `'OPS/Images/cover.jpg'` when empty and is validated like every
-   * other asset href, so an absolute path or one escaping the archive throws.
-   * The stored asset is marked `properties: 'cover-image'` and moved to the end
-   * of {@link EpubProject.assets}, which is what makes `export()` emit the cover
+   * Registers `cover` as the cover image, replacing any previous one, and
+   * returns it as stored. It is written to `OPS/Images/<filename>` and carries
+   * `properties: 'cover-image'`; it moves to the end of
+   * {@link EpubProject.assets}, which is what makes `export()` emit the cover
    * `<meta>` entry for it.
+   *
+   * @throws {TypeError} When `filename` is not a plain file name, or `cover`
+   *   carries neither valid `data` nor a `url`.
    */
-  setCover(asset: EpubProjectAsset): void {
-    const href = asset.href || 'OPS/Images/cover.jpg';
-    assertProjectAssetHref(href);
-    const nonCoverAssets = this.assets.filter((existing) => existing.properties !== 'cover-image');
-    const stored: EpubProjectAsset = {
-      ...asset,
-      id: uniqueManifestId(
-        toManifestId(asset.id ?? 'cover-image'),
-        projectManifestIds(this, nonCoverAssets),
-      ),
-      href: uniqueAssetHref(
-        href,
-        nonCoverAssets.map((existing) => existing.href),
-      ),
-      mediaType: asset.mediaType ?? mediaTypeFromPath(href),
-      properties: 'cover-image',
-    };
-    this.assets.splice(0, this.assets.length, ...nonCoverAssets, stored);
+  setCover(cover: CoverInput): Readonly<EpubProjectAsset> {
+    const nonCoverAssets = this.assetList.filter(
+      (existing) => existing.properties !== 'cover-image',
+    );
+    const stored = this.buildAsset(
+      {
+        href: imageHref(cover.filename ?? DEFAULT_COVER_FILENAME),
+        mediaType: cover.mediaType,
+        properties: 'cover-image',
+        data: cover.data,
+        url: cover.url,
+      },
+      nonCoverAssets,
+      'cover-image',
+    );
+    this.assetList.splice(0, this.assetList.length, ...nonCoverAssets, stored);
+    return stored;
   }
 
   /**
@@ -432,41 +568,62 @@ export class EpubProject {
    * `export()` generates, so link the returned `href` rather than the one passed
    * in.
    *
-   * @throws If `asset.href` is not a clean relative path inside the archive.
+   * @throws {TypeError} When `asset.href` is not a clean relative path inside
+   *   the archive, or the asset carries neither valid `data` nor a `url`.
    */
-  addAsset(asset: EpubProjectAsset): EpubProjectAsset {
+  addAsset(asset: EpubProjectAsset): Readonly<EpubProjectAsset> {
+    const stored = this.buildAsset(asset, this.assetList);
+    this.assetList.push(stored);
+    return stored;
+  }
+
+  /**
+   * Validates `asset` and resolves its stored form against `others`, the assets
+   * it must not collide with.
+   */
+  private buildAsset(
+    asset: AssetDraft,
+    others: readonly EpubProjectAsset[],
+    defaultId?: string,
+  ): EpubProjectAsset {
     assertProjectAssetHref(asset.href);
-    const stored: EpubProjectAsset = {
-      ...asset,
+    const source = copyAssetSource(asset);
+    return {
+      ...(asset.properties !== undefined ? { properties: asset.properties } : {}),
+      ...source,
       id: uniqueManifestId(
-        toManifestId(asset.id ?? manifestIdFromHref(asset.href)),
-        projectManifestIds(this),
+        toManifestId(asset.id ?? defaultId ?? manifestIdFromHref(asset.href)),
+        projectManifestIds(this, others),
       ),
       href: uniqueAssetHref(
         asset.href,
-        this.assets.map((existing) => existing.href),
+        others.map((existing) => existing.href),
       ),
       mediaType: asset.mediaType ?? mediaTypeFromPath(asset.href),
     };
-    this.assets.push(stored);
-    return stored;
+  }
+
+  private requireChapter(index: number): ProjectChapter {
+    const chapter = this.chapterList[index];
+    if (!chapter) throw new RangeError(`Missing chapter: ${index}`);
+    return chapter;
   }
 
   private removeUnreferencedAssets(candidates: ReadonlySet<string>): void {
     if (candidates.size === 0) return;
     const referencedHrefs = new Set<string>();
-    for (const chapter of this.chapters) {
+    for (const chapter of this.chapterList) {
       for (const href of markerAssetHrefs(chapter)) referencedHrefs.add(href);
     }
-    for (let i = this.assets.length - 1; i >= 0; i--) {
-      const asset = this.assets[i];
+    for (let i = this.assetList.length - 1; i >= 0; i--) {
+      const asset = this.assetList[i];
       if (
         asset.properties === 'cover-image' ||
         !candidates.has(asset.href) ||
         referencedHrefs.has(asset.href)
       )
         continue;
-      this.assets.splice(i, 1);
+      this.assetList.splice(i, 1);
     }
   }
 
@@ -476,20 +633,27 @@ export class EpubProject {
    * stylesheet, the optional title page, one XHTML document per chapter, and
    * finally every asset.
    *
-   * Asset bytes are taken from {@link EpubProjectAsset.data}, or fetched from
-   * {@link EpubProjectAsset.url} through `options.assetResolver` (the runtime
-   * `fetch` when no resolver is given). `options.signal` is checked between
-   * chapters and assets as well as during compression, and `options.onProgress`
-   * reports the `'serialize'` phase per chapter and the `'zip'` phase from JSZip.
+   * Asset bytes are taken from the asset's `data`, or fetched from its `url`
+   * through `options.assetResolver` (the runtime `fetch` when no resolver is
+   * given). `options.signal` is checked between chapters and assets as well as
+   * during compression, and `options.onProgress` reports the `'serialize'`
+   * phase per chapter and the `'zip'` phase from JSZip.
    *
-   * @throws If the project has no chapters, if an asset cannot be resolved, or
-   *   with an `AbortError` when `options.signal` is triggered.
+   * @returns The EPUB file contents.
+   * @throws {MejiroError} `epub-invalid-package` when the project has no
+   *   chapters, `asset-fetch-failed` when the default fetch of an asset fails.
+   * @throws {TypeError} When `options.signal` is not an `AbortSignal`, or an
+   *   asset resolver returns something other than bytes.
+   * @throws The `signal.reason` when `options.signal` aborts.
    */
-  async export(options: EpubExportOptions = {}): Promise<ArrayBuffer> {
+  async export(options: EpubExportOptions = {}): Promise<Uint8Array<ArrayBuffer>> {
     const { onProgress, signal, assetResolver } = options;
     throwIfAborted(signal);
-    if (this.chapters.length === 0) {
-      throw new Error('Cannot export an EPUB project without at least one chapter');
+    if (this.chapterList.length === 0) {
+      throw new MejiroError(
+        'epub-invalid-package',
+        'Cannot export an EPUB project without at least one chapter',
+      );
     }
 
     const zip = new JSZip();
@@ -502,17 +666,17 @@ export class EpubProject {
     zip.file('META-INF/container.xml', containerXml());
     zip.file('OPS/package.opf', packageOpf(this));
     zip.file('OPS/nav.xhtml', navXhtml(this));
-    zip.file('OPS/Styles/style.css', this.stylesheet);
+    zip.file('OPS/Styles/style.css', this.currentStylesheet);
     if (this.includeTitlePage) {
       zip.file('OPS/Text/titlepage.xhtml', titlePageXhtml(this));
     }
-    const totalChapters = Math.max(1, this.chapters.length);
-    this.chapters.forEach((chapter, index) => {
+    const totalChapters = this.chapterList.length;
+    this.chapterList.forEach((chapter, index) => {
       throwIfAborted(signal);
       zip.file(`OPS/Text/${chapterFileName(index)}`, chapterXhtml(this, chapter, index));
       onProgress?.('serialize', (index + 1) / totalChapters);
     });
-    for (const asset of this.assets) {
+    for (const asset of this.assetList) {
       throwIfAborted(signal);
       const bytes = await resolveAssetData(asset.href, asset, assetResolver, signal);
       zip.file(asset.href, bytes);
@@ -522,20 +686,65 @@ export class EpubProject {
   }
 }
 
+/** The fields {@link EpubProject} validates before it stores an asset. */
+interface AssetDraft {
+  id?: string;
+  href: string;
+  mediaType?: string;
+  properties?: string;
+  data?: unknown;
+  url?: unknown;
+}
+
+/** The bytes or URL of a stored asset. */
+type AssetSource = { data: Uint8Array; url?: never } | { url: string; data?: never };
+
+/**
+ * Takes the source of `asset` for storage. Bytes are copied through the range
+ * of their view; `data` wins when both are present.
+ */
+function copyAssetSource(asset: AssetDraft): AssetSource {
+  if (asset.data !== undefined) {
+    const tag = Object.prototype.toString.call(asset.data);
+    if (tag === '[object Uint8Array]') return { data: (asset.data as Uint8Array).slice() };
+    if (tag === '[object ArrayBuffer]')
+      return { data: new Uint8Array(asset.data as ArrayBuffer).slice() };
+    throw new TypeError('Asset data must be an ArrayBuffer or a Uint8Array');
+  }
+  if (typeof asset.url !== 'string') {
+    throw new TypeError('Asset must include either `data` or `url`');
+  }
+  return { url: asset.url };
+}
+
+/**
+ * The ZIP path an image or cover named `filename` is stored under.
+ *
+ * @throws {TypeError} When `filename` is not a plain file name.
+ */
+function imageHref(filename: string): string {
+  if (typeof filename !== 'string' || /[\\/]|^\.{0,2}$/u.test(filename)) {
+    throw new TypeError('Image filename must be a plain file name without a directory');
+  }
+  return `${IMAGE_DIRECTORY}${filename}`;
+}
+
 /**
  * Validates an asset href as the unencoded ZIP path the exporter writes it to;
  * manifest hrefs and `src` attributes are percent-encoded from it on output.
  */
 function assertProjectAssetHref(href: string): void {
-  if (!href || href.endsWith('/')) throw new Error('Asset href must point to a file');
+  if (typeof href !== 'string' || !href || href.endsWith('/')) {
+    throw new TypeError('Asset href must point to a file');
+  }
   if (href.includes('\\') || href.includes('#') || href.includes('?')) {
-    throw new Error(`Asset href must be a clean EPUB file path: ${href}`);
+    throw new TypeError(`Asset href must be a clean EPUB file path: ${href}`);
   }
   if (href.startsWith('/') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(href)) {
-    throw new Error(`Asset href must be a relative EPUB path: ${href}`);
+    throw new TypeError(`Asset href must be a relative EPUB path: ${href}`);
   }
   if (href.split('/').some((part) => part === '..')) {
-    throw new Error(`Asset href must not contain parent directory segments: ${href}`);
+    throw new TypeError(`Asset href must not contain parent directory segments: ${href}`);
   }
 }
 
@@ -610,13 +819,13 @@ function serializeManuscriptParagraph(text: string, dialect: ManuscriptDialect):
   return inlineContentMarkup(parsed.text, parsed.inlineAnnotations);
 }
 
-/** Builds the manuscript marker for an inline image inserted via `addInlineImage`. */
-function manuscriptImageBlock(asset: EpubProjectAsset & { alt?: string }): string {
-  const relative = relativeZipPath('OPS/Text/', asset.href);
+/** Builds the manuscript marker for an inline image inserted via `addImage`. */
+function manuscriptImageBlock(href: string, alt: string | undefined): string {
+  const relative = relativeZipPath('OPS/Text/', href);
   // A bare filename reads back as `../Images/<name>`, so a same-directory asset
   // keeps an explicit `./` to resolve to itself.
   const src = relative.includes('/') ? relative : `./${relative}`;
-  const altPart = asset.alt ? `|${encodeURIComponent(asset.alt)}` : '';
+  const altPart = alt ? `|${encodeURIComponent(alt)}` : '';
   return `[[mejiro-image:${encodeURIComponent(src)}${altPart}]]`;
 }
 
@@ -776,15 +985,6 @@ function buildMetadataLines(
     }
   });
 
-  if (metadata.series) {
-    push(`<meta name="calibre:series" content="${escapeAttribute(metadata.series.name)}" />`);
-    if (metadata.series.index !== undefined) {
-      push(
-        `<meta name="calibre:series_index" content="${escapeAttribute(String(metadata.series.index))}" />`,
-      );
-    }
-  }
-
   push(`<meta property="dcterms:modified">${modified}</meta>`);
   if (coverImageId) {
     push(`<meta name="cover" content="${escapeAttribute(coverImageId)}" />`);
@@ -793,14 +993,8 @@ function buildMetadataLines(
   return lines.join('\n');
 }
 
-/**
- * Resolves the effective creator list. Falls back to `metadata.author` when
- * `creators` is empty so the legacy single-author shortcut keeps working.
- */
-function normalizeCreators(metadata: EpubProjectMetadata): EpubContributor[] {
-  if (metadata.creators?.length) return metadata.creators;
-  if (metadata.author) return [{ name: metadata.author, role: 'aut' }];
-  return [];
+function normalizeCreators(metadata: EpubProjectMetadata): readonly EpubContributor[] {
+  return metadata.creators ?? [];
 }
 
 function navXhtml(project: EpubProject): string {

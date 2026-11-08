@@ -203,7 +203,7 @@ describe('backward compatibility', () => {
       breakPenalties: penalties(toCodepoints(paragraph).length, {}),
     });
     expect([...costed.breakPoints]).toEqual([...plain.breakPoints]);
-    expect([...(costed.hangingAdjustments ?? [])]).toEqual([...(plain.hangingAdjustments ?? [])]);
+    expect([...costed.hangingAdjustments]).toEqual([...plain.hangingAdjustments]);
   });
 
   it('accepts empty text carrying an empty penalty array', () => {

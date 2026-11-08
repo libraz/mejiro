@@ -1,4 +1,5 @@
 import type { EpubBook, EpubChapter } from '@libraz/mejiro/epub';
+import { toRaw } from 'vue';
 
 const identities = new WeakMap<object, object>();
 
@@ -14,7 +15,8 @@ export function markBookIdentity<T extends EpubBook>(derived: T, identity: objec
 
 /** The identity a book swap is judged by: the tagged source, else the book itself. */
 export function bookIdentity<T>(book: T): T | object {
-  return (book && identities.get(book as object)) || book;
+  const raw = toRaw(book);
+  return (raw && identities.get(raw as object)) || raw;
 }
 
 /** Layout-relevant content of a chapter, as a comparable string. */

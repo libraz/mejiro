@@ -1,3 +1,4 @@
+import { MejiroError } from '../errors.js';
 import type { AnalyzerIdentity, MorphemeLike, TextAnalysis, TextAnalyzer } from '../types.js';
 import { alignMorphemeOffsets } from './align.js';
 
@@ -6,19 +7,40 @@ const ANALYZER_NAME = 'suzume';
 
 /** Options for {@link createSuzumeAnalyzer}. */
 export interface SuzumeAnalyzerOptions {
-  /** Pre-created Suzume instance to adopt instead of creating one. */
-  instance?: unknown;
-  /** Override for the WebAssembly binary location, forwarded to Suzume.create(). */
+  /**
+   * Pre-created Suzume instance to adopt instead of creating one. The caller
+   * keeps ownership: disposing the analyzer does not destroy it.
+   * @defaultValue a new instance, destroyed when the analyzer is disposed
+   */
+  instance?: SuzumeInstance;
+  /**
+   * Override for the WebAssembly binary location, forwarded to Suzume.create().
+   * Ignored when `instance` is set.
+   * @defaultValue the location `@libraz/suzume` resolves itself
+   */
   wasmPath?: string;
 }
 
-/** The part of a suzume morpheme this analyzer reads. */
-interface SuzumeMorpheme {
+/** A morpheme as suzume reports it; offsets are code points in the normalized text. */
+export interface SuzumeMorpheme {
+  /** Surface form, as normalized by suzume. */
   surface: string;
+  /** Coarse part-of-speech code. */
   pos: string;
+  /** Fine-grained part-of-speech code. */
   extendedPos: string;
+  /** Inclusive start offset in code points of the normalized text. */
   start: number;
+  /** Exclusive end offset in code points of the normalized text. */
   end: number;
+}
+
+/** What a suzume instance returns for one text: its normalized form and the morphemes of that form. */
+export interface SuzumeAnalysis {
+  /** The text suzume tokenized, after its own normalization. */
+  normalizedText: string;
+  /** Morphemes in document order, indexed against `normalizedText`. */
+  morphemes: readonly SuzumeMorpheme[];
 }
 
 /**
@@ -26,14 +48,14 @@ interface SuzumeMorpheme {
  *
  * Declared structurally rather than imported: `@libraz/suzume` is an optional
  * peer dependency, so its types must not appear in this package's own type
- * surface either.
+ * surface either. An instance from `Suzume.create()` satisfies it.
  */
-interface SuzumeInstance {
+export interface SuzumeInstance {
+  /** Version of suzume, reported in the analyzer's identity. */
   readonly version: string;
-  analyzeWithNormalizedText(text: string): {
-    normalizedText: string;
-    morphemes: readonly SuzumeMorpheme[];
-  };
+  /** Tokenizes `text` and returns the normalized text the offsets address. */
+  analyzeWithNormalizedText(text: string): SuzumeAnalysis;
+  /** Releases the instance's WebAssembly resources. */
   destroy(): void;
 }
 
@@ -48,17 +70,27 @@ interface SuzumeInstance {
  * request for that analyzer, so a caller that would rather fall back to
  * character-class-only line breaking catches the rejection and does so itself.
  *
+ * Takes no `AbortSignal`: instantiating the WebAssembly module cannot be
+ * interrupted once started.
+ *
+ * The returned analyzer is terminal once disposed: `dispose()` frees its
+ * WebAssembly instance (unless adopted), and `analyze()` then throws
+ * `analyzer-disposed`. Create a new analyzer to continue.
+ *
  * @param options - Instance adoption and WebAssembly location overrides.
  * @returns An analyzer ready to use, which the caller disposes when done.
- * @throws When `@libraz/suzume` is not installed or its module fails to load.
+ * @throws TypeError if `options.instance` is set but lacks a string `version`
+ *   or an `analyzeWithNormalizedText` or `destroy` method.
+ * @throws MejiroError with code `analyzer-unavailable` when `@libraz/suzume` is
+ *   not installed or its WebAssembly module fails to load; the underlying error
+ *   is the `cause`.
  */
 export async function createSuzumeAnalyzer(
   options: SuzumeAnalyzerOptions = {},
 ): Promise<TextAnalyzer> {
   const adopted = options.instance !== undefined;
-  const instance = adopted
-    ? (options.instance as SuzumeInstance)
-    : await createInstance(options.wasmPath);
+  if (adopted) assertSuzumeInstance(options.instance);
+  const instance = options.instance ?? (await createInstance(options.wasmPath));
   let disposed = false;
   // One object, handed out as both the analyzer's identity and the provenance
   // of every analysis, so the two cannot drift apart.
@@ -68,7 +100,10 @@ export async function createSuzumeAnalyzer(
     identity,
     analyze(text: string): TextAnalysis {
       if (disposed) {
-        throw new Error('This suzume analyzer has been disposed and can no longer analyse text.');
+        throw new MejiroError(
+          'analyzer-disposed',
+          'This suzume analyzer has been disposed and can no longer analyse text.',
+        );
       }
       const result = instance.analyzeWithNormalizedText(text);
       const raw = result.morphemes.map(toMorphemeLike);
@@ -82,7 +117,11 @@ export async function createSuzumeAnalyzer(
           morphemes: [],
           analyzer: identity,
           warnings: [
-            'Morpheme offsets could not be aligned to the input text; morphemes were dropped.',
+            {
+              code: 'alignment-failed',
+              message:
+                'Morpheme offsets could not be aligned to the input text; morphemes were dropped.',
+            },
           ],
         };
       }
@@ -98,22 +137,44 @@ export async function createSuzumeAnalyzer(
   };
 }
 
+/** Throws a `TypeError` unless `instance` has the members this analyzer calls. */
+function assertSuzumeInstance(instance: unknown): asserts instance is SuzumeInstance {
+  const candidate = instance as Partial<Record<keyof SuzumeInstance, unknown>> | null;
+  if (
+    typeof candidate !== 'object' ||
+    candidate === null ||
+    typeof candidate.version !== 'string' ||
+    typeof candidate.analyzeWithNormalizedText !== 'function' ||
+    typeof candidate.destroy !== 'function'
+  ) {
+    throw new TypeError(
+      'createSuzumeAnalyzer: instance must have a string version and analyzeWithNormalizedText() and destroy() methods; pass the result of Suzume.create()',
+    );
+  }
+}
+
 /**
  * Loads suzume and creates an instance configured to normalize as little as it
  * can, so the aligner has less to reconcile.
  */
 async function createInstance(wasmPath: string | undefined): Promise<SuzumeInstance> {
   const { Suzume } = await loadSuzume();
-  return await Suzume.create({
-    // Keeping ヴ, ASCII case and symbols leaves suzume's normalized text as
-    // close to the input as suzume can make it, which keeps the offset
-    // alignment on its identity fast path for ordinary prose.
-    preserveVu: true,
-    preserveCase: true,
-    preserveSymbols: true,
-    mode: 'normal',
-    ...(wasmPath === undefined ? {} : { wasmPath }),
-  });
+  try {
+    return await Suzume.create({
+      // Keeping ヴ, ASCII case and symbols leaves suzume's normalized text as
+      // close to the input as suzume can make it, which keeps the offset
+      // alignment on its identity fast path for ordinary prose.
+      preserveVu: true,
+      preserveCase: true,
+      preserveSymbols: true,
+      mode: 'normal',
+      ...(wasmPath === undefined ? {} : { wasmPath }),
+    });
+  } catch (cause) {
+    throw new MejiroError('analyzer-unavailable', 'The suzume WebAssembly module failed to load.', {
+      cause,
+    });
+  }
 }
 
 /**
@@ -128,7 +189,8 @@ async function loadSuzume(): Promise<typeof import('@libraz/suzume')> {
   try {
     return await import('@libraz/suzume');
   } catch (cause) {
-    throw new Error(
+    throw new MejiroError(
+      'analyzer-unavailable',
       "The suzume analyzer requires the optional peer dependency '@libraz/suzume'. " +
         'Install it to use createSuzumeAnalyzer().',
       { cause },
@@ -140,8 +202,8 @@ async function loadSuzume(): Promise<typeof import('@libraz/suzume')> {
 function toMorphemeLike(morpheme: SuzumeMorpheme): MorphemeLike {
   return {
     surface: morpheme.surface,
-    start: morpheme.start,
-    end: morpheme.end,
+    startIndex: morpheme.start,
+    endIndex: morpheme.end,
     pos: morpheme.pos,
     extendedPos: morpheme.extendedPos,
   };

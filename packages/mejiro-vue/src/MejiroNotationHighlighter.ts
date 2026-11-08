@@ -1,27 +1,29 @@
 import { tokenizeManuscriptSource } from '@libraz/mejiro';
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
-import { computed, defineComponent, h, type PropType, ref } from 'vue';
+import { computed, defineComponent, h, type PropType, ref, type StyleValue } from 'vue';
 
 /**
- * Vue equivalent of {@link MejiroNotationHighlighter} (React). Renders a
- * textarea with a notation-highlight overlay behind it.
+ * Manuscript textarea with a notation-highlight overlay behind it. Bind the
+ * source text with `v-model:value`; other attributes and listeners —
+ * `class` and `placeholder` included — go to the textarea.
  */
 export const MejiroNotationHighlighter = defineComponent({
   name: 'MejiroNotationHighlighter',
   inheritAttrs: false,
   props: {
     /** Source manuscript text. */
-    modelValue: { type: String, required: true },
+    value: { type: String, required: true },
     /** Manuscript notation dialect. @defaultValue `'mejiro'` */
     dialect: { type: String as PropType<ManuscriptDialect>, default: 'mejiro' },
     /** Class on the wrapper element. */
     wrapperClass: { type: String, default: undefined },
-    /** Class on the inner textarea. */
-    textareaClass: { type: String, default: undefined },
-    /** Placeholder for the inner textarea. */
-    placeholder: { type: String, default: undefined },
+    /** Inline style on the wrapper element. */
+    wrapperStyle: { type: [String, Object, Array] as PropType<StyleValue>, default: undefined },
   },
-  emits: ['update:modelValue'],
+  emits: {
+    /** The text changed; carries the next source text. */
+    'update:value': (_value: string) => true,
+  },
   setup(props, { attrs, emit }) {
     const overlayRef = ref<HTMLDivElement | null>(null);
     const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -32,14 +34,12 @@ export const MejiroNotationHighlighter = defineComponent({
     // value cannot overwrite the uncommitted string.
     const isComposing = ref(false);
     const composingValue = ref('');
-    const boundValue = computed(() =>
-      isComposing.value ? composingValue.value : props.modelValue,
-    );
+    const boundValue = computed(() => (isComposing.value ? composingValue.value : props.value));
 
     let lastSegments: Segment[] | null = null;
     const segments = computed<Segment[]>(() => {
       if (isComposing.value && lastSegments) return lastSegments;
-      const next = buildSegments(props.modelValue, props.dialect);
+      const next = buildSegments(props.value, props.dialect);
       lastSegments = next;
       return next;
     });
@@ -59,6 +59,7 @@ export const MejiroNotationHighlighter = defineComponent({
         'div',
         {
           class: ['mejiro-notation-highlighter', props.wrapperClass].filter(Boolean).join(' '),
+          style: props.wrapperStyle,
         },
         [
           h(
@@ -88,16 +89,13 @@ export const MejiroNotationHighlighter = defineComponent({
           h('textarea', {
             ...attrs,
             ref: textareaRef,
-            class: ['mejiro-notation-textarea', props.textareaClass, attrs.class]
-              .filter(Boolean)
-              .join(' '),
+            class: ['mejiro-notation-textarea', attrs.class],
             value: boundValue.value,
-            placeholder: props.placeholder,
             spellcheck: false,
             onInput: (event: Event) => {
               const next = (event.target as HTMLTextAreaElement).value;
               if (isComposing.value) composingValue.value = next;
-              emit('update:modelValue', next);
+              emit('update:value', next);
               callAttrHandler(attrs.onInput, event);
             },
             onCompositionstart: (event: CompositionEvent) => {
@@ -109,7 +107,7 @@ export const MejiroNotationHighlighter = defineComponent({
               isComposing.value = false;
               const next = (event.target as HTMLTextAreaElement).value;
               composingValue.value = next;
-              emit('update:modelValue', next);
+              emit('update:value', next);
               callAttrHandler(attrs.onCompositionend, event);
             },
             onScroll: (event: Event) => {
@@ -142,15 +140,15 @@ function buildSegments(text: string, dialect: ManuscriptDialect): Segment[] {
   const segments: Segment[] = [];
   let cursor = 0;
   for (const [i, token] of tokens.entries()) {
-    if (token.start > cursor) {
-      segments.push({ key: `t-${i}-pre`, text: text.slice(cursor, token.start) });
+    if (token.startOffset > cursor) {
+      segments.push({ key: `t-${i}-pre`, text: text.slice(cursor, token.startOffset) });
     }
     segments.push({
       key: `t-${i}`,
-      text: text.slice(token.start, token.end),
+      text: text.slice(token.startOffset, token.endOffset),
       kind: token.kind,
     });
-    cursor = token.end;
+    cursor = token.endOffset;
   }
   if (cursor < text.length) {
     segments.push({ key: 'tail', text: text.slice(cursor) });

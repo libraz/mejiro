@@ -58,7 +58,9 @@ describe('CharMeasurer', () => {
     const broken = {
       getContext: () => null,
     } as unknown as HTMLCanvasElement;
-    expect(() => new CharMeasurer({ canvas: broken })).toThrow('Failed to get 2d context');
+    expect(() => new CharMeasurer({ canvas: broken })).toThrow(
+      expect.objectContaining({ code: 'environment-unsupported' }),
+    );
   });
 
   it('caches widths after the first measurement', () => {
@@ -162,8 +164,12 @@ describe('CharMeasurer', () => {
     const m = new CharMeasurer({ canvas: strictCanvas().canvas });
     expect(m.measure('16px serif', 0x3042)).toBe(16);
 
-    expect(() => m.measure('-16px serif', 0x3042)).toThrow(/rejected/);
-    expect(() => m.measureAll('NaNpx serif', new Uint32Array([0x3042]))).toThrow(/rejected/);
+    expect(() => m.measure('-16px serif', 0x3042)).toThrow(
+      expect.objectContaining({ code: 'font-unavailable' }),
+    );
+    expect(() => m.measureAll('NaNpx serif', new Uint32Array([0x3042]))).toThrow(
+      expect.objectContaining({ code: 'font-unavailable' }),
+    );
     expect(m.getCache().get('-16px serif', 0x3042)).toBeUndefined();
     expect(m.getCache().get('NaNpx serif', 0x3042)).toBeUndefined();
 

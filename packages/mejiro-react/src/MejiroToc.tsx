@@ -1,22 +1,31 @@
 import type { ReadingAnchor } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
-import { type ReactNode, useMemo, useState } from 'react';
-import { format, type MejiroMessages, useI18n } from './i18n.js';
+import {
+  type ComponentPropsWithoutRef,
+  forwardRef,
+  type ReactNode,
+  useMemo,
+  useState,
+} from 'react';
+import { formatMessage, type MejiroMessages, useI18n } from './i18n.js';
 
-/** Props for {@link MejiroToc}. */
-export interface MejiroTocProps {
+/**
+ * Props for {@link MejiroToc}; other `nav` attributes go to the root element,
+ * except `title`, which here is the heading text.
+ */
+export interface MejiroTocProps extends ComponentPropsWithoutRef<'nav'> {
   /** EPUB whose chapter list is rendered. */
   epub: EpubBook;
   /** Current reading anchor; the matching chapter is highlighted. */
   currentAnchor?: ReadingAnchor | null;
   /** Show a search input that filters chapter titles. @defaultValue false */
-  searchable?: boolean;
+  showSearch?: boolean;
   /** Heading displayed above the list. Defaults to the active message catalog's `tocTitle`. */
   title?: string;
   /** Placeholder shown in the search input. Defaults to the active message catalog's `tocSearchPlaceholder`. */
   searchPlaceholder?: string;
-  /** Called when the user picks a chapter. */
-  onSelect?: (chapter: number) => void;
+  /** Called with the zero-based index of the chapter the user picks. */
+  onChapterSelect?: (chapterIndex: number) => void;
 }
 
 interface ChapterEntry {
@@ -28,7 +37,7 @@ interface ChapterEntry {
 
 function buildEntries(epub: EpubBook, messages: MejiroMessages): ChapterEntry[] {
   return epub.chapters.map((ch, i) => {
-    const title = ch.title ?? format(messages.chapterN, { n: i + 1 });
+    const title = ch.title ?? formatMessage(messages.chapterN, { n: i + 1 });
     const headings = ch.paragraphs.flatMap((p, paragraph) => {
       const text = p.text.trim();
       return p.headingLevel && text && text !== title ? [{ paragraph, text }] : [];
@@ -38,18 +47,22 @@ function buildEntries(epub: EpubBook, messages: MejiroMessages): ChapterEntry[] 
 }
 
 /**
- * Searchable, current-anchor-aware table of contents. Long-form replacement
- * for {@link MejiroChapterNav}. Supersedes the older `MejiroChapterNav`
- * for new code — the panel variant remains for backwards compatibility.
+ * Searchable table of contents that highlights the chapter of the current
+ * reading anchor. For a compact chapter picker, use {@link MejiroChapterNav}.
  */
-export function MejiroToc({
-  epub,
-  currentAnchor,
-  searchable = false,
-  title,
-  searchPlaceholder,
-  onSelect,
-}: MejiroTocProps): ReactNode {
+export const MejiroToc = forwardRef<HTMLElement, MejiroTocProps>(function MejiroToc(
+  {
+    epub,
+    currentAnchor,
+    showSearch = false,
+    title,
+    searchPlaceholder,
+    onChapterSelect,
+    className,
+    ...rest
+  },
+  ref,
+): ReactNode {
   const messages = useI18n();
   const resolvedTitle = title ?? messages.tocTitle;
   const resolvedSearchPlaceholder = searchPlaceholder ?? messages.tocSearchPlaceholder;
@@ -64,15 +77,20 @@ export function MejiroToc({
         e.headings.some((h) => h.text.toLowerCase().includes(needle)),
     );
   }, [entries, query]);
-  const activeIndex = currentAnchor?.chapter ?? -1;
+  const activeIndex = currentAnchor?.chapterIndex ?? -1;
 
   return (
-    <nav className="mejiro-toc" aria-label={resolvedTitle}>
+    <nav
+      aria-label={resolvedTitle}
+      {...rest}
+      ref={ref}
+      className={className ? `mejiro-toc ${className}` : 'mejiro-toc'}
+    >
       <header className="mejiro-toc-header">
         <span className="mejiro-toc-title">{resolvedTitle}</span>
         {epub.author && <span className="mejiro-toc-subtitle">{epub.author}</span>}
       </header>
-      {searchable && (
+      {showSearch && (
         <div className="mejiro-toc-search">
           <input
             type="search"
@@ -90,7 +108,7 @@ export function MejiroToc({
               type="button"
               className={`mejiro-toc-link${entry.index === activeIndex ? ' is-active' : ''}`}
               aria-current={entry.index === activeIndex ? 'true' : undefined}
-              onClick={() => onSelect?.(entry.index)}
+              onClick={() => onChapterSelect?.(entry.index)}
             >
               <span className="mejiro-toc-num">{String(entry.index + 1).padStart(2, '0')}</span>
               <span className="mejiro-toc-label">{entry.title}</span>
@@ -109,9 +127,9 @@ export function MejiroToc({
       </ol>
       {filtered.length === 0 && (
         <div className="mejiro-toc-empty" role="status">
-          {format(messages.tocEmpty, { query })}
+          {formatMessage(messages.tocEmpty, { query })}
         </div>
       )}
     </nav>
   );
-}
+});

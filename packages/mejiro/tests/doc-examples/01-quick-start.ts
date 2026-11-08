@@ -8,7 +8,7 @@ host.id = 'reader';
 document.body.appendChild(host);
 
 // #region doc:dom
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { paragraphClassName } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
@@ -18,12 +18,11 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// 2. Compute page size from a container element
+// 2. Measure the container and store the page size on the book
 const container = document.getElementById('reader')!;
-const { pageWidth, pageHeight } = book.computePageSize(container);
+const { pageWidth, pageHeight } = book.fitPageSize(container);
 
 // 3. Load and parse an EPUB file
 const response = await fetch('/book.epub');
@@ -37,7 +36,7 @@ const spread = layout.getSpread(0);
 
 // spread.right  — PageResult for the right page
 // spread.left   — PageResult for the left page
-// spread.totalPages — total page count
+// spread.pageCount  — page count of the chapter
 
 // 6. Render with DOM (example for the right page)
 const pageEl = document.createElement('div');

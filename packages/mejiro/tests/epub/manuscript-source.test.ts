@@ -33,7 +33,7 @@ describe('manuscriptToEpubBook', () => {
     const body = book.chapters[0].paragraphs[1];
     expect(body.text).toBe('漢字です。');
     expect(body.inlineAnnotations).toHaveLength(1);
-    expect(body.inlineAnnotations[0]).toMatchObject({ kind: 'ruby', rubyText: 'かんじ' });
+    expect(body.inlineAnnotations[0]).toMatchObject({ type: 'ruby', rubyText: 'かんじ' });
   });
 
   it('drops mejiro-only annotations when the dialect is narou', () => {
@@ -129,10 +129,9 @@ describe('manuscriptToEpubBook', () => {
     expect(insertManuscriptParagraph('\n \n', 0, 'BLOCK')).toBe('BLOCK');
   });
 
-  it('honors the book-level title and author options', () => {
+  it('honors the book-level title and author metadata', () => {
     const book = manuscriptToEpubBook([{ title: 'C1', body: '' }], {
-      title: '作品名',
-      author: '作者',
+      metadata: { title: '作品名', creators: [{ name: '作者', role: 'aut' }] },
     });
     expect(book.title).toBe('作品名');
     expect(book.author).toBe('作者');

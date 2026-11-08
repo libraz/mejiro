@@ -1,7 +1,5 @@
 # Ruby Annotations
 
-> **Changed in v0.5:** Browser/book/render paragraph annotations are now the `kind: 'ruby'` variant of the `InlineAnnotation` discriminated union. The field name is `inlineAnnotations`, and ruby literals must include `kind: 'ruby'`. `RubyInputAnnotation` remains as a deprecated alias for `InlineRubyAnnotation`.
-
 ## What is Ruby?
 
 Ruby annotations (振り仮名 / furigana) are small characters placed alongside base text to indicate pronunciation. They are common in Japanese text, where they provide readings for kanji characters.
@@ -22,7 +20,7 @@ Example: 字 with ruby じ.
 
 Mono ruby allows line breaks between annotated characters since each annotation is self-contained.
 
-`'mono'` is the default `type`, and a mono annotation covers exactly one base character. An annotation over two or more characters that leaves `type` unset is rejected with a `RangeError` by `preprocessRuby()` and by the `MejiroBrowser.layout()` / `layoutChapter()` calls that run it; give such a span `type: 'group'` or `'jukugo'`.
+`'mono'` is the default `rubyType`, and a mono annotation covers exactly one base character. An annotation over two or more characters that leaves `rubyType` unset is rejected with a `RangeError` by `preprocessRuby()` and by the `MejiroBrowser.layout()` / `layoutParagraphs()` calls that run it; give such a span `rubyType: 'group'` or `'jukugo'`.
 
 ### Group Ruby
 
@@ -48,8 +46,8 @@ interface RubyAnnotation {
   endIndex: number;          // End in base text codepoint array (exclusive)
   rubyText: Uint32Array;     // Ruby text as codepoints
   rubyAdvances: Float32Array; // Measured ruby character widths in pixels
-  type?: 'mono' | 'group' | 'jukugo'; // Default: 'mono'
-  jukugoSplitPoints?: number[]; // For jukugo: base-text-relative indices where breaks are allowed
+  rubyType?: 'mono' | 'group' | 'jukugo'; // Default: 'mono'
+  jukugoSplitPoints?: readonly number[]; // For jukugo: base-text-relative indices where breaks are allowed
 }
 ```
 
@@ -78,7 +76,7 @@ const annotations: RubyAnnotation[] = [{
   endIndex: 2,
   rubyText: toCodepoints('かんじ'),
   rubyAdvances: new Float32Array([8, 8, 8]), // 3 ruby chars x 8px = 24px
-  type: 'group',
+  rubyType: 'group',
 }];
 
 const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotations);
@@ -113,7 +111,7 @@ const result = computeBreaks({
       endIndex: 2,
       rubyText: toCodepoints('かんじ'),
       rubyAdvances: new Float32Array([8, 8, 8]),
-      type: 'group',
+      rubyType: 'group',
     },
   ],
 });
@@ -128,16 +126,16 @@ The browser layer provides a string-based annotation interface that is easier to
 
 ```ts
 interface InlineRubyAnnotation {
-  kind: 'ruby';
+  type: 'ruby';
   startIndex: number;   // Character index in base text string
   endIndex: number;     // End index (exclusive)
   rubyText: string;     // Ruby text as a plain string
-  type?: 'mono' | 'group' | 'jukugo';
-  jukugoSplitPoints?: number[];
+  rubyType?: 'mono' | 'group' | 'jukugo';
+  jukugoSplitPoints?: readonly number[];
 }
 ```
 
-When you call `MejiroBrowser.layout()` or `layoutChapter()` with `inlineAnnotations`, the browser layer automatically:
+When you call `MejiroBrowser.layout()` or `layoutParagraphs()` with `inlineAnnotations`, the browser layer automatically:
 
 1. Converts the ruby text string to a `Uint32Array` of codepoints.
 2. Measures ruby character advance widths using `Canvas.measureText()`.
@@ -157,31 +155,31 @@ const result = await mejiro.layout({
   lineWidth: 200,
   inlineAnnotations: [
     {
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: 0,
       endIndex: 2,
       rubyText: 'かんじ',
-      type: 'group',
+      rubyType: 'group',
     },
   ],
 });
 ```
 
-For chapter-level layout with multiple paragraphs, use `layoutChapter()`:
+For chapter-level layout with multiple paragraphs, use `layoutParagraphs()`:
 
 <!-- doc-example: 04-ruby-browser.ts#chapter -->
 ```ts
-const chapterResult = await mejiro.layoutChapter({
+const chapterResult = await mejiro.layoutParagraphs({
   paragraphs: [
     {
       text: '漢字を読む',
       inlineAnnotations: [
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 0,
           endIndex: 2,
           rubyText: 'かんじ',
-          type: 'group',
+          rubyType: 'group',
         },
       ],
     },
@@ -203,8 +201,8 @@ When parsing EPUB files, the `extractRubyContent()` function automatically detec
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
 
-const book = await parseEpub(buffer);
-const paragraph = book.chapters[0].paragraphs[0];
+const epub = await parseEpub(buffer);
+const paragraph = epub.chapters[0].paragraphs[0];
 // paragraph.text   -- base text with ruby content stripped out
 // paragraph.inlineAnnotations -- InlineAnnotation[] with character indices into text
 ```
@@ -236,10 +234,10 @@ for (const para of page.paragraphs) {
   for (const line of para.lines) {
     for (const segment of line.segments) {
       if (segment.type === 'ruby') {
-        // segment.base     -- base text string
+        // segment.text     -- base text string
         // segment.rubyText -- ruby text string
         // segment.children -- annotations nested inside the base, if any
-        // Render as: <ruby>base<rt>rubyText</rt></ruby>
+        // Render as: <ruby>text<rt>rubyText</rt></ruby>
       } else {
         // Not ruby: 'text', 'emphasis', 'tcy', 'em', 'strong', 'link' or
         // 'footnote-ref'. Every one of these carries a `text` field.

@@ -19,7 +19,7 @@ Peer dependencies: `react >= 18`; TypeScript projects should install `@types/rea
 
 ### Choosing a component
 
-- **`<MejiroReader>`** -- the all-in-one reader. Hand it an EPUB and you get a working viewer with header, chapter nav, settings panel, paged spreads, page turns, and keyboard bindings out of the box. Start here for "public reading page" use cases such as a novel-submission site.
+- **`<MejiroReader>`** -- the all-in-one reader. Hand it an EPUB and you get a working viewer with chapter navigation, settings panel, paged spreads, page turns, and keyboard bindings out of the box; it adds a header when you give it a `title`. Start here for "public reading page" use cases such as a novel-submission site.
 - **`<MejiroEditor>` / `<MejiroManuscriptEditor>`** -- editors for an existing EPUB and for plain-text manuscripts respectively. Pair with `useEditableEpub` / `useEpubProject` when you want headless state with your own UI.
 - **`<MejiroPageView>`** -- per-page renderer. Use it when you need to embed pages inside a custom layout (comment column, share buttons, etc.) instead of the bundled reader chrome.
 - **`<MejiroPage>`** -- lowest-level renderer for a single `RenderPage` under CSS `writing-mode: vertical-rl`. Use it when you drive paginate / buildRenderPage yourself.
@@ -48,10 +48,26 @@ In manuscript mode each chapter body is split into paragraphs on blank lines and
 with `parseManuscript()` before layout, which makes it the mode to use for live preview
 inside a custom manuscript editor.
 
-Use `bare` to strip all chrome at once, and reintroduce individual pieces with `enableHeader` / `enableChapterNav` / `enableSettings` / etc.:
+The shortest call shows the book with the page indicator, the settings button and the chapter selector; there is no header until you give the reader a `title` (or a `logo`), and no development statistics. Each piece of chrome has its own switch: `showSettings`, `showPageIndicator`, `showStats`, `showImageOverlayButton`, and `chapterNavMode` (`'none'` hides the chapter navigation):
 
 ```tsx
-<MejiroReader epubUrl="/books/sample.epub" bare enableChapterNav />
+<MejiroReader epubUrl="/books/sample.epub" title="吾輩は猫である" showSettings={false} />
+```
+
+The arrow keys and Escape act on the reader root once it has focus, so several readers on one page do not steal each other's keys.
+
+#### Reading position props
+
+`chapterIndex`, `spreadIndex` and `anchor` set where the reader opens. Passing the matching handler — `onChapterIndexChange`, `onSpreadIndexChange`, `onAnchorChange` — makes that value controlled: the reader reports each move through the handler and shows what the prop says. Without the handler the prop is only the starting position.
+
+- `spreadIndex` always counts spreads of the chapter layout, also in single-page mode. Given alone in single-page mode, the reader opens the right page of that spread (the first in reading order). Turning from the right to the left page of one spread keeps the spread, so `onSpreadIndexChange` does not fire; follow `onAnchorChange` for page-level changes.
+- `anchor` (a `ReadingAnchor`) wins over `chapterIndex` and `spreadIndex` when both are given, and survives re-layout, which a spread index does not.
+- A position that is not finite reads as `0`, a fraction is truncated, and an index past the end is clamped.
+
+```tsx
+const [chapterIndex, setChapterIndex] = useState(0);
+
+<MejiroReader epub={epub} chapterIndex={chapterIndex} onChapterIndexChange={setChapterIndex} />
 ```
 
 #### MejiroReader imperative handle
@@ -71,73 +87,55 @@ reader.current?.goToSpread(12);
 
 | Method | Signature | Purpose |
 |--------|-----------|---------|
-| `goToSpread` | `(index: number) => void` | Jump to a spread index (clamped to range). |
+| `goToSpread` | `(index: number) => void` | Jump to a navigation index (clamped to range). |
 | `next` | `() => void` | Advance one spread. |
 | `prev` | `() => void` | Go back one spread. |
 | `goToChapter` | `(index: number) => void` | Switch chapter (clamped to the book's chapters); resets the spread index to 0. |
-| `getReadingPosition` | `() => ReadingPosition` | Returns `{ chapter, spreadIdx, totalPages, totalSpreads }`. |
+| `getSpreadPosition` | `() => SpreadPosition` | Returns `{ chapterIndex, spreadIndex, spreadCount, pageCount }`. |
 | `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | Navigate to a `ReadingAnchor`, without the page-turn animation; switches chapters first if needed. A call made before the book has loaded is applied once it has. The promise resolves once the spread is applied, or without moving when the anchor's chapter or position does not exist in the book. If a later `goToAnchor` supersedes the previous call, the earlier promise resolves immediately. The promise also resolves on unmount so `await` cannot hang. |
 | `getAnchor` | `() => ReadingAnchor \| null` | Anchor at the start of the text on the current spread, or `null` before layout is ready. When an image covers a whole page, the anchor comes from the next page with text. |
-| `getVisibleRange` | `() => { start, end } \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the text on the next spread that has any (or the end of the chapter). |
-| `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
+| `getVisibleRange` | `() => ReadingAnchorRange \| null` | Half-open anchor range visible on the current spread; `end` points at the start of the text on the next spread that has any (or the end of the chapter). |
+| `updateOptions` | `(patch: BookOptionsPatch) => Promise<void>` | Change fonts / sizes at runtime; re-measures and re-lays out asynchronously. |
 | `subscribe` | `(event, listener) => () => void` | Subscribe to a lifecycle event; the returned function detaches the listener. |
 
 Lifecycle events available via `subscribe`:
 
 | Event | Payload | Fires |
 |-------|---------|-------|
-| `spreadChanged` | `{ chapter, spreadIdx }` | After the current spread index changes. |
+| `spreadIndexChange` | `{ chapterIndex, spreadIndex }` | After the current spread index changes. |
 | `turnStart` | `{ from }` | When a turn animation begins, before the new spread is shown. |
 | `turnEnd` | `{ to }` | When a turn animation completes. |
-| `chapterFinished` | `{ chapter }` | When the reader reaches the last spread of a chapter. Mirrors the `onChapterCompleted` prop. |
+| `chapterFinished` | `{ chapterIndex }` | When the reader reaches the last spread of a chapter. Mirrors the `onChapterFinished` prop, which receives the chapter index. |
 
-The first position the reader settles on after loading is the baseline and fires nothing. After that, each change of chapter or spread index fires `spreadChanged` once, then `chapterFinished` if the new index is the last one in the chapter, and a re-layout that keeps the index fires nothing. The `onPageRead(anchor, dwellMs)` prop fires on the same transitions, for the spread that was left; a book swap and unmount do not fire it. When an uncontrolled reader on another chapter resets to chapter 0 on a book swap, `onChapterChange` fires with `0`. React and Vue emit the same sequence.
+The first position the reader settles on after loading is the baseline and fires nothing. After that, each change of chapter or spread index fires `spreadIndexChange` once, then `chapterFinished` if the new index is the last one in the chapter, and a re-layout that keeps the index fires nothing. The `onPageRead(anchor, dwellMs)` prop fires on the same transitions, for the spread that was left; a book swap and unmount do not fire it. When an uncontrolled reader on another chapter resets to chapter 0 on a book swap, `onChapterIndexChange` fires with `0`. React and Vue emit the same sequence.
 
-In single-page mode (`spreadMode="single"`, or `"auto"` on a portrait surface) the reader shows one page at a time, and every spread index above counts pages instead: `goToSpread`, `next` / `prev`, `spreadIdx` / `totalSpreads`, the `spreadChanged` payload and `onSpreadIdxChange`. `getAnchor` and `getVisibleRange` then cover the current page. When `"auto"` switches mode, the index is converted so the page on screen stays visible.
+In single-page mode (`spreadMode="single"`, or `"auto"` on a portrait surface) the reader shows one page at a time. `goToSpread`, `next` and `prev` then move by page, while `spreadIndex`, `onSpreadIndexChange`, the `spreadIndexChange` event and `SpreadPosition` keep counting layout spreads. `getAnchor` and `getVisibleRange` cover the current page. When `"auto"` switches mode, the index is converted so the page on screen stays visible.
 
 #### Persisting the reading position
 
-`useReadingPosition` stores positions as a `ReadingAnchor` (`{ chapter, paragraph, charIndex }`). Unlike a spread index, anchors survive font-size changes and viewport resizes because they reference logical content, so they round-trip cleanly through any reflow.
+`useReadingPosition` stores positions as a `ReadingAnchor` (`{ chapterIndex, paragraphIndex, charIndex }`). Unlike a spread index, anchors survive font-size changes and viewport resizes because they reference logical content, so they round-trip cleanly through any reflow.
 
 ```tsx
-import { useEffect, useRef } from 'react';
-import {
-  MejiroReader,
-  useReadingPosition,
-  type MejiroReaderHandle,
-} from '@libraz/mejiro-react';
+import { MejiroReader, useReadingPosition } from '@libraz/mejiro-react';
 
-const reader = useRef<MejiroReaderHandle>(null);
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${bookId}`,
   // Defaults to `window.localStorage`. For server-backed persistence,
   // pass a custom { getItem, setItem, removeItem } implementation.
 });
 
-// Restore the saved anchor once, on mount. Depending on `position` would re-run
-// after every save() below and pull the reader back on each page turn.
-useEffect(() => {
-  if (position) reader.current?.goToAnchor(position);
-}, []);
-
-<MejiroReader
-  ref={reader}
-  epubUrl={url}
-  onSpreadChange={() => {
-    const anchor = reader.current?.getAnchor();
-    if (anchor) save(anchor);
-  }}
-/>
+// The reader opens at the saved anchor and reports every move to save().
+<MejiroReader epubUrl={url} anchor={position} onAnchorChange={save} />
 ```
 
-`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). For async, server-backed persistence, the idiomatic pattern is to leave `storage` pointing at an in-memory mirror and use `onChange` to forward each mutation. Send the bytes produced by `serializeReadingPosition` -- that is the same payload the hook writes to `storage`, and `parseReadingPosition` reads it back on the next visit:
+`storage` accepts any implementation of the minimal `localStorage`-shaped interface (`getItem` / `setItem` / `removeItem`). For async, server-backed persistence, the idiomatic pattern is to leave `storage` pointing at an in-memory mirror and use `onPositionChange` to forward each mutation. Send the bytes produced by `serializeReadingPosition` -- that is the same payload the hook writes to `storage`, and `parseReadingPosition` reads it back on the next visit:
 
 ```tsx
 import { serializeReadingPosition } from '@libraz/mejiro';
 
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${bookId}`,
-  onChange: (next) => {
+  onPositionChange: (next) => {
     void fetch(`/api/books/${bookId}/position`, {
       method: next ? 'PUT' : 'DELETE',
       body: next ? serializeReadingPosition(next) : undefined,
@@ -155,7 +153,7 @@ const restored = parseReadingPosition(await loadPositionFromServer(bookId));
 if (restored) reader.current?.goToAnchor(restored);
 ```
 
-`onChange` fires synchronously after `save()` or `clear()` (never on initial hydration or `key` changes). Local persistence stays on its own debounce, so you can pick a different rate for the network call without coordinating throttles.
+`onPositionChange` fires synchronously after `save()` or `clear()` (never on initial hydration or `key` changes). Local persistence stays on its own `debounceMs`, so you can pick a different rate for the network call without coordinating the two. A storage that throws, or data it cannot read back, is reported to `onError` (`storage-read-failed`, `storage-write-failed`, `storage-corrupt`); corrupt data is left in place until the first change.
 
 ### MejiroPageView (Recommended)
 
@@ -166,9 +164,10 @@ Props:
 | Prop | Type | Description |
 |------|------|-------------|
 | `result` | `PageResult` | Required. Page data from `layout.getSpread()`. |
+| `layout` | `ChapterLayout` | Supplies the default `fontFamily` and `lineSpacing` from `layout.typography`. |
 | `fontFamily` | `string` | Font family for slot-based rendering. |
 | `lineSpacing` | `number` | Line spacing multiplier for slot-based rendering. |
-| `slotMode` | `boolean` | Force slot-based rendering (set to `true` when images exist on any spread). |
+| `slotMode` | `boolean` | Force slot-based rendering (set it from `result.hasImages`). |
 | `className` | `string` | Additional CSS class. |
 | `style` | `CSSProperties` | Additional inline styles. |
 
@@ -181,7 +180,7 @@ A full component using `MejiroBook`, spread navigation, and image overlay:
 <!-- doc-example: 08-react-vertical-reader.tsx#reader -->
 ```tsx
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -189,41 +188,41 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<ChapterLayout | null>(null);
   const [spread, setSpread] = useState<SpreadResult | null>(null);
-  const [spreadIdx, setSpreadIdx] = useState(0);
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  const [spreadIndex, setSpreadIndex] = useState(0);
+  const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
 
-  // Image overlay hook
-  const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-    useImageOverlay(layout, spreadIdx, setSpread);
+  // Image overlays: every change re-flows the spread around them
+  const { currentImages, addOverlay, clearOverlays, onOverlayPointerDown, onResizePointerDown } =
+    useImageOverlay(layout, { spreadIndex, onReflow: setSpread });
+  const overlay = currentImages[0];
 
-  // Compute page size from container and lay out the chapter
+  // Measure the container and lay out the chapter
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const { pageWidth, pageHeight } = book.computePageSize(el);
-    setPageSize({ w: pageWidth, h: pageHeight });
+    const { pageWidth, pageHeight } = book.fitPageSize(el);
+    setPageSize({ width: pageWidth, height: pageHeight });
 
     book.layoutChapter({ paragraphs }).then((lo) => {
       setLayout(lo);
       setSpread(lo.getSpread(0));
-      setSpreadIdx(0);
+      setSpreadIndex(0);
     });
   }, [paragraphs]);
 
   // Navigate spreads
   const goTo = useCallback(
-    (idx: number) => {
+    (index: number) => {
       if (!layout) return;
-      setSpreadIdx(idx);
-      setSpread(layout.getSpread(idx));
+      setSpreadIndex(index);
+      setSpread(layout.getSpread(index));
     },
     [layout],
   );
@@ -231,34 +230,34 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
   // The measured container renders on every path, so the effect finds it on first commit.
   if (!spread) return <div ref={containerRef}>Loading...</div>;
 
-  const totalSpreads = Math.ceil(spread.totalPages / 2);
+  const spreadCount = Math.ceil(spread.pageCount / 2);
 
   return (
     <div ref={containerRef}>
       <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
         {/* Right page (first in vertical-rl order) */}
-        <div style={{ width: pageSize.w, height: pageSize.h, position: 'relative' }}>
+        <div style={{ width: pageSize.width, height: pageSize.height, position: 'relative' }}>
           <MejiroPageView
             result={spread.right}
             fontFamily='"Noto Serif JP"'
             lineSpacing={1.8}
-            slotMode={hasImage}
+            slotMode={spread.right.hasImages}
             style={{ width: '100%', height: '100%' }}
           />
           {/* Image overlay on the right page */}
-          {imageRect && (
+          {overlay && (
             <div
               style={{
                 position: 'absolute',
-                left: imageRect.x,
-                top: imageRect.y,
-                width: imageRect.w,
-                height: imageRect.h,
+                left: overlay.rect.x,
+                top: overlay.rect.y,
+                width: overlay.rect.width,
+                height: overlay.rect.height,
                 background: 'rgba(0,0,0,0.1)',
                 border: '2px dashed #888',
                 cursor: 'move',
               }}
-              onPointerDown={onOverlayPointerDown}
+              onPointerDown={(e) => onOverlayPointerDown(overlay.id, e)}
             >
               {/* Resize handle */}
               <div
@@ -270,40 +269,44 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
                   height: 16,
                   cursor: 'nwse-resize',
                 }}
-                onPointerDown={onResizePointerDown}
+                onPointerDown={(e) => onResizePointerDown(overlay.id, e)}
               />
             </div>
           )}
         </div>
 
         {/* Left page */}
-        <div style={{ width: pageSize.w, height: pageSize.h }}>
+        <div style={{ width: pageSize.width, height: pageSize.height }}>
           <MejiroPageView
             result={spread.left}
             fontFamily='"Noto Serif JP"'
             lineSpacing={1.8}
-            slotMode={hasImage}
+            slotMode={spread.left.hasImages}
             style={{ width: '100%', height: '100%' }}
           />
         </div>
       </div>
 
       <div style={{ textAlign: 'center', marginTop: 8 }}>
-        <button type="button" onClick={() => goTo(spreadIdx - 1)} disabled={spreadIdx === 0}>
+        <button type="button" onClick={() => goTo(spreadIndex - 1)} disabled={spreadIndex === 0}>
           Previous
         </button>
         <span style={{ margin: '0 1em' }}>
-          {spreadIdx + 1} / {totalSpreads}
+          {spreadIndex + 1} / {spreadCount}
         </span>
         <button
           type="button"
-          onClick={() => goTo(spreadIdx + 1)}
-          disabled={spreadIdx >= totalSpreads - 1}
+          onClick={() => goTo(spreadIndex + 1)}
+          disabled={spreadIndex >= spreadCount - 1}
         >
           Next
         </button>
-        <button type="button" onClick={toggleImage} style={{ marginLeft: '1em' }}>
-          {hasImage ? 'Remove Image' : 'Add Image'}
+        <button
+          type="button"
+          onClick={() => (overlay ? clearOverlays(spreadIndex) : addOverlay())}
+          style={{ marginLeft: '1em' }}
+        >
+          {overlay ? 'Remove Image' : 'Add Image'}
         </button>
       </div>
     </div>
@@ -316,57 +319,70 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 `useChapterLayout` lays the chapter out again whenever the surface resizes or a metric option changes; a resize observation that reports the box the current layout was measured with does not re-flow. The book replays the line-breaking hints it already derived, so this never re-runs the analyzer, but the result is a brand-new `ChapterLayout`, which resets any downstream spread index to 0. The hook carries the reading position across the swap in three steps, and the Vue composable has exactly the same shape:
 
 - `capturePosition(layout)` is called on the outgoing layout just before a re-flow and returns the anchor to keep (or `null`). It is never called for a blank (content-change) re-layout.
-- `pendingRestore.current` holds that anchor until the new layout is in place.
+- `pendingRestore.current` (Vue: `pendingRestore.value`) holds that anchor until the new layout is in place.
 - `restorePosition(layout, anchor)`, when given, is called once the new layout is in place (React: after it commits, before paint), with `pendingRestore` already cleared.
 
 <!-- doc-example: 08-reflow-options.tsx#react -->
 ```tsx
-const layout = useChapterLayout(book, epub, chapter, surface, {
-  capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
-  restorePosition: (l, anchor) => setSpreadIdx(l.locateAnchor(anchor)?.spreadIdx ?? 0),
+const layout = useChapterLayout(book, {
+  epub,
+  chapterIndex,
+  surface,
+  capturePosition: (l) => l.anchorAt(spreadIndex),
+  restorePosition: (l, anchor) => setSpreadIndex(l.locateAnchor(anchor)?.spreadIndex ?? 0),
 });
 ```
 
 <!-- doc-example: 08-reflow-options-vue.ts#vue -->
 ```ts
-// Vue: the same options; `layout.layout` is a Ref.
-const layout = useChapterLayout(book, epub, chapter, surface, {
-  capturePosition: (l) => l.anchorAt(spreadIdx.value, 'right'),
+// Vue: the same options, which also take Refs; `layout.layout` is a Ref.
+const layout = useChapterLayout(book, {
+  epub,
+  chapterIndex,
+  surface,
+  capturePosition: (l) => l.anchorAt(spreadIndex.value),
   restorePosition: (l, anchor) => {
-    spreadIdx.value = l.locateAnchor(anchor)?.spreadIdx ?? 0;
+    spreadIndex.value = l.locateAnchor(anchor)?.spreadIndex ?? 0;
   },
 });
 ```
 
-Without `restorePosition`, read `pendingRestore.current` yourself once the new layout is in place and set it back to `null`; this suits a component that resets its spread index in its own layout effect and must restore after that reset. `useManuscriptLayout` takes the same options and returns the same `pendingRestore` for manuscript previews.
+When the spread index lives in `useSpread`, one option does all of this: `useSpread(layout, { preservePosition: true })` opens each replacement layout at the text the old one showed.
+
+Without `restorePosition`, read `pendingRestore.current` (Vue: `.value`) yourself once the new layout is in place and set it back to `null`; this suits a component that resets its spread index in its own layout effect and must restore after that reset. `useManuscriptLayout` takes the same options and returns the same `pendingRestore` for manuscript previews.
 
 ### useImageOverlay Hook
 
-`useImageOverlay` manages a draggable/resizable image rectangle and syncs it with the layout engine for real-time text reflow. While an overlay is active, the exclusion is re-issued when the layout is replaced or the spread changes, so the text keeps flowing around it after a resize or a page turn. In React a change of the `margin` option re-issues it as well; the Vue composable reads its options once, when it is called. A drag starts only on a press `isPrimaryPointerPress` accepts (touch, pen or the primary mouse button), and `MejiroSpread` does not turn the page for a press on an overlay. With `enableImageOverlay`, `MejiroReader` clears its overlays when a book loads or the chapter changes.
+`useImageOverlay` manages draggable, resizable image overlays per spread and syncs them with the layout engine for real-time text reflow. Each overlay change re-flows its spread through `ChapterLayout.setImages`, and the overlays are re-applied when the layout is replaced, so the text keeps flowing around them after a resize. In React a change of the `margin` option re-applies them as well; the Vue composable reads its options once, when it is called. A drag starts only on a press `isPrimaryPointerPress` accepts (touch, pen or the primary mouse button), and `MejiroSpread` does not turn the page for a press on an overlay. With `showImageOverlayButton`, `MejiroReader` clears its overlays when a book loads or the chapter changes.
 
 ```ts
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, onUpdate, options?);
+const nav = useSpread(layout);
+const overlays = useImageOverlay(layout, {
+  spreadIndex: nav.spreadIndex,
+  onReflow: () => nav.refresh(),
+});
 ```
 
-Parameters:
+Options (`UseImageOverlayOptions`):
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `layout` | `ChapterLayout \| null` | Current chapter layout. |
-| `spreadIdx` | `number` | Current spread index. |
-| `onUpdate` | `(spread: SpreadResult) => void` | Called after every reflow. |
-| `options` | `UseImageOverlayOptions` | Default size/position (`defaultWidth`, `defaultHeight`, `defaultX`, `defaultY`, `margin`). |
+| Option | Type | Description |
+|--------|------|-------------|
+| `spreadIndex` | `number` | Required. Layout spread `addOverlay` places overlays on. |
+| `onReflow` | `(spread: SpreadResult) => void` | Called with each spread re-flowed after an overlay change. Pair it with `useSpread().refresh()`. Defaults to a no-op. |
+| `defaultWidth` / `defaultHeight` / `defaultX` / `defaultY` | `number` | Size and position of a new overlay (120 × 160 at 80, 100). |
+| `margin` | `number` | Margin around each overlay; defaults to the book's font size. |
 
-Returns:
+Returns (`UseImageOverlayReturn`):
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `imageRect` | `ImageRect \| null` | Current rectangle `{ x, y, w, h }`, or `null`. |
-| `hasImage` | `boolean` | Whether an overlay is active. |
-| `toggleImage` | `() => void` | Toggle the overlay on/off. |
-| `onOverlayPointerDown` | `(e: PointerEvent) => void` | Attach to the overlay div for dragging. |
-| `onResizePointerDown` | `(e: PointerEvent) => void` | Attach to a corner handle for resizing. |
+| `imagesBySpread` | `ReadonlyMap<number, readonly MultiImageItem[]>` | Overlays keyed by spread index. |
+| `currentImages` | `readonly MultiImageItem[]` | Overlays on `spreadIndex`; pass them to `MejiroSpread`'s `images`. |
+| `hasOverlays` | `boolean` | Whether any spread holds an overlay. |
+| `addOverlay` | `(overrides?: Partial<ImageOverlayRect>) => MultiImageItem` | Add an overlay on the current spread. |
+| `removeOverlay` / `updateOverlay` | `(id) => void` / `(id, rect) => void` | Remove an overlay, or merge a rectangle into it. |
+| `clearOverlays` | `(spreadIndex?: number) => void` | Remove every overlay, or those of one spread. |
+| `onOverlayPointerDown` / `onResizePointerDown` | `(id: string, e: PointerEvent) => void` | Attach to an overlay body for dragging, and to its corner handle for resizing. |
 
 ### MejiroPage (Low-Level)
 
@@ -408,32 +424,20 @@ function jump(): void {
 </template>
 ```
 
-Source props mirror the React package: `epub-url`, `epub`, `manuscript` (with the optional `dialect` prop), or none of them (the reader renders its own drop zone). `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
+Source props mirror the React package: `epub-url`, `epub`, `manuscript` (with the optional `dialect` prop), or none of them (the reader renders its own drop zone). The position props bind with `v-model:chapter-index`, `v-model:spread-index` and `v-model:anchor`; a value bound without listening to its `update:` event is only the starting position, as in React. `MejiroReaderHandle` exposes the same surface as the React handle — see [the React handle table](#mejiroreader-imperative-handle) for the full list. Vue callers reach it through the `ref`'s `.value`.
 
-Persist the reading position the same way as in React: `useReadingPosition` stores a `ReadingAnchor`, restored through the handle's `goToAnchor` and captured with `getAnchor`. A spread index (`:spread-idx`) does not survive reflow, so it is not a persistence format.
+Persist the reading position the same way as in React: bind the `ReadingAnchor` that `useReadingPosition` stores to `anchor` and save each move. A spread index does not survive reflow, so it is not a persistence format.
 
 ```vue
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { MejiroReader, type MejiroReaderHandle, useReadingPosition } from '@libraz/mejiro-vue';
+import { MejiroReader, useReadingPosition } from '@libraz/mejiro-vue';
 
 const props = defineProps<{ bookId: string; url: string }>();
-const reader = ref<MejiroReaderHandle | null>(null);
 const { position, save } = useReadingPosition({ key: `mejiro:position:${props.bookId}` });
-
-// Restore once, on mount. Watching `position` would re-fire after every save().
-onMounted(() => {
-  if (position.value) void reader.value?.goToAnchor(position.value);
-});
-
-function onSpreadChange(): void {
-  const anchor = reader.value?.getAnchor();
-  if (anchor) save(anchor);
-}
 </script>
 
 <template>
-  <MejiroReader ref="reader" :epub-url="url" @spread-change="onSpreadChange" />
+  <MejiroReader :epub-url="url" :anchor="position" @update:anchor="save" />
 </template>
 ```
 
@@ -446,6 +450,7 @@ Props:
 | Prop | Type | Description |
 |------|------|-------------|
 | `result` | `PageResult` | Required. Page data from `layout.getSpread()`. |
+| `layout` | `ChapterLayout` | Supplies the default `fontFamily` and `lineSpacing` from `layout.typography`. |
 | `fontFamily` | `string` | Font family for slot-based rendering. |
 | `lineSpacing` | `number` | Line spacing multiplier for slot-based rendering. |
 | `slotMode` | `boolean` | Force slot-based rendering. |
@@ -458,7 +463,7 @@ A full component using `MejiroBook`, spread navigation, and image overlay:
 ```vue
 <script setup lang="ts">
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
 import { computed, onMounted, ref, shallowRef } from 'vue';
 
@@ -468,35 +473,43 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 const containerRef = ref<HTMLElement | null>(null);
 const layout = shallowRef<ChapterLayout | null>(null);
 const spread = shallowRef<SpreadResult | null>(null);
-const spreadIdx = ref(0);
-const pageSize = ref({ w: 0, h: 0 });
+const spreadIndex = ref(0);
+const pageSize = ref({ width: 0, height: 0 });
 
-// Image overlay composable (note: takes Vue Refs for layout and spreadIdx)
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, (s) => {
-    spread.value = s;
+// Image overlays: every change re-flows the spread around them (layout and spreadIndex are Refs)
+const { currentImages, addOverlay, clearOverlays, onOverlayPointerDown, onResizePointerDown } =
+  useImageOverlay(layout, {
+    spreadIndex,
+    onReflow: (s) => {
+      spread.value = s;
+    },
   });
+const overlay = computed(() => currentImages.value[0]);
 
-const totalSpreads = computed(() => (spread.value ? Math.ceil(spread.value.totalPages / 2) : 0));
+const spreadCount = computed(() => (spread.value ? Math.ceil(spread.value.pageCount / 2) : 0));
 
-function goTo(idx: number): void {
+function goTo(index: number): void {
   if (!layout.value) return;
-  spreadIdx.value = idx;
-  spread.value = layout.value.getSpread(idx);
+  spreadIndex.value = index;
+  spread.value = layout.value.getSpread(index);
+}
+
+function toggleOverlay(): void {
+  if (overlay.value) clearOverlays(spreadIndex.value);
+  else addOverlay();
 }
 
 onMounted(async () => {
   const el = containerRef.value;
   if (!el) return;
 
-  const { pageWidth, pageHeight } = book.computePageSize(el);
-  pageSize.value = { w: pageWidth, h: pageHeight };
+  const { pageWidth, pageHeight } = book.fitPageSize(el);
+  pageSize.value = { width: pageWidth, height: pageHeight };
 
   const lo = await book.layoutChapter({ paragraphs: props.paragraphs });
   layout.value = lo;
@@ -510,29 +523,29 @@ onMounted(async () => {
       <div style="display: flex; gap: 4px; justify-content: center">
         <!-- Right page (first in vertical-rl order) -->
         <div
-          :style="{ width: pageSize.w + 'px', height: pageSize.h + 'px', position: 'relative' }"
+          :style="{ width: pageSize.width + 'px', height: pageSize.height + 'px', position: 'relative' }"
         >
           <MejiroPageView
             :result="spread.right"
             font-family='"Noto Serif JP"'
             :line-spacing="1.8"
-            :slot-mode="hasImage"
+            :slot-mode="spread.right.hasImages"
             :style="{ width: '100%', height: '100%' }"
           />
           <!-- Image overlay on the right page -->
           <div
-            v-if="imageRect"
+            v-if="overlay"
             :style="{
               position: 'absolute',
-              left: imageRect.x + 'px',
-              top: imageRect.y + 'px',
-              width: imageRect.w + 'px',
-              height: imageRect.h + 'px',
+              left: overlay.rect.x + 'px',
+              top: overlay.rect.y + 'px',
+              width: overlay.rect.width + 'px',
+              height: overlay.rect.height + 'px',
               background: 'rgba(0,0,0,0.1)',
               border: '2px dashed #888',
               cursor: 'move',
             }"
-            @pointerdown="onOverlayPointerDown"
+            @pointerdown="onOverlayPointerDown(overlay.id, $event)"
           >
             <!-- Resize handle -->
             <div
@@ -544,31 +557,31 @@ onMounted(async () => {
                 height: '16px',
                 cursor: 'nwse-resize',
               }"
-              @pointerdown="onResizePointerDown"
+              @pointerdown="onResizePointerDown(overlay.id, $event)"
             />
           </div>
         </div>
 
         <!-- Left page -->
-        <div :style="{ width: pageSize.w + 'px', height: pageSize.h + 'px' }">
+        <div :style="{ width: pageSize.width + 'px', height: pageSize.height + 'px' }">
           <MejiroPageView
             :result="spread.left"
             font-family='"Noto Serif JP"'
             :line-spacing="1.8"
-            :slot-mode="hasImage"
+            :slot-mode="spread.left.hasImages"
             :style="{ width: '100%', height: '100%' }"
           />
         </div>
       </div>
 
       <div style="text-align: center; margin-top: 8px">
-        <button :disabled="spreadIdx === 0" @click="goTo(spreadIdx - 1)">Previous</button>
-        <span style="margin: 0 1em">{{ spreadIdx + 1 }} / {{ totalSpreads }}</span>
-        <button :disabled="spreadIdx >= totalSpreads - 1" @click="goTo(spreadIdx + 1)">
+        <button :disabled="spreadIndex === 0" @click="goTo(spreadIndex - 1)">Previous</button>
+        <span style="margin: 0 1em">{{ spreadIndex + 1 }} / {{ spreadCount }}</span>
+        <button :disabled="spreadIndex >= spreadCount - 1" @click="goTo(spreadIndex + 1)">
           Next
         </button>
-        <button style="margin-left: 1em" @click="toggleImage">
-          {{ hasImage ? 'Remove Image' : 'Add Image' }}
+        <button style="margin-left: 1em" @click="toggleOverlay">
+          {{ overlay ? 'Remove Image' : 'Add Image' }}
         </button>
       </div>
     </template>
@@ -579,31 +592,16 @@ onMounted(async () => {
 
 ### useImageOverlay Composable
 
-Same functionality as the React hook, but takes **Vue Refs** for `layout` and `spreadIdx`, and returns **Refs** for reactive values.
+The same options and return keys as the React hook. `layout` and `options.spreadIndex` accept a value, a `Ref` or a getter; `imagesBySpread`, `currentImages` and `hasOverlays` are returned as refs; the other options are read once.
 
 ```ts
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, onUpdate, options?);
+const nav = useSpread(layout);
+const overlays = useImageOverlay(layout, {
+  spreadIndex: nav.spreadIndex,
+  onReflow: () => nav.refresh(),
+});
+overlays.addOverlay();
 ```
-
-Parameters:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `layout` | `Ref<ChapterLayout \| null>` | Ref to the current chapter layout. |
-| `spreadIdx` | `Ref<number>` | Ref to the current spread index. |
-| `onUpdate` | `(spread: SpreadResult) => void` | Called after every reflow. |
-| `options` | `UseImageOverlayOptions` | Default size/position. |
-
-Returns:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `imageRect` | `Ref<ImageRect \| null>` | Reactive rectangle. |
-| `hasImage` | `Ref<boolean>` | Reactive computed boolean. |
-| `toggleImage` | `() => void` | Toggle the overlay. |
-| `onOverlayPointerDown` | `(e: PointerEvent) => void` | Attach for dragging. |
-| `onResizePointerDown` | `(e: PointerEvent) => void` | Attach for resizing. |
 
 ### MejiroPage (Low-Level)
 
@@ -635,7 +633,9 @@ Quick decision:
 
 ### MejiroManuscriptEditor controlled mode
 
-`title` / `author` / `cover` work as both uncontrolled (initial value) and controlled (parent-owned) props. Attaching `onXxxChange` (React) or `v-model:xxx` (Vue) flips that field into controlled mode — the input value tracks the prop until the parent updates it.
+`title` / `author` / `cover` / `chapters` work as both uncontrolled (initial value) and controlled (parent-owned) props. Attaching `onXxxChange` (React) or `v-model:xxx` (Vue) flips that field into controlled mode — the input value tracks the prop until the parent updates it.
+
+This is the rule for every value prop in both packages: the prop is the starting value, and the handler is what makes it controlled. It differs from the common `value` + `onChange` / `defaultValue` split, so that a host can take over one field — a title edited on another screen, say — without the others leaving their uncontrolled default, and so that each value keeps a single prop name.
 
 ```tsx
 // React: wiring the editor into a post-form's shared state
@@ -662,7 +662,7 @@ const [cover, setCover] = useState<File | null>(null);
 />
 ```
 
-Without handlers the fields stay uncontrolled, so existing usage keeps working unchanged.
+Without handlers the fields stay uncontrolled.
 
 ---
 
@@ -767,14 +767,14 @@ width.
 ### Page numbers (`pageNumbers`)
 
 Each page of a spread prints its own page number in the running head — the right
-page odd, the left page even. Use `pageNumbers` to choose which pages show one. It applies in every reader mode: `mode="scroll"` numbers its page stack by the same rule, with the first page on the right, and shows the `enablePageIndicator` badge as well.
+page odd, the left page even. Use `pageNumbers` to choose which pages show one. It applies in every reader mode: `mode="scroll"` numbers its page stack by the same rule, with the first page on the right, and shows the `showPageIndicator` badge as well.
 
 | Value | Effect |
 |---|---|
 | `'both'` | Number every page (default). |
 | `'right'` | Only the right page. |
 | `'left'` | Only the left page. |
-| `'none'` | Hide page numbers. The `enablePageIndicator` "n / total" badge is independent. |
+| `'none'` | Hide page numbers. The `showPageIndicator` "n / total" badge is independent. |
 
 ```tsx
 // React
@@ -794,10 +794,10 @@ page odd, the left page even. Use `pageNumbers` to choose which pages show one. 
 
 | What you need | API |
 |---|---|
-| Draft state (chapter array + autosave) | `useManuscriptDraft({ onAutosave, autosaveDelay })` |
-| Lay out a single manuscript chapter for preview | `useManuscriptLayout(book, chapter, surfaceRef, { dialect })` |
+| Draft state (chapter array + autosave) | `useManuscriptDraft({ onAutosave, autosaveDebounceMs })` |
+| Lay out a single manuscript chapter for preview | `useManuscriptLayout(book, { chapter, surface, dialect })` |
 | Full-chrome preview (chapter nav + settings) | `<MejiroReader manuscript={chapters} dialect="mejiro" />` |
-| Notation highlight overlay for an editing textarea | `<MejiroNotationHighlighter value onChange />` |
+| Notation highlight overlay for an editing textarea | `<MejiroNotationHighlighter value onValueChange />` |
 | Final EPUB export | `EpubProject.fromManuscript(...).export(...)` |
 
 ### Drive MejiroReader from manuscript chapters directly
@@ -816,9 +816,9 @@ function MyEditor() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100vh' }}>
       <MejiroReader
-        manuscript={draft.chapters.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
-        chapter={draft.selected}
-        onChapterChange={draft.setSelected}
+        manuscript={draft.chapters}
+        chapterIndex={draft.selectedChapterIndex}
+        onChapterIndexChange={draft.setSelectedChapterIndex}
         dialect="mejiro"
       />
       <YourSidePanel draft={draft} />
@@ -840,7 +840,7 @@ import { useRef } from 'react';
 function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
   const { book } = useMejiroBook({ fontFamily: '"Noto Serif JP"', fontSize: 16 });
   const surface = useRef<HTMLDivElement>(null);
-  const layout = useManuscriptLayout(book, chapter, surface);
+  const layout = useManuscriptLayout(book, { chapter, surface });
   return (
     <div ref={surface} style={{ height: '100%' }}>
       {layout.layout && (
@@ -858,7 +858,7 @@ function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
 
 ### Add notation highlighting to your manuscript textarea
 
-`MejiroNotationHighlighter` places an overlay behind a textarea and tints the background of manuscript notation tokens (ruby, emphasis dots, tate-chu-yoko, em/strong, links, footnotes). The textarea stays fully interactive.
+`MejiroNotationHighlighter` places an overlay behind a textarea and tints the background of manuscript notation tokens (ruby, emphasis dots, tate-chu-yoko, em/strong, links, footnotes). The textarea stays fully interactive. `onValueChange` receives the new text; other textarea attributes, a native `onChange` included, reach the textarea (Vue: `v-model:value`, with the attributes passed through).
 
 ```tsx
 import { MejiroNotationHighlighter } from '@libraz/mejiro-react';
@@ -866,7 +866,7 @@ import { useState } from 'react';
 
 function Notation() {
   const [text, setText] = useState('｜漢字《かんじ》 is a ruby example.');
-  return <MejiroNotationHighlighter value={text} onChange={setText} dialect="mejiro" />;
+  return <MejiroNotationHighlighter value={text} onValueChange={setText} dialect="mejiro" />;
 }
 ```
 
@@ -900,16 +900,16 @@ function Reader({ bookId, epub }) {
 }
 ```
 
-`annotations` is an array of `{ chapter, start, end, color? }`. The Reader filters by current chapter, computes highlight rectangles via `ChapterLayout.selectionRects`, and forwards them to `MejiroSpread`. The `storage` option follows the same interface as `useReadingPosition`, so swapping `localStorage` for a server-backed store is a drop-in change.
+`annotations` is an array of `ReaderAnnotation` (`{ chapterIndex, start, end, color? }`). The Reader filters by current chapter, computes highlight rectangles via `ChapterLayout.selectionRects`, and forwards them to `MejiroSpread`. The `storage` option follows the same interface as `useReadingPosition`, so swapping `localStorage` for a server-backed store is a drop-in change.
 
-For asynchronous server sync, use `onChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration or `key` changes; `clear()` on an empty list is a no-op and does not fire it). As with the reading position, send the bytes produced by `serializeAnnotations` so `parseAnnotations` accepts them on the next visit:
+For asynchronous server sync, use `onAnnotationsChange` to forward each mutation (it fires synchronously after `add` / `remove` / `update` / `clear` and never on initial hydration or `key` changes; `clear()` on an empty list is a no-op and does not fire it). As with the reading position, send the bytes produced by `serializeAnnotations` so `parseAnnotations` accepts them on the next visit:
 
 ```tsx
 import { serializeAnnotations } from '@libraz/mejiro';
 
 const { annotations, add, remove } = useAnnotations({
   key: `mejiro:ann:${bookId}`,
-  onChange: (next) => {
+  onAnnotationsChange: (next) => {
     void fetch(`/api/books/${bookId}/annotations`, {
       method: 'PUT',
       body: serializeAnnotations(next),

@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "paths": {
+      "@libraz/mejiro": ["../../src/index.ts"],
+      "@libraz/mejiro/*": ["../../src/*/index.ts"],
+      "@libraz/mejiro-react": ["../../../mejiro-react/src/index.ts"],
+      "@libraz/mejiro-vue": ["../../../mejiro-vue/src/index.ts"]
+    }
+  },
+  "include": ["**/*.vue", "../../../mejiro-vue/src/css.d.ts"]
+}

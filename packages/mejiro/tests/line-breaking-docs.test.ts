@@ -25,7 +25,7 @@ describe('line breaking documentation examples', () => {
     });
 
     expect([...result.breakPoints]).toEqual([5]);
-    expect([...(result.hangingAdjustments ?? [])]).toEqual([16, 0]);
+    expect([...result.hangingAdjustments]).toEqual([16, 0]);
   });
 
   it('breaks earlier with hanging punctuation disabled', () => {
@@ -37,7 +37,7 @@ describe('line breaking documentation examples', () => {
     });
 
     expect([...result.breakPoints]).toEqual([3, 8]);
-    expect(result.hangingAdjustments).toBeUndefined();
+    expect([...result.hangingAdjustments]).toEqual([0, 0, 0]);
 
     // The per-line grouping printed under the example matches the real lines.
     const chars = [...HANGING_TEXT];
@@ -57,10 +57,12 @@ describe('line breaking documentation examples', () => {
     const text = toCodepoints(SMALL_KANA_TEXT);
 
     expect([
-      ...computeBreaks({ text, advances: advances(11), lineWidth: 80, mode: 'strict' }).breakPoints,
+      ...computeBreaks({ text, advances: advances(11), lineWidth: 80, kinsoku: 'strict' })
+        .breakPoints,
     ]).toEqual([3, 8]);
     expect([
-      ...computeBreaks({ text, advances: advances(11), lineWidth: 80, mode: 'loose' }).breakPoints,
+      ...computeBreaks({ text, advances: advances(11), lineWidth: 80, kinsoku: 'loose' })
+        .breakPoints,
     ]).toEqual([4, 9]);
   });
 
@@ -192,7 +194,9 @@ describe('kinsoku character tables', () => {
 
   it.each(DOC_PAGES)('lists exactly the characters loose mode allows in $path', (page) => {
     const looseAllowed = rules.lineStartProhibited.filter(
-      (cp) => isLineStartProhibited(cp, 'strict') && !isLineStartProhibited(cp, 'loose'),
+      (cp) =>
+        isLineStartProhibited(cp, { kinsoku: 'strict' }) &&
+        !isLineStartProhibited(cp, { kinsoku: 'loose' }),
     );
 
     expect(tableChars(page.path, page.loose)).toEqual(codepointSet(looseAllowed));

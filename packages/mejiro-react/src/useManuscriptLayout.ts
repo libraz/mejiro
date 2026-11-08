@@ -6,16 +6,21 @@ import type {
 } from '@libraz/mejiro/book';
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
 import { type MutableRefObject, type RefObject, useMemo, useRef } from 'react';
+import type { ChapterLayoutRecomputeOptions } from './useChapterLayout.js';
 import { type SurfaceLayoutSource, useSurfaceLayout } from './useSurfaceLayout.js';
 
 /** Options for {@link useManuscriptLayout}. */
 export interface UseManuscriptLayoutOptions {
+  /** The chapter to lay out; `null` lays nothing out. */
+  chapter: ManuscriptChapter | null;
+  /** The reading surface the pages are sized against. */
+  surface: RefObject<HTMLElement | null>;
   /** Manuscript notation dialect. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
   /** Observe the surface element for size changes and re-flow. @defaultValue true */
   enableResize?: boolean;
   /** Debounce window (ms) applied to size-triggered re-flows. @defaultValue 120 */
-  resizeDebounce?: number;
+  resizeDebounceMs?: number;
   /**
    * Capture the reading position from the outgoing layout, just before a
    * **reflow** (non-blank) re-layout replaces it. The anchor is held in
@@ -39,32 +44,11 @@ export interface UseManuscriptLayoutOptions {
   onError?: (error: Error) => void;
 }
 
-/** Options for {@link UseManuscriptLayoutReturn.recompute}. */
-export interface ManuscriptRecomputeOptions {
-  /**
-   * Blank the current layout while the new one is computed. Use for content
-   * changes (chapter swaps); skip for size changes so the previous spread stays
-   * visible until the re-flow completes (no flicker).
-   * @defaultValue true
-   */
-  blank?: boolean;
-}
-
-/** Page dimensions returned by {@link MejiroBook.computePageSize}. */
-export interface ManuscriptPageDimensions {
-  /** Width of one page, in CSS pixels. */
-  pageWidth: number;
-  /** Height of one page, in CSS pixels. */
-  pageHeight: number;
-  /** Height of the text area inside a page, in CSS pixels. */
-  contentHeight: number;
-}
-
 /** Return value of {@link useManuscriptLayout}. */
 export interface UseManuscriptLayoutReturn {
   /** Current layout, or `null` before the first computation. */
   layout: ChapterLayout | null;
-  /** Page width in pixels. */
+  /** Page width in pixels, as {@link MejiroBook.fitPageSize} measured it. */
   pageWidth: number;
   /** Page height in pixels. */
   pageHeight: number;
@@ -73,10 +57,15 @@ export interface UseManuscriptLayoutReturn {
   /** Most recent layout time (ms). */
   elapsedMs: number;
   /**
+   * Failure of the most recent layout of the current source, whichever path
+   * started it; `null` once a layout succeeds or the source changes.
+   */
+  error: Error | null;
+  /**
    * Force a fresh layout computation. A failure goes to `onError` when one is
    * supplied; otherwise the returned promise rejects.
    */
-  recompute: (opts?: ManuscriptRecomputeOptions) => Promise<void>;
+  recompute: (opts?: ChapterLayoutRecomputeOptions) => Promise<void>;
   /**
    * Anchor captured by `capturePosition` before the most recent reflow,
    * awaiting restoration into the new layout. `restorePosition`, when given,
@@ -102,7 +91,8 @@ function chapterSignature(chapter: ManuscriptChapter | null): string | null {
  * Re-layouts whenever the chapter's id, title or body, `dialect`, or `book`
  * change; a new chapter object with the same content does not. The surface is
  * observed with {@link ResizeObserver}; size changes trigger a full re-layout
- * so pagination stays correct after non-trivial container changes.
+ * so pagination stays correct after non-trivial container changes. While the
+ * surface measures zero wide or high, nothing is measured or laid out.
  *
  * A size-driven re-layout keeps the previous layout on screen while the new one
  * is computed (no blank flash) and yields a new {@link ChapterLayout} object,
@@ -112,13 +102,15 @@ function chapterSignature(chapter: ManuscriptChapter | null): string | null {
  * {@link UseManuscriptLayoutOptions.restorePosition} and
  * {@link UseManuscriptLayoutReturn.pendingRestore}, identically in the Vue
  * composable.
+ *
+ * @param book - The book instance to lay out with.
+ * @param options - The chapter and surface to lay out, plus behavior overrides.
  */
 export function useManuscriptLayout(
   book: MejiroBook,
-  chapter: ManuscriptChapter | null,
-  surface: RefObject<HTMLElement | null>,
-  options: UseManuscriptLayoutOptions = {},
+  options: UseManuscriptLayoutOptions,
 ): UseManuscriptLayoutReturn {
+  const { chapter, surface } = options;
   const dialect = options.dialect ?? 'mejiro';
 
   // The source is keyed on content, so a freshly built but equal chapter object
@@ -130,12 +122,12 @@ export function useManuscriptLayout(
   const source = useMemo<SurfaceLayoutSource | null>(() => {
     if (signature === null) return null;
     return {
-      measure: (el) => book.computePageSize(el),
+      measure: (el) => book.fitPageSize(el),
       layout: async () => {
         const current = chapterRef.current;
         if (!current) return null;
-        const layouts = await book.layoutManuscript({ chapters: [current], dialect });
-        return layouts.values().next().value ?? null;
+        const [layout] = await book.layoutManuscript({ chapters: [current], dialect });
+        return layout ?? null;
       },
     };
   }, [book, signature, dialect]);
@@ -143,6 +135,6 @@ export function useManuscriptLayout(
   return useSurfaceLayout(source, surface, {
     ...options,
     enableResize: options.enableResize ?? true,
-    resizeDebounce: options.resizeDebounce ?? 120,
+    resizeDebounceMs: options.resizeDebounceMs ?? 120,
   });
 }

@@ -8,10 +8,10 @@ import { type UseEpubOptions, type UseEpubReturn, useEpub } from '../src/useEpub
 
 /** A fetcher whose responses the test releases by hand. */
 function manualFetcher() {
-  const requests: Array<{ resolve: (b: ArrayBuffer) => void; reject: (e: Error) => void }> = [];
+  const requests: Array<{ resolve: (b: Uint8Array) => void; reject: (e: Error) => void }> = [];
   const fetchEpub = vi.fn(
     () =>
-      new Promise<ArrayBuffer>((resolve, reject) => {
+      new Promise<Uint8Array>((resolve, reject) => {
         requests.push({ resolve, reject });
       }),
   );
@@ -48,7 +48,7 @@ describe('useEpub (Vue) — abandoned loads', () => {
     const { fetchEpub, requests } = manualFetcher();
     const onLoad = vi.fn();
     const onError = vi.fn();
-    const { wrapper } = mountEpub({ defaultUrl: '/a.epub', fetchEpub, onLoad, onError });
+    const { wrapper } = mountEpub({ url: '/a.epub', fetchEpub, onLoad, onError });
     expect(requests).toHaveLength(1);
 
     wrapper.unmount();
@@ -62,7 +62,7 @@ describe('useEpub (Vue) — abandoned loads', () => {
   it('reports nothing for a load that fails after unmount', async () => {
     const { fetchEpub, requests } = manualFetcher();
     const onError = vi.fn();
-    const { wrapper } = mountEpub({ defaultUrl: '/a.epub', fetchEpub, onError });
+    const { wrapper } = mountEpub({ url: '/a.epub', fetchEpub, onError });
 
     wrapper.unmount();
     requests[0].reject(new Error('offline'));
@@ -77,9 +77,7 @@ describe('useEpub (Vue) — abandoned loads', () => {
     const onLoad = vi.fn();
     const url = ref<string | undefined>('/a.epub');
     const { epub } = mountEpub({
-      get defaultUrl() {
-        return url.value;
-      },
+      url: () => url.value,
       fetchEpub,
       onLoad,
     });
@@ -102,9 +100,7 @@ describe('useEpub (Vue) — abandoned loads', () => {
     const onLoad = vi.fn();
     const url = ref('/a.epub');
     const { epub } = mountEpub({
-      get defaultUrl() {
-        return url.value;
-      },
+      url: () => url.value,
       fetchEpub,
       onLoad,
     });

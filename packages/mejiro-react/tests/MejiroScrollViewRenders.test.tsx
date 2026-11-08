@@ -5,6 +5,7 @@ import type { ChapterLayout } from '@libraz/mejiro/book';
 import { render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MejiroScrollView } from '../src/MejiroScrollView.js';
+import { FAKE_LAYOUT_METRICS } from './helpers/fixtures.js';
 
 const rendered = vi.hoisted(() => ({ pages: [] as number[] }));
 
@@ -16,9 +17,13 @@ vi.mock('../src/MejiroPageView.js', () => ({
   },
 }));
 
-function fakeLayout(totalPages: number): ChapterLayout {
-  const pages = Array.from({ length: totalPages }, (_, index) => ({ index }));
-  return { totalPages, getPage: (i: number) => pages[i] } as unknown as ChapterLayout;
+function fakeLayout(pageCount: number): ChapterLayout {
+  const pages = Array.from({ length: pageCount }, (_, index) => ({ index }));
+  return {
+    ...FAKE_LAYOUT_METRICS,
+    pageCount,
+    getPage: (i: number) => pages[i],
+  } as unknown as ChapterLayout;
 }
 
 describe('MejiroScrollView (React) — re-renders', () => {
@@ -34,7 +39,7 @@ describe('MejiroScrollView (React) — re-renders', () => {
     expect(rendered.pages).toEqual([]);
 
     // Selection rects for page 1 re-render that page alone.
-    const rect = { pageIdx: 1, x: 0, y: 0, width: 1, height: 1 };
+    const rect = { pageIndex: 1, x: 0, y: 0, width: 1, height: 1 };
     rerender(<MejiroScrollView {...props} scrollToPage={2} selectionRects={[rect]} />);
     expect(rendered.pages).toEqual([1]);
   });

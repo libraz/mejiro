@@ -8,7 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick } from 'vue';
 
 const epubMocks = vi.hoisted(() => ({
-  exportProject: vi.fn(async () => new ArrayBuffer(8)),
+  exportProject: vi.fn(async () => new Uint8Array(8)),
   setCover: vi.fn(),
 }));
 
@@ -197,7 +197,7 @@ describe('MejiroManuscriptEditor (Vue)', () => {
     try {
       const onAutosave = vi.fn();
       const { container } = render(MejiroManuscriptEditor, {
-        props: { title: 'Draft', author: 'Author', onAutosave, autosaveDelay: 100 },
+        props: { title: 'Draft', author: 'Author', onAutosave, autosaveDebounceMs: 100 },
       });
       const input = container.querySelector(
         '.mejiro-editor-panel input[type="file"]',
@@ -226,7 +226,7 @@ describe('MejiroManuscriptEditor (Vue)', () => {
     try {
       const onAutosave = vi.fn();
       const { container } = render(MejiroManuscriptEditor, {
-        props: { title: 'Before', author: 'Author', onAutosave, autosaveDelay: 100 },
+        props: { title: 'Before', author: 'Author', onAutosave, autosaveDebounceMs: 100 },
       });
       const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
       await fireEvent.update(titleInput, 'After');
@@ -251,10 +251,10 @@ describe('MejiroManuscriptEditor (Vue)', () => {
       const first = vi.fn();
       const second = vi.fn();
       const { container, rerender } = render(MejiroManuscriptEditor, {
-        props: { title: 'Before', autosaveDelay: 100 },
+        props: { title: 'Before', autosaveDebounceMs: 100 },
       });
-      await rerender({ title: 'Before', autosaveDelay: 100, onAutosave: first });
-      await rerender({ title: 'Before', autosaveDelay: 100, onAutosave: second });
+      await rerender({ title: 'Before', autosaveDebounceMs: 100, onAutosave: first });
+      await rerender({ title: 'Before', autosaveDebounceMs: 100, onAutosave: second });
       const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
       await fireEvent.update(titleInput, 'After');
 
@@ -275,7 +275,7 @@ describe('MejiroManuscriptEditor (Vue)', () => {
         throw new Error('autosave failed');
       });
       const { container } = render(MejiroManuscriptEditor, {
-        props: { onAutosave, autosaveDelay: 100 },
+        props: { onAutosave, autosaveDebounceMs: 100 },
       });
       const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
       await fireEvent.update(textarea, 'changed');
@@ -377,7 +377,11 @@ describe('MejiroManuscriptEditor (Vue)', () => {
   it('forwards preview options, theme, and settings slot to the embedded reader', async () => {
     const { container } = render(MejiroManuscriptEditor, {
       props: {
-        previewProps: { options: { fontFamily: 'serif', fontSize: 22 }, theme: 'dark' },
+        previewProps: {
+          options: { fontFamily: 'serif', fontSize: 22 },
+          theme: 'dark',
+          showStats: true,
+        },
       },
       slots: {
         settings: () => h('div', { class: 'custom-preview-settings' }, 'Custom'),
@@ -410,7 +414,7 @@ describe('MejiroManuscriptEditor (Vue)', () => {
     await waitFor(() => {
       expect(epubMocks.setCover).toHaveBeenCalledWith(
         expect.objectContaining({
-          href: 'OPS/Images/cover.png',
+          filename: 'cover.png',
           mediaType: 'image/png',
         }),
       );

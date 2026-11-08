@@ -5,9 +5,9 @@ import type { MorphemeLike, TextAnalyzer } from '../../src/types.js';
 /** ZERO WIDTH SPACE, which suzume's normalizer removes before tokenizing. */
 const ZWSP = String.fromCodePoint(0x200b);
 
-/** Extracts the code points `[start, end)` addresses, the way a caller would. */
+/** Extracts the code points `[startIndex, endIndex)` addresses, the way a caller would. */
 function span(text: string, morpheme: MorphemeLike): string {
-  return [...text].slice(morpheme.start, morpheme.end).join('');
+  return [...text].slice(morpheme.startIndex, morpheme.endIndex).join('');
 }
 
 // Loading the WebAssembly module and its dictionaries costs a few hundred
@@ -98,7 +98,9 @@ describe('createSuzumeAnalyzer', () => {
     disposable.dispose();
 
     expect(() => disposable.dispose()).not.toThrow();
-    expect(() => disposable.analyze('猫')).toThrow(/disposed/u);
+    expect(() => disposable.analyze('猫')).toThrow(
+      expect.objectContaining({ name: 'MejiroError', code: 'analyzer-disposed' }),
+    );
   });
 
   it('leaves an adopted instance to its owner', async () => {

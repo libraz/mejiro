@@ -23,8 +23,8 @@ export default function App() {
         <MejiroReader
           epubUrl="/neko.epub"
           enableDropZone={false}
-          enableStats={false}
-          enableSettings={false}
+          showSettings={false}
+          title="mejiro"
           subtitle=""
         />
       </div>

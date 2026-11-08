@@ -37,8 +37,8 @@ function analyze(text: string, tokens: readonly Token[]): TextAnalysis {
     }
     morphemes.push({
       surface,
-      start: cursor,
-      end: cursor + length,
+      startIndex: cursor,
+      endIndex: cursor + length,
       pos: extendedPos.split('_')[0],
       extendedPos,
     });
@@ -55,7 +55,7 @@ function analyze(text: string, tokens: readonly Token[]): TextAnalysis {
 
 /** Cluster IDs of `text` under the default options, as a plain array. */
 function clustersOf(text: string, tokens: readonly Token[]): number[] | undefined {
-  const hints = deriveTypographyHints(text, analyze(text, tokens));
+  const hints = deriveTypographyHints(analyze(text, tokens));
   return hints.clusterIds ? [...hints.clusterIds] : undefined;
 }
 
@@ -70,7 +70,7 @@ function penaltiesOf(
   tokens: readonly Token[],
   options: Omit<TypographyHintOptions, 'penalties'> = {},
 ): number[] {
-  const hints = deriveTypographyHints(text, analyze(text, tokens), { ...options, penalties: true });
+  const hints = deriveTypographyHints(analyze(text, tokens), { ...options, penalties: true });
   return [...(hints.breakPenalties as Uint8Array)];
 }
 
@@ -196,7 +196,7 @@ describe('deriveTypographyHints — hard clusters', () => {
     ];
     expect(clustersOf(text, tokens)).toBeUndefined();
 
-    const raised = deriveTypographyHints(text, analyze(text, tokens), {
+    const raised = deriveTypographyHints(analyze(text, tokens), {
       maxHardClusterChars: 8,
     });
     expect([...(raised.clusterIds as Uint32Array)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
@@ -205,7 +205,6 @@ describe('deriveTypographyHints — hard clusters', () => {
   it('omits cluster IDs when clustering is switched off', () => {
     const text = '3人';
     const hints = deriveTypographyHints(
-      text,
       analyze(text, [
         ['3', 'NOUN_数'],
         ['人', 'SUFFIX'],
@@ -220,7 +219,6 @@ describe('deriveTypographyHints — break penalties', () => {
   it('is absent unless requested', () => {
     const text = '犬が走る';
     const hints = deriveTypographyHints(
-      text,
       analyze(text, [
         ['犬', 'NOUN_普通名詞'],
         ['が', 'PART_格助詞'],
@@ -402,7 +400,7 @@ describe('deriveTypographyHints — keeping a word whole', () => {
     '$pos list, $penalty penalty, $length-code-point word, penalties $penalties',
     (testCase) => {
       const { text, tokens } = keepWholeFixture(testCase.length);
-      const hints = deriveTypographyHints(text, analyze(text, tokens), keepWholeOptions(testCase));
+      const hints = deriveTypographyHints(analyze(text, tokens), keepWholeOptions(testCase));
       expect(hints.breakPenalties ? [...hints.breakPenalties] : undefined).toEqual(
         testCase.expected,
       );
@@ -411,7 +409,7 @@ describe('deriveTypographyHints — keeping a word whole', () => {
 
   it('reaches nothing at all while penalties are off', () => {
     const { text, tokens } = keepWholeFixture(4);
-    const hints = deriveTypographyHints(text, analyze(text, tokens), {
+    const hints = deriveTypographyHints(analyze(text, tokens), {
       keepWholePos: ['CONJ'],
       keepWholePenalty: 200,
     });
@@ -513,25 +511,24 @@ describe('deriveTypographyHints — token boundaries and tate-chu-yoko', () => {
   ];
 
   it('leaves both off by default', () => {
-    const hints = deriveTypographyHints(text, analyze(text, tokens));
+    const hints = deriveTypographyHints(analyze(text, tokens));
     expect(hints.tokenBoundaries).toBeUndefined();
     expect(hints.tcyCandidates).toBeUndefined();
   });
 
   it('reports every morpheme end but the last on request', () => {
-    const hints = deriveTypographyHints(text, analyze(text, tokens), { tokenBoundaries: true });
+    const hints = deriveTypographyHints(analyze(text, tokens), { tokenBoundaries: true });
     expect([...(hints.tokenBoundaries as Uint32Array)]).toEqual([1, 2]);
   });
 
   it('proposes a free-standing two-digit number on request', () => {
-    const hints = deriveTypographyHints(text, analyze(text, tokens), { tcy: true });
+    const hints = deriveTypographyHints(analyze(text, tokens), { tcy: true });
     expect(hints.tcyCandidates).toEqual([{ startIndex: 0, endIndex: 2 }]);
   });
 
   it('skips a two-digit number bound to a counter', () => {
     const bound = '12月';
     const hints = deriveTypographyHints(
-      bound,
       analyze(bound, [
         ['12', 'NOUN_数'],
         ['月', 'SUFFIX'],
@@ -544,7 +541,6 @@ describe('deriveTypographyHints — token boundaries and tate-chu-yoko', () => {
   it('skips a number that is not exactly two digits', () => {
     const long = '123と';
     const hints = deriveTypographyHints(
-      long,
       analyze(long, [
         ['123', 'NOUN_数'],
         ['と', 'PART_格助詞'],
@@ -552,20 +548,6 @@ describe('deriveTypographyHints — token boundaries and tate-chu-yoko', () => {
       { tcy: true },
     );
     expect(hints.tcyCandidates).toBeUndefined();
-  });
-});
-
-describe('deriveTypographyHints — misaligned analysis', () => {
-  it('yields no hints when the analysis describes different text', () => {
-    const hints = deriveTypographyHints(
-      '3人が来る',
-      analyze('3人', [
-        ['3', 'NOUN_数'],
-        ['人', 'SUFFIX'],
-      ]),
-      { penalties: true, tokenBoundaries: true, tcy: true },
-    );
-    expect(hints).toEqual({});
   });
 });
 

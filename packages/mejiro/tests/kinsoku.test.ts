@@ -10,40 +10,40 @@ import {
 
 describe('isLineStartProhibited', () => {
   it('prohibits closing brackets in strict mode', () => {
-    expect(isLineStartProhibited(0x300d, 'strict')).toBe(true); // 」
-    expect(isLineStartProhibited(0x3011, 'strict')).toBe(true); // 】
+    expect(isLineStartProhibited(0x300d, { kinsoku: 'strict' })).toBe(true); // 」
+    expect(isLineStartProhibited(0x3011, { kinsoku: 'strict' })).toBe(true); // 】
   });
 
   it('prohibits small kana in strict mode', () => {
-    expect(isLineStartProhibited(0x3041, 'strict')).toBe(true); // ぁ
-    expect(isLineStartProhibited(0x30c3, 'strict')).toBe(true); // ッ
-    expect(isLineStartProhibited(0x3095, 'strict')).toBe(true); // ゕ
-    expect(isLineStartProhibited(0x30f6, 'strict')).toBe(true); // ヶ
+    expect(isLineStartProhibited(0x3041, { kinsoku: 'strict' })).toBe(true); // ぁ
+    expect(isLineStartProhibited(0x30c3, { kinsoku: 'strict' })).toBe(true); // ッ
+    expect(isLineStartProhibited(0x3095, { kinsoku: 'strict' })).toBe(true); // ゕ
+    expect(isLineStartProhibited(0x30f6, { kinsoku: 'strict' })).toBe(true); // ヶ
   });
 
   it('prohibits JLReq punctuation extensions in strict mode', () => {
-    expect(isLineStartProhibited(0x2026, 'strict')).toBe(true); // …
-    expect(isLineStartProhibited(0x2025, 'strict')).toBe(true); // ‥
-    expect(isLineStartProhibited(0x301c, 'strict')).toBe(true); // 〜
-    expect(isLineStartProhibited(0x2015, 'strict')).toBe(true); // ―
-    expect(isLineStartProhibited(0x2019, 'strict')).toBe(true); // ’
-    expect(isLineStartProhibited(0x201d, 'strict')).toBe(true); // ”
+    expect(isLineStartProhibited(0x2026, { kinsoku: 'strict' })).toBe(true); // …
+    expect(isLineStartProhibited(0x2025, { kinsoku: 'strict' })).toBe(true); // ‥
+    expect(isLineStartProhibited(0x301c, { kinsoku: 'strict' })).toBe(true); // 〜
+    expect(isLineStartProhibited(0x2015, { kinsoku: 'strict' })).toBe(true); // ―
+    expect(isLineStartProhibited(0x2019, { kinsoku: 'strict' })).toBe(true); // ’
+    expect(isLineStartProhibited(0x201d, { kinsoku: 'strict' })).toBe(true); // ”
   });
 
   it('allows small kana in loose mode', () => {
-    expect(isLineStartProhibited(0x3041, 'loose')).toBe(false); // ぁ
-    expect(isLineStartProhibited(0x30c3, 'loose')).toBe(false); // ッ
-    expect(isLineStartProhibited(0x30fc, 'loose')).toBe(false); // ー
+    expect(isLineStartProhibited(0x3041, { kinsoku: 'loose' })).toBe(false); // ぁ
+    expect(isLineStartProhibited(0x30c3, { kinsoku: 'loose' })).toBe(false); // ッ
+    expect(isLineStartProhibited(0x30fc, { kinsoku: 'loose' })).toBe(false); // ー
   });
 
   it('still prohibits punctuation in loose mode', () => {
-    expect(isLineStartProhibited(0x3001, 'loose')).toBe(true); // 、
-    expect(isLineStartProhibited(0x300d, 'loose')).toBe(true); // 」
+    expect(isLineStartProhibited(0x3001, { kinsoku: 'loose' })).toBe(true); // 、
+    expect(isLineStartProhibited(0x300d, { kinsoku: 'loose' })).toBe(true); // 」
   });
 
   it('allows regular characters', () => {
-    expect(isLineStartProhibited(0x3042, 'strict')).toBe(false); // あ
-    expect(isLineStartProhibited(0x6f22, 'strict')).toBe(false); // 漢
+    expect(isLineStartProhibited(0x3042, { kinsoku: 'strict' })).toBe(false); // あ
+    expect(isLineStartProhibited(0x6f22, { kinsoku: 'strict' })).toBe(false); // 漢
   });
 
   it('uses custom rules when provided', () => {
@@ -51,9 +51,9 @@ describe('isLineStartProhibited', () => {
       lineStartProhibited: [0x0041], // 'A'
       lineEndProhibited: [0x0042], // 'B'
     });
-    expect(isLineStartProhibited(0x0041, 'strict', rules)).toBe(true);
+    expect(isLineStartProhibited(0x0041, { kinsoku: rules })).toBe(true);
     // Original rules no longer apply when custom rules are passed
-    expect(isLineStartProhibited(0x3001, 'strict', rules)).toBe(false);
+    expect(isLineStartProhibited(0x3001, { kinsoku: rules })).toBe(false);
   });
 });
 
@@ -74,9 +74,9 @@ describe('isLineEndProhibited', () => {
       lineStartProhibited: [0x0041],
       lineEndProhibited: [0x0042], // 'B'
     });
-    expect(isLineEndProhibited(0x0042, rules)).toBe(true);
+    expect(isLineEndProhibited(0x0042, { kinsoku: rules })).toBe(true);
     // Original rules no longer apply
-    expect(isLineEndProhibited(0x300c, rules)).toBe(false);
+    expect(isLineEndProhibited(0x300c, { kinsoku: rules })).toBe(false);
   });
 });
 
@@ -93,29 +93,29 @@ describe('isUnbreakablePair', () => {
       lineEndProhibited: [],
       unbreakablePairs: [[0x0041, 0x0042]],
     });
-    expect(isUnbreakablePair(0x0041, 0x0042, rules)).toBe(true);
-    expect(isUnbreakablePair(0x2026, 0x2026, rules)).toBe(false);
+    expect(isUnbreakablePair(0x0041, 0x0042, { kinsoku: rules })).toBe(true);
+    expect(isUnbreakablePair(0x2026, 0x2026, { kinsoku: rules })).toBe(false);
   });
 });
 
 describe('getDefaultKinsokuRules / buildKinsokuRules', () => {
-  it('returns default rules with lookup sets', () => {
+  it('returns default rules that answer through the predicates', () => {
     const rules = getDefaultKinsokuRules();
     expect(rules.lineStartProhibited).toContain(0x3001);
     expect(rules.lineEndProhibited).toContain(0x300c);
     expect(rules.unbreakablePairs).toContainEqual([0x2026, 0x2026]);
-    expect(rules.lineStartProhibitedSet.has(0x3001)).toBe(true);
-    expect(rules.lineEndProhibitedSet.has(0x300c)).toBe(true);
-    expect(rules.unbreakablePairSet.has('8230:8230')).toBe(true);
+    expect(isLineStartProhibited(0x3001, { kinsoku: rules })).toBe(true);
+    expect(isLineEndProhibited(0x300c, { kinsoku: rules })).toBe(true);
+    expect(isUnbreakablePair(0x2026, 0x2026, { kinsoku: rules })).toBe(true);
   });
 
-  it('buildKinsokuRules creates rules with sets', () => {
+  it('buildKinsokuRules creates rules that answer through the predicates', () => {
     const rules = buildKinsokuRules({
       lineStartProhibited: [0x0041],
       lineEndProhibited: [0x0042],
     });
-    expect(rules.lineStartProhibitedSet.has(0x0041)).toBe(true);
-    expect(rules.lineEndProhibitedSet.has(0x0042)).toBe(true);
+    expect(isLineStartProhibited(0x0041, { kinsoku: rules })).toBe(true);
+    expect(isLineEndProhibited(0x0042, { kinsoku: rules })).toBe(true);
   });
 });
 
@@ -138,8 +138,8 @@ describe('half-width forms', () => {
     (mode) => {
       for (const cp of HALF_WIDTH_CANDIDATES) {
         const full = fullWidthOf(cp);
-        if (full === undefined || !isLineStartProhibited(full, mode)) continue;
-        expect(isLineStartProhibited(cp, mode), `U+${cp.toString(16)}`).toBe(true);
+        if (full === undefined || !isLineStartProhibited(full, { kinsoku: mode })) continue;
+        expect(isLineStartProhibited(cp, { kinsoku: mode }), `U+${cp.toString(16)}`).toBe(true);
       }
     },
   );

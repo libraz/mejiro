@@ -8,7 +8,6 @@ import {
   manuscriptToEpubBook,
   parseEpub,
   parseManuscript,
-  parseManuscriptRuby,
 } from '../../src/epub/index.js';
 import { manuscriptParagraphs } from '../../src/epub/manuscript-source.js';
 import { stripStylesheetLinks } from '../../src/epub/xml-utils.js';
@@ -41,10 +40,10 @@ describe('EpubProject', () => {
       '普通の《《重要》》文字と〔ABC〕と**強調**と*イタリック*と[リンク](https://example.test "例")と[[#fn1]]',
     );
     expect(result.text).toBe('普通の重要文字とABCと強調とイタリックとリンクと*fn1');
-    const kinds = result.inlineAnnotations.map((ann) => ann.kind).sort();
-    expect(kinds).toEqual(['em', 'emphasis', 'footnote', 'link', 'strong', 'tcy']);
-    expect(result.inlineAnnotations.find((ann) => ann.kind === 'link')).toMatchObject({
-      kind: 'link',
+    const types = result.inlineAnnotations.map((ann) => ann.type).sort();
+    expect(types).toEqual(['em', 'emphasis', 'footnote-ref', 'link', 'strong', 'tcy']);
+    expect(result.inlineAnnotations.find((ann) => ann.type === 'link')).toMatchObject({
+      type: 'link',
       href: 'https://example.test',
       title: '例',
     });
@@ -53,30 +52,30 @@ describe('EpubProject', () => {
   it('leaves malformed markdown links as plain text', () => {
     const result = parseManuscript('これは[リンク](https://example.test bad title)です');
     expect(result.text).toBe('これは[リンク](https://example.test bad title)です');
-    expect(result.inlineAnnotations.some((ann) => ann.kind === 'link')).toBe(false);
+    expect(result.inlineAnnotations.some((ann) => ann.type === 'link')).toBe(false);
   });
 
   it('narou dialect only emits ruby, leaving other markers as plain text', () => {
     const result = parseManuscript('《《これは強調じゃない》》漢字《かんじ》*not-em*', {
       dialect: 'narou',
     });
-    expect(result.inlineAnnotations.map((ann) => ann.kind)).toEqual(['ruby']);
+    expect(result.inlineAnnotations.map((ann) => ann.type)).toEqual(['ruby']);
     expect(result.text).toContain('《《これは強調じゃない》》');
     expect(result.text).toContain('*not-em*');
   });
 
   it('parses common manuscript ruby notation', () => {
-    expect(parseManuscriptRuby('これは｜漢字《かんじ》です')).toEqual({
+    expect(parseManuscript('これは｜漢字《かんじ》です')).toEqual({
       text: 'これは漢字です',
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 3, endIndex: 5, rubyText: 'かんじ', type: 'group' },
+        { type: 'ruby', startIndex: 3, endIndex: 5, rubyText: 'かんじ', rubyType: 'group' },
       ],
     });
 
-    expect(parseManuscriptRuby('山田《やまだ》太郎')).toEqual({
+    expect(parseManuscript('山田《やまだ》太郎')).toEqual({
       text: '山田太郎',
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'やまだ', type: 'group' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'やまだ', rubyType: 'group' },
       ],
     });
   });
@@ -85,7 +84,7 @@ describe('EpubProject', () => {
     const project = EpubProject.fromManuscript({
       metadata: {
         title: '投稿小説',
-        author: '作者',
+        creators: [{ name: '作者', role: 'aut' }],
         identifier: 'urn:uuid:test-book',
         modified: new Date('2026-05-20T00:00:00Z'),
       },
@@ -107,11 +106,11 @@ describe('EpubProject', () => {
     expect(parsed.chapters[1].title).toBe('第一話');
     expect(parsed.chapters[1].paragraphs[1].text).toBe('これは漢字です。');
     expect(parsed.chapters[1].paragraphs[1].inlineAnnotations[0]).toMatchObject({
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: 3,
       endIndex: 5,
       rubyText: 'かんじ',
-      type: 'group',
+      rubyType: 'group',
     });
   });
 
@@ -136,7 +135,10 @@ describe('EpubProject', () => {
       chapters: [],
     });
 
-    await expect(project.export()).rejects.toThrow(/without at least one chapter/);
+    await expect(project.export()).rejects.toMatchObject({
+      name: 'MejiroError',
+      code: 'epub-invalid-package',
+    });
   });
 
   it('threads manuscript dialect through project export', async () => {
@@ -158,14 +160,17 @@ describe('EpubProject', () => {
     });
 
     const parsed = await parseEpub(await project.export());
-    const preview = manuscriptToEpubBook(chapters, { dialect: 'narou', title: '方言' });
+    const preview = manuscriptToEpubBook(chapters, {
+      dialect: 'narou',
+      metadata: { title: '方言' },
+    });
 
     expect(parsed.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual(
       preview.chapters[0].paragraphs.map((paragraph) => paragraph.text),
     );
     expect(parsed.chapters[0].paragraphs[1].text).toBe('《《これは強調じゃない》》漢字*not-em*');
     expect(parsed.chapters[0].paragraphs[1].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 13, endIndex: 15, rubyText: 'かんじ', type: 'group' },
+      { type: 'ruby', startIndex: 13, endIndex: 15, rubyText: 'かんじ', rubyType: 'group' },
     ]);
   });
 
@@ -349,17 +354,20 @@ describe('EpubProject', () => {
         { title: '二', body: '本文2' },
       ],
     });
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/only-first.png',
+    project.addImage(0, {
+      filename: 'only-first.png',
       data: new Uint8Array([1]),
+      atParagraphIndex: 1,
     });
-    project.addInlineImage(0, 2, {
-      href: 'OPS/Images/shared.png',
+    project.addImage(0, {
+      filename: 'shared.png',
       data: new Uint8Array([2]),
+      atParagraphIndex: 2,
     });
-    project.addInlineImage(1, 1, {
-      href: 'OPS/Images/shared.png',
+    project.addImage(1, {
+      filename: 'shared.png',
       data: new Uint8Array([3]),
+      atParagraphIndex: 1,
     });
     project.addAsset({ href: 'OPS/Data/kept.bin', data: new Uint8Array([4]) });
 
@@ -374,15 +382,19 @@ describe('EpubProject', () => {
   it('removes assets whose marker a chapter update deleted', async () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: '差し替え', identifier: 'urn:uuid:update-chapter-cleanup' },
-      cover: { href: 'OPS/Images/cover.png', data: new Uint8Array([9]) },
+      cover: { filename: 'cover.png', mediaType: 'image/png', data: new Uint8Array([9]) },
       chapters: [
         { title: '一', body: '本文1' },
         { title: '二', body: '本文2' },
       ],
     });
-    project.addInlineImage(0, 1, { href: 'OPS/Images/dropped.png', data: new Uint8Array([1]) });
-    project.addInlineImage(0, 2, { href: 'OPS/Images/kept.png', data: new Uint8Array([2]) });
-    project.addInlineImage(1, 1, { href: 'OPS/Images/shared.png', data: new Uint8Array([3]) });
+    project.addImage(0, {
+      filename: 'dropped.png',
+      data: new Uint8Array([1]),
+      atParagraphIndex: 1,
+    });
+    project.addImage(0, { filename: 'kept.png', data: new Uint8Array([2]), atParagraphIndex: 2 });
+    project.addImage(1, { filename: 'shared.png', data: new Uint8Array([3]), atParagraphIndex: 1 });
     project.addAsset({ href: 'OPS/Data/manual.bin', data: new Uint8Array([4]) });
     const keptMarker = manuscriptParagraphs(project.chapters[0].body)[2];
     const sharedMarker = manuscriptParagraphs(project.chapters[1].body)[1];
@@ -412,7 +424,7 @@ describe('EpubProject', () => {
       metadata: { title: '改題', identifier: 'urn:uuid:update-chapter-title-only' },
       chapters: [{ title: '一', body: '本文' }],
     });
-    project.addInlineImage(0, 1, { href: 'OPS/Images/figure.png', data: new Uint8Array([1]) });
+    project.addImage(0, { filename: 'figure.png', data: new Uint8Array([1]), atParagraphIndex: 1 });
 
     project.updateChapter(0, { title: '一改' });
 
@@ -423,11 +435,7 @@ describe('EpubProject', () => {
   it('normalizes chapter and asset IDs used by OPF manifest and spine', async () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: 'ID', identifier: 'urn:uuid:id-book' },
-      cover: {
-        id: '123 cover',
-        href: 'OPS/Images/cover.png',
-        data: new Uint8Array([0]),
-      },
+      cover: { filename: 'cover.png', mediaType: 'image/png', data: new Uint8Array([0]) },
       chapters: [
         { id: '第一 章', title: '一', body: '本文1' },
         { id: '第一 章', title: '二', body: '本文2' },
@@ -440,7 +448,7 @@ describe('EpubProject', () => {
     });
 
     expect(project.chapters.map((chapter) => chapter.id)).toEqual(['chapter-1', 'chapter-2']);
-    expect(project.assets.map((asset) => asset.id)).toEqual(['id-123-cover', 'id-123-asset']);
+    expect(project.assets.map((asset) => asset.id)).toEqual(['cover-image', 'id-123-asset']);
 
     const out = await project.export();
     const zip = await JSZip.loadAsync(out);
@@ -450,8 +458,8 @@ describe('EpubProject', () => {
     expect(opf).toContain('<item id="chapter-2" href="Text/chapter-002.xhtml"');
     expect(opf).toMatch(/<itemref idref="title-page" \/>[\s\S]*<itemref idref="chapter-1" \/>/u);
     expect(opf).toContain('<itemref idref="chapter-2" />');
-    expect(opf).toContain('<item id="id-123-cover" href="Images/cover.png"');
-    expect(opf).toContain('<meta name="cover" content="id-123-cover" />');
+    expect(opf).toContain('<item id="cover-image" href="Images/cover.png"');
+    expect(opf).toContain('<meta name="cover" content="cover-image" />');
     expect(opf).toContain('<item id="id-123-asset" href="Data/data.bin"');
   });
 
@@ -467,6 +475,7 @@ describe('EpubProject', () => {
       chapters: [
         { id: 'nav', title: '一', body: '本文1' },
         { id: 'creator-1', title: '二', body: '本文2' },
+        { id: 'cover-image', title: '三', body: '本文3' },
       ],
     });
     project.addAsset({
@@ -474,14 +483,23 @@ describe('EpubProject', () => {
       href: 'OPS/Data/data.bin',
       data: new Uint8Array([1]),
     });
-    project.setCover({
+    project.addAsset({
       id: 'title-page',
-      href: 'OPS/Images/cover.png',
-      data: new Uint8Array([2]),
+      href: 'OPS/Data/other.bin',
+      data: new Uint8Array([3]),
     });
+    project.setCover({ filename: 'cover.png', mediaType: 'image/png', data: new Uint8Array([2]) });
 
-    expect(project.chapters.map((chapter) => chapter.id)).toEqual(['nav-2', 'creator-1-2']);
-    expect(project.assets.map((asset) => asset.id)).toEqual(['contributor-1-2', 'title-page-2']);
+    expect(project.chapters.map((chapter) => chapter.id)).toEqual([
+      'nav-2',
+      'creator-1-2',
+      'cover-image',
+    ]);
+    expect(project.assets.map((asset) => asset.id)).toEqual([
+      'contributor-1-2',
+      'title-page-2',
+      'cover-image-2',
+    ]);
 
     const out = await project.export();
     const zip = await JSZip.loadAsync(out);
@@ -495,17 +513,13 @@ describe('EpubProject', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(opf).toContain('<itemref idref="nav-2" />');
     expect(opf).toContain('<itemref idref="creator-1-2" />');
-    expect(opf).toContain('<meta name="cover" content="title-page-2" />');
+    expect(opf).toContain('<meta name="cover" content="cover-image-2" />');
   });
 
   it('replaces an existing cover instead of keeping stale cover-image assets', async () => {
     const project = EpubProject.fromManuscript({
       metadata: { title: 'Cover replace', identifier: 'urn:uuid:cover-replace-book' },
-      cover: {
-        id: 'old-cover',
-        href: 'OPS/Images/old.png',
-        data: new Uint8Array([1]),
-      },
+      cover: { filename: 'old.png', mediaType: 'image/png', data: new Uint8Array([1]) },
       chapters: [{ title: '一', body: '本文' }],
     });
     project.addAsset({
@@ -514,13 +528,9 @@ describe('EpubProject', () => {
       data: new Uint8Array([9]),
     });
 
-    project.setCover({
-      id: 'new-cover',
-      href: 'OPS/Images/new.png',
-      data: new Uint8Array([2]),
-    });
+    project.setCover({ filename: 'new.png', mediaType: 'image/png', data: new Uint8Array([2]) });
 
-    expect(project.assets.map((asset) => asset.id)).toEqual(['data', 'new-cover']);
+    expect(project.assets.map((asset) => asset.id)).toEqual(['data', 'cover-image']);
     expect(project.assets.filter((asset) => asset.properties === 'cover-image')).toHaveLength(1);
 
     const out = await project.export();
@@ -531,10 +541,9 @@ describe('EpubProject', () => {
     expect(Array.from((await zip.file('OPS/Images/new.png')?.async('uint8array')) ?? [])).toEqual([
       2,
     ]);
-    expect(opf).not.toContain('old-cover');
     expect(opf).not.toContain('Images/old.png');
-    expect(opf).toContain('<item id="new-cover" href="Images/new.png"');
-    expect(opf).toContain('<meta name="cover" content="new-cover" />');
+    expect(opf).toContain('<item id="cover-image" href="Images/new.png"');
+    expect(opf).toContain('<meta name="cover" content="cover-image" />');
     expect(opf).toContain('<item id="data" href="Data/data.bin"');
   });
 
@@ -544,10 +553,11 @@ describe('EpubProject', () => {
       chapters: [{ title: '一', body: '段落1\n\n段落2' }],
     });
 
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/figure.png',
+    project.addImage(0, {
+      filename: 'figure.png',
       data: new Uint8Array([1, 2, 3]),
       alt: '挿絵',
+      atParagraphIndex: 1,
     });
 
     const out = await project.export();
@@ -566,10 +576,11 @@ describe('EpubProject', () => {
       chapters: [{ title: '一', body: '\n\n段落1\n\n段落2' }],
     });
 
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/figure.png',
+    project.addImage(0, {
+      filename: 'figure.png',
       data: new Uint8Array([1]),
       alt: '挿絵',
+      atParagraphIndex: 1,
     });
 
     expect(manuscriptParagraphs(project.chapters[0].body)[1]).toMatch(/^\[\[mejiro-image:/u);
@@ -587,10 +598,11 @@ describe('EpubProject', () => {
       chapters: [{ title: '一', body: '段落' }],
     });
 
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/fig]x|y.png',
+    project.addImage(0, {
+      filename: 'fig]x|y.png',
       data: new Uint8Array([4, 5, 6]),
       alt: '挿絵] | "説明"',
+      atParagraphIndex: 1,
     });
 
     expect(project.chapters[0].body).toContain(
@@ -606,14 +618,9 @@ describe('EpubProject', () => {
     expect(Array.from(image ?? [])).toEqual([4, 5, 6]);
   });
 
-  it('round-trips inline-image markers for assets in any directory', async () => {
-    const hrefs = [
-      'OPS/Text/flat.png',
-      'OPS/Images/a.png',
-      'OPS/Media/b.webp',
-      'OPS/c.png',
-      'OPS/Images/sub/d.png',
-    ];
+  it('round-trips inline-image markers for any file name', async () => {
+    const filenames = ['flat.png', 'a b.png', '100%.webp', '挿絵 [1].png', 'x_y.gif'];
+    const hrefs = filenames.map((filename) => `OPS/Images/${filename}`);
     const project = EpubProject.fromManuscript({
       metadata: { title: '画像', identifier: 'urn:uuid:marker-round-trip' },
       chapters: [
@@ -621,15 +628,17 @@ describe('EpubProject', () => {
         { title: '二', body: '別章' },
       ],
     });
-    hrefs.forEach((href, index) => {
-      project.addInlineImage(0, index + 1, { href, data: new Uint8Array([index]) });
+    filenames.forEach((filename, index) => {
+      project.addImage(0, { filename, data: new Uint8Array([index]), atParagraphIndex: index + 1 });
     });
 
     const out = await project.export();
     const zip = await JSZip.loadAsync(out);
     const xhtml = (await zip.file('OPS/Text/chapter-001.xhtml')?.async('string')) ?? '';
     const srcs = [...xhtml.matchAll(/<img src="([^"]+)"/gu)].map((match) => match[1]);
-    expect(srcs.map((src) => new URL(src, 'https://x/OPS/Text/').pathname.slice(1))).toEqual(hrefs);
+    expect(
+      srcs.map((src) => decodeURIComponent(new URL(src, 'https://x/OPS/Text/').pathname).slice(1)),
+    ).toEqual(hrefs);
 
     // Editing another chapter scans every marker; all assets stay referenced.
     project.updateChapter(1, { body: '変更' });
@@ -658,28 +667,8 @@ describe('EpubProject', () => {
     const parsed = await parseEpub(out);
     const links = (parsed.chapters.at(-1)?.paragraphs ?? [])
       .flatMap((paragraph) => paragraph.inlineAnnotations ?? [])
-      .filter((ann) => ann.kind === 'link');
+      .filter((ann) => ann.type === 'link');
     expect(links).toEqual([expect.objectContaining({ href: 'https://example.test' })]);
-  });
-
-  it('links inline images to the actual asset href instead of assuming OPS/Images', async () => {
-    const project = EpubProject.fromManuscript({
-      metadata: { title: '画像配置', identifier: 'urn:uuid:inline-image-path-book' },
-      chapters: [{ title: '一', body: '段落' }],
-    });
-
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Media/figure.webp',
-      data: new Uint8Array([7, 8, 9]),
-      alt: '別ディレクトリ',
-    });
-
-    const out = await project.export();
-    const zip = await JSZip.loadAsync(out);
-    const xhtml = await zip.file('OPS/Text/chapter-001.xhtml')?.async('string');
-    expect(xhtml).toContain('src="../Media/figure.webp"');
-    const image = await zip.file('OPS/Media/figure.webp')?.async('uint8array');
-    expect(Array.from(image ?? [])).toEqual([7, 8, 9]);
   });
 
   it('uniques duplicate project asset hrefs so ZIP files are not overwritten', async () => {
@@ -688,15 +677,17 @@ describe('EpubProject', () => {
       chapters: [{ title: '一', body: '段落1\n\n段落2' }],
     });
 
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/figure.png',
+    project.addImage(0, {
+      filename: 'figure.png',
       data: new Uint8Array([1]),
       alt: '一枚目',
+      atParagraphIndex: 1,
     });
-    project.addInlineImage(0, 2, {
-      href: 'OPS/Images/figure.png',
+    project.addImage(0, {
+      filename: 'figure.png',
       data: new Uint8Array([2]),
       alt: '二枚目',
+      atParagraphIndex: 2,
     });
     const stored = project.addAsset({
       href: 'OPS/Images/figure.png',
@@ -744,8 +735,9 @@ describe('EpubProject', () => {
       href: 'OPS/Text/chapter-001.xhtml',
       data: new Uint8Array([4]),
     });
-    project.setCover({ href: 'OPS/nav.xhtml', data: new Uint8Array([5]) });
-    project.addInlineImage(0, 1, { href: 'OPS/Styles/style.css', data: new Uint8Array([6]) });
+    project.addAsset({ href: 'OPS/nav.xhtml', data: new Uint8Array([5]) });
+    project.addAsset({ href: 'OPS/Styles/style.css', data: new Uint8Array([6]) });
+    project.addImage(0, { filename: 'inline.png', data: new Uint8Array([7]), atParagraphIndex: 1 });
 
     expect(opfAsset.href).toBe('OPS/package-2.opf');
     expect(mimetypeAsset.href).toBe('mimetype-2');
@@ -758,6 +750,7 @@ describe('EpubProject', () => {
       'OPS/Text/chapter-001-2.xhtml',
       'OPS/nav-2.xhtml',
       'OPS/Styles/style-2.css',
+      'OPS/Images/inline.png',
     ]);
 
     const zip = await JSZip.loadAsync(await project.export());
@@ -792,27 +785,19 @@ describe('EpubProject', () => {
       chapters: [{ title: '一', body: '本文' }],
     });
 
-    expect(() => project.addAsset({ href: '', data: new Uint8Array([1]) })).toThrow(
-      /Asset href must point to a file/,
-    );
-    expect(() => project.addAsset({ href: 'OPS/Images/', data: new Uint8Array([1]) })).toThrow(
-      /Asset href must point to a file/,
-    );
-    expect(() => project.addAsset({ href: '../outside.png', data: new Uint8Array([1]) })).toThrow(
-      /must not contain parent directory/,
-    );
-    expect(() =>
-      project.addAsset({ href: 'OPS/Images/cover.png#frag', data: new Uint8Array([1]) }),
-    ).toThrow(/clean EPUB file path/);
-    expect(() =>
-      project.addAsset({ href: 'OPS\\Images\\cover.png', data: new Uint8Array([1]) }),
-    ).toThrow(/clean EPUB file path/);
-    expect(() =>
-      project.addAsset({ href: 'https://example.test/x.png', data: new Uint8Array([1]) }),
-    ).toThrow(/must be a relative EPUB path/);
-    expect(() =>
-      project.setCover({ href: '/OPS/Images/cover.png', data: new Uint8Array([1]) }),
-    ).toThrow(/must be a relative EPUB path/);
+    const data = new Uint8Array([1]);
+
+    for (const href of [
+      '',
+      'OPS/Images/',
+      '../outside.png',
+      'OPS/Images/cover.png#frag',
+      'OPS\\Images\\cover.png',
+      'https://example.test/x.png',
+      '/OPS/Images/cover.png',
+    ]) {
+      expect(() => project.addAsset({ href, data }), href).toThrow(TypeError);
+    }
     expect(project.assets).toHaveLength(0);
   });
 
@@ -831,7 +816,11 @@ describe('EpubProject', () => {
       'OPS/Images/挿絵 [1].png',
     ];
     for (const href of hrefs) project.addAsset({ href, data: new Uint8Array([1]) });
-    project.addInlineImage(0, 1, { href: 'OPS/Images/inline 100%.png', data: new Uint8Array([2]) });
+    project.addImage(0, {
+      filename: 'inline 100%.png',
+      data: new Uint8Array([2]),
+      atParagraphIndex: 1,
+    });
 
     const zip = await JSZip.loadAsync(await project.export());
     const opf = (await zip.file('OPS/package.opf')?.async('string')) ?? '';
@@ -847,7 +836,7 @@ describe('EpubProject', () => {
     expect(resolveZipPath('OPS/Text/', src)).toBe('OPS/Images/inline 100%.png');
   });
 
-  it('emits EPUB3 metadata for creators, contributors, subjects, series, and rights', async () => {
+  it('emits EPUB3 metadata for creators, contributors, subjects, collections, and rights', async () => {
     const project = EpubProject.fromManuscript({
       metadata: {
         title: '群像',
@@ -863,7 +852,6 @@ describe('EpubProject', () => {
         ],
         contributors: [{ name: '挿絵担当', role: 'ill' }],
         subjects: ['歴史小説', '純文学'],
-        series: { name: '近代文学集', index: 3 },
         collections: [{ name: 'コレクション', type: 'series', index: 1 }],
       },
       chapters: [{ title: '一', body: '本文。' }],
@@ -887,29 +875,9 @@ describe('EpubProject', () => {
     expect(opf).toContain('<dc:contributor id="contributor-1">挿絵担当</dc:contributor>');
     expect(opf).toContain('<dc:subject>歴史小説</dc:subject>');
     expect(opf).toContain('<dc:subject>純文学</dc:subject>');
-    expect(opf).toContain('calibre:series" content="近代文学集"');
-    expect(opf).toContain('calibre:series_index" content="3"');
     expect(opf).toContain('property="belongs-to-collection" id="collection-1">コレクション');
     expect(opf).toContain('property="collection-type">series');
     expect(opf).toContain('property="group-position">1');
-  });
-
-  it('maps the legacy `author` shortcut to creators[0] with role aut', async () => {
-    const project = EpubProject.fromManuscript({
-      metadata: {
-        title: '吾輩は猫である',
-        author: '夏目漱石',
-        identifier: 'urn:uuid:legacy-author-book',
-        modified: new Date('2026-05-20T00:00:00Z'),
-      },
-      chapters: [{ title: '一', body: '本文。' }],
-    });
-
-    const out = await project.export();
-    const zip = await JSZip.loadAsync(out);
-    const opf = await zip.file('OPS/package.opf')?.async('string');
-    expect(opf).toContain('<dc:creator id="creator-1">夏目漱石</dc:creator>');
-    expect(opf).toContain('scheme="marc:relators">aut');
   });
 
   it('reports serialize and zip progress during export', async () => {
@@ -1005,8 +973,10 @@ describe('EpubProject', () => {
     });
     project.addAsset({ id: 'chapter-title', href: 'OPS/Data/a.bin', data: new Uint8Array([1]) });
     // Metadata set after the chapter that already took a generated-looking id.
-    project.metadata.author = '作者';
-    project.metadata.contributors = [{ name: '編集' }];
+    project.updateMetadata({
+      creators: [{ name: '作者', role: 'aut' }],
+      contributors: [{ name: '編集' }],
+    });
 
     expect(project.chapters[0].id).not.toBe('chapter-title');
     expect(project.assets[0].id).not.toBe('chapter-title');
@@ -1034,16 +1004,13 @@ describe('EpubProject', () => {
         identifier: 'urn:uuid:cover-book',
         modified: new Date('2026-05-20T00:00:00Z'),
       },
-      cover: {
-        href: 'OPS/Images/cover.png',
-        data: new Uint8Array([1, 2, 3]),
-      },
+      cover: { filename: 'cover.png', mediaType: 'image/png', data: new Uint8Array([1, 2, 3]) },
       chapters: [{ title: '本文', body: '本文です。' }],
     });
 
     const out = await project.export();
-    const bytes = new Uint8Array(out);
-    const view = new DataView(out);
+    const bytes = out;
+    const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
     const fileNameLength = view.getUint16(26, true);
     const extraLength = view.getUint16(28, true);
     const firstName = new TextDecoder().decode(bytes.slice(30, 30 + fileNameLength));
@@ -1080,7 +1047,7 @@ describe('EpubProject', () => {
       metadata: {
         title: `題${bel}名`,
         subtitle: `副${verticalTab}題`,
-        author: `作${formFeed}者`,
+        creators: [{ name: `作${formFeed}者`, role: 'aut' }],
         publisher: `版${bel}元`,
         subjects: [`分${verticalTab}類`],
         identifier: 'urn:uuid:control-char-book',
@@ -1088,10 +1055,11 @@ describe('EpubProject', () => {
       },
       chapters: [{ title: `第${bel}一話`, body: `本${verticalTab}文${formFeed}です。` }],
     });
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/figure.png',
+    project.addImage(0, {
+      filename: 'figure.png',
       data: new Uint8Array([1]),
       alt: `挿${bel}絵`,
+      atParagraphIndex: 1,
     });
 
     const zip = await JSZip.loadAsync(await project.export());
@@ -1127,10 +1095,11 @@ describe('EpubProject', () => {
       metadata: { title: 'Attribute white space', identifier: 'urn:uuid:attribute-space-book' },
       chapters: [{ title: '一', body: '段落' }],
     });
-    project.addInlineImage(0, 1, {
-      href: 'OPS/Images/figure.png',
+    project.addImage(0, {
+      filename: 'figure.png',
       data: new Uint8Array([1]),
       alt: '一行目\n二行目',
+      atParagraphIndex: 1,
     });
 
     const zip = await JSZip.loadAsync(await project.export());
@@ -1157,10 +1126,10 @@ describe('EpubProject', () => {
         url: 'https://cdn.example.com/remote.png',
       });
 
-      const seen: Array<{ assetKey: string; url: string }> = [];
+      const seen: Array<{ href: string; url: string }> = [];
       const out = await project.export({
         assetResolver(request) {
-          seen.push({ assetKey: request.assetKey, url: request.url });
+          seen.push({ href: request.href, url: request.url });
           return new Uint8Array([0x52, 0x65, 0x6d]);
         },
       });
@@ -1170,22 +1139,18 @@ describe('EpubProject', () => {
 
       expect(Array.from(stored ?? [])).toEqual([0x52, 0x65, 0x6d]);
       expect(seen).toEqual([
-        { assetKey: 'OPS/Images/remote.png', url: 'https://cdn.example.com/remote.png' },
+        { href: 'OPS/Images/remote.png', url: 'https://cdn.example.com/remote.png' },
       ]);
     });
 
-    it('rejects when an asset has neither `data` nor `url`', async () => {
+    it('rejects an asset that has neither `data` nor `url` before storing it', () => {
       const project = EpubProject.fromManuscript({
         metadata: { title: 'Empty asset', identifier: 'urn:uuid:empty-asset' },
         chapters: [{ title: '一', body: '本文' }],
       });
-      const asset = project.addAsset({
-        href: 'OPS/Images/orphan.png',
-        data: new Uint8Array([1]),
-      });
-      asset.data = undefined;
 
-      await expect(project.export()).rejects.toThrow(/has neither `data` nor `url`/);
+      expect(() => project.addAsset({ href: 'OPS/Images/orphan.png' } as never)).toThrow(TypeError);
+      expect(project.assets).toEqual([]);
     });
   });
 });

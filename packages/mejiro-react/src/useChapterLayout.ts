@@ -1,6 +1,6 @@
 import type {
   ChapterLayout,
-  ComputePageSizeOptions,
+  FitPageSizeOptions,
   InChapterAnchor,
   MejiroBook,
 } from '@libraz/mejiro/book';
@@ -10,17 +10,23 @@ import { type SurfaceLayoutSource, useSurfaceLayout } from './useSurfaceLayout.j
 
 /** Options for {@link useChapterLayout}. */
 export interface UseChapterLayoutOptions {
+  /** The parsed EPUB whose chapter is laid out; `null` lays nothing out. */
+  epub: EpubBook | null;
+  /** Zero-based index of the chapter to lay out. */
+  chapterIndex: number;
+  /** The reading surface the pages are sized against. */
+  surface: RefObject<HTMLElement | null>;
   /** Observe the surface element for size changes and re-flow. @defaultValue true */
   enableResize?: boolean;
   /** Debounce window (ms) applied to size-triggered re-flows. @defaultValue 120 */
-  resizeDebounce?: number;
+  resizeDebounceMs?: number;
   /**
    * Resolver for page-geometry overrides forwarded to
-   * {@link MejiroBook.computePageSize} — e.g. to shrink the reserved
+   * {@link MejiroBook.fitPageSize} — e.g. to shrink the reserved
    * `gutterOffset` / `headerOffset` so the pages fill their frame. Called on
    * every (re)layout so it may return a value that changes over time.
    */
-  pageGeometry?: () => ComputePageSizeOptions | undefined;
+  pageGeometry?: () => FitPageSizeOptions | undefined;
   /**
    * Capture the reading position from the outgoing layout, just before a
    * **reflow** (non-blank) re-layout replaces it. The anchor is held in
@@ -44,8 +50,11 @@ export interface UseChapterLayoutOptions {
   onError?: (error: Error) => void;
 }
 
-/** Options for {@link UseChapterLayoutReturn.recompute}. */
-export interface RecomputeOptions {
+/**
+ * Options for the `recompute` of {@link useChapterLayout} and
+ * {@link useManuscriptLayout}.
+ */
+export interface ChapterLayoutRecomputeOptions {
   /**
    * Blank the current layout while the new one is computed. Use for content
    * changes (chapter / book swaps); skip for size or option changes so the
@@ -55,21 +64,11 @@ export interface RecomputeOptions {
   blank?: boolean;
 }
 
-/** Page dimensions returned by {@link MejiroBook.computePageSize}. */
-export interface PageDimensions {
-  /** Width of one page, in CSS pixels. */
-  pageWidth: number;
-  /** Height of one page, in CSS pixels. */
-  pageHeight: number;
-  /** Height of the text area inside a page, in CSS pixels. */
-  contentHeight: number;
-}
-
 /** Return value of {@link useChapterLayout}. */
 export interface UseChapterLayoutReturn {
   /** Current layout, or `null` before the first computation. */
   layout: ChapterLayout | null;
-  /** Page width in pixels. */
+  /** Page width in pixels, as {@link MejiroBook.fitPageSize} measured it. */
   pageWidth: number;
   /** Page height in pixels. */
   pageHeight: number;
@@ -78,10 +77,15 @@ export interface UseChapterLayoutReturn {
   /** Most recent layout time (ms). */
   elapsedMs: number;
   /**
+   * Failure of the most recent layout of the current source, whichever path
+   * started it; `null` once a layout succeeds or the source changes.
+   */
+  error: Error | null;
+  /**
    * Force a fresh layout computation. A failure goes to `onError` when one is
    * supplied; otherwise the returned promise rejects.
    */
-  recompute: (opts?: RecomputeOptions) => Promise<void>;
+  recompute: (opts?: ChapterLayoutRecomputeOptions) => Promise<void>;
   /**
    * Anchor captured by `capturePosition` before the most recent reflow,
    * awaiting restoration into the new layout. `restorePosition`, when given,
@@ -102,9 +106,11 @@ export interface UseChapterLayoutReturn {
  *
  * Re-layouts whenever `book`, `epub`, or `chapterIndex` change, against the
  * dimensions of `surface`. The `surface` element is observed with a
- * {@link ResizeObserver}: the first observation runs immediately (so a reader
- * mounted before its container had a final box is still sized correctly on
- * first paint), and later size changes trigger a debounced **full re-layout**.
+ * {@link ResizeObserver}: the first observation of a positive box runs
+ * immediately (so a reader mounted before its container had a final box is
+ * still sized correctly on first paint), and later size changes trigger a
+ * debounced **full re-layout**. While the surface measures zero wide or high,
+ * nothing is measured or laid out.
  *
  * Size and option changes lay the chapter out again rather than calling
  * `ChapterLayout.resize()`, so page geometry is re-derived from the surface and
@@ -118,27 +124,22 @@ export interface UseChapterLayoutReturn {
  * composable.
  *
  * @param book - The book instance to lay out with.
- * @param epub - The current parsed EPUB.
- * @param chapterIndex - Zero-based chapter index to lay out.
- * @param surface - DOM ref for the reading surface used for page sizing.
- * @param options - Behavior overrides.
+ * @param options - The EPUB, chapter and surface to lay out, plus behavior overrides.
  */
 export function useChapterLayout(
   book: MejiroBook,
-  epub: EpubBook | null,
-  chapterIndex: number,
-  surface: RefObject<HTMLElement | null>,
-  options: UseChapterLayoutOptions = {},
+  options: UseChapterLayoutOptions,
 ): UseChapterLayoutReturn {
   // Latest options, so the source stays stable while `pageGeometry` changes identity.
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  const { epub, chapterIndex, surface } = options;
 
   const source = useMemo<SurfaceLayoutSource | null>(() => {
     const chapter = epub?.chapters[chapterIndex];
     if (!chapter) return null;
     return {
-      measure: (el) => book.computePageSize(el, optionsRef.current.pageGeometry?.()),
+      measure: (el) => book.fitPageSize(el, optionsRef.current.pageGeometry?.()),
       layout: () => book.layoutChapter(chapter),
     };
   }, [book, epub, chapterIndex]);
@@ -146,6 +147,6 @@ export function useChapterLayout(
   return useSurfaceLayout(source, surface, {
     ...options,
     enableResize: options.enableResize ?? true,
-    resizeDebounce: options.resizeDebounce ?? 120,
+    resizeDebounceMs: options.resizeDebounceMs ?? 120,
   });
 }

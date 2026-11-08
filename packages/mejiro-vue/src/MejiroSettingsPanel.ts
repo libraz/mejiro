@@ -1,4 +1,4 @@
-import type { EditableSettings, FontChoice } from '@libraz/mejiro';
+import type { EditableSettings, FontChoice, KinsokuMode } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
 import * as Vue from 'vue';
 import { defineComponent, h, type PropType } from 'vue';
@@ -6,7 +6,7 @@ import { useI18n } from './i18n.js';
 
 export type { EditableSettings, FontChoice };
 
-const DEFAULT_FONTS: FontChoice[] = [
+const DEFAULT_FONTS: readonly FontChoice[] = [
   { value: 'serif', label: 'System Serif' },
   { value: 'sans-serif', label: 'System Sans' },
 ];
@@ -59,7 +59,7 @@ export const MejiroSettingsPanel = defineComponent({
     },
     /** Font choices for the family selector. */
     fonts: {
-      type: Array as PropType<FontChoice[]>,
+      type: Array as PropType<readonly FontChoice[]>,
       default: () => DEFAULT_FONTS,
     },
     /** Minimum font size. @defaultValue 10 */
@@ -73,7 +73,10 @@ export const MejiroSettingsPanel = defineComponent({
       default: 48,
     },
   },
-  emits: ['update:settings'],
+  emits: {
+    /** A control changed; carries the whole next settings value. */
+    'update:settings': (_settings: EditableSettings) => true,
+  },
   setup(props, { emit }) {
     const messages = useI18n();
     // Per-instance ids keep label associations valid when two panels share a page.
@@ -188,10 +191,10 @@ export const MejiroSettingsPanel = defineComponent({
                   'select',
                   {
                     id: `${uid}-kinsoku`,
-                    value: s.mode ?? 'strict',
+                    value: s.kinsoku ?? 'strict',
                     onChange: (e: Event) =>
                       patch({
-                        mode: (e.target as HTMLSelectElement).value as 'strict' | 'loose',
+                        kinsoku: (e.target as HTMLSelectElement).value as KinsokuMode,
                       }),
                   },
                   [

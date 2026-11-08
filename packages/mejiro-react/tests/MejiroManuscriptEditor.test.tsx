@@ -8,7 +8,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const epubMocks = vi.hoisted(() => ({
-  exportProject: vi.fn(async () => new ArrayBuffer(8)),
+  exportProject: vi.fn(async () => new Uint8Array(8)),
   setCover: vi.fn(),
 }));
 
@@ -186,7 +186,7 @@ describe('MejiroManuscriptEditor (React)', () => {
           title="Draft"
           author="Author"
           onAutosave={onAutosave}
-          autosaveDelay={100}
+          autosaveDebounceMs={100}
         />,
       );
       const input = container.querySelector(
@@ -222,7 +222,7 @@ describe('MejiroManuscriptEditor (React)', () => {
           title="Before"
           author="Author"
           onAutosave={onAutosave}
-          autosaveDelay={100}
+          autosaveDebounceMs={100}
         />,
       );
       const titleInput = container.querySelector('.mejiro-editor-panel input') as HTMLInputElement;
@@ -251,7 +251,7 @@ describe('MejiroManuscriptEditor (React)', () => {
         throw new Error('autosave failed');
       });
       const { container } = render(
-        <MejiroManuscriptEditor onAutosave={onAutosave} autosaveDelay={100} />,
+        <MejiroManuscriptEditor onAutosave={onAutosave} autosaveDebounceMs={100} />,
       );
       const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: 'changed' } });
@@ -322,6 +322,7 @@ describe('MejiroManuscriptEditor (React)', () => {
       <MejiroManuscriptEditor
         previewProps={{
           options: { fontFamily: 'serif', fontSize: 22 },
+          showStats: true,
           theme: 'dark',
           renderSettings: () => <div className="custom-preview-settings">Custom</div>,
         }}
@@ -361,7 +362,7 @@ describe('MejiroManuscriptEditor (React)', () => {
     await waitFor(() => {
       expect(epubMocks.setCover).toHaveBeenCalledWith(
         expect.objectContaining({
-          href: 'OPS/Images/cover.png',
+          filename: 'cover.png',
           mediaType: 'image/png',
         }),
       );

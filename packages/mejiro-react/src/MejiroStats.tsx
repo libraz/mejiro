@@ -1,56 +1,72 @@
+import type { MejiroLocale } from '@libraz/mejiro';
 import { estimateReadingTime, formatReadingTime } from '@libraz/mejiro/book';
 import type { EpubChapter } from '@libraz/mejiro/epub';
-import type { ReactNode } from 'react';
+import { type ComponentPropsWithoutRef, forwardRef, type ReactNode } from 'react';
+import { useI18n } from './i18n.js';
 
-/** Props for {@link MejiroStats}. */
-export interface MejiroStatsProps {
+/** Props for {@link MejiroStats}; other `span` attributes go to the root element. */
+export interface MejiroStatsProps extends ComponentPropsWithoutRef<'span'> {
   /** Chapter currently displayed. */
   chapter: EpubChapter | null;
-  /** Total page count for the current layout. */
-  totalPages: number;
+  /** Number of pages in the current layout. */
+  pageCount: number;
   /** Most recent layout time in ms. */
   elapsedMs: number;
   /** Optional label for the current font (e.g. "Noto Serif JP 16px"). */
   fontLabel?: string;
   /** Show estimated reading time in the stats line. @defaultValue false */
   showReadingTime?: boolean;
-  /** Characters-per-minute used for the reading-time estimate. @defaultValue 600 */
-  cpm?: number;
-  /** Locale used to format the reading-time label. @defaultValue 'ja' */
-  readingTimeLocale?: 'ja' | 'en';
+  /** Characters per minute used for the reading-time estimate. @defaultValue 600 */
+  charsPerMinute?: number;
+  /**
+   * Locale whose catalog spells the reading-time units. Defaults to the
+   * catalog of the nearest `MejiroI18nProvider`.
+   */
+  locale?: MejiroLocale;
 }
 
 /** Compact reading stats line. */
-export function MejiroStats({
-  chapter,
-  totalPages,
-  elapsedMs,
-  fontLabel,
-  showReadingTime = false,
-  cpm = 600,
-  readingTimeLocale = 'ja',
-}: MejiroStatsProps): ReactNode {
-  if (!chapter) return <span className="mejiro-reader-stats" />;
+export const MejiroStats = forwardRef<HTMLSpanElement, MejiroStatsProps>(function MejiroStats(
+  {
+    chapter,
+    pageCount,
+    elapsedMs,
+    fontLabel,
+    showReadingTime = false,
+    charsPerMinute = 600,
+    locale,
+    className,
+    ...rest
+  },
+  ref,
+): ReactNode {
+  const messages = useI18n(locale != null ? { locale } : {});
+  const rootClass = className ? `mejiro-reader-stats ${className}` : 'mejiro-reader-stats';
+  if (!chapter) return <span {...rest} ref={ref} className={rootClass} />;
   // Same population as the reading-time estimate shown beside it: codepoints
   // (so surrogate pairs count once) with headings left out.
-  const totalChars = chapter.paragraphs.reduce(
+  const charCount = chapter.paragraphs.reduce(
     (s, p) => (p.headingLevel != null ? s : s + [...p.text].length),
     0,
   );
-  const totalRuby = chapter.paragraphs.reduce(
-    (s, p) => s + p.inlineAnnotations.filter((a) => a.kind === 'ruby').length,
+  const rubyCount = chapter.paragraphs.reduce(
+    (s, p) => s + p.inlineAnnotations.filter((a) => a.type === 'ruby').length,
     0,
   );
   const readingTimeLabel = showReadingTime
-    ? formatReadingTime(estimateReadingTime(chapter, { cpm }), readingTimeLocale)
+    ? formatReadingTime(estimateReadingTime(chapter, { charsPerMinute }), { messages })
     : null;
   const parts = [
-    `${totalChars}ch`,
-    `${totalPages}pp`,
-    totalRuby > 0 ? `${totalRuby}ruby` : null,
+    `${charCount}ch`,
+    `${pageCount}pp`,
+    rubyCount > 0 ? `${rubyCount}ruby` : null,
     readingTimeLabel,
     fontLabel || null,
     `${elapsedMs.toFixed(0)}ms`,
   ];
-  return <span className="mejiro-reader-stats">{parts.filter(Boolean).join(' / ')}</span>;
-}
+  return (
+    <span {...rest} ref={ref} className={rootClass}>
+      {parts.filter(Boolean).join(' / ')}
+    </span>
+  );
+});

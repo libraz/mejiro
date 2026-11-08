@@ -20,7 +20,6 @@ function entriesFor(paragraphs: readonly BookParagraph[]): RenderEntry[] {
     chars: [...p.text],
     breakPoints: new Uint32Array([]),
     inlineAnnotations: p.inlineAnnotations ?? [],
-    isHeading: p.headingLevel != null || p.kind === 'heading',
     headingLevel: p.headingLevel,
     kind: p.kind,
   }));

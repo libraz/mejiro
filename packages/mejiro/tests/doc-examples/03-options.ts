@@ -12,10 +12,9 @@ const result = computeBreaks({
   text: toCodepoints('あいうえお、かきくけこ'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
-  mode: 'loose',
+  kinsoku: customRules,
   enableHanging: true,
   tokenBoundaries: new Uint32Array([4, 10]),
-  kinsokuRules: customRules,
 });
 
 // #endregion doc:options

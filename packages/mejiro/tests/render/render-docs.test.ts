@@ -28,9 +28,9 @@ function appendInlineNode(parent: Node, node: InlineRenderNode): void {
   parent.appendChild(el);
 }
 
-/** Flattening helper from `09-advanced.md` (Canvas example). */
+/** What the `09-advanced.md` Canvas example draws for a segment. */
 function segmentText(segment: RenderSegment): string {
-  return segment.type === 'ruby' ? segment.base : segment.text;
+  return segment.text;
 }
 
 /** String renderer from `09-advanced.md`. */
@@ -39,7 +39,7 @@ function renderToString(page: RenderPage): string {
     .map((p) =>
       p.lines
         .map((l) =>
-          l.segments.map((s) => (s.type === 'ruby' ? `${s.base}(${s.rubyText})` : s.text)).join(''),
+          l.segments.map((s) => (s.type === 'ruby' ? `${s.text}(${s.rubyText})` : s.text)).join(''),
         )
         .join('\n'),
     )
@@ -56,13 +56,13 @@ function annotated(): RenderEntry {
     chars: [...TEXT],
     breakPoints: new Uint32Array([]),
     inlineAnnotations: [
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
-      { kind: 'emphasis', startIndex: 5, endIndex: 7, style: 'dot' },
-      { kind: 'tcy', startIndex: 7, endIndex: 11 },
-      { kind: 'em', startIndex: 11, endIndex: 12 },
-      { kind: 'strong', startIndex: 12, endIndex: 13 },
-      { kind: 'link', startIndex: 13, endIndex: 16, href: 'ch2.xhtml', title: '第二章' },
-      { kind: 'footnote', startIndex: 16, endIndex: 17, noteId: 'fn1' },
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
+      { type: 'emphasis', startIndex: 5, endIndex: 7, style: 'dot' },
+      { type: 'tcy', startIndex: 7, endIndex: 11 },
+      { type: 'em', startIndex: 11, endIndex: 12 },
+      { type: 'strong', startIndex: 12, endIndex: 13 },
+      { type: 'link', startIndex: 13, endIndex: 16, href: 'ch2.xhtml', title: '第二章' },
+      { type: 'footnote-ref', startIndex: 16, endIndex: 17, noteId: 'fn1' },
     ],
   };
 }
@@ -110,8 +110,8 @@ describe('documented RenderSegment renderers', () => {
       chars: [...'重要な漢字です'],
       breakPoints: new Uint32Array([]),
       inlineAnnotations: [
-        { kind: 'strong', startIndex: 0, endIndex: 5 },
-        { kind: 'ruby', startIndex: 3, endIndex: 5, rubyText: 'かんじ' },
+        { type: 'strong', startIndex: 0, endIndex: 5 },
+        { type: 'ruby', startIndex: 3, endIndex: 5, rubyText: 'かんじ' },
       ],
     };
 
@@ -125,7 +125,7 @@ describe('documented RenderSegment renderers', () => {
       chars: [...'危険なリンク'],
       breakPoints: new Uint32Array([]),
       inlineAnnotations: [
-        { kind: 'link', startIndex: 3, endIndex: 6, href: 'javascript:alert(1)' },
+        { type: 'link', startIndex: 3, endIndex: 6, href: 'javascript:alert(1)' },
       ],
     };
 

@@ -16,7 +16,7 @@ const result = computeBreaks({
       endIndex: 2,
       rubyText: toCodepoints('かんじ'),
       rubyAdvances: new Float32Array([8, 8, 8]),
-      type: 'group',
+      rubyType: 'group',
     },
   ],
 });

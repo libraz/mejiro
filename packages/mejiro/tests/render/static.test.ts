@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { BookParagraph } from '../../src/book/types.js';
-import type { InlineAnnotation } from '../../src/browser/types.js';
 import { normalizeAnnotatedText } from '../../src/normalize.js';
 import { renderEpubStatic } from '../../src/render/static.js';
+import type { BookParagraph, InlineAnnotation } from '../../src/types.js';
 
 function paragraph(text: string, extra: Partial<BookParagraph> = {}): BookParagraph {
   return { text, ...extra };
@@ -64,13 +63,13 @@ describe('renderEpubStatic', () => {
       paragraphs: [
         paragraph('漢字abcdef', {
           inlineAnnotations: [
-            { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
-            { kind: 'emphasis', startIndex: 2, endIndex: 3, style: 'sesame' },
-            { kind: 'tcy', startIndex: 3, endIndex: 4 },
-            { kind: 'em', startIndex: 4, endIndex: 5 },
-            { kind: 'strong', startIndex: 5, endIndex: 6 },
-            { kind: 'link', startIndex: 6, endIndex: 7, href: '/x' },
-            { kind: 'footnote', startIndex: 7, endIndex: 8, noteId: 'n1' },
+            { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ' },
+            { type: 'emphasis', startIndex: 2, endIndex: 3, style: 'sesame' },
+            { type: 'tcy', startIndex: 3, endIndex: 4 },
+            { type: 'em', startIndex: 4, endIndex: 5 },
+            { type: 'strong', startIndex: 5, endIndex: 6 },
+            { type: 'link', startIndex: 6, endIndex: 7, href: '/x' },
+            { type: 'footnote-ref', startIndex: 7, endIndex: 8, noteId: 'n1' },
           ],
         }),
       ],
@@ -88,7 +87,7 @@ describe('renderEpubStatic', () => {
     const html = renderEpubStatic({
       paragraphs: [
         paragraph('unsafe', {
-          inlineAnnotations: [{ kind: 'link', startIndex: 0, endIndex: 6, href: 'javascript:x' }],
+          inlineAnnotations: [{ type: 'link', startIndex: 0, endIndex: 6, href: 'javascript:x' }],
         }),
       ],
     });
@@ -103,7 +102,7 @@ describe('renderEpubStatic', () => {
       paragraphs: [
         paragraph('一行目\n二行目', {
           inlineAnnotations: [
-            { kind: 'link', startIndex: 0, endIndex: 7, href: 'javascript:alert(1)' },
+            { type: 'link', startIndex: 0, endIndex: 7, href: 'javascript:alert(1)' },
           ],
         }),
       ],
@@ -119,8 +118,8 @@ describe('renderEpubStatic', () => {
       paragraphs: [
         paragraph('漢字', {
           inlineAnnotations: [
-            { kind: 'link', startIndex: 0, endIndex: 2, href: 'javascript:alert(1)' },
-            { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+            { type: 'link', startIndex: 0, endIndex: 2, href: 'javascript:alert(1)' },
+            { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
           ],
         }),
       ],
@@ -136,8 +135,8 @@ describe('renderEpubStatic', () => {
       paragraphs: [
         paragraph('漢字', {
           inlineAnnotations: [
-            { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
-            { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+            { type: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+            { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
           ],
         }),
       ],
@@ -150,7 +149,7 @@ describe('renderEpubStatic', () => {
     // Decomposed `がぎ` followed by `漢字`; the ruby offsets index the text as given.
     const text = `${String.fromCodePoint(0x304b, 0x3099, 0x304d, 0x3099)}漢字`;
     const inlineAnnotations = [
-      { kind: 'ruby', startIndex: 4, endIndex: 5, rubyText: 'かん' },
+      { type: 'ruby', startIndex: 4, endIndex: 5, rubyText: 'かん' },
     ] as const satisfies readonly InlineAnnotation[];
     const html = renderEpubStatic({ paragraphs: [paragraph(text, { inlineAnnotations })] });
 

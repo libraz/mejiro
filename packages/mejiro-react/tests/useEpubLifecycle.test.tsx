@@ -34,9 +34,7 @@ describe('useEpub (React) — abandoned loads', () => {
     const { fetchEpub, requests } = manualFetcher();
     const onLoad = vi.fn();
     const onError = vi.fn();
-    const { unmount } = renderHook(() =>
-      useEpub({ defaultUrl: '/a.epub', fetchEpub, onLoad, onError }),
-    );
+    const { unmount } = renderHook(() => useEpub({ url: '/a.epub', fetchEpub, onLoad, onError }));
     expect(requests).toHaveLength(1);
 
     unmount();
@@ -50,7 +48,7 @@ describe('useEpub (React) — abandoned loads', () => {
   it('reports nothing for a load that fails after unmount', async () => {
     const { fetchEpub, requests } = manualFetcher();
     const onError = vi.fn();
-    const { unmount } = renderHook(() => useEpub({ defaultUrl: '/a.epub', fetchEpub, onError }));
+    const { unmount } = renderHook(() => useEpub({ url: '/a.epub', fetchEpub, onError }));
 
     unmount();
     requests[0].reject(new Error('offline'));
@@ -64,7 +62,7 @@ describe('useEpub (React) — abandoned loads', () => {
     const { fetchEpub, requests } = manualFetcher();
     const onLoad = vi.fn();
     const { result, rerender } = renderHook(
-      ({ url }: { url: string | undefined }) => useEpub({ defaultUrl: url, fetchEpub, onLoad }),
+      ({ url }: { url: string | undefined }) => useEpub({ url: url, fetchEpub, onLoad }),
       { initialProps: { url: '/a.epub' as string | undefined } },
     );
     expect(result.current.loading).toBe(true);
@@ -84,7 +82,7 @@ describe('useEpub (React) — abandoned loads', () => {
     const { fetchEpub, requests } = manualFetcher();
     const onLoad = vi.fn();
     const { result, rerender } = renderHook(
-      ({ url }: { url: string }) => useEpub({ defaultUrl: url, fetchEpub, onLoad }),
+      ({ url }: { url: string }) => useEpub({ url: url, fetchEpub, onLoad }),
       { initialProps: { url: '/a.epub' } },
     );
     rerender({ url: '/b.epub' });

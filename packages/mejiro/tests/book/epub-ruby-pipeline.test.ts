@@ -41,11 +41,11 @@ async function makeEpub(body: string): Promise<ArrayBuffer> {
   return zip.generateAsync({ type: 'arraybuffer' });
 }
 
-function collectRubySegments(page: RenderPage): { base: string; rubyText: string }[] {
-  const found: { base: string; rubyText: string }[] = [];
+function collectRubySegments(page: RenderPage): { text: string; rubyText: string }[] {
+  const found: { text: string; rubyText: string }[] = [];
   const visit = (segments: readonly RenderSegment[]): void => {
     for (const segment of segments) {
-      if (segment.type === 'ruby') found.push({ base: segment.base, rubyText: segment.rubyText });
+      if (segment.type === 'ruby') found.push({ text: segment.text, rubyText: segment.rubyText });
       if (segment.type !== 'text' && segment.children) visit(segment.children);
     }
   };
@@ -60,7 +60,7 @@ function lineTexts(page: RenderPage, paragraphIndex: number): string[] {
     segments
       .map((segment) => {
         if (segment.type === 'text') return segment.text;
-        if (segment.type === 'ruby') return segment.base;
+        if (segment.type === 'ruby') return segment.text;
         return segment.text;
       })
       .join('');
@@ -79,7 +79,7 @@ describe('EPUB chapters with multi-rt ruby', () => {
 
     const layout = await book.layoutChapter(parsed.chapters[0]);
 
-    expect(layout.totalPages).toBeGreaterThan(0);
+    expect(layout.pageCount).toBeGreaterThan(0);
   });
 
   it('renders every rt of a per-character ruby span into the page', async () => {
@@ -95,9 +95,9 @@ describe('EPUB chapters with multi-rt ruby', () => {
     const rubies = collectRubySegments(layout.getPage(0).page);
     expect(rubies).toEqual(
       expect.arrayContaining([
-        { base: '東', rubyText: 'とう' },
-        { base: '京', rubyText: 'きょう' },
-        { base: '都', rubyText: 'と' },
+        { text: '東', rubyText: 'とう' },
+        { text: '京', rubyText: 'きょう' },
+        { text: '都', rubyText: 'と' },
       ]),
     );
     // The covering aggregate must not be rendered a second time.
@@ -116,7 +116,7 @@ describe('EPUB chapters with multi-rt ruby', () => {
 
     const page = layout.getPage(0).page;
     expect(lineTexts(page, 0).join('')).toBe('これは漢字の練習です。');
-    expect(collectRubySegments(page)).toEqual([{ base: '漢字', rubyText: 'かんじ' }]);
+    expect(collectRubySegments(page)).toEqual([{ text: '漢字', rubyText: 'かんじ' }]);
   });
 
   it('breaks a multi-rt span only where the markup allows it', async () => {

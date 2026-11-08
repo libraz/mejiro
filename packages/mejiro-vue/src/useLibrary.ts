@@ -20,8 +20,8 @@ export interface UseLibraryOptions<T = unknown> {
   volumes: MaybeRefOrGetter<readonly VolumeInfo<T>[]>;
   /** ID of the volume to start on. Defaults to the first entry. */
   initialVolumeId?: string;
-  /** Called whenever the active volume changes. */
-  onChange?: (volume: VolumeInfo<T>) => void;
+  /** Called with the new volume whenever the active volume changes. */
+  onVolumeChange?: (volume: VolumeInfo<T>) => void;
 }
 
 /** Return value of {@link useLibrary}. */
@@ -29,15 +29,15 @@ export interface UseLibraryReturn<T = unknown> {
   /** Computed list of volumes (reactive). */
   list: ComputedRef<readonly VolumeInfo<T>[]>;
   /** Currently active volume, or `null` for an empty library. */
-  current: ComputedRef<VolumeInfo<T> | null>;
-  /** Index of the current volume, or `-1` for an empty library. */
-  currentIndex: ComputedRef<number>;
+  volume: ComputedRef<VolumeInfo<T> | null>;
+  /** Index of the active volume, or `-1` for an empty library. */
+  volumeIndex: ComputedRef<number>;
   /** Advance to the next volume in the list (no-op at the end). */
   next(): void;
   /** Go back to the previous volume in the list (no-op at the start). */
   prev(): void;
-  /** Jump to a volume by ID. No-op when the ID is not in the list. */
-  goTo(id: string): void;
+  /** Make the volume with the given ID active. No-op when the ID is not in the list. */
+  selectVolume(id: string): void;
 }
 
 function readVolumes<T>(
@@ -88,12 +88,12 @@ export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibra
       if (resolved === currentId.value) return;
       currentId.value = resolved;
       const volume = next.find((v) => v.id === resolved);
-      if (volume) options.onChange?.(volume);
+      if (volume) options.onVolumeChange?.(volume);
     },
     { flush: 'sync' },
   );
 
-  const currentIndex = computed(() => {
+  const volumeIndex = computed(() => {
     const arr = list.value;
     if (arr.length === 0) return -1;
     if (currentId.value == null) return 0;
@@ -101,8 +101,8 @@ export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibra
     return Math.max(found, 0);
   });
 
-  const current = computed<VolumeInfo<T> | null>(() => {
-    const i = currentIndex.value;
+  const volume = computed<VolumeInfo<T> | null>(() => {
+    const i = volumeIndex.value;
     const arr = list.value;
     return i >= 0 && i < arr.length ? arr[i] : null;
   });
@@ -112,31 +112,31 @@ export function useLibrary<T = unknown>(options: UseLibraryOptions<T>): UseLibra
     if (!v) return;
     navigated = true;
     currentId.value = v.id;
-    options.onChange?.(v);
+    options.onVolumeChange?.(v);
   }
 
   function next(): void {
-    if (currentIndex.value < 0) return;
-    const ni = Math.min(list.value.length - 1, currentIndex.value + 1);
-    if (ni !== currentIndex.value) activate(ni);
+    if (volumeIndex.value < 0) return;
+    const ni = Math.min(list.value.length - 1, volumeIndex.value + 1);
+    if (ni !== volumeIndex.value) activate(ni);
   }
   function prev(): void {
-    if (currentIndex.value < 0) return;
-    const ni = Math.max(0, currentIndex.value - 1);
-    if (ni !== currentIndex.value) activate(ni);
+    if (volumeIndex.value < 0) return;
+    const ni = Math.max(0, volumeIndex.value - 1);
+    if (ni !== volumeIndex.value) activate(ni);
   }
-  function goTo(id: string): void {
+  function selectVolume(id: string): void {
     const ni = list.value.findIndex((v) => v.id === id);
-    if (ni < 0 || ni === currentIndex.value) return;
+    if (ni < 0 || ni === volumeIndex.value) return;
     activate(ni);
   }
 
   return {
     list,
-    current,
-    currentIndex,
+    volume,
+    volumeIndex,
     next,
     prev,
-    goTo,
+    selectVolume,
   };
 }

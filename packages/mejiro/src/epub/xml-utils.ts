@@ -1,3 +1,5 @@
+import { MejiroError } from '../errors.js';
+
 // Stylesheet links are located in one forward pass over markup starts.
 // Comments, CDATA sections and processing instructions are skipped whole, and
 // a tag ends at the first `>` outside a quoted attribute value, so every range
@@ -96,4 +98,23 @@ export function stripStylesheetLinks(xhtml: string): string {
  */
 export function extractStylesheetLinks(xhtml: string): string[] {
   return findStylesheetLinks(xhtml).map(({ start, end }) => xhtml.slice(start, end));
+}
+
+/**
+ * @internal
+ * Fails with a mejiro error naming the missing host globals, so a Node or SSR
+ * caller sees what to register instead of a bare `ReferenceError`.
+ *
+ * @throws {MejiroError} `dom-unavailable` when the host provides no DOM implementation.
+ */
+export function assertEpubDomAvailable(): void {
+  const missing: string[] = [];
+  if (typeof DOMParser === 'undefined') missing.push('DOMParser');
+  if (typeof XMLSerializer === 'undefined') missing.push('XMLSerializer');
+  if (typeof Node === 'undefined') missing.push('Node');
+  if (missing.length === 0) return;
+  throw new MejiroError(
+    'dom-unavailable',
+    `EPUB parsing requires a DOM implementation providing ${missing.join(', ')}. Node and SSR runtimes must register one globally (for example from happy-dom or jsdom) before calling mejiro/epub.`,
+  );
 }

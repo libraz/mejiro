@@ -26,7 +26,7 @@ export type InlineRenderNode =
       className?: string;
       href?: string;
       title?: string;
-      children: InlineRenderNode[];
+      children: readonly InlineRenderNode[];
     };
 
 /**
@@ -53,7 +53,7 @@ export function segmentToInlineNode(segment: RenderSegment): InlineRenderNode {
       return { type: 'text', text: segment.text };
     case 'ruby':
       return element('ruby', [
-        ...renderChildren(segment.children, segment.base),
+        ...renderChildren(segment.children, segment.text),
         element('rt', [text(segment.rubyText)]),
       ]);
     case 'emphasis':

@@ -11,8 +11,8 @@ describe('MejiroSettingsPanel (React) — label association', () => {
   it('links every label to a control and keeps ids unique across two panels', () => {
     const { container } = render(
       <>
-        <MejiroSettingsPanel settings={settings} onChange={() => {}} />
-        <MejiroSettingsPanel settings={settings} onChange={() => {}} />
+        <MejiroSettingsPanel settings={settings} onSettingsChange={() => {}} />
+        <MejiroSettingsPanel settings={settings} onSettingsChange={() => {}} />
       </>,
     );
 

@@ -4,8 +4,7 @@
  * React and Vue packages carry identical copies so both follow one rule.
  * Internal: not re-exported from the package entry.
  */
-import type { MejiroStorage } from '@libraz/mejiro';
-import type { ManuscriptEditorChapter } from './MejiroManuscriptEditor.js';
+import { type ManuscriptChapter, MejiroError, type MejiroStorage } from '@libraz/mejiro';
 
 /**
  * Returns `globalThis.localStorage`, or `null` when it is absent or its getter
@@ -19,28 +18,60 @@ export function resolveDefaultStorage(): MejiroStorage | null {
   }
 }
 
-/** Reads and parses `key`, returning `fallback` when there is no backend or it throws. */
+/**
+ * Reads and parses `key`, returning `fallback` when there is no backend, it
+ * throws (reported as `storage-read-failed`), or a stored value cannot be
+ * parsed (`parse` returns `null` for a non-empty value; reported as
+ * `storage-corrupt`). The stored value is left in place either way.
+ */
 export function readStorage<T>(
   storage: MejiroStorage | null,
   key: string,
-  parse: (raw: string | null) => T,
+  parse: (raw: string | null) => T | null,
   fallback: T,
+  report: (error: MejiroError) => void,
 ): T {
   if (!storage) return fallback;
+  let raw: string | null;
   try {
-    return parse(storage.getItem(key));
-  } catch {
+    raw = storage.getItem(key);
+  } catch (cause) {
+    report(new MejiroError('storage-read-failed', `Could not read "${key}"`, { cause }));
     return fallback;
   }
+  const parsed = parse(raw);
+  if (parsed !== null) return parsed;
+  if (raw) report(new MejiroError('storage-corrupt', `Stored data under "${key}" is unreadable`));
+  return fallback;
 }
 
-/** Removes `key`, ignoring a throwing backend. */
-export function removeStorage(storage: MejiroStorage | null, key: string): void {
+/** Removes `key`; a throwing backend is reported as `storage-write-failed`. */
+export function removeStorage(
+  storage: MejiroStorage | null,
+  key: string,
+  report: (error: MejiroError) => void,
+): void {
   if (!storage) return;
   try {
     storage.removeItem(key);
-  } catch {
-    // Disabled or denied storage — the in-memory state is already cleared.
+  } catch (cause) {
+    // The in-memory state is already cleared.
+    report(new MejiroError('storage-write-failed', `Could not remove "${key}"`, { cause }));
+  }
+}
+
+/** Writes `value` under `key`; a throwing backend is reported as `storage-write-failed`. */
+export function writeStorage(
+  storage: MejiroStorage,
+  key: string,
+  value: string,
+  report: (error: MejiroError) => void,
+): void {
+  try {
+    storage.setItem(key, value);
+  } catch (cause) {
+    // Quota, disabled storage, or denied access — the in-memory copy is kept.
+    report(new MejiroError('storage-write-failed', `Could not write "${key}"`, { cause }));
   }
 }
 
@@ -48,7 +79,7 @@ export function removeStorage(storage: MejiroStorage | null, key: string): void 
  * Returns a generated chapter id no chapter in `existing` carries, however
  * many chapters were added or removed within the same millisecond.
  */
-export function uniqueChapterId(existing: readonly { id: string }[]): string {
+export function uniqueChapterId(existing: readonly ManuscriptChapter[]): string {
   const taken = new Set(existing.map((chapter) => chapter.id));
   const stamp = Date.now();
   let n = existing.length;
@@ -70,7 +101,7 @@ export function mergeDefined<T extends object>(base: T, patch: Partial<T>): T {
 export interface PendingWrite {
   /** Replaces the pending write and runs it after `delayMs`. */
   schedule(write: () => void, delayMs: number): void;
-  /** Runs the pending write now, if any. A throwing write keeps the in-memory state. */
+  /** Runs the pending write now, if any. */
   flush(): void;
   /** Drops the pending write without running it. */
   cancel(): void;
@@ -90,12 +121,7 @@ export function createPendingWrite(): PendingWrite {
   function flush(): void {
     const write = pending;
     cancel();
-    if (!write) return;
-    try {
-      write();
-    } catch {
-      // Quota, disabled storage, or denied access — keep the in-memory copy.
-    }
+    write?.();
   }
   return {
     schedule(write, delayMs) {
@@ -125,29 +151,34 @@ export function flushOnPageHide(flush: () => void): () => void {
 }
 
 /** Copies chapters into plain objects so an autosave payload is structured-cloneable. */
-export function snapshotChapters(
-  chapters: readonly ManuscriptEditorChapter[],
-): ManuscriptEditorChapter[] {
-  return chapters.map(({ id, title, body }) => ({ id, title, body }));
+export function snapshotChapters(chapters: readonly ManuscriptChapter[]): ManuscriptChapter[] {
+  return chapters.map(({ id, title, body }) =>
+    id === undefined ? { title, body } : { id, title, body },
+  );
+}
+
+/** Whether two dependency lists hold the same values, compared with `Object.is`. */
+function sameDeps(a: readonly unknown[], b: readonly unknown[]): boolean {
+  return a.length === b.length && a.every((value, i) => Object.is(value, b[i]));
 }
 
 /** Decides whether a draft differs from the last one it was shown. */
 export interface DraftChangeTracker {
-  /** Records `chapters` / `key` and reports whether they differ from the previous record. */
-  changed(chapters: readonly ManuscriptEditorChapter[], key: string): boolean;
+  /** Records `chapters` / `deps` and reports whether they differ from the previous record. */
+  changed(chapters: readonly ManuscriptChapter[], deps: readonly unknown[]): boolean;
 }
 
 /** Creates a {@link DraftChangeTracker} seeded with the draft present at mount. */
 export function createDraftChangeTracker(
-  chapters: readonly ManuscriptEditorChapter[],
-  key: string,
+  chapters: readonly ManuscriptChapter[],
+  deps: readonly unknown[],
 ): DraftChangeTracker {
   let lastChapters = snapshotChapters(chapters);
-  let lastKey = key;
+  let lastDeps = [...deps];
   return {
-    changed(nextChapters, nextKey) {
+    changed(nextChapters, nextDeps) {
       const same =
-        nextKey === lastKey &&
+        sameDeps(nextDeps, lastDeps) &&
         nextChapters.length === lastChapters.length &&
         nextChapters.every((chapter, i) => {
           const prev = lastChapters[i];
@@ -157,7 +188,7 @@ export function createDraftChangeTracker(
         });
       if (same) return false;
       lastChapters = snapshotChapters(nextChapters);
-      lastKey = nextKey;
+      lastDeps = [...nextDeps];
       return true;
     },
   };

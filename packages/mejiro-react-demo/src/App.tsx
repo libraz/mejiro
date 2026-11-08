@@ -1,8 +1,12 @@
-import { formatDialogueLineBreaks, normalizeText } from '@libraz/mejiro';
+import { formatDialogueLineBreaks, type ManuscriptChapter, normalizeText } from '@libraz/mejiro';
 import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
+import type {
+  EditableBlock,
+  EditableEpubChapter,
+  EditableParagraphBlock,
+} from '@libraz/mejiro/epub';
 import {
-  type EpubProjectChapterDraft,
   type MejiroChapterNavMode,
   type MejiroLocale,
   MejiroNotationHighlighter,
@@ -34,30 +38,31 @@ const OPTIONS = {
 
 type DemoMode = 'viewer' | 'create' | 'edit' | 'custom';
 
+/** The header is drawn only when the reader gets a `title`; `title` here toggles passing one. */
+const READER_TITLE = 'mejiro';
+
 type ReaderChromeOptions = {
-  enableHeader: boolean;
-  enableChapterNav: boolean;
-  enableSettings: boolean;
-  enableImageOverlay: boolean;
-  enableStats: boolean;
+  title: boolean;
+  showSettings: boolean;
+  showImageOverlayButton: boolean;
+  showStats: boolean;
   enableKeyboard: boolean;
-  enablePageIndicator: boolean;
+  showPageIndicator: boolean;
 };
 
 const DEFAULT_CHROME_OPTIONS: ReaderChromeOptions = {
-  enableHeader: true,
-  enableChapterNav: true,
-  enableSettings: true,
-  enableImageOverlay: true,
-  enableStats: true,
+  title: true,
+  showSettings: true,
+  showImageOverlayButton: true,
+  showStats: true,
   enableKeyboard: true,
-  enablePageIndicator: true,
+  showPageIndicator: true,
 };
 
 const HEADER_DEPENDENT_OPTIONS: (keyof ReaderChromeOptions)[] = [
-  'enableSettings',
-  'enableImageOverlay',
-  'enableStats',
+  'showSettings',
+  'showImageOverlayButton',
+  'showStats',
 ];
 
 const CHAPTER_NAV_MODES: MejiroChapterNavMode[] = ['select', 'panel', 'both', 'none'];
@@ -71,7 +76,7 @@ const DEFAULT_DRAFT = `これは｜漢字《かんじ》のルビ例です。
 
 小説投稿サイトから貼り付けた原稿を章に分け、EPUBとして整理します。`;
 
-function defaultChapter(index = 0): EpubProjectChapterDraft {
+function defaultChapter(index = 0): ManuscriptChapter {
   return {
     id: `chapter-${Date.now()}-${index}`,
     title: index === 0 ? '第一話' : `第${index + 1}話`,
@@ -79,7 +84,7 @@ function defaultChapter(index = 0): EpubProjectChapterDraft {
   };
 }
 
-function downloadEpub(buffer: ArrayBuffer, title: string): void {
+function downloadEpub(buffer: Uint8Array<ArrayBuffer>, title: string): void {
   const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
   const a = document.createElement('a');
   a.href = url;
@@ -118,15 +123,18 @@ export default function App() {
   const [exportError, setExportError] = useState<string | null>(null);
 
   const project = useEpubProject({
-    metadata: { title: '新しい作品', author: '作者名' },
-    chapters: [defaultChapter()],
+    initialMetadata: { title: '新しい作品', creators: [{ name: '作者名' }] },
+    initialChapters: [defaultChapter()],
   });
   // Parse the sample EPUB once at the app level so switching back to the
   // viewer tab is instant — passing `epub={...}` skips the fetch+parse
   // cycle that `epubUrl` would re-run on every remount.
-  const sample = useEpub({ defaultUrl: '/neko.epub' });
-  const editable = useEditableEpub({ defaultUrl: '/neko.epub' });
-  const exportAndDownload = (run: () => Promise<ArrayBuffer | null>, title: string): void => {
+  const sample = useEpub({ url: '/neko.epub' });
+  const editable = useEditableEpub({ url: '/neko.epub' });
+  const exportAndDownload = (
+    run: () => Promise<Uint8Array<ArrayBuffer> | null>,
+    title: string,
+  ): void => {
     setExportError(null);
     run()
       .then((buffer) => buffer && downloadEpub(buffer, title))
@@ -150,33 +158,31 @@ export default function App() {
     setChrome((current) => ({ ...current, [key]: value }));
   };
   const optionDisabled = (key: keyof ReaderChromeOptions) =>
-    HEADER_DEPENDENT_OPTIONS.includes(key) && !chrome.enableHeader;
+    HEADER_DEPENDENT_OPTIONS.includes(key) && !chrome.title;
   const effectiveOption = (key: keyof ReaderChromeOptions) =>
     optionDisabled(key) ? false : chrome[key];
   const modeDisabled = (modeValue: MejiroChapterNavMode) =>
-    !chrome.enableChapterNav ||
-    (!chrome.enableHeader && (modeValue === 'select' || modeValue === 'both'));
-  const effectiveChapterNavMode: MejiroChapterNavMode = !chrome.enableChapterNav
-    ? 'none'
-    : !chrome.enableHeader && chapterNavMode === 'select'
+    !chrome.title && (modeValue === 'select' || modeValue === 'both');
+  const effectiveChapterNavMode: MejiroChapterNavMode =
+    !chrome.title && chapterNavMode === 'select'
       ? 'none'
-      : !chrome.enableHeader && chapterNavMode === 'both'
+      : !chrome.title && chapterNavMode === 'both'
         ? 'panel'
         : chapterNavMode;
 
-  const editBook = editable.book;
-  const editChapter = editBook?.chapters[editable.selection.chapter] ?? null;
+  const editBook = editable.epub;
+  const editChapter = editBook?.chapters[editable.selection.chapterIndex] ?? null;
   const editParagraph = editable.selectedParagraph;
-  const selectedEditChapter = editable.selection.chapter;
+  const selectedEditChapter = editable.selection.chapterIndex;
+  const editParagraphs = useMemo(() => paragraphBlocks(editChapter), [editChapter]);
   const filteredParagraphs = useMemo(() => {
     const query = normalizeText(paragraphFilter.trim()).toLowerCase();
-    if (!editChapter) return [];
-    return editChapter.paragraphs
+    return editParagraphs
       .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
       .filter(
         ({ paragraph }) => !query || normalizeText(paragraph.text).toLowerCase().includes(query),
       );
-  }, [editChapter, paragraphFilter]);
+  }, [editParagraphs, paragraphFilter]);
 
   useEffect(() => {
     setEditText(editParagraph?.text ?? '');
@@ -187,7 +193,7 @@ export default function App() {
 
   function updateEditText(nextText: string): void {
     setEditText(nextText);
-    editable.updateParagraph(nextText);
+    editable.updateParagraph({ text: nextText });
   }
 
   function adjustDialogueLineBreaks(): void {
@@ -208,19 +214,19 @@ export default function App() {
     const end = Math.max(start, Math.min(rubyEnd, len));
     if (end <= start) return;
     const newRuby: InlineAnnotation = {
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: start,
       endIndex: end,
       rubyText: rubyText.trim(),
-      type: end - start === 1 ? 'mono' : 'group',
+      rubyType: end - start === 1 ? 'mono' : 'group',
     };
     const nextInline: InlineAnnotation[] = [
       ...editParagraph.inlineAnnotations.filter(
-        (ann) => ann.kind !== 'ruby' || ann.endIndex <= start || ann.startIndex >= end,
+        (ann) => ann.type !== 'ruby' || ann.endIndex <= start || ann.startIndex >= end,
       ),
       newRuby,
     ].sort((a, b) => a.startIndex - b.startIndex);
-    editable.updateParagraph(editText, nextInline);
+    editable.updateParagraph({ text: editText, inlineAnnotations: nextInline });
     setRubyText('');
   }
 
@@ -229,27 +235,31 @@ export default function App() {
     editable.addImage({
       filename: file.name,
       mediaType: file.type || 'application/octet-stream',
-      data: await file.arrayBuffer(),
+      data: new Uint8Array(await file.arrayBuffer()),
       alt: file.name,
-      afterBlockId: paragraphBlockId(editChapter, editable.selection.paragraph),
+      afterBlockId: editable.selection.blockId ?? undefined,
     });
   }
 
   const previewBook =
-    mode === 'create' ? project.previewBook : mode === 'edit' ? editable.previewBook : null;
+    mode === 'create' ? project.previewEpub : mode === 'edit' ? editable.previewEpub : null;
   const previewChapter =
     mode === 'create'
-      ? Math.min(project.selectedChapter, Math.max(0, (previewBook?.chapters.length ?? 1) - 1))
+      ? Math.min(project.selectedChapterIndex, Math.max(0, (previewBook?.chapters.length ?? 1) - 1))
       : mode === 'edit'
         ? selectedEditChapter
         : undefined;
+  const selectChapter = (chapterIndex: number): void => {
+    const firstParagraph = paragraphBlocks(editBook?.chapters[chapterIndex] ?? null)[0];
+    editable.setSelection({ chapterIndex, blockId: firstParagraph?.id ?? null });
+  };
   const setPreviewChapter = (nextChapter: number): void => {
     if (mode === 'create') {
-      project.setSelectedChapter(nextChapter);
+      project.setSelectedChapterIndex(nextChapter);
       return;
     }
     if (mode === 'edit') {
-      editable.setSelection({ chapter: nextChapter, paragraph: 0 });
+      selectChapter(nextChapter);
     }
   };
 
@@ -261,6 +271,7 @@ export default function App() {
             key="custom"
             options={OPTIONS}
             fonts={FONTS}
+            title={READER_TITLE}
             subtitle="Custom Editor Preview"
             chapterNavMode="panel"
             manuscript={customDraft.chapters.map((chapter) => ({
@@ -268,9 +279,8 @@ export default function App() {
               title: chapter.title,
               body: chapter.body,
             }))}
-            chapter={customDraft.selected}
-            onChapterChange={customDraft.setSelected}
-            enableImageOverlay={false}
+            chapterIndex={customDraft.selectedChapterIndex}
+            onChapterIndexChange={customDraft.setSelectedChapterIndex}
             enableSurfaceTap={false}
           />
         ) : mode === 'viewer' ? (
@@ -279,20 +289,19 @@ export default function App() {
             options={OPTIONS}
             fonts={FONTS}
             epub={sample.epub}
+            title={chrome.title ? READER_TITLE : undefined}
             subtitle="React Viewer"
             mode={readerMode}
             spreadMode={spreadMode}
             theme={theme}
             locale={locale}
             fallback={<div className="demo-empty">Preparing vertical layout...</div>}
-            enableHeader={chrome.enableHeader}
-            enableChapterNav={chrome.enableChapterNav}
             chapterNavMode={effectiveChapterNavMode}
-            enableSettings={effectiveOption('enableSettings')}
-            enableImageOverlay={effectiveOption('enableImageOverlay')}
-            enableStats={effectiveOption('enableStats')}
+            showSettings={effectiveOption('showSettings')}
+            showImageOverlayButton={effectiveOption('showImageOverlayButton')}
+            showStats={effectiveOption('showStats')}
             enableKeyboard={chrome.enableKeyboard}
-            enablePageIndicator={chrome.enablePageIndicator}
+            showPageIndicator={chrome.showPageIndicator}
             pageNumbers={pageNumbers}
           />
         ) : previewBook ? (
@@ -301,12 +310,12 @@ export default function App() {
             options={OPTIONS}
             fonts={FONTS}
             epub={previewBook}
-            chapter={previewChapter}
+            chapterIndex={previewChapter}
+            title={READER_TITLE}
             subtitle={mode === 'create' ? 'Create Preview' : 'Edit Preview'}
             chapterNavMode="panel"
-            enableImageOverlay={false}
             enableSurfaceTap={false}
-            onChapterChange={setPreviewChapter}
+            onChapterIndexChange={setPreviewChapter}
           />
         ) : (
           <div className="demo-empty">Loading preview...</div>
@@ -455,14 +464,13 @@ export default function App() {
   pageNumbers="${pageNumbers}"
   theme="${theme}"
   locale="${locale}"
-  enableHeader={${chrome.enableHeader}}
-  enableChapterNav={${chrome.enableChapterNav}}
+  title={${chrome.title ? `"${READER_TITLE}"` : 'undefined'}}
   chapterNavMode="${effectiveChapterNavMode}"
-  enableSettings={${effectiveOption('enableSettings')}}
-  enableImageOverlay={${effectiveOption('enableImageOverlay')}}
-  enableStats={${effectiveOption('enableStats')}}
+  showSettings={${effectiveOption('showSettings')}}
+  showImageOverlayButton={${effectiveOption('showImageOverlayButton')}}
+  showStats={${effectiveOption('showStats')}}
   enableKeyboard={${chrome.enableKeyboard}}
-  enablePageIndicator={${chrome.enablePageIndicator}}
+  showPageIndicator={${chrome.showPageIndicator}}
 />`}</pre>
           </>
         )}
@@ -478,14 +486,16 @@ export default function App() {
                 <span>Title</span>
                 <input
                   value={project.metadata.title}
-                  onChange={(event) => project.setMetadata({ title: event.target.value })}
+                  onChange={(event) => project.updateMetadata({ title: event.target.value })}
                 />
               </label>
               <label>
                 <span>Author</span>
                 <input
-                  value={project.metadata.author ?? ''}
-                  onChange={(event) => project.setMetadata({ author: event.target.value })}
+                  value={project.metadata.creators?.[0]?.name ?? ''}
+                  onChange={(event) =>
+                    project.updateMetadata({ creators: [{ name: event.target.value }] })
+                  }
                 />
               </label>
             </div>
@@ -498,9 +508,9 @@ export default function App() {
                 {project.chapters.map((chapter, index) => (
                   <button
                     type="button"
-                    key={chapter.id}
-                    className={project.selectedChapter === index ? 'is-active' : ''}
-                    onClick={() => project.setSelectedChapter(index)}
+                    key={chapter.id ?? index}
+                    className={project.selectedChapterIndex === index ? 'is-active' : ''}
+                    onClick={() => project.setSelectedChapterIndex(index)}
                   >
                     <span>{`Chapter ${index + 1}`}</span>
                     <strong>{chapter.title || 'Untitled'}</strong>
@@ -511,7 +521,10 @@ export default function App() {
                 <button type="button" onClick={() => project.addChapter()}>
                   Add chapter
                 </button>
-                <button type="button" onClick={() => project.removeChapter()}>
+                <button
+                  type="button"
+                  onClick={() => project.removeChapter(project.selectedChapterIndex)}
+                >
                   Remove
                 </button>
               </div>
@@ -523,7 +536,9 @@ export default function App() {
                   <input
                     value={project.currentChapter.title}
                     onChange={(event) =>
-                      project.patchChapter(project.selectedChapter, { title: event.target.value })
+                      project.updateChapter(project.selectedChapterIndex, {
+                        title: event.target.value,
+                      })
                     }
                   />
                 </label>
@@ -533,7 +548,9 @@ export default function App() {
                     className="demo-manuscript"
                     value={project.currentChapter.body}
                     onChange={(event) =>
-                      project.patchChapter(project.selectedChapter, { body: event.target.value })
+                      project.updateChapter(project.selectedChapterIndex, {
+                        body: event.target.value,
+                      })
                     }
                   />
                 </label>
@@ -564,16 +581,12 @@ export default function App() {
                 <div className="mejiro-editor-section">
                   <div className="demo-section-title">
                     <span className="demo-option-label">Chapter</span>
-                    <small>
-                      {editBook.chapters[selectedEditChapter]?.paragraphs.length ?? 0} paragraphs
-                    </small>
+                    <small>{editParagraphs.length} paragraphs</small>
                   </div>
                   <select
                     className="demo-select"
                     value={selectedEditChapter}
-                    onChange={(event) =>
-                      editable.setSelection({ chapter: Number(event.target.value), paragraph: 0 })
-                    }
+                    onChange={(event) => selectChapter(Number(event.target.value))}
                   >
                     {editBook.chapters.map((chapter, chapterIndex) => (
                       <option key={chapter.href} value={chapterIndex}>
@@ -591,14 +604,12 @@ export default function App() {
                     {filteredParagraphs.map(({ paragraph, paragraphIndex }) => (
                       <button
                         type="button"
-                        key={`${editChapter?.href}-${paragraphIndex}`}
-                        className={
-                          editable.selection.paragraph === paragraphIndex ? 'is-active' : ''
-                        }
+                        key={paragraph.id}
+                        className={editable.selection.blockId === paragraph.id ? 'is-active' : ''}
                         onClick={() =>
                           editable.setSelection({
-                            chapter: selectedEditChapter,
-                            paragraph: paragraphIndex,
+                            chapterIndex: selectedEditChapter,
+                            blockId: paragraph.id,
                           })
                         }
                       >
@@ -698,9 +709,9 @@ export default function App() {
                 {customDraft.chapters.map((chapter, index) => (
                   <button
                     type="button"
-                    key={chapter.id}
-                    className={customDraft.selected === index ? 'is-active' : ''}
-                    onClick={() => customDraft.setSelected(index)}
+                    key={chapter.id ?? index}
+                    className={customDraft.selectedChapterIndex === index ? 'is-active' : ''}
+                    onClick={() => customDraft.setSelectedChapterIndex(index)}
                   >
                     <span>{`#${index + 1}`}</span>
                     <strong>{chapter.title || 'Untitled'}</strong>
@@ -718,7 +729,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => customDraft.removeChapter(customDraft.selected)}
+                  onClick={() => customDraft.removeChapter(customDraft.selectedChapterIndex)}
                 >
                   Remove
                 </button>
@@ -728,15 +739,19 @@ export default function App() {
               <span className="demo-option-label">Chapter title</span>
               <input
                 className="demo-search"
-                value={customDraft.chapters[customDraft.selected]?.title ?? ''}
+                value={customDraft.chapters[customDraft.selectedChapterIndex]?.title ?? ''}
                 onChange={(event) =>
-                  customDraft.patchChapter(customDraft.selected, { title: event.target.value })
+                  customDraft.updateChapter(customDraft.selectedChapterIndex, {
+                    title: event.target.value,
+                  })
                 }
               />
               <span className="demo-option-label">Body (with notation highlight)</span>
               <MejiroNotationHighlighter
-                value={customDraft.chapters[customDraft.selected]?.body ?? ''}
-                onChange={(next) => customDraft.patchChapter(customDraft.selected, { body: next })}
+                value={customDraft.chapters[customDraft.selectedChapterIndex]?.body ?? ''}
+                onValueChange={(next) =>
+                  customDraft.updateChapter(customDraft.selectedChapterIndex, { body: next })
+                }
                 dialect="mejiro"
               />
             </div>
@@ -747,15 +762,9 @@ export default function App() {
   );
 }
 
-function paragraphBlockId(
-  chapter: NonNullable<ReturnType<typeof useEditableEpub>['book']>['chapters'][number],
-  paragraphIndex: number,
-): string | undefined {
-  let current = 0;
-  for (const block of chapter.blocks) {
-    if (block.kind !== 'paragraph') continue;
-    if (current === paragraphIndex) return block.id;
-    current++;
-  }
-  return undefined;
+function paragraphBlocks(chapter: EditableEpubChapter | null): EditableParagraphBlock[] {
+  if (!chapter) return [];
+  return chapter.blocks.filter(
+    (block: EditableBlock): block is EditableParagraphBlock => block.kind === 'paragraph',
+  );
 }

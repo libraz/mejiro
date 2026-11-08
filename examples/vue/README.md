@@ -27,7 +27,7 @@ yarn dev
 
 The example loads `/neko.epub` on mount. ArrowLeft / ArrowRight to navigate,
 and click **Settings** for font / size / kinsoku. Set `enable-drop-zone` or
-`enable-image-overlay` when you want users to drop their own EPUB or place
+`show-image-overlay-button` when you want users to drop their own EPUB or place
 draggable image placeholders.
 
 ## Sample EPUB
@@ -55,14 +55,14 @@ npm run dev
 ## Common patterns
 
 ```vue
-<!-- Open a URL on mount -->
+<!-- Open a URL on mount (no title: no header, just the spread) -->
 <MejiroReader epub-url="/book.epub" />
 
 <!-- Pre-parsed EpubBook -->
 <MejiroReader :epub="myParsedBook" />
 
-<!-- Bare spread (no header, no settings, no overlay) -->
-<MejiroReader epub-url="/book.epub" bare />
+<!-- Header with a title -->
+<MejiroReader epub-url="/book.epub" title="My Library" />
 
 <!-- Custom logo -->
 <MejiroReader>

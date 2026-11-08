@@ -1,12 +1,26 @@
+import type { MejiroError } from '../errors.js';
 import type { ColumnSlot } from '../exclusion.js';
 import type { HeadingStyle } from '../render/measures.js';
 import type { RenderPage, RenderSegment } from '../render/types.js';
-import type { BreakCostOptions, TextAnalyzer, TypographyHints } from '../types.js';
+import type {
+  BreakCostOptions,
+  HeadingLevel,
+  KinsokuMode,
+  ParagraphKind,
+  TextAnalyzer,
+} from '../types.js';
 
-export type { RubyInputAnnotation } from '../browser/types.js';
 export type { HeadingStyle } from '../render/measures.js';
+export type { BookParagraph, ChapterSource, HeadingLevel, ParagraphKind } from '../types.js';
 
-/** Configuration for {@link MejiroBook}. */
+/**
+ * Configuration for {@link MejiroBook}.
+ *
+ * The typography keys collected in {@link BookOptionsPatch} can be changed later
+ * with {@link MejiroBook.updateOptions}. The rest — `analyzer`,
+ * `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty`, `breakCost`,
+ * `strictFontCheck`, `pageSize` and `onError` — are read once, at construction.
+ */
 export interface BookOptions {
   /**
    * CSS font family. Either a CSS-ready string (e.g. `'"Noto Serif JP", serif'`)
@@ -19,11 +33,11 @@ export interface BookOptions {
   /**
    * Line spacing multiplier. Controls the pitch between adjacent columns
    * in vertical writing mode (equivalent to CSS `line-height`).
-   * @defaultValue 1.8
+   * @defaultValue {@link DEFAULT_LINE_SPACING} (1.8)
    */
   lineSpacing?: number;
   /** Kinsoku processing mode. @defaultValue 'strict' */
-  mode?: 'strict' | 'loose';
+  kinsoku?: KinsokuMode;
   /** Whether to enable hanging punctuation. @defaultValue true */
   enableHanging?: boolean;
   /**
@@ -47,8 +61,8 @@ export interface BookOptions {
    * image exclusion reflow) reuses what the first pass produced, because the
    * analysis of a paragraph cannot change while its text does not.
    *
-   * Read when a chapter is laid out. {@link MejiroBook.setOptions} does not
-   * re-analyse the chapters a book has already laid out.
+   * Read at construction; a book never re-analyses the chapters it has
+   * already laid out.
    */
   analyzer?: TextAnalyzer;
   /**
@@ -97,7 +111,64 @@ export interface BookOptions {
    * supplying its own {@link BookParagraph.hints} with penalties in them.
    */
   breakCost?: BreakCostOptions;
+  /**
+   * When true, layout and font changes reject with a `font-unavailable`
+   * {@link MejiroError} if the requested font family measures exactly like the
+   * host's default font, which is how a silent fallback presents itself.
+   * @defaultValue false
+   */
+  strictFontCheck?: boolean;
+  /**
+   * Page geometry to lay out for, so a book needs no separate
+   * {@link MejiroBook.setPageSize} call. Validated like `setPageSize`.
+   */
+  pageSize?: PageSize;
+  /**
+   * Receives the failures a book recovers from instead of throwing: an
+   * analyzer that throws while a chapter is laid out arrives here as an
+   * `analyzer-failed` {@link MejiroError} whose `cause` is the analyzer's error,
+   * and the paragraph is laid out on the character-class rules alone. Reported
+   * once per book. Without it the failure is written to `console.warn`.
+   */
+  onError?: (error: MejiroError) => void;
 }
+
+/** The {@link BookOptions} keys {@link MejiroBook.updateOptions} can change after construction. */
+export type BookOptionsPatch = Partial<
+  Pick<
+    BookOptions,
+    | 'fontFamily'
+    | 'fontSize'
+    | 'lineSpacing'
+    | 'kinsoku'
+    | 'enableHanging'
+    | 'headingStyles'
+    | 'headingScale'
+  >
+>;
+
+/**
+ * The options a book is using, as {@link MejiroBook.getOptions} reports them:
+ * every defaulted key resolved to its value, construction-time keys included.
+ */
+export type ResolvedBookOptions = Readonly<
+  Required<
+    Pick<
+      BookOptions,
+      | 'fontFamily'
+      | 'fontSize'
+      | 'lineSpacing'
+      | 'kinsoku'
+      | 'enableHanging'
+      | 'headingScale'
+      | 'wordAwareBreaking'
+    >
+  > &
+    Pick<
+      BookOptions,
+      'headingStyles' | 'analyzer' | 'keepWholePos' | 'keepWholePenalty' | 'breakCost'
+    >
+>;
 
 /** Page geometry configuration. */
 export interface PageSize {
@@ -106,19 +177,59 @@ export interface PageSize {
   /** Line width in pixels (inline direction extent — vertical height of text columns). */
   lineWidth: number;
   /** Horizontal padding on each side of a page in pixels. @defaultValue 0 */
-  pagePaddingX?: number;
+  paddingX?: number;
   /** Vertical padding at the top of a page in pixels. @defaultValue 0 */
-  pagePaddingY?: number;
+  paddingY?: number;
 }
 
-/** Overrides for {@link MejiroBook.computePageSize}. */
-export interface ComputePageSizeOptions {
+/**
+ * A {@link PageSize} with every padding resolved and the page's vertical
+ * extent: what {@link MejiroBook.fitPageSize} returns and
+ * {@link ChapterLayout.geometry} reports. It can be passed back to
+ * {@link MejiroBook.setPageSize} or {@link ChapterLayout.resize} as it is.
+ */
+export interface PageGeometry extends PageSize {
+  /** Horizontal padding on each side of a page in pixels. */
+  paddingX: number;
+  /** Vertical padding at the top of a page in pixels. */
+  paddingY: number;
+  /** Page height in pixels, padding included. */
+  pageHeight: number;
+  /** Height of the page's content box in pixels: the page height less its vertical padding. */
+  contentHeight: number;
+}
+
+/**
+ * Typography a {@link ChapterLayout} was last measured with, as
+ * {@link ChapterLayout.typography} reports it.
+ */
+export interface ChapterTypography {
+  /** Font family the advances were measured in. */
+  readonly fontFamily: import('../browser/types.js').FontFamily;
+  /** Body font size in pixels. */
+  readonly fontSize: number;
+  /** Line spacing multiplier. */
+  readonly lineSpacing: number;
+}
+
+/** Overrides for {@link MejiroBook.fitPageSize}. */
+export interface FitPageSizeOptions {
   /**
-   * Per-page padding overrides applied via {@link MejiroBook.setPageSize}.
-   * Defaults to the `--mejiro-page-pad-*` custom properties the container
-   * inherits from the reader stylesheet, then {@link DEFAULT_PAGE_PADDING}.
+   * Horizontal padding on each side of a page in pixels. Defaults to the
+   * `--mejiro-page-pad-x` custom property the container inherits from the
+   * reader stylesheet, then {@link DEFAULT_PAGE_PADDING}.
    */
-  padding?: { x?: number; y?: number; bottom?: number };
+  paddingX?: number;
+  /**
+   * Padding at the top of a page in pixels. Defaults to
+   * `--mejiro-page-pad-y`, then {@link DEFAULT_PAGE_PADDING}.
+   */
+  paddingY?: number;
+  /**
+   * Padding at the bottom of a page in pixels. Defaults to
+   * `--mejiro-page-pad-bottom`, then {@link DEFAULT_PAGE_PADDING}.
+   */
+  paddingBottom?: number;
   /** Page aspect ratio (height / width). @defaultValue 1.45 */
   aspect?: number;
   /** Minimum page width in pixels. @defaultValue 280 */
@@ -147,42 +258,25 @@ export interface ComputePageSizeOptions {
   columns?: 1 | 2;
 }
 
-/**
- * Structural classification of a {@link BookParagraph}.
- *
- * - `'body'` — ordinary body text (the default when `kind` is omitted).
- * - `'heading'` — heading paragraph; pair with {@link BookParagraph.headingLevel}.
- * - `'blockquote'` — quoted block.
- * - `'sceneBreak'` — visible scene divider (e.g. `* * *`); typically rendered
- *   without body text.
- * - `'pre'` — preformatted text (no automatic line breaks). Reserved.
- * - `'figure'` — figure container (image + optional caption). Reserved.
- */
-export type ParagraphKind = 'body' | 'heading' | 'blockquote' | 'sceneBreak' | 'pre' | 'figure';
+/** Options for {@link ChapterLayout.anchorAt}. */
+export interface AnchorAtOptions {
+  /**
+   * Page of the spread to read: `'right'` is the first page in vertical-rl
+   * reading order, `'left'` the second.
+   * @defaultValue 'right'
+   */
+  side?: 'right' | 'left';
+}
 
-/** A paragraph to lay out, compatible with EPUB chapter paragraphs. */
-export interface BookParagraph {
-  /** Text string to lay out. */
-  text: string;
-  /**
-   * Structural kind of the paragraph. Defaults to `'heading'` if
-   * {@link BookParagraph.headingLevel} is set, otherwise `'body'`.
-   */
-  kind?: ParagraphKind;
-  /** Inline annotations (ruby, emphasis, tcy, em/strong, link, footnote). */
-  inlineAnnotations?: readonly import('../browser/types.js').InlineAnnotation[];
-  /** Heading level (1–6), or undefined for body text. */
-  headingLevel?: number;
-  /**
-   * Pre-computed line breaking hints for this paragraph, bypassing the book's
-   * own {@link BookOptions.analyzer} entirely — a caller that has already
-   * analysed its text, or that wants a different rule set for one paragraph,
-   * supplies them here and the analyzer is not consulted for it.
-   *
-   * Offsets are code point indices into the NFC form of `text`, which is what
-   * the layout runs on. Use {@link deriveTypographyHints} to produce them.
-   */
-  hints?: TypographyHints;
+/**
+ * A point in spread-local coordinates, relative to the right page's content
+ * top-left as {@link AnchorRect} describes.
+ */
+export interface SpreadPoint {
+  /** Spread-local x in pixels; negative on the left page. */
+  x: number;
+  /** Spread-local y in pixels. */
+  y: number;
 }
 
 /** An image rectangle for exclusion layout. Coordinates are relative to the right page's top-left corner. */
@@ -192,9 +286,9 @@ export interface BookImage {
   /** Vertical offset from the top of the right page (px). */
   y: number;
   /** Width in pixels. */
-  w: number;
+  width: number;
   /** Height in pixels. */
-  h: number;
+  height: number;
   /** Margin around the image in pixels (applied on both inline sides). Defaults to base `fontSize`. */
   margin?: number;
 }
@@ -205,8 +299,8 @@ export interface SpreadResult {
   readonly right: PageResult;
   /** Left page (second page in the spread). */
   readonly left: PageResult;
-  /** Total number of pages in the layout. */
-  readonly totalPages: number;
+  /** Number of pages in the layout. */
+  readonly pageCount: number;
 }
 
 /** Result for a single page. */
@@ -226,7 +320,7 @@ export interface PageLine {
   /** Segments (text and ruby) that make up this line. */
   readonly segments: readonly RenderSegment[];
   /** Heading level if this line belongs to a heading paragraph. */
-  readonly headingLevel?: number;
+  readonly headingLevel?: HeadingLevel;
   /**
    * Structural classification of the line's paragraph, `'heading'` for a
    * heading that carries no kind of its own. Slot-mode page components pass it

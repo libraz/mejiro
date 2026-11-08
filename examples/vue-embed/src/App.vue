@@ -23,8 +23,8 @@ import { MejiroReader } from '@libraz/mejiro-vue';
       <MejiroReader
         epub-url="/neko.epub"
         :enable-drop-zone="false"
-        :enable-stats="false"
-        :enable-settings="false"
+        :show-settings="false"
+        title="mejiro"
         subtitle=""
       />
     </div>

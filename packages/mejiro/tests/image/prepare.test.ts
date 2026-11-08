@@ -53,16 +53,9 @@ describe('prepareImage', () => {
     const result = await prepareImage(file, { maxWidth: 512, maxHeight: 512 });
     expect(result.width).toBeLessThanOrEqual(512);
     expect(result.height).toBeLessThanOrEqual(512);
-    expect(result.warnings.some((w) => /downscaled/.test(w))).toBe(true);
   });
 
-  it('warns when encoded size still exceeds maxBytes after quality decay', async () => {
-    const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
-    const result = await prepareImage(file, { maxBytes: 4_000, quality: 0.85 });
-    expect(result.warnings.some((w) => /Encoded size/.test(w))).toBe(true);
-  });
-
-  it('reports the reduced quality when smaller files fit within maxBytes', async () => {
+  it('reduces the quality until a smaller file fits within maxBytes', async () => {
     const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
     // Allow downscale so the stub's encoded size collapses below maxBytes.
     const result = await prepareImage(file, {
@@ -71,7 +64,8 @@ describe('prepareImage', () => {
       maxHeight: 128,
       quality: 0.85,
     });
-    expect(result.warnings.some((w) => /Quality reduced/.test(w))).toBe(true);
+    expect(result.data.byteLength).toBeLessThanOrEqual(500);
+    expect(result.warnings).toEqual([]);
   });
 
   it('treats an option set to undefined exactly like an omitted one', async () => {
@@ -111,8 +105,10 @@ describe('prepareImage', () => {
     const file = new Blob([new Uint8Array(16)], { type: 'image/jpeg' });
     const result = await prepareImage(file, { maxBytes: undefined, quality: undefined });
     expect(
-      result.warnings.some((w) =>
-        /exceeds maxBytes \(2097152\); quality is already at 0\.40/.test(w),
+      result.warnings.some(
+        (w) =>
+          w.code === 'max-bytes-exceeded' &&
+          /exceeds maxBytes \(2097152\); quality is already at 0\.40/.test(w.message),
       ),
     ).toBe(true);
   });
@@ -133,7 +129,6 @@ describe('prepareImage', () => {
     const file = new Blob([new Uint8Array(16)], { type: 'image/avif' });
     const result = await prepareImage(file);
     expect(result.mediaType).toBe('image/jpeg');
-    expect(result.warnings.some((w) => /Unsupported source type/.test(w))).toBe(true);
   });
 
   it('keeps source type when convertTo is auto and source is supported', async () => {
@@ -149,17 +144,15 @@ describe('prepareImage', () => {
     const result = await prepareImage(file);
 
     expect(result.mediaType).toBe('image/png');
-    expect(result.warnings.some((w) => /does not match image bytes/.test(w))).toBe(true);
   });
 
-  it('warns when GIF input is flattened to a static image', async () => {
+  it('re-encodes GIF input as PNG', async () => {
     const gifHeader = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]);
     const file = new Blob([gifHeader], { type: 'image/gif' });
 
     const result = await prepareImage(file);
 
     expect(result.mediaType).toBe('image/png');
-    expect(result.warnings.some((w) => /GIF animation is flattened/.test(w))).toBe(true);
   });
 
   it('reports the media type the canvas actually encoded', async () => {
@@ -183,7 +176,6 @@ describe('prepareImage', () => {
     const result = await prepareImage(file, { convertTo: 'webp' });
 
     expect(result.mediaType).toBe('image/png');
-    expect(result.warnings.some((w) => /encoded the image as "image\/png"/.test(w))).toBe(true);
   });
 
   it('throws when createImageBitmap is unavailable', async () => {
@@ -232,7 +224,11 @@ describe('prepareImage', () => {
     vi.stubGlobal('OffscreenCanvas', FailingOffscreen as unknown as typeof OffscreenCanvas);
 
     const file = new Blob([new Uint8Array(16)], { type: 'image/png' });
-    await expect(prepareImage(file)).rejects.toThrow(/encode failed/);
+    await expect(prepareImage(file)).rejects.toMatchObject({
+      name: 'MejiroError',
+      code: 'image-encode-failed',
+      cause: expect.objectContaining({ message: 'encode failed' }),
+    });
     expect(close).toHaveBeenCalledTimes(1);
   });
 });

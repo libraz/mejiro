@@ -1,5 +1,7 @@
 import { type ManuscriptDialect, parseManuscript } from '../manuscript.js';
 import { manuscriptParagraphs, parseInlineImageMarker } from '../manuscript-paragraphs.js';
+import type { ManuscriptChapter } from '../types.js';
+import type { EpubProjectMetadata } from './project.js';
 import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
 
 export {
@@ -9,28 +11,21 @@ export {
   parseInlineImageMarker,
 } from '../manuscript-paragraphs.js';
 
-/** Input shape for {@link manuscriptToEpubBook}. */
-export interface ManuscriptSourceChapter {
-  /** Optional source id for callers; the synthesized `EpubBook` shape does not expose it. */
-  id?: string;
-  /** Chapter title. Emitted as an `h1` paragraph at the top of the chapter. */
-  title: string;
-  /** Raw manuscript body. Blank lines separate paragraphs. */
-  body: string;
-}
-
 /** Options for {@link manuscriptToEpubBook}. */
 export interface ManuscriptToEpubBookOptions {
   /** Manuscript notation dialect. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
-  /** Book title surfaced via {@link EpubBook.title}. @defaultValue `''` */
-  title?: string;
-  /** Book author surfaced via {@link EpubBook.author}. */
-  author?: string;
+  /**
+   * Package metadata of the book. Only `title` and `creators` reach the
+   * synthesized {@link EpubBook}: the title as {@link EpubBook.title}, and the
+   * names of the creators whose role is `'aut'`, joined with `', '`, as
+   * {@link EpubBook.author}. A title left out reads as `''`.
+   */
+  metadata?: Partial<EpubProjectMetadata>;
 }
 
 function manuscriptChapterToAnnotatedParagraphs(
-  chapter: ManuscriptSourceChapter,
+  chapter: ManuscriptChapter,
   dialect: ManuscriptDialect,
 ): AnnotatedParagraph[] {
   const paragraphs: AnnotatedParagraph[] = [];
@@ -51,6 +46,7 @@ function manuscriptChapterToAnnotatedParagraphs(
  * manuscript editors that want to feed `MejiroReader` (or any code that
  * consumes `EpubBook`) without exporting to a real EPUB file first.
  *
+ * A chapter's `id` is not carried over: {@link EpubBook} chapters have none.
  * Each chapter body is split into paragraphs on blank lines and run through
  * {@link parseManuscript}, so ruby / emphasis / TCY / em / strong / link /
  * footnote annotations are resolved exactly as `EpubProject.export()` would
@@ -60,12 +56,19 @@ function manuscriptChapterToAnnotatedParagraphs(
  *
  * @example
  * ```ts
- * const book = manuscriptToEpubBook(draft.chapters, { dialect: 'mejiro' });
+ * const book = manuscriptToEpubBook(draft.chapters, {
+ *   dialect: 'mejiro',
+ *   metadata: { title: draft.title, creators: [{ name: draft.author, role: 'aut' }] },
+ * });
  * <MejiroReader epub={book} />
  * ```
+ *
+ * @param chapters - Chapters in reading order.
+ * @param options - Dialect and book metadata.
+ * @returns A book with one {@link EpubChapter} per input chapter.
  */
 export function manuscriptToEpubBook(
-  chapters: readonly ManuscriptSourceChapter[],
+  chapters: readonly ManuscriptChapter[],
   options: ManuscriptToEpubBookOptions = {},
 ): EpubBook {
   const dialect = options.dialect ?? 'mejiro';
@@ -73,9 +76,13 @@ export function manuscriptToEpubBook(
     title: chapter.title,
     paragraphs: manuscriptChapterToAnnotatedParagraphs(chapter, dialect),
   }));
+  const author = (options.metadata?.creators ?? [])
+    .filter((creator) => creator.role === 'aut')
+    .map((creator) => creator.name)
+    .join(', ');
   return {
-    title: options.title ?? '',
-    ...(options.author ? { author: options.author } : {}),
+    title: options.metadata?.title ?? '',
+    ...(author ? { author } : {}),
     chapters: synthesized,
   };
 }

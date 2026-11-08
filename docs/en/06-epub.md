@@ -4,15 +4,15 @@ The `@libraz/mejiro/epub` subpath export provides functions for parsing EPUB fil
 
 ## parseEpub()
 
-The main entry point for EPUB parsing. Accepts an `ArrayBuffer` containing the EPUB file (which is a ZIP archive) and returns a promise resolving to an `EpubBook`.
+The main entry point for EPUB parsing. Accepts the EPUB file (a ZIP archive) as a `BinaryInput` — an `ArrayBuffer` or a `Uint8Array`, a Node `Buffer` included — and returns a promise resolving to an `EpubBook`. The input is read within its view and neither kept nor modified.
 
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
 
-const book = await parseEpub(epubArrayBuffer);
-console.log(book.title);   // Book title from OPF metadata
-console.log(book.author);  // Author (optional)
-console.log(book.chapters.length);
+const epub = await parseEpub(epubBytes);
+console.log(epub.title);   // Book title from OPF metadata
+console.log(epub.author);  // Author (optional)
+console.log(epub.chapters.length);
 ```
 
 ## Internal Flow
@@ -34,12 +34,30 @@ The chapter title comes from the document's own `id="chapter-title"` element if 
 
 Empty chapters (those with no paragraphs after extraction) are omitted from the result.
 
-### Import limits for untrusted EPUBs
-
-`parseEpub()` and `EditableEpub.load()` reject archives that exceed safe defaults for compressed input size, entry count, expanded entry size, total expanded size, or compression ratio. Pass `limits` only when a trusted environment needs a different ceiling:
+A failure is a `MejiroError` whose `code` says what went wrong: `epub-invalid-archive` for input that is not a readable ZIP archive, `epub-invalid-package` for a malformed container, package document or chapter (or no readable chapter), `epub-limit-exceeded` for an archive past the limits below, and `dom-unavailable` for a host without a DOM implementation.
 
 ```ts
-const book = await parseEpub(data, {
+import { MejiroError, parseEpub } from '@libraz/mejiro/epub';
+
+try {
+  await parseEpub(bytes);
+} catch (error) {
+  if (error instanceof MejiroError && error.code === 'epub-invalid-archive') {
+    showMessage('This file is not an EPUB.');
+  } else {
+    throw error;
+  }
+}
+```
+
+Pass `signal` to cancel a parse: `parseEpub(bytes, { signal })` rejects with `signal.reason` once the signal fires.
+
+### Import limits for untrusted EPUBs
+
+`parseEpub()` and `parseEditableEpub()` reject archives that exceed safe defaults for compressed input size, entry count, expanded entry size, total expanded size, or compression ratio. Pass `limits` only when a trusted environment needs a different ceiling:
+
+```ts
+const epub = await parseEpub(data, {
   limits: { maxTotalBytes: 300 * 1024 * 1024 },
 });
 ```
@@ -50,33 +68,33 @@ const book = await parseEpub(data, {
 
 ```ts
 interface EpubBook {
-  title: string;          // From OPF dc:title
-  author?: string;        // From OPF dc:creator
-  chapters: EpubChapter[];
+  readonly title: string;          // From OPF dc:title
+  readonly author?: string;        // From OPF dc:creator
+  readonly chapters: readonly EpubChapter[];
 }
 
 interface EpubChapter {
-  title?: string;         // From h1/h2/h3 in the XHTML
-  paragraphs: AnnotatedParagraph[];
+  readonly title?: string;         // From h1/h2/h3 in the XHTML
+  readonly paragraphs: readonly AnnotatedParagraph[];
 }
 
 interface AnnotatedParagraph {
-  text: string;                             // Base text (ruby text stripped)
-  inlineAnnotations: InlineAnnotation[];    // Ruby / emphasis / tcy / links / notes
-  headingLevel?: number;                    // 1-6 if from h1-h6 element
+  text: string;                                   // Base text (ruby text stripped)
+  inlineAnnotations: readonly InlineAnnotation[]; // Ruby / emphasis / tcy / links / notes
+  headingLevel?: HeadingLevel;                    // 1-6 if from h1-h6 element
 }
 ```
 
-Ruby is represented as the `kind: 'ruby'` variant of `InlineAnnotation`, defined in `@libraz/mejiro/browser`:
+Ruby is represented as the `type: 'ruby'` variant of `InlineAnnotation`, defined in `@libraz/mejiro`:
 
 ```ts
 interface InlineRubyAnnotation {
-  kind: 'ruby';
+  type: 'ruby';
   startIndex: number;                  // Character index, not byte offset
   endIndex: number;                    // Exclusive
   rubyText: string;
-  type?: 'mono' | 'group' | 'jukugo';
-  jukugoSplitPoints?: number[];
+  rubyType?: 'mono' | 'group' | 'jukugo';
+  jukugoSplitPoints?: readonly number[];
 }
 ```
 
@@ -98,7 +116,7 @@ const xhtml = `<html><body>
 const paragraphs = extractRubyContent(xhtml);
 // paragraphs[0].text === '漢字を読む'
 // paragraphs[0].inlineAnnotations === [
-//   { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' }
+//   { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' }
 // ]
 // paragraphs[1].text === '第二章'
 // paragraphs[1].headingLevel === 2
@@ -139,7 +157,7 @@ input.addEventListener('change', async () => {
   const file = input.files?.[0];
   if (!file) return;
   const buffer = await file.arrayBuffer();
-  const book = await parseEpub(buffer);
+  const epub = await parseEpub(buffer);
 });
 ```
 
@@ -151,7 +169,7 @@ document.addEventListener('drop', async (e) => {
   const file = e.dataTransfer?.files[0];
   if (!file?.name.endsWith('.epub')) return;
   const buffer = await file.arrayBuffer();
-  const book = await parseEpub(buffer);
+  const epub = await parseEpub(buffer);
 });
 ```
 
@@ -160,7 +178,7 @@ document.addEventListener('drop', async (e) => {
 ```ts
 const response = await fetch('/books/example.epub');
 const buffer = await response.arrayBuffer();
-const book = await parseEpub(buffer);
+const epub = await parseEpub(buffer);
 ```
 
 ## Using EPUB with Layout
@@ -177,19 +195,19 @@ import { buildParagraphMeasures, buildRenderPage, type RenderEntry } from '@libr
 
 const fontSize = 16;
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: fontSize,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: fontSize,
 });
 
-const book = await parseEpub(buffer);
-const chapter = book.chapters[0];
+const epub = await parseEpub(buffer);
+const chapter = epub.chapters[0];
 
 // Break a heading at the size buildParagraphMeasures() measures it at: the level's
 // DEFAULT_HEADING_STYLES scale, rounded to whole pixels.
 const headingSize = (level: number) =>
   Math.round(fontSize * (DEFAULT_HEADING_STYLES[level]?.scale ?? 1));
 
-const result = await mejiro.layoutChapter({
+const result = await mejiro.layoutParagraphs({
   paragraphs: chapter.paragraphs.map((p) => ({
     text: p.text,
     inlineAnnotations: p.inlineAnnotations,
@@ -220,11 +238,14 @@ import { parseEditableEpub } from '@libraz/mejiro/epub';
 
 const editor = await parseEditableEpub(buffer);
 
-editor.updateParagraph(0, 2, {
+// Mutators address an existing block by its id.
+const [, , block] = editor.epub.chapters[0].blocks;
+
+editor.updateParagraph(0, block.id, {
   text: '差し替え後の本文',
   inlineAnnotations: [
     // 本文 sits at indices 6 and 7: startIndex is inclusive, endIndex exclusive.
-    { kind: 'ruby', startIndex: 6, endIndex: 8, rubyText: 'ほんぶん', type: 'group' },
+    { type: 'ruby', startIndex: 6, endIndex: 8, rubyText: 'ほんぶん', rubyType: 'group' },
   ],
 });
 
@@ -235,49 +256,38 @@ const nextBuffer = await editor.export({
 });
 ```
 
-Editable chapters expose block-level content through `chapter.blocks`, where paragraph blocks and image blocks are siblings. Legacy paragraph arrays are still projected for read-only compatibility, but new editor code should mutate blocks through `EditableEpub` methods.
+Editable chapters hold their content in `chapter.blocks`, where paragraph blocks and image blocks are siblings. Every mutator addresses an existing block by `(chapterIndex, blockId)`; an index appears only where a block is put. An unknown chapter index or block id, or the id of a block of the wrong kind, throws `RangeError`, and an edit that throws changes and records nothing.
 
-### Migrating to the v0.5 block-based API
+| Task | Call | Notes |
+|---|---|---|
+| Change a paragraph | `editor.updateParagraph(chapterIndex, blockId, patch)` | `patch` is a `ParagraphPatch`. Without `paragraphKind` the kind is kept; changing the kind brings the fields the new kind needs (`headingLevel` for `'heading'`, no text for `'sceneBreak'`). Text changed without new annotations keeps each annotation on the same base characters or drops it |
+| Insert a paragraph | `editor.insertParagraph(chapterIndex, index, paragraph)` | `index` is a position in `chapter.blocks`; append with `chapter.blocks.length`. `paragraph` is a `NewParagraph`, so `{ text }` is a body paragraph. Returns the stored block with its generated `id` |
+| Replace annotations | `editor.setInlineAnnotations(chapterIndex, blockId, annotations)` | Annotations outside the current text are dropped |
+| Remove a block | `editor.deleteBlock(chapterIndex, blockId)` | Paragraph or image. Removing the last reference to an image asset also drops the asset |
+| Split a paragraph | `editor.splitParagraph(chapterIndex, blockId, charIndex)` | The block keeps its id and the text before the split; returns the new block after it. A fractional `charIndex` is truncated, an out-of-range one is clamped and a non-finite one throws. Annotations straddling the split are dropped |
+| Merge two paragraphs | `editor.mergeParagraphs(chapterIndex, { leftId, rightId })` | `rightId` must immediately follow `leftId`. Returns the merged block |
+| Add an image | `editor.addImage(chapterIndex, { filename, data, alt?, caption?, placement?, afterBlockId? })` | Returns the image block; `block.assetKey` names the new asset. `url` in place of `data` defers the bytes to export time (below) |
+| Remove an image asset | `editor.removeImageAsset(assetKey)` | Removes the asset and every block that shows it, as one history entry |
+| Change an image block | `editor.updateImage(chapterIndex, blockId, patch)` / `editor.setImageCaption(chapterIndex, blockId, caption)` | In `updateImage` a field passed as `undefined` is removed and a field left out is untouched. `setImageCaption(…, null)` removes the caption |
+| Move a block | `editor.moveBlock(chapterIndex, blockId, toIndex)` | `toIndex` is the target index in `blocks`, clamped |
 
-In `v0.5` the canonical chapter content lives in `blocks: EditableBlock[]` — a mixed array of `EditableParagraphBlock` and `EditableImageBlock`. The `paragraphs` / `paragraphRefs` / `images` fields are deprecated read-only projections that are regenerated from `blocks` after every mutation. Their removal is deferred to a future major release and no removal version is scheduled; new integrations should still use the block-based methods below.
+#### Walking the blocks
 
-| v0.4 / legacy API | v0.5 recommended API | Notes |
-|-------------------|----------------------|-------|
-| Mutate `chapter.paragraphs[i]` directly | `editor.updateParagraph(chapterIdx, paragraphIdx, patch)` | `paragraphIdx` indexes the paragraph projection (image blocks skipped). A `sceneBreak` cannot carry text: a patch that gives it text throws, unless it also sets `headingLevel`, which turns the block into a heading. A `headingLevel` that is not an integer from 1 to 6 throws. |
-| `chapter.paragraphs.splice(i, 0, p)` | `editor.insertParagraph(chapterIdx, atIndex, partial)` | `atIndex` indexes `chapter.blocks`. Append with `chapter.blocks.length`. Inserting a `sceneBreak` with text throws, as does a `headingLevel` that is not an integer from 1 to 6 or a heading without one. Annotations outside `text` are dropped. |
-| `chapter.paragraphs.splice(i, 1)` | `editor.deleteBlock(chapterIdx, blockId)` | Works for both paragraph and image blocks. Removing the last reference to an image asset also drops it from `imageAssets`. |
-| Split a paragraph at a position | `editor.splitParagraph(chapterIdx, blockId, charIndex)` | Returns `[leftId, rightId]`. A fractional `charIndex` is truncated and an out-of-range one is clamped; a non-finite one throws. Annotations straddling the split are dropped intentionally. |
-| Merge adjacent paragraphs | `editor.mergeParagraphs(chapterIdx, leftId, rightId)` | `rightId` must be immediately after `leftId`. Throws when the merge would give a `sceneBreak` text. |
-| `chapter.images.push(...)` | `editor.addImage(chapterIdx, { filename, data, alt?, caption?, placement? })` | Returns the generated `assetKey`. The legacy `{ href, mediaType, ... }` shape is still accepted; its removal is deferred to a future major release. |
-| `chapter.images.splice(i, 1)` | `editor.removeImage(chapterIdx, blockIdOrAssetKey)` | Identify by either block id or asset key. |
-| Patch image alt / caption / placement | `editor.updateImage(chapterIdx, blockId, patch)` / `setImageCaption(...)` | A field passed as `undefined` is removed; a field left out of the patch is untouched. `setImageCaption(chapterIdx, blockId, undefined)` removes the caption. |
-| Reorder paragraphs or images | `editor.moveBlock(chapterIdx, blockId, toIndex)` | `toIndex` is the target index in `blocks`. |
-| Inspect `paragraphRefs[i].tagName` | (removed) | The source XHTML tag is no longer tracked. The exported tag is derived from `paragraphKind` / `headingLevel`. |
-
-#### Paragraph projection vs block indices
-
-`updateParagraph` / `setInlineAnnotations` accept paragraph-only indices, whereas `insertParagraph` / `moveBlock` accept block indices that include images. For operations that interleave the two, walk `chapter.blocks` directly:
+A block keeps its id across edits, so a loop over `chapter.blocks` can edit the blocks it visits:
 
 <!-- doc-example: 06-epub-editing.ts#walk-blocks -->
 ```ts
-// updateParagraph() takes a paragraph index, which skips image blocks.
-let paragraphIndex = 0;
-for (const block of editor.book.chapters[0].blocks) {
-  if (block.kind !== 'paragraph') continue;
-  if (block.text.includes(query)) {
-    editor.updateParagraph(0, paragraphIndex, {
-      text: block.text.replaceAll(query, replacement),
-    });
-  }
-  paragraphIndex++;
+for (const block of editor.epub.chapters[0].blocks) {
+  if (block.kind !== 'paragraph' || !block.text.includes(query)) continue;
+  editor.updateParagraph(0, block.id, { text: block.text.replaceAll(query, replacement) });
 }
 ```
 
-#### Undo/redo, transactions, and progress
+#### Undo/redo, transactions, change notifications, and progress
 
-`v0.5` groups multiple operations through `editor.transaction(fn)` and exposes history via `editor.undo()` / `editor.redo()` / `editor.history`. `editor.export({ onProgress, signal })` also accepts a progress callback and an `AbortSignal`, so large EPUB writes can report status and be cancelled from the host UI.
+`editor.transaction(fn)` groups several edits into one history entry; a throw inside `fn` rewinds them. `fn` runs synchronously, and a callback returning a promise is rejected by the type. `editor.undo()` / `editor.redo()` / `editor.history` expose the history. `editor.subscribe(listener)` calls `listener` after every change — each edit, each completed transaction once, each undo and redo — and returns the function that removes it; `useEditableEpub` relies on it, so an edit made on the editor directly still re-renders. `editor.export({ onProgress, signal, assetResolver, watermark })` resolves to a `Uint8Array`. `onProgress(phase, ratio)` runs `ratio` from 0 to 1 within each phase (`'serialize'`, then `'zip'`); `signal` cancels the export, which then rejects with `signal.reason`; `watermark` inserts a paragraph at the top of every exported chapter without touching the edited document.
 
-Unedited chapters are written back from their original XHTML so stylesheet links, list wrappers, tables, and other source structure stay intact. Edited chapters preserve the document shell (`html`, `head`, `body`, and stylesheet links), any whole-chapter wrapper (`section`, `article`, `main` or `div` around the content, with its attributes) and the chapter-title element (`id="chapter-title"`, rewritten from `chapter.title`); the blocks are rebuilt inside them. An image inside a paragraph is imported as an image block of its own, splitting the paragraph around it. Exporting an edited chapter throws instead of silently losing content when its source carries list or table containers (`ul`, `ol`, `dl`, `table`, `thead`, `tbody`), embedded content (`svg`, `math`, `video`, `audio`, `iframe`, `object`, `embed`, `canvas`), an element `id` other than the chapter-title one, text inside a hidden or non-rendered element such as `script` or `style`, an image whose `src` does not resolve to a file in the archive (a `data:` URI included), a `figure` with more than one image or content besides one image and its caption, or a `blockquote` around anything other than paragraphs. A `blockquote` of paragraphs is imported as `blockquote` blocks and written back the same way.
+Unedited chapters are written back from their original XHTML so stylesheet links, list wrappers, tables, and other source structure stay intact. Edited chapters preserve the document shell (`html`, `head`, `body`, and stylesheet links), any whole-chapter wrapper (`section`, `article`, `main` or `div` around the content, with its attributes) and the chapter-title element (`id="chapter-title"`, rewritten from `chapter.title`); the blocks are rebuilt inside them. An image inside a paragraph is imported as an image block of its own, splitting the paragraph around it. Exporting an edited chapter rejects with `MejiroError` `epub-unsupported-content` instead of silently losing content when its source carries list or table containers (`ul`, `ol`, `dl`, `table`, `thead`, `tbody`), embedded content (`svg`, `math`, `video`, `audio`, `iframe`, `object`, `embed`, `canvas`), an element `id` other than the chapter-title one, text inside a hidden or non-rendered element such as `script` or `style`, an image whose `src` does not resolve to a file in the archive (a `data:` URI included), a `figure` with more than one image or content besides one image and its caption, or a `blockquote` around anything other than paragraphs. A `blockquote` of paragraphs is imported as `blockquote` blocks and written back the same way.
 
 #### URL-only image registration (assetResolver)
 
@@ -290,20 +300,20 @@ editor.addImage(0, {
   alt: 'figure',
 });
 
-const buffer = await editor.export({
-  assetResolver: async ({ assetKey, url, signal }) => {
+const bytes = await editor.export({
+  assetResolver: async ({ href, url, signal }) => {
     const res = await fetch(url, { signal });
-    if (!res.ok) throw new Error(`asset ${assetKey} failed: ${res.status}`);
-    return res.arrayBuffer();
+    if (!res.ok) throw new Error(`asset ${href} failed: ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
   },
 });
 ```
 
-When `assetResolver` is omitted, the runtime `fetch(url, { signal })` is used by default. See [09-advanced.md §7.4](09-advanced.md#74-delivering-image-assets-assetresolver) for the end-to-end novel-posting-site pattern.
+When `assetResolver` is omitted, the runtime `fetch(url, { signal })` is used by default, and a failure status rejects the export with `MejiroError` `asset-fetch-failed`. See [09-advanced.md §7.4](09-advanced.md#74-delivering-image-assets-assetresolver) for the end-to-end novel-posting-site pattern.
 
 ## Building EPUBs from Manuscript Text
 
-`EpubProject` creates a new EPUB 3 package from chapter drafts. Manuscript ruby uses Aozora-style notation such as `｜漢字《かんじ》`.
+`EpubProject` creates a new EPUB 3 package from `ManuscriptChapter` drafts (`{ id?, title, body }`). Manuscript ruby uses Aozora-style notation such as `｜漢字《かんじ》`.
 
 ```ts
 import { EpubProject } from '@libraz/mejiro/epub';
@@ -324,8 +334,10 @@ const project = new EpubProject({
 });
 
 project.addChapter({ title: '第二話', body: '続きの本文です。' });
-const epubBuffer = await project.export();
+const epubBytes = await project.export(); // Uint8Array
 ```
+
+The project's state is read-only from outside. Change it through its methods: `updateMetadata(patch)`, `setStylesheet(css)`, `addChapter` / `updateChapter` / `removeChapter` / `reorderChapters`, `addImage(chapterIndex, { filename, data, atParagraphIndex, alt? })` (the class picks the path, `OPS/Images/<filename>`), `setCover({ data, mediaType, filename? })` and `addAsset`. `addChapter`, `addImage`, `setCover` and `addAsset` return what they stored. `export()` rejects with `MejiroError` `epub-invalid-package` when the project has no chapters.
 
 ## Manuscript notation dialects (parseManuscript)
 
@@ -345,14 +357,14 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 
 | Marker | Example | Emitted annotation | `mejiro` (default) | `narou` | `kakuyomu` |
 |--------|---------|--------------------|:--:|:--:|:--:|
-| Pipe ruby | `｜漢字《かんじ》` | `kind: 'ruby'` | ✅ | ✅ | ✅ |
-| Auto ruby (kanji + 《》) | `漢字《かんじ》` | `kind: 'ruby'` | ✅ | ✅ | ✅ |
-| Emphasis dots (sesame) | `《《重要》》` | `kind: 'emphasis'` (`style: 'sesame'`) | ✅ | — | — |
-| Tate-chu-yoko | `〔20〕` | `kind: 'tcy'` | ✅ | — | — |
-| Footnote reference | `[[#note-1]]` | `kind: 'footnote'` | ✅ | — | — |
-| Link | `[label](https://example.com)` | `kind: 'link'` | ✅ | — | — |
-| Strong | `**text**` | `kind: 'strong'` | ✅ | — | — |
-| Emphasis (italic) | `*text*` | `kind: 'em'` | ✅ | — | — |
+| Pipe ruby | `｜漢字《かんじ》` | `type: 'ruby'` | ✅ | ✅ | ✅ |
+| Auto ruby (kanji + 《》) | `漢字《かんじ》` | `type: 'ruby'` | ✅ | ✅ | ✅ |
+| Emphasis dots (sesame) | `《《重要》》` | `type: 'emphasis'` (`style: 'sesame'`) | ✅ | — | — |
+| Tate-chu-yoko | `〔20〕` | `type: 'tcy'` | ✅ | — | — |
+| Footnote reference | `[[#note-1]]` | `type: 'footnote-ref'` | ✅ | — | — |
+| Link | `[label](https://example.com)` | `type: 'link'` | ✅ | — | — |
+| Strong | `**text**` | `type: 'strong'` | ✅ | — | — |
+| Emphasis (italic) | `*text*` | `type: 'em'` | ✅ | — | — |
 
 `narou` and `kakuyomu` currently behave identically — both restrict parsing to Aozora-compatible ruby. Choose one of them when ingesting manuscripts copied from those sites verbatim, or when you want `*` / `[]` characters to survive as literal body text. Under those dialects, sequences such as `**text**` or `〔20〕` flow through to the body without producing annotations.
 
@@ -363,26 +375,26 @@ parseManuscript('｜漢字《かんじ》を読む', { dialect: 'kakuyomu' });
 - **Line feeds**: a closing marker must sit on the same line as its opener, so no notation, auto ruby (`漢字《…》`) included, spans a line feed.
 - **Emphasis dots**: if the matching `》》` cannot be found, the literal `《《...` flows through as plain text. The emitted annotation uses `style: 'sesame'`; for other styles (e.g. `dot`), build the `InlineAnnotation` directly.
 - **Tate-chu-yoko**: the body inside `〔...〕` must match `[A-Za-z0-9!?]+` and be at most 5 characters long (7 including the brackets), so `〔12345〕` is annotated but `〔123456〕` is not. Mixed Japanese or longer payloads fall through as literal body text.
-- **Footnote reference**: the body text receives `*<id>` (e.g. `*note-1`) plus the matching `kind: 'footnote'` annotation. Managing the footnote target itself is left to the host application.
+- **Footnote reference**: the body text receives `*<id>` (e.g. `*note-1`) plus the matching `type: 'footnote-ref'` annotation. Managing the footnote target itself is left to the host application.
 - **Link**: both `[label](href)` and `[label](href "title")` are accepted. Empty link text (`[](url)`) stays literal body text. The `href` is a single whitespace-free token and `title` must be double-quoted.
 - **Strong / Emphasis**: `**` is tried before `*`. Nested forms such as `***text***` do not nest cleanly (the outer `**` becomes `strong` and the leftover `*` remains as text). Build `InlineAnnotation`s by hand for compound styles.
 
 ### Filtering inline annotations from imported manuscripts
 
-The legacy `parseManuscriptRuby()` helper is a thin wrapper that returns ruby annotations only. It is deprecated, with removal deferred to a future major release and no removal version scheduled. New code should call `parseManuscript()` and narrow on `kind`:
+To keep only some annotation kinds, call `parseManuscript()` and narrow on `type`:
 
 ```ts
 import { parseManuscript } from '@libraz/mejiro/epub';
 
 const { text, inlineAnnotations } = parseManuscript(rawText, { dialect: 'narou' });
-const rubyOnly = inlineAnnotations.filter((ann) => ann.kind === 'ruby');
+const rubyOnly = inlineAnnotations.filter((ann) => ann.type === 'ruby');
 ```
 
 ## Dependencies
 
 The `@libraz/mejiro/epub` module depends on [JSZip](https://stuk.github.io/jszip/) for ZIP decompression and uses `DOMParser` for XML/XHTML parsing (available in all browsers and in server-side runtimes that provide a DOM implementation such as happy-dom or jsdom).
 
-The globals used are `DOMParser`, `XMLSerializer`, and `Node`, none of which plain Node provides. When they are not registered, `parseEpub()` and `EditableEpub.load()` throw an error naming what is missing instead of a bare `ReferenceError`. See [Advanced -- First paint under SSR](./09-advanced.md#722-first-paint-under-ssr) for a registration snippet.
+The globals used are `DOMParser`, `XMLSerializer`, and `Node`, none of which plain Node provides. When they are not registered, `parseEpub()`, `parseEditableEpub()` and `extractRubyContent()` throw `MejiroError` `dom-unavailable`, naming what is missing, instead of a bare `ReferenceError`. See [Advanced -- First paint under SSR](./09-advanced.md#722-first-paint-under-ssr) for a registration snippet.
 
 ---
 

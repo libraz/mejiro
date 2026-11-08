@@ -15,7 +15,7 @@ export type ManuscriptTokenKind =
   | 'link'
   | 'footnote';
 
-/** A notation token located in manuscript source by `[start, end)` char range. */
+/** A notation token located in manuscript source by a `[startOffset, endOffset)` range. */
 export interface ManuscriptToken {
   /**
    * Which notation the range spells out. Determines how a highlighter should
@@ -23,10 +23,10 @@ export interface ManuscriptToken {
    * the ruby reading or link target must read it back out of the source range.
    */
   kind: ManuscriptTokenKind;
-  /** Inclusive start index (in code units of the source string). */
-  start: number;
-  /** Exclusive end index (in code units of the source string). */
-  end: number;
+  /** Inclusive start offset (in UTF-16 code units of the source string). */
+  startOffset: number;
+  /** Exclusive end offset (in UTF-16 code units of the source string). */
+  endOffset: number;
 }
 
 const TCY_BODY = /^[A-Za-z0-9!?]+$/;
@@ -55,7 +55,7 @@ export function tokenizeManuscriptSource(
       const rubyText = closeRuby > closeBase ? text.slice(closeBase + 1, closeRuby) : '';
       // An empty base (`｜《…》`) is a literal escape, not ruby.
       if (closeBase > i + 1 && rubyText && !rubyText.includes('《')) {
-        tokens.push({ kind: 'ruby', start: i, end: closeRuby + 1 });
+        tokens.push({ kind: 'ruby', startOffset: i, endOffset: closeRuby + 1 });
         i = closeRuby + 1;
         continue;
       }
@@ -64,7 +64,7 @@ export function tokenizeManuscriptSource(
     if (dialect === 'mejiro' && text.startsWith('《《', i)) {
       const close = scanner.find('》》', i + 2);
       if (close > i + 2) {
-        tokens.push({ kind: 'emphasis', start: i, end: close + 2 });
+        tokens.push({ kind: 'emphasis', startOffset: i, endOffset: close + 2 });
         i = close + 2;
         continue;
       }
@@ -73,7 +73,7 @@ export function tokenizeManuscriptSource(
     AUTO_RUBY.lastIndex = i;
     const auto = AUTO_RUBY.exec(text);
     if (auto) {
-      tokens.push({ kind: 'ruby', start: i, end: i + auto[0].length });
+      tokens.push({ kind: 'ruby', startOffset: i, endOffset: i + auto[0].length });
       i += auto[0].length;
       continue;
     }
@@ -84,7 +84,7 @@ export function tokenizeManuscriptSource(
         if (close > i && close - i <= 6) {
           const body = text.slice(i + 1, close);
           if (TCY_BODY.test(body)) {
-            tokens.push({ kind: 'tcy', start: i, end: close + 1 });
+            tokens.push({ kind: 'tcy', startOffset: i, endOffset: close + 1 });
             i = close + 1;
             continue;
           }
@@ -94,7 +94,7 @@ export function tokenizeManuscriptSource(
       if (text.startsWith('[[#', i)) {
         const close = scanner.find(']]', i + 3);
         if (close > i + 3) {
-          tokens.push({ kind: 'footnote', start: i, end: close + 2 });
+          tokens.push({ kind: 'footnote', startOffset: i, endOffset: close + 2 });
           i = close + 2;
           continue;
         }
@@ -109,7 +109,7 @@ export function tokenizeManuscriptSource(
             closeTarget > openTarget + 1 &&
             parseLinkTarget(text.slice(openTarget + 1, closeTarget))
           ) {
-            tokens.push({ kind: 'link', start: i, end: closeTarget + 1 });
+            tokens.push({ kind: 'link', startOffset: i, endOffset: closeTarget + 1 });
             i = closeTarget + 1;
             continue;
           }
@@ -119,7 +119,7 @@ export function tokenizeManuscriptSource(
       if (text.startsWith('**', i)) {
         const close = scanner.find('**', i + 2);
         if (close > i && close - i > 2) {
-          tokens.push({ kind: 'strong', start: i, end: close + 2 });
+          tokens.push({ kind: 'strong', startOffset: i, endOffset: close + 2 });
           i = close + 2;
           continue;
         }
@@ -130,7 +130,7 @@ export function tokenizeManuscriptSource(
         if (close > i && close - i > 1) {
           const body = text.slice(i + 1, close);
           if (!body.includes('*')) {
-            tokens.push({ kind: 'em', start: i, end: close + 1 });
+            tokens.push({ kind: 'em', startOffset: i, endOffset: close + 1 });
             i = close + 1;
             continue;
           }

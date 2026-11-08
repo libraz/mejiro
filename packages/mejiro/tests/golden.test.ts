@@ -10,7 +10,7 @@ interface FixtureRubyAnnotation {
   endIndex: number;
   rubyText: string;
   rubyAdvanceWidth: number;
-  type?: RubyAnnotation['type'];
+  type?: RubyAnnotation['rubyType'];
   jukugoSplitPoints?: number[];
 }
 
@@ -57,7 +57,7 @@ function toAnnotations(specs: FixtureRubyAnnotation[]): RubyAnnotation[] {
       endIndex: spec.endIndex,
       rubyText,
       rubyAdvances: uniformAdvances(rubyText.length, spec.rubyAdvanceWidth),
-      type: spec.type,
+      rubyType: spec.type,
       jukugoSplitPoints: spec.jukugoSplitPoints,
     };
   });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
 import { computed, onMounted, ref, shallowRef } from 'vue';
 
@@ -10,35 +10,43 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 const containerRef = ref<HTMLElement | null>(null);
 const layout = shallowRef<ChapterLayout | null>(null);
 const spread = shallowRef<SpreadResult | null>(null);
-const spreadIdx = ref(0);
-const pageSize = ref({ w: 0, h: 0 });
+const spreadIndex = ref(0);
+const pageSize = ref({ width: 0, height: 0 });
 
-// Image overlay composable (note: takes Vue Refs for layout and spreadIdx)
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, (s) => {
-    spread.value = s;
+// Image overlays: every change re-flows the spread around them (layout and spreadIndex are Refs)
+const { currentImages, addOverlay, clearOverlays, onOverlayPointerDown, onResizePointerDown } =
+  useImageOverlay(layout, {
+    spreadIndex,
+    onReflow: (s) => {
+      spread.value = s;
+    },
   });
+const overlay = computed(() => currentImages.value[0]);
 
-const totalSpreads = computed(() => (spread.value ? Math.ceil(spread.value.totalPages / 2) : 0));
+const spreadCount = computed(() => (spread.value ? Math.ceil(spread.value.pageCount / 2) : 0));
 
-function goTo(idx: number): void {
+function goTo(index: number): void {
   if (!layout.value) return;
-  spreadIdx.value = idx;
-  spread.value = layout.value.getSpread(idx);
+  spreadIndex.value = index;
+  spread.value = layout.value.getSpread(index);
+}
+
+function toggleOverlay(): void {
+  if (overlay.value) clearOverlays(spreadIndex.value);
+  else addOverlay();
 }
 
 onMounted(async () => {
   const el = containerRef.value;
   if (!el) return;
 
-  const { pageWidth, pageHeight } = book.computePageSize(el);
-  pageSize.value = { w: pageWidth, h: pageHeight };
+  const { pageWidth, pageHeight } = book.fitPageSize(el);
+  pageSize.value = { width: pageWidth, height: pageHeight };
 
   const lo = await book.layoutChapter({ paragraphs: props.paragraphs });
   layout.value = lo;
@@ -52,29 +60,29 @@ onMounted(async () => {
       <div style="display: flex; gap: 4px; justify-content: center">
         <!-- Right page (first in vertical-rl order) -->
         <div
-          :style="{ width: pageSize.w + 'px', height: pageSize.h + 'px', position: 'relative' }"
+          :style="{ width: pageSize.width + 'px', height: pageSize.height + 'px', position: 'relative' }"
         >
           <MejiroPageView
             :result="spread.right"
             font-family='"Noto Serif JP"'
             :line-spacing="1.8"
-            :slot-mode="hasImage"
+            :slot-mode="spread.right.hasImages"
             :style="{ width: '100%', height: '100%' }"
           />
           <!-- Image overlay on the right page -->
           <div
-            v-if="imageRect"
+            v-if="overlay"
             :style="{
               position: 'absolute',
-              left: imageRect.x + 'px',
-              top: imageRect.y + 'px',
-              width: imageRect.w + 'px',
-              height: imageRect.h + 'px',
+              left: overlay.rect.x + 'px',
+              top: overlay.rect.y + 'px',
+              width: overlay.rect.width + 'px',
+              height: overlay.rect.height + 'px',
               background: 'rgba(0,0,0,0.1)',
               border: '2px dashed #888',
               cursor: 'move',
             }"
-            @pointerdown="onOverlayPointerDown"
+            @pointerdown="onOverlayPointerDown(overlay.id, $event)"
           >
             <!-- Resize handle -->
             <div
@@ -86,31 +94,31 @@ onMounted(async () => {
                 height: '16px',
                 cursor: 'nwse-resize',
               }"
-              @pointerdown="onResizePointerDown"
+              @pointerdown="onResizePointerDown(overlay.id, $event)"
             />
           </div>
         </div>
 
         <!-- Left page -->
-        <div :style="{ width: pageSize.w + 'px', height: pageSize.h + 'px' }">
+        <div :style="{ width: pageSize.width + 'px', height: pageSize.height + 'px' }">
           <MejiroPageView
             :result="spread.left"
             font-family='"Noto Serif JP"'
             :line-spacing="1.8"
-            :slot-mode="hasImage"
+            :slot-mode="spread.left.hasImages"
             :style="{ width: '100%', height: '100%' }"
           />
         </div>
       </div>
 
       <div style="text-align: center; margin-top: 8px">
-        <button :disabled="spreadIdx === 0" @click="goTo(spreadIdx - 1)">Previous</button>
-        <span style="margin: 0 1em">{{ spreadIdx + 1 }} / {{ totalSpreads }}</span>
-        <button :disabled="spreadIdx >= totalSpreads - 1" @click="goTo(spreadIdx + 1)">
+        <button :disabled="spreadIndex === 0" @click="goTo(spreadIndex - 1)">Previous</button>
+        <span style="margin: 0 1em">{{ spreadIndex + 1 }} / {{ spreadCount }}</span>
+        <button :disabled="spreadIndex >= spreadCount - 1" @click="goTo(spreadIndex + 1)">
           Next
         </button>
-        <button style="margin-left: 1em" @click="toggleImage">
-          {{ hasImage ? 'Remove Image' : 'Add Image' }}
+        <button style="margin-left: 1em" @click="toggleOverlay">
+          {{ overlay ? 'Remove Image' : 'Add Image' }}
         </button>
       </div>
     </template>

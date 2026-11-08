@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { type CachedParagraph, ChapterLayout } from '../../src/book/chapter-layout.js';
+import {
+  type CachedParagraph,
+  type ChapterLayout,
+  chapterLayoutChannel,
+  createChapterLayout,
+} from '../../src/book/chapter-layout.js';
 import type { ParagraphKind } from '../../src/book/types.js';
-import type { InlineAnnotation, InlineRubyAnnotation } from '../../src/browser/types.js';
+import { MejiroError } from '../../src/errors.js';
 import { computeBreaks } from '../../src/layout.js';
 import { getLineRanges } from '../../src/paginate.js';
 import type { RenderEntry } from '../../src/render/types.js';
 import type { RubyAnnotation } from '../../src/ruby.js';
+import type { InlineAnnotation, InlineRubyAnnotation } from '../../src/types.js';
 import { toCodepoints, uniformAdvances } from '../helpers.js';
 
 function chars(text: string): string[] {
@@ -13,18 +19,31 @@ function chars(text: string): string[] {
 }
 
 function makeLayout(cached: CachedParagraph[], entries: RenderEntry[]): ChapterLayout {
-  return new ChapterLayout(
+  return createChapterLayout(
     cached,
     entries,
     {
       fontSize: 10,
       lineSpacing: 1,
       headingScale: 1.4,
-      mode: 'strict',
+      fontFamily: 'serif',
+      kinsoku: 'strict',
       enableHanging: true,
     },
-    { pageWidth: 100, lineWidth: 100, pagePaddingX: 0, pagePaddingY: 0 },
+    { pageWidth: 100, lineWidth: 100, paddingX: 0, paddingY: 0 },
   );
+}
+
+/** Asserts `search` throws the unsafe-pattern error. */
+function expectRegexUnsafe(search: () => unknown): void {
+  let thrown: unknown;
+  try {
+    search();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(MejiroError);
+  expect(thrown).toMatchObject({ code: 'regex-unsafe' });
 }
 
 function computedBreakPoints(charCount: number): Uint32Array {
@@ -69,23 +88,24 @@ describe('ChapterLayout', () => {
       fontSize: 10,
       lineSpacing: 1,
       headingScale: 1.4,
-      mode: 'strict' as const,
+      fontFamily: 'serif',
+      kinsoku: 'strict' as const,
       enableHanging: true,
     };
-    const layout = new ChapterLayout(
+    const layout = createChapterLayout(
       cached,
       entries,
       { ...config, breakCost: stiff },
       {
         pageWidth: 100,
         lineWidth: 100,
-        pagePaddingX: 0,
-        pagePaddingY: 0,
+        paddingX: 0,
+        paddingY: 0,
       },
     );
     expect(layout.snapshot().paragraphs[0].breakPoints[0]).toBe(9);
 
-    layout.applyConfig(config);
+    chapterLayoutChannel(layout).applyConfig(config);
 
     expect(layout.snapshot().paragraphs[0].breakPoints).toEqual(
       Array.from(computeBreaks(params).breakPoints),
@@ -102,7 +122,7 @@ describe('ChapterLayout', () => {
         endIndex: 1,
         rubyText,
         rubyAdvances: uniformAdvances(rubyText.length, 10),
-        type: 'mono',
+        rubyType: 'mono',
       },
     ];
     const cached: CachedParagraph[] = [
@@ -111,7 +131,7 @@ describe('ChapterLayout', () => {
         advances: uniformAdvances([...text].length, 16),
         chars: chars(text),
         inlineAnnotations: [
-          { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かんかん', type: 'mono' },
+          { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かんかん', rubyType: 'mono' },
         ],
         layoutRubyAnnotations,
       },
@@ -151,14 +171,14 @@ describe('ChapterLayout', () => {
     it('rejects a collapsed line width without changing any state', () => {
       const layout = makeResizableLayout();
       const before = layout.getPage(0);
-      const totalPagesBefore = layout.totalPages;
+      const pageCountBefore = layout.pageCount;
 
       expect(() => layout.resize({ lineWidth: 0 })).toThrow(RangeError);
 
       const after = layout.getPage(0);
       expect(after.slots).toEqual(before.slots);
       expect(after.lines).toEqual(before.lines);
-      expect(layout.totalPages).toBe(totalPagesBefore);
+      expect(layout.pageCount).toBe(pageCountBefore);
     });
 
     it('keeps geometry and breaks in step after a rejected resize', () => {
@@ -197,26 +217,26 @@ describe('ChapterLayout', () => {
     const layout = makeLayout(cached, entries);
 
     // Char 0 → first line, first page (right side of first spread).
-    expect(layout.locateAnchor({ paragraph: 0, charIndex: 0 })).toEqual({
-      spreadIdx: 0,
-      pageIdx: 0,
-      lineIdx: 0,
+    expect(layout.locateAnchor({ paragraphIndex: 0, charIndex: 0 })).toEqual({
+      spreadIndex: 0,
+      pageIndex: 0,
+      lineIndex: 0,
       side: 'right',
     });
 
     // Char 25 (within line 2) → still on first page (10 lines per page).
-    const at25 = layout.locateAnchor({ paragraph: 0, charIndex: 25 });
-    expect(at25?.lineIdx).toBe(2);
+    const at25 = layout.locateAnchor({ paragraphIndex: 0, charIndex: 25 });
+    expect(at25?.lineIndex).toBe(2);
     expect(at25?.side).toBe('right');
 
     // Line-end anchors stay on the line they end; the next character moves to
     // the following line.
-    expect(layout.locateAnchor({ paragraph: 0, charIndex: 9 })?.lineIdx).toBe(0);
-    expect(layout.locateAnchor({ paragraph: 0, charIndex: 10 })?.lineIdx).toBe(1);
+    expect(layout.locateAnchor({ paragraphIndex: 0, charIndex: 9 })?.lineIndex).toBe(0);
+    expect(layout.locateAnchor({ paragraphIndex: 0, charIndex: 10 })?.lineIndex).toBe(1);
 
     // Char index out of range → null.
-    expect(layout.locateAnchor({ paragraph: 0, charIndex: -1 })).toBeNull();
-    expect(layout.locateAnchor({ paragraph: 5, charIndex: 0 })).toBeNull();
+    expect(layout.locateAnchor({ paragraphIndex: 0, charIndex: -1 })).toBeNull();
+    expect(layout.locateAnchor({ paragraphIndex: 5, charIndex: 0 })).toBeNull();
   });
 
   it('rejects anchors that are not non-negative safe integers', () => {
@@ -237,14 +257,14 @@ describe('ChapterLayout', () => {
 
     const rejected = [Number.NaN, Number.POSITIVE_INFINITY, -1, 0.5, Number.MAX_SAFE_INTEGER + 1];
     for (const value of rejected) {
-      expect(layout.locateAnchor({ paragraph: value, charIndex: 0 })).toBeNull();
-      expect(layout.locateAnchor({ paragraph: 0, charIndex: value })).toBeNull();
-      expect(layout.coordOfAnchor({ paragraph: value, charIndex: 0 })).toBeNull();
-      expect(layout.coordOfAnchor({ paragraph: 0, charIndex: value })).toBeNull();
+      expect(layout.locateAnchor({ paragraphIndex: value, charIndex: 0 })).toBeNull();
+      expect(layout.locateAnchor({ paragraphIndex: 0, charIndex: value })).toBeNull();
+      expect(layout.coordOfAnchor({ paragraphIndex: value, charIndex: 0 })).toBeNull();
+      expect(layout.coordOfAnchor({ paragraphIndex: 0, charIndex: value })).toBeNull();
     }
 
     // A valid anchor still resolves after the rejected ones.
-    expect(layout.locateAnchor({ paragraph: 0, charIndex: 0 })).not.toBeNull();
+    expect(layout.locateAnchor({ paragraphIndex: 0, charIndex: 0 })).not.toBeNull();
   });
 
   it('round-trips anchorAt ↔ locateAnchor for spread starts', () => {
@@ -262,12 +282,12 @@ describe('ChapterLayout', () => {
     const entries: RenderEntry[] = [{ chars: chars(text), breakPoints, inlineAnnotations: [] }];
     const layout = makeLayout(cached, entries);
 
-    const anchor = layout.anchorAt(0, 'right');
-    expect(anchor).toEqual({ paragraph: 0, charIndex: 0 });
+    const anchor = layout.anchorAt(0, { side: 'right' });
+    expect(anchor).toEqual({ paragraphIndex: 0, charIndex: 0 });
     if (!anchor) throw new Error('anchorAt returned null');
 
     const located = layout.locateAnchor(anchor);
-    expect(located?.spreadIdx).toBe(0);
+    expect(located?.spreadIndex).toBe(0);
     expect(located?.side).toBe('right');
   });
 
@@ -286,10 +306,10 @@ describe('ChapterLayout', () => {
     const entries: RenderEntry[] = [{ chars: chars(text), breakPoints, inlineAnnotations: [] }];
     const layout = makeLayout(cached, entries);
 
-    layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 20, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 20, margin: 0 }]);
 
-    expect(layout.totalPages).toBe(1);
-    expect(layout.getSpread(0).totalPages).toBe(1);
+    expect(layout.pageCount).toBe(1);
+    expect(layout.getSpread(0).pageCount).toBe(1);
   });
 
   describe('coord ↔ anchor', () => {
@@ -310,12 +330,12 @@ describe('ChapterLayout', () => {
     it('returns rect at the start of the first column on the right page', () => {
       // 100 chars at 10px each, lineWidth=100 → 10 chars per line, 10 lines per page.
       const layout = makeStaticLayout('あ'.repeat(100), computedBreakPoints(100));
-      const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 0 });
+      const rect = layout.coordOfAnchor({ paragraphIndex: 0, charIndex: 0 });
       expect(rect).not.toBeNull();
       if (!rect) throw new Error('rect is null');
       expect(rect.side).toBe('right');
-      expect(rect.spreadIdx).toBe(0);
-      expect(rect.pageIdx).toBe(0);
+      expect(rect.spreadIndex).toBe(0);
+      expect(rect.pageIndex).toBe(0);
       // Rightmost column: right edge at contentWidth (100), left at 90, width = 10 (linePitch).
       expect(rect.x).toBe(90);
       expect(rect.y).toBe(0);
@@ -326,30 +346,30 @@ describe('ChapterLayout', () => {
     it('returns rect on the left page in negative x range', () => {
       const layout = makeStaticLayout('あ'.repeat(150), computedBreakPoints(150));
       // Char 100 is at the start of line 10. Lines 0..9 fit on page 0; line 10 starts page 1 (left page of spread 0).
-      const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 100 });
+      const rect = layout.coordOfAnchor({ paragraphIndex: 0, charIndex: 100 });
       expect(rect).not.toBeNull();
       if (!rect) throw new Error('rect is null');
       expect(rect.side).toBe('left');
-      expect(rect.pageIdx).toBe(1);
+      expect(rect.pageIndex).toBe(1);
       // Left page rightmost column: right edge at x = 0, left at x = -10.
       expect(rect.x).toBe(-10);
     });
 
     it('round-trips coordOfAnchor → anchorAtCoord at a column center', () => {
       const layout = makeStaticLayout('あ'.repeat(100), computedBreakPoints(100));
-      const original = { paragraph: 0, charIndex: 25 };
+      const original = { paragraphIndex: 0, charIndex: 25 };
       const rect = layout.coordOfAnchor(original);
       expect(rect).not.toBeNull();
       if (!rect) throw new Error('rect is null');
       const cx = rect.x + rect.width / 2;
       const cy = rect.y + rect.height / 2;
-      const back = layout.anchorAtCoord(rect.spreadIdx, cx, cy);
+      const back = layout.anchorAtCoord(rect.spreadIndex, { x: cx, y: cy });
       expect(back).toEqual(original);
     });
 
     it('returns null when the coordinate is outside every column', () => {
       const layout = makeStaticLayout('あ'.repeat(30), computedBreakPoints(30));
-      expect(layout.anchorAtCoord(0, 1000, 1000)).toBeNull();
+      expect(layout.anchorAtCoord(0, { x: 1000, y: 1000 })).toBeNull();
     });
   });
 
@@ -371,8 +391,8 @@ describe('ChapterLayout', () => {
     it('returns one rect when the range stays within a single line', () => {
       const layout = makeStaticLayout('あ'.repeat(30), computedBreakPoints(30));
       const rects = layout.selectionRects({
-        start: { paragraph: 0, charIndex: 2 },
-        end: { paragraph: 0, charIndex: 7 },
+        start: { paragraphIndex: 0, charIndex: 2 },
+        end: { paragraphIndex: 0, charIndex: 7 },
       });
       expect(rects).toHaveLength(1);
       const [r] = rects;
@@ -383,8 +403,8 @@ describe('ChapterLayout', () => {
     it('returns multiple rects across line boundaries', () => {
       const layout = makeStaticLayout('あ'.repeat(30), computedBreakPoints(30));
       const rects = layout.selectionRects({
-        start: { paragraph: 0, charIndex: 5 },
-        end: { paragraph: 0, charIndex: 25 },
+        start: { paragraphIndex: 0, charIndex: 5 },
+        end: { paragraphIndex: 0, charIndex: 25 },
       });
       expect(rects.length).toBeGreaterThanOrEqual(3);
       // Different columns → different x.
@@ -395,12 +415,12 @@ describe('ChapterLayout', () => {
     it('normalizes reversed ranges', () => {
       const layout = makeStaticLayout('あ'.repeat(20), computedBreakPoints(20));
       const forward = layout.selectionRects({
-        start: { paragraph: 0, charIndex: 2 },
-        end: { paragraph: 0, charIndex: 8 },
+        start: { paragraphIndex: 0, charIndex: 2 },
+        end: { paragraphIndex: 0, charIndex: 8 },
       });
       const reversed = layout.selectionRects({
-        start: { paragraph: 0, charIndex: 8 },
-        end: { paragraph: 0, charIndex: 2 },
+        start: { paragraphIndex: 0, charIndex: 8 },
+        end: { paragraphIndex: 0, charIndex: 2 },
       });
       expect(reversed).toEqual(forward);
     });
@@ -408,8 +428,8 @@ describe('ChapterLayout', () => {
     it('returns an empty array for an empty range', () => {
       const layout = makeStaticLayout('あ'.repeat(10), new Uint32Array(0));
       const rects = layout.selectionRects({
-        start: { paragraph: 0, charIndex: 5 },
-        end: { paragraph: 0, charIndex: 5 },
+        start: { paragraphIndex: 0, charIndex: 5 },
+        end: { paragraphIndex: 0, charIndex: 5 },
       });
       expect(rects).toEqual([]);
     });
@@ -430,7 +450,7 @@ describe('ChapterLayout', () => {
           endIndex: 3,
           rubyText,
           rubyAdvances: uniformAdvances(rubyText.length, 10),
-          type: 'group',
+          rubyType: 'group',
         },
       ];
       const cached: CachedParagraph[] = [
@@ -441,11 +461,11 @@ describe('ChapterLayout', () => {
           inlineAnnotations: withRuby
             ? [
                 {
-                  kind: 'ruby',
+                  type: 'ruby',
                   startIndex: 1,
                   endIndex: 3,
                   rubyText: 'かんじかんじ',
-                  type: 'group',
+                  rubyType: 'group',
                 },
               ]
             : [],
@@ -466,12 +486,12 @@ describe('ChapterLayout', () => {
 
     it('sizes selection rectangles from the ruby-widened advances', () => {
       const plainRects = makeRubyLayout(false).selectionRects({
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 4 },
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 4 },
       });
       const rubyRects = makeRubyLayout(true).selectionRects({
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 4 },
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 4 },
       });
 
       expect(plainRects).toHaveLength(1);
@@ -485,7 +505,7 @@ describe('ChapterLayout', () => {
 
     it('places a character rectangle where the ruby-aware breaks put it', () => {
       const layout = makeRubyLayout(true);
-      const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 3 });
+      const rect = layout.coordOfAnchor({ paragraphIndex: 0, charIndex: 3 });
       if (!rect) throw new Error('rect is null');
 
       expect(rect.y).toBeCloseTo(70, 5);
@@ -495,14 +515,13 @@ describe('ChapterLayout', () => {
     it('round-trips anchor → coord → anchor with ruby present', () => {
       const layout = makeRubyLayout(true);
       for (const charIndex of [0, 1, 2, 3, 5]) {
-        const original = { paragraph: 0, charIndex };
+        const original = { paragraphIndex: 0, charIndex };
         const rect = layout.coordOfAnchor(original);
         if (!rect) throw new Error(`rect is null for char ${charIndex}`);
-        const back = layout.anchorAtCoord(
-          rect.spreadIdx,
-          rect.x + rect.width / 2,
-          rect.y + rect.height / 2,
-        );
+        const back = layout.anchorAtCoord(rect.spreadIndex, {
+          x: rect.x + rect.width / 2,
+          y: rect.y + rect.height / 2,
+        });
         expect(back).toEqual(original);
       }
     });
@@ -511,7 +530,10 @@ describe('ChapterLayout', () => {
       const layout = makeRubyLayout(true);
       // 40px down the first column is inside the second annotated character,
       // which spans 40..70; the raw advances would report char 4 instead.
-      expect(layout.anchorAtCoord(0, 95, 40)).toEqual({ paragraph: 0, charIndex: 2 });
+      expect(layout.anchorAtCoord(0, { x: 95, y: 40 })).toEqual({
+        paragraphIndex: 0,
+        charIndex: 2,
+      });
     });
   });
 
@@ -541,11 +563,11 @@ describe('ChapterLayout', () => {
       const matches = layout.findText('猫');
       expect(matches).toHaveLength(1);
       const [m] = matches;
-      expect(m.paragraph).toBe(0);
-      expect(m.charStart).toBe(3);
-      expect(m.charEnd).toBe(4);
+      expect(m.paragraphIndex).toBe(0);
+      expect(m.startIndex).toBe(3);
+      expect(m.endIndex).toBe(4);
       expect(m.match).toBe('猫');
-      expect(m.spreadIdx).toBe(0);
+      expect(m.spreadIndex).toBe(0);
       expect(m.side).toBe('right');
     });
 
@@ -555,9 +577,9 @@ describe('ChapterLayout', () => {
       const layout = setup(['𠮷野🐈猫です']);
       const [match] = layout.findText('猫');
 
-      expect(match.paragraph).toBe(0);
-      expect(match.charStart).toBe(3);
-      expect(match.charEnd).toBe(4);
+      expect(match.paragraphIndex).toBe(0);
+      expect(match.startIndex).toBe(3);
+      expect(match.endIndex).toBe(4);
       expect(match.match).toBe('猫');
     });
 
@@ -565,24 +587,24 @@ describe('ChapterLayout', () => {
       const layout = setup(['あ𠮷い']);
       const [match] = layout.findText('𠮷');
 
-      expect(match.charStart).toBe(1);
-      expect(match.charEnd).toBe(2);
+      expect(match.startIndex).toBe(1);
+      expect(match.endIndex).toBe(2);
       expect(match.match).toBe('𠮷');
     });
 
     it('reports codepoint offsets for supplementary-plane regex matches', () => {
       const layout = setup(['𠮷野🐈第12章']);
-      const [match] = layout.findText('\\d+', { regex: true });
+      const [match] = layout.findText(/\d+/u);
 
-      expect(match.charStart).toBe(4);
-      expect(match.charEnd).toBe(6);
+      expect(match.startIndex).toBe(4);
+      expect(match.endIndex).toBe(6);
       expect(match.match).toBe('12');
     });
 
     it('finds multiple matches across paragraphs in document order', () => {
       const layout = setup(['abc abc', 'xyz', 'abc']);
       const matches = layout.findText('abc');
-      expect(matches.map((m) => [m.paragraph, m.charStart])).toEqual([
+      expect(matches.map((m) => [m.paragraphIndex, m.startIndex])).toEqual([
         [0, 0],
         [0, 4],
         [2, 0],
@@ -591,59 +613,47 @@ describe('ChapterLayout', () => {
 
     it('is case-insensitive by default and respects caseSensitive: true', () => {
       const layout = setup(['Hello hello HELLO']);
-      expect(layout.findText('hello').map((m) => m.charStart)).toEqual([0, 6, 12]);
-      expect(layout.findText('hello', { caseSensitive: true }).map((m) => m.charStart)).toEqual([
+      expect(layout.findText('hello').map((m) => m.startIndex)).toEqual([0, 6, 12]);
+      expect(layout.findText('hello', { caseSensitive: true }).map((m) => m.startIndex)).toEqual([
         6,
       ]);
     });
 
-    it('supports regex queries when regex: true', () => {
+    it('supports RegExp queries', () => {
       const layout = setup(['第1章: あ\n第10章: い']);
-      const matches = layout.findText('第\\d+章', { regex: true });
+      const matches = layout.findText(/第\d+章/u);
       expect(matches.map((m) => m.match)).toEqual(['第1章', '第10章']);
     });
 
     it('uses Unicode regex semantics for regex queries', () => {
       const layout = setup(['ABC 漢字 123']);
-      const matches = layout.findText('\\p{Script=Han}+', { regex: true });
+      const matches = layout.findText(/\p{Script=Han}+/u);
 
-      expect(matches.map((m) => [m.match, m.charStart, m.charEnd])).toEqual([['漢字', 4, 6]]);
+      expect(matches.map((m) => [m.match, m.startIndex, m.endIndex])).toEqual([['漢字', 4, 6]]);
     });
 
     it('rejects regex patterns with quantified complex groups', () => {
       const layout = setup(['aaaaaaaaaaaaaaaa!']);
 
-      expect(() => layout.findText('(a+)+$', { regex: true })).toThrow(
-        /Unsafe regex search pattern/,
-      );
-      expect(() => layout.findText('(a|aa)+$', { regex: true })).toThrow(
-        /Unsafe regex search pattern/,
-      );
+      expectRegexUnsafe(() => layout.findText(/(a+)+$/u));
+      expectRegexUnsafe(() => layout.findText(/(a|aa)+$/u));
     });
 
     it('rejects regex patterns with several quantifiers in one concatenation', () => {
       const layout = setup(['a'.repeat(60)]);
 
-      expect(() => layout.findText('a*a*a*a*a*a*a*b', { regex: true })).toThrow(
-        /Unsafe regex search pattern/,
-      );
+      expectRegexUnsafe(() => layout.findText(/a*a*a*a*a*a*a*b/u));
       // Splitting the quantifiers across groups does not help: an unquantified
       // group is spliced into the enclosing concatenation.
-      expect(() => layout.findText('(a*)(a*)b', { regex: true })).toThrow(
-        /Unsafe regex search pattern/,
-      );
+      expectRegexUnsafe(() => layout.findText(/(a*)(a*)b/u));
       // An optional term between the quantifiers does not anchor them either.
-      expect(() => layout.findText('a*b?a*c', { regex: true })).toThrow(
-        /Unsafe regex search pattern/,
-      );
+      expectRegexUnsafe(() => layout.findText(/a*b?a*c/u));
     });
 
     it('accepts quantifiers separated by a term that always consumes input', () => {
       const layout = setup(['2026年8月に刊行']);
 
-      expect(layout.findText('\\d+年\\d+月', { regex: true }).map((m) => m.match)).toEqual([
-        '2026年8月',
-      ]);
+      expect(layout.findText(/\d+年\d+月/u).map((m) => m.match)).toEqual(['2026年8月']);
     });
 
     it('refuses a long adversarial pattern instead of running it', () => {
@@ -652,20 +662,15 @@ describe('ChapterLayout', () => {
       expect(pattern.length).toBeGreaterThanOrEqual(60);
 
       const started = Date.now();
-      expect(() => layout.findText(pattern, { regex: true })).toThrow(
-        /Unsafe regex search pattern/,
-      );
+      expectRegexUnsafe(() => layout.findText(new RegExp(pattern, 'u')));
       expect(Date.now() - started).toBeLessThan(5000);
     });
 
     it('keeps accepting patterns with a single quantified term', () => {
       const layout = setup(['第1章: 漢字', '第10章: あ']);
 
-      expect(layout.findText('第\\d+章', { regex: true }).map((m) => m.match)).toEqual([
-        '第1章',
-        '第10章',
-      ]);
-      expect(layout.findText('\\p{Script=Han}+', { regex: true }).map((m) => m.match)).toEqual([
+      expect(layout.findText(/第\d+章/u).map((m) => m.match)).toEqual(['第1章', '第10章']);
+      expect(layout.findText(/\p{Script=Han}+/u).map((m) => m.match)).toEqual([
         '第',
         '章',
         '漢字',
@@ -673,8 +678,8 @@ describe('ChapterLayout', () => {
         '章',
       ]);
       // A lazy quantifier is one term, and alternatives are counted separately.
-      expect(() => layout.findText('漢.*?字', { regex: true })).not.toThrow();
-      expect(() => layout.findText('あ*|い*', { regex: true })).not.toThrow();
+      expect(() => layout.findText(/漢.*?字/u)).not.toThrow();
+      expect(() => layout.findText(/あ*|い*/u)).not.toThrow();
     });
 
     it('accepts a RegExp query and takes the regex path', () => {
@@ -682,29 +687,24 @@ describe('ChapterLayout', () => {
 
       const matches = layout.findText(/第\d+章/g);
       expect(matches.map((m) => m.match)).toEqual(['第1章', '第10章']);
-      // A RegExp never falls through to the literal path, whatever `regex` says.
-      expect(layout.findText(/第\d+章/, { regex: false }).map((m) => m.match)).toEqual([
-        '第1章',
-        '第10章',
-      ]);
     });
 
-    it('honours a RegExp own case flag and lets caseSensitive override it', () => {
+    it('keeps the case flag of a RegExp whatever caseSensitive says', () => {
       const layout = setup(['Hello hello HELLO']);
 
-      expect(layout.findText(/hello/).map((m) => m.charStart)).toEqual([6]);
-      expect(layout.findText(/hello/i).map((m) => m.charStart)).toEqual([0, 6, 12]);
-      expect(layout.findText(/hello/i, { caseSensitive: true }).map((m) => m.charStart)).toEqual([
-        6,
-      ]);
-      expect(layout.findText(/hello/, { caseSensitive: false }).map((m) => m.charStart)).toEqual([
+      expect(layout.findText(/hello/).map((m) => m.startIndex)).toEqual([6]);
+      expect(layout.findText(/hello/i).map((m) => m.startIndex)).toEqual([0, 6, 12]);
+      expect(layout.findText(/hello/i, { caseSensitive: true }).map((m) => m.startIndex)).toEqual([
         0, 6, 12,
+      ]);
+      expect(layout.findText(/hello/, { caseSensitive: false }).map((m) => m.startIndex)).toEqual([
+        6,
       ]);
     });
 
     it('applies the regex safety guard to RegExp queries too', () => {
       const layout = setup(['aaaaaaaaaaaaaaaa!']);
-      expect(() => layout.findText(/(a+)+$/)).toThrow(/Unsafe regex search pattern/);
+      expectRegexUnsafe(() => layout.findText(/(a+)+$/));
     });
 
     it('returns an empty array for a RegExp that matches nothing', () => {
@@ -717,20 +717,20 @@ describe('ChapterLayout', () => {
       const layout = setup(['a.b a.b a+b']);
       // '.' must match literally, not "any char".
       const matches = layout.findText('a.b');
-      expect(matches.map((m) => m.charStart)).toEqual([0, 4]);
+      expect(matches.map((m) => m.startIndex)).toEqual([0, 4]);
     });
 
     it('caps results when maxResults is set', () => {
       const layout = setup(['aa aa aa aa aa']);
       const matches = layout.findText('aa', { maxResults: 2 });
       expect(matches).toHaveLength(2);
-      expect(matches.map((m) => m.charStart)).toEqual([0, 3]);
+      expect(matches.map((m) => m.startIndex)).toEqual([0, 3]);
     });
 
-    it('never returns more matches than maxResults, and none for 0', () => {
+    it('never returns more matches than maxResults, and rejects a cap below 1', () => {
       const layout = setup(['aa aa aa aa aa']);
-      expect(layout.findText('aa', { maxResults: 0 })).toEqual([]);
-      expect(layout.findText(/aa/, { maxResults: 0 })).toEqual([]);
+      expect(() => layout.findText('aa', { maxResults: 0 })).toThrow(RangeError);
+      expect(() => layout.findText(/aa/, { maxResults: 0.5 })).toThrow(RangeError);
       expect(layout.findText('aa', { maxResults: 1.5 })).toHaveLength(1);
       expect(layout.findText('aa')).toHaveLength(5);
       expect(() => layout.findText('aa', { maxResults: -1 })).toThrow(RangeError);
@@ -743,19 +743,19 @@ describe('ChapterLayout', () => {
       expect(decomposed).not.toBe('が');
 
       const matches = layout.findText(decomposed);
-      expect(matches.map((m) => [m.charStart, m.charEnd, m.match])).toEqual([
+      expect(matches.map((m) => [m.startIndex, m.endIndex, m.match])).toEqual([
         [1, 2, 'が'],
         [4, 5, 'が'],
       ]);
-      // A regex source is not normalized: its meaning could change.
-      expect(layout.findText(decomposed, { regex: true })).toEqual([]);
+      // A pattern is not normalized: its meaning could change.
+      expect(layout.findText(new RegExp(decomposed, 'u'))).toEqual([]);
     });
 
     it('keeps a compatibility ideograph in a literal query as the layout keeps it', () => {
       // U+FA11 is kept as written in layout text; plain NFC would map it to U+5D0E.
       const layout = setup(['\uFA11と\u5D0E']);
-      expect(layout.findText('\uFA11').map((m) => m.charStart)).toEqual([0]);
-      expect(layout.findText('\u5D0E').map((m) => m.charStart)).toEqual([2]);
+      expect(layout.findText('\uFA11').map((m) => m.startIndex)).toEqual([0]);
+      expect(layout.findText('\u5D0E').map((m) => m.startIndex)).toEqual([2]);
     });
   });
 
@@ -775,17 +775,18 @@ describe('ChapterLayout', () => {
       const entries: RenderEntry[] = [
         { chars: chars(body), breakPoints: new Uint32Array(0), inlineAnnotations: [] },
       ];
-      return new ChapterLayout(
+      return createChapterLayout(
         cached,
         entries,
         {
           fontSize: 16,
           lineSpacing: 1.9,
           headingScale: 1.4,
-          mode: 'strict',
+          fontFamily: 'serif',
+          kinsoku: 'strict',
           enableHanging: true,
         },
-        { pageWidth: 400, lineWidth: 600, pagePaddingX: 40, pagePaddingY: 40 },
+        { pageWidth: 400, lineWidth: 600, paddingX: 40, paddingY: 40 },
       );
     }
 
@@ -793,7 +794,7 @@ describe('ChapterLayout', () => {
       const layout = makeBlockedLayout();
       // Covers the rightmost column over the full line width: every surviving
       // slot keeps its full height, so only the missing column reveals it.
-      layout.setImages(0, [{ x: 330, y: 40, w: 30, h: 600 }]);
+      layout.setImages(0, [{ x: 330, y: 40, width: 30, height: 600 }]);
 
       const spread = layout.getSpread(0);
       expect(layout.hasImages).toBe(true);
@@ -807,7 +808,7 @@ describe('ChapterLayout', () => {
     it('moves the text on when an image blocks an entire spread', () => {
       const layout = makeBlockedLayout();
       // Wide enough to cover both pages of the spread over the full line width.
-      layout.setImages(0, [{ x: -400, y: 40, w: 800, h: 600 }]);
+      layout.setImages(0, [{ x: -400, y: 40, width: 800, height: 600 }]);
 
       const first = layout.getSpread(0);
       expect(first.right.hasImages).toBe(true);
@@ -819,22 +820,22 @@ describe('ChapterLayout', () => {
 
     it('returns no anchor for a side an image blocks entirely', () => {
       const layout = makeBlockedLayout();
-      layout.setImages(0, [{ x: -400, y: 40, w: 800, h: 600 }]);
+      layout.setImages(0, [{ x: -400, y: 40, width: 800, height: 600 }]);
 
-      expect(layout.anchorAt(0, 'right')).toBeNull();
-      expect(layout.anchorAt(0, 'left')).toBeNull();
+      expect(layout.anchorAt(0, { side: 'right' })).toBeNull();
+      expect(layout.anchorAt(0, { side: 'left' })).toBeNull();
     }, 5000);
 
     it('anchors a page beside a fully blocked page on that page', () => {
       const layout = makeBlockedLayout();
       // Covers the whole right page, so only the left page holds text.
-      layout.setImages(0, [{ x: 0, y: 40, w: 400, h: 600 }]);
+      layout.setImages(0, [{ x: 0, y: 40, width: 400, height: 600 }]);
 
       expect(layout.getSpread(0).right.lines).toEqual([]);
-      expect(layout.anchorAt(0, 'right')).toBeNull();
-      const left = layout.anchorAt(0, 'left');
+      expect(layout.anchorAt(0, { side: 'right' })).toBeNull();
+      const left = layout.anchorAt(0, { side: 'left' });
       if (!left) throw new Error('left page has text but no anchor');
-      expect(layout.locateAnchor(left)).toMatchObject({ spreadIdx: 0, side: 'left' });
+      expect(layout.locateAnchor(left)).toMatchObject({ spreadIndex: 0, side: 'left' });
     }, 5000);
 
     it('keeps page and chapter image state in step across updates', () => {
@@ -842,7 +843,7 @@ describe('ChapterLayout', () => {
       expect(layout.hasImages).toBe(false);
       expect(layout.getSpread(0).right.hasImages).toBe(false);
 
-      layout.setImages(0, [{ x: 330, y: 40, w: 30, h: 600 }]);
+      layout.setImages(0, [{ x: 330, y: 40, width: 30, height: 600 }]);
       expect(layout.hasImages).toBe(true);
       expect(layout.getSpread(0).right.hasImages).toBe(true);
 
@@ -890,7 +891,7 @@ describe('ChapterLayout', () => {
 
     /** Concatenates all rendered text across every spread of the layout. */
     function renderedText(layout: ChapterLayout): string {
-      const spreadCount = Math.ceil(layout.totalPages / 2);
+      const spreadCount = Math.ceil(layout.pageCount / 2);
       let out = '';
       for (let s = 0; s < spreadCount; s++) {
         const spread = layout.getSpread(s);
@@ -908,7 +909,7 @@ describe('ChapterLayout', () => {
     it('keeps every right-page column inside the page content box', () => {
       const layout = makeHeadedLayout();
       // Image on the right page (content coords): overlaps body columns near x≈30.
-      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
 
       const spread = layout.getSpread(0);
       expect(spread.right.hasImages).toBe(true);
@@ -924,7 +925,7 @@ describe('ChapterLayout', () => {
       const layout = makeHeadedLayout();
       const expected = renderedText(layout);
 
-      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
       // Columns trimmed from the overflowing right page must reappear on a
       // later page — the full chapter text is still rendered, never lost.
       expect(renderedText(layout)).toBe(expected);
@@ -932,19 +933,22 @@ describe('ChapterLayout', () => {
 
     it('uses heading pitch for exclusion anchor rectangles and taps', () => {
       const layout = makeHeadedLayout();
-      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
 
-      const rect = layout.coordOfAnchor({ paragraph: 0, charIndex: 0 });
+      const rect = layout.coordOfAnchor({ paragraphIndex: 0, charIndex: 0 });
       expect(rect?.width).toBe(14);
       if (!rect) throw new Error('missing heading rect');
 
-      const anchor = layout.anchorAtCoord(rect.spreadIdx, rect.x + rect.width / 2, rect.y + 1);
-      expect(anchor).toEqual({ paragraph: 0, charIndex: 0 });
+      const anchor = layout.anchorAtCoord(rect.spreadIndex, {
+        x: rect.x + rect.width / 2,
+        y: rect.y + 1,
+      });
+      expect(anchor).toEqual({ paragraphIndex: 0, charIndex: 0 });
     });
 
     it('applies heading offset compensation to left-page images', () => {
       const layout = makeHeadedLayout();
-      layout.setImages(0, [{ x: -70, y: 10, w: 20, h: 30, margin: 0 }]);
+      layout.setImages(0, [{ x: -70, y: 10, width: 20, height: 30, margin: 0 }]);
 
       const spread = layout.getSpread(0);
 
@@ -973,11 +977,18 @@ describe('ChapterLayout', () => {
         breakPoints: computedBreakPoints([...text].length),
         inlineAnnotations: [],
       }));
-      return new ChapterLayout(
+      return createChapterLayout(
         cached,
         entries,
-        { fontSize: 10, lineSpacing: 1, headingScale: 1.4, mode: 'strict', enableHanging: true },
-        { pageWidth: 120, lineWidth: 100, pagePaddingX: PAD_X, pagePaddingY: 0 },
+        {
+          fontSize: 10,
+          lineSpacing: 1,
+          headingScale: 1.4,
+          fontFamily: 'serif',
+          kinsoku: 'strict',
+          enableHanging: true,
+        },
+        { pageWidth: 120, lineWidth: 100, paddingX: PAD_X, paddingY: 0 },
       );
     }
 
@@ -985,7 +996,7 @@ describe('ChapterLayout', () => {
       const layout = makeGappedLayout();
       // Left-page columns sit at xPos 0, 14, 28, 42, 56, …; the image covers
       // xPos 44–62 from the left page's right content edge.
-      const image = { x: -PAD_X - 62, y: 20, w: 18, h: 40, margin: 0 };
+      const image = { x: -PAD_X - 62, y: 20, width: 18, height: 40, margin: 0 };
       layout.setImages(0, [image]);
 
       const left = layout.getSpread(0).left;
@@ -994,8 +1005,9 @@ describe('ChapterLayout', () => {
       const intruding = left.slots.filter((slot) => {
         const colLeft = -PAD_X - slot.xPos - PITCH;
         const colRight = -PAD_X - slot.xPos;
-        const overlapsX = colRight > image.x && colLeft < image.x + image.w;
-        const overlapsY = slot.yStart + slot.height > image.y && slot.yStart < image.y + image.h;
+        const overlapsX = colRight > image.x && colLeft < image.x + image.width;
+        const overlapsY =
+          slot.yStart + slot.height > image.y && slot.yStart < image.y + image.height;
         return overlapsX && overlapsY;
       });
       expect(intruding).toEqual([]);
@@ -1018,7 +1030,7 @@ describe('ChapterLayout', () => {
       const texts = Array.from({ length: 80 }, (_, i) => 'あ'.repeat(LENGTHS[i % LENGTHS.length]));
       const heading = (i: number) =>
         headingEvery > 0 && i % headingEvery === headingEvery - 1
-          ? { headingLevel: 2, isHeading: true }
+          ? { headingLevel: 2 as const }
           : {};
       const cached: CachedParagraph[] = texts.map((text, i) => ({
         text: toCodepoints(text),
@@ -1033,15 +1045,22 @@ describe('ChapterLayout', () => {
         inlineAnnotations: [],
         ...heading(i),
       }));
-      return new ChapterLayout(
+      return createChapterLayout(
         cached,
         entries,
-        { fontSize: 10, lineSpacing: 1, headingScale: 1.4, mode: 'strict', enableHanging: true },
+        {
+          fontSize: 10,
+          lineSpacing: 1,
+          headingScale: 1.4,
+          fontFamily: 'serif',
+          kinsoku: 'strict',
+          enableHanging: true,
+        },
         {
           pageWidth: CONTENT_WIDTH + PAD_X * 2,
           lineWidth: LINE_WIDTH,
-          pagePaddingX: PAD_X,
-          pagePaddingY: PAD_Y,
+          paddingX: PAD_X,
+          paddingY: PAD_Y,
         },
       );
     }
@@ -1049,8 +1068,8 @@ describe('ChapterLayout', () => {
     interface DrawnImage {
       x: number;
       y: number;
-      w: number;
-      h: number;
+      width: number;
+      height: number;
       margin: number;
     }
 
@@ -1085,10 +1104,12 @@ describe('ChapterLayout', () => {
             side === 'right' ? PAD_X - 0.5 : -PAD_X - CONTENT_WIDTH - 0.5,
           );
           for (const img of images) {
-            if (!overlaps(x0, x1, img.x, img.x + img.w)) continue;
+            if (!overlaps(x0, x1, img.x, img.x + img.width)) continue;
             shortened++;
             expect(slot.height).toBeLessThan(LINE_WIDTH);
-            expect(overlaps(y0, y1, img.y - img.margin, img.y + img.h + img.margin)).toBe(false);
+            expect(overlaps(y0, y1, img.y - img.margin, img.y + img.height + img.margin)).toBe(
+              false,
+            );
           }
           expect(lineLength(page.lines[i]) * fontSize).toBeLessThanOrEqual(slot.height + 0.5);
         });
@@ -1098,33 +1119,33 @@ describe('ChapterLayout', () => {
 
     it('keeps text out of an off-centre image on the right page', () => {
       expectTextClear(makeShortParagraphLayout(), 0, [
-        { x: 25, y: PAD_Y + 30, w: 45, h: 40, margin: 0 },
+        { x: 25, y: PAD_Y + 30, width: 45, height: 40, margin: 0 },
       ]);
     });
 
     it('keeps text out of an off-centre image on the left page', () => {
       expectTextClear(makeShortParagraphLayout(), 0, [
-        { x: -80, y: PAD_Y + 30, w: 55, h: 40, margin: 0 },
+        { x: -80, y: PAD_Y + 30, width: 55, height: 40, margin: 0 },
       ]);
     });
 
     it('keeps text out of an image spanning the spine', () => {
       expectTextClear(makeShortParagraphLayout(), 0, [
-        { x: -85, y: PAD_Y + 30, w: 150, h: 40, margin: 0 },
+        { x: -85, y: PAD_Y + 30, width: 150, height: 40, margin: 0 },
       ]);
     });
 
     it('keeps text out of several images and their margins on a later spread', () => {
       expectTextClear(makeShortParagraphLayout(), 1, [
-        { x: 45, y: PAD_Y + 10, w: 25, h: 20, margin: 5 },
-        { x: 40, y: PAD_Y + 60, w: 40, h: 20, margin: 5 },
-        { x: -75, y: PAD_Y + 40, w: 35, h: 30, margin: 5 },
+        { x: 45, y: PAD_Y + 10, width: 25, height: 20, margin: 5 },
+        { x: 40, y: PAD_Y + 60, width: 40, height: 20, margin: 5 },
+        { x: -75, y: PAD_Y + 40, width: 35, height: 30, margin: 5 },
       ]);
     });
 
     it('keeps wider heading columns out of an image and inside the page', () => {
       expectTextClear(makeShortParagraphLayout(3), 0, [
-        { x: 5, y: PAD_Y + 30, w: 20, h: 40, margin: 0 },
+        { x: 5, y: PAD_Y + 30, width: 20, height: 40, margin: 0 },
       ]);
     });
 
@@ -1166,15 +1187,18 @@ describe('ChapterLayout', () => {
 
     /** Every character on spread 0 maps to a rect whose centre maps back to it. */
     function expectAnchorsRoundTrip(layout: ChapterLayout): void {
-      const start = layout.anchorAt(0, 'right');
-      const end = layout.anchorAt(1, 'right');
+      const start = layout.anchorAt(0, { side: 'right' });
+      const end = layout.anchorAt(1, { side: 'right' });
       expect(start).not.toBeNull();
-      for (let p = start?.paragraph ?? 0; p < (end?.paragraph ?? 0); p++) {
+      for (let p = start?.paragraphIndex ?? 0; p < (end?.paragraphIndex ?? 0); p++) {
         for (let c = 0; c < LENGTHS[p % LENGTHS.length]; c++) {
-          const anchor = { paragraph: p, charIndex: c };
+          const anchor = { paragraphIndex: p, charIndex: c };
           const rect = layout.coordOfAnchor(anchor);
-          if (rect?.spreadIdx !== 0) continue;
-          const back = layout.anchorAtCoord(0, rect.x + rect.width / 2, rect.y + rect.height / 2);
+          if (rect?.spreadIndex !== 0) continue;
+          const back = layout.anchorAtCoord(0, {
+            x: rect.x + rect.width / 2,
+            y: rect.y + rect.height / 2,
+          });
           expect(back, JSON.stringify(anchor)).toEqual(anchor);
         }
       }
@@ -1183,7 +1207,7 @@ describe('ChapterLayout', () => {
     describe('reading order around images', () => {
       it('continues each column below a partial image before the next column', () => {
         const layout = makeShortParagraphLayout();
-        const images = [{ x: 40, y: PAD_Y + 30, w: 40, h: 30, margin: 0 }];
+        const images = [{ x: 40, y: PAD_Y + 30, width: 40, height: 30, margin: 0 }];
         expect(expectReadingOrder(layout, images)).toBeGreaterThan(0);
         expectTextClear(layout, 0, images);
         expectAnchorsRoundTrip(layout);
@@ -1191,7 +1215,7 @@ describe('ChapterLayout', () => {
 
       it('reads the tier above a full-width image across the page first', () => {
         const layout = makeShortParagraphLayout();
-        const images = [{ x: PAD_X, y: PAD_Y + 40, w: CONTENT_WIDTH, h: 20, margin: 0 }];
+        const images = [{ x: PAD_X, y: PAD_Y + 40, width: CONTENT_WIDTH, height: 20, margin: 0 }];
         expect(expectReadingOrder(layout, images, { right: [50] })).toBe(0);
         const { slots } = layout.getSpread(0).right;
         const upper = slots.filter((slot) => slot.yStart < 50).length;
@@ -1207,8 +1231,8 @@ describe('ChapterLayout', () => {
           {
             x: -PAD_X - CONTENT_WIDTH,
             y: PAD_Y + 40,
-            w: 2 * (PAD_X + CONTENT_WIDTH),
-            h: 20,
+            width: 2 * (PAD_X + CONTENT_WIDTH),
+            height: 20,
             margin: 0,
           },
         ];
@@ -1226,8 +1250,8 @@ describe('ChapterLayout', () => {
         // the two overlap in y, but no column has text on both sides of it.
         const layout = makeShortParagraphLayout();
         const images = [
-          { x: 60, y: PAD_Y, w: 50, h: 55, margin: 0 },
-          { x: PAD_X, y: PAD_Y + 45, w: 50, h: 55, margin: 0 },
+          { x: 60, y: PAD_Y, width: 50, height: 55, margin: 0 },
+          { x: PAD_X, y: PAD_Y + 45, width: 50, height: 55, margin: 0 },
         ];
         expectReadingOrder(layout, images);
         expectTextClear(layout, 0, images);
@@ -1237,8 +1261,8 @@ describe('ChapterLayout', () => {
       it('reads past a partial image in the lower tier of a divided page', () => {
         const layout = makeShortParagraphLayout();
         const images = [
-          { x: PAD_X, y: PAD_Y + 20, w: CONTENT_WIDTH, h: 10, margin: 0 },
-          { x: 50, y: PAD_Y + 60, w: 30, h: 20, margin: 0 },
+          { x: PAD_X, y: PAD_Y + 20, width: CONTENT_WIDTH, height: 10, margin: 0 },
+          { x: 50, y: PAD_Y + 60, width: 30, height: 20, margin: 0 },
         ];
         expect(expectReadingOrder(layout, images, { right: [25] })).toBeGreaterThan(0);
         expectTextClear(layout, 0, images);
@@ -1247,18 +1271,20 @@ describe('ChapterLayout', () => {
 
       it('keeps wider heading columns in order around a partial image', () => {
         const layout = makeShortParagraphLayout(3);
-        const images = [{ x: 30, y: PAD_Y + 30, w: 50, h: 30, margin: 0 }];
+        const images = [{ x: 30, y: PAD_Y + 30, width: 50, height: 30, margin: 0 }];
         expectReadingOrder(layout, images);
         expectTextClear(layout, 0, images);
         expectAnchorsRoundTrip(layout);
       });
 
       it('lays out the same spread on a fresh layout as after a relayout', () => {
-        const images = [{ x: 40, y: PAD_Y + 30, w: 40, h: 30, margin: 0 }];
+        const images = [{ x: 40, y: PAD_Y + 30, width: 40, height: 30, margin: 0 }];
         const fresh = makeShortParagraphLayout();
         fresh.setImages(0, images);
         const relaid = makeShortParagraphLayout();
-        relaid.setImages(0, [{ x: PAD_X, y: PAD_Y + 40, w: CONTENT_WIDTH, h: 20, margin: 0 }]);
+        relaid.setImages(0, [
+          { x: PAD_X, y: PAD_Y + 40, width: CONTENT_WIDTH, height: 20, margin: 0 },
+        ]);
         relaid.getSpread(0);
         relaid.setImages(0, images);
         expect(relaid.getSpread(0)).toEqual(fresh.getSpread(0));
@@ -1276,14 +1302,14 @@ describe('ChapterLayout', () => {
         advances: uniformAdvances([...text].length, 10),
         chars: chars(text),
         inlineAnnotations: [],
-        ...(kind === 'heading' ? { headingLevel: 2, isHeading: true } : {}),
+        ...(kind === 'heading' ? { headingLevel: 2 as const } : {}),
       }));
       const entries: RenderEntry[] = KINDS.map((kind) => ({
         chars: chars(text),
         breakPoints: new Uint32Array(0),
         inlineAnnotations: [],
         kind,
-        ...(kind === 'heading' ? { headingLevel: 2, isHeading: true } : {}),
+        ...(kind === 'heading' ? { headingLevel: 2 as const } : {}),
       }));
       return makeLayout(cached, entries);
     }
@@ -1310,11 +1336,12 @@ describe('ChapterLayout', () => {
 
     it('keeps the kind after an option change re-break', () => {
       const layout = makeKindedLayout();
-      layout.applyConfig({
+      chapterLayoutChannel(layout).applyConfig({
         fontSize: 10,
         lineSpacing: 2,
         headingScale: 1.4,
-        mode: 'loose',
+        fontFamily: 'serif',
+        kinsoku: 'loose',
         enableHanging: false,
       });
 
@@ -1323,14 +1350,15 @@ describe('ChapterLayout', () => {
 
     it('keeps the kind after a font re-measurement re-break', () => {
       const layout = makeKindedLayout();
-      for (const para of layout.getCachedParagraphs()) {
+      for (const para of chapterLayoutChannel(layout).cachedParagraphs()) {
         para.advances = uniformAdvances(para.text.length, 8);
       }
-      layout.recomputeAfterMeasurement({
+      chapterLayoutChannel(layout).recomputeAfterMeasurement({
         fontSize: 8,
         lineSpacing: 1,
         headingScale: 1.4,
-        mode: 'strict',
+        fontFamily: 'serif',
+        kinsoku: 'strict',
         enableHanging: true,
       });
 
@@ -1343,7 +1371,8 @@ describe('ChapterLayout', () => {
         fontSize: 10,
         lineSpacing: 1,
         headingScale: 1.4,
-        mode: 'strict' as const,
+        fontFamily: 'serif',
+        kinsoku: 'strict' as const,
         enableHanging: true,
       };
       for (const measured of [
@@ -1351,16 +1380,23 @@ describe('ChapterLayout', () => {
         { headingScale: 2 },
         { headingStyles: { 2: { scale: 3 } } },
       ]) {
-        expect(layout.measuredAt({ ...config, ...measured })).toBe(false);
-        expect(() => layout.applyConfig({ ...config, ...measured })).toThrow(/re-measuring/);
+        expect(chapterLayoutChannel(layout).measuredAt({ ...config, ...measured })).toBe(false);
+        expect(() => chapterLayoutChannel(layout).applyConfig({ ...config, ...measured })).toThrow(
+          /re-measuring/,
+        );
       }
       // A heading style that changes only a gap is not a measured field.
-      expect(layout.measuredAt({ ...config, headingStyles: { 2: { gapAfterEm: 3 } } })).toBe(true);
+      expect(
+        chapterLayoutChannel(layout).measuredAt({
+          ...config,
+          headingStyles: { 2: { gapAfterEm: 3 } },
+        }),
+      ).toBe(true);
     });
 
     it('keeps the kind on the image exclusion path', () => {
       const layout = makeKindedLayout();
-      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
 
       const spread = layout.getSpread(0);
       expect(spread.right.hasImages).toBe(true);
@@ -1375,7 +1411,7 @@ describe('ChapterLayout', () => {
       expect(lineKinds(makeKindedLayout())).toEqual(KINDS);
 
       const reflowed = makeKindedLayout();
-      reflowed.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      reflowed.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
       expect(lineKinds(reflowed)).toEqual(KINDS);
     });
 
@@ -1403,20 +1439,25 @@ describe('ChapterLayout', () => {
         chars: chars(text),
         inlineAnnotations: [],
         headingLevel,
-        isHeading: headingLevel != null,
       }));
       const entries: RenderEntry[] = levels.map((headingLevel) => ({
         chars: chars(text),
         breakPoints: new Uint32Array(0),
         inlineAnnotations: [],
         headingLevel,
-        isHeading: headingLevel != null,
       }));
-      return new ChapterLayout(
+      return createChapterLayout(
         cached,
         entries,
-        { fontSize: 10, lineSpacing: 1, headingScale, mode: 'strict', enableHanging: true },
-        { pageWidth: 100, lineWidth: 100, pagePaddingX: 0, pagePaddingY: 0 },
+        {
+          fontSize: 10,
+          lineSpacing: 1,
+          headingScale,
+          fontFamily: 'serif',
+          kinsoku: 'strict',
+          enableHanging: true,
+        },
+        { pageWidth: 100, lineWidth: 100, paddingX: 0, paddingY: 0 },
       );
     }
 
@@ -1437,7 +1478,7 @@ describe('ChapterLayout', () => {
 
     it('scales a heading to the rounded pixel size it was measured at', () => {
       const text = 'あああ';
-      const layout = new ChapterLayout(
+      const layout = createChapterLayout(
         [
           {
             text: toCodepoints(text),
@@ -1445,7 +1486,6 @@ describe('ChapterLayout', () => {
             chars: chars(text),
             inlineAnnotations: [],
             headingLevel: 2,
-            isHeading: true,
           },
         ],
         [
@@ -1454,16 +1494,22 @@ describe('ChapterLayout', () => {
             breakPoints: new Uint32Array(0),
             inlineAnnotations: [],
             headingLevel: 2,
-            isHeading: true,
           },
         ],
-        { fontSize: 16, lineSpacing: 1.8, headingScale: 1.4, mode: 'strict', enableHanging: true },
-        { pageWidth: 400, lineWidth: 400, pagePaddingX: 0, pagePaddingY: 0 },
+        {
+          fontSize: 16,
+          lineSpacing: 1.8,
+          headingScale: 1.4,
+          fontFamily: 'serif',
+          kinsoku: 'strict',
+          enableHanging: true,
+        },
+        { pageWidth: 400, lineWidth: 400, paddingX: 0, paddingY: 0 },
       );
 
       // Flow mode, then the image-exclusion page builder.
       const pages = [layout.getPage(0)];
-      layout.setImages(0, [{ x: 0, y: 0, w: 1, h: 1 }]);
+      layout.setImages(0, [{ x: 0, y: 0, width: 1, height: 1 }]);
       pages.push(layout.getPage(0));
       for (const page of pages) {
         const [heading] = page.page.paragraphs;
@@ -1489,7 +1535,7 @@ describe('ChapterLayout', () => {
     }));
     const layout = makeLayout(cached, entries);
 
-    layout.setImages(1, [{ x: 20, y: 20, w: 40, h: 60, margin: 0 }]);
+    layout.setImages(1, [{ x: 20, y: 20, width: 40, height: 60, margin: 0 }]);
 
     const page = layout.getSpread(1).right;
     expect(page.hasImages).toBe(true);
@@ -1503,7 +1549,7 @@ describe('ChapterLayout', () => {
     for (const { line, slot } of constrained) {
       const charCount = line.segments.reduce((sum, segment) => {
         if (segment.type === 'text') return sum + [...segment.text].length;
-        if (segment.type === 'ruby') return sum + [...segment.base].length;
+        if (segment.type === 'ruby') return sum + [...segment.text].length;
         return sum + [...segment.text].length;
       }, 0);
       expect(charCount * 10).toBeLessThanOrEqual(slot.height + 0.5);
@@ -1516,25 +1562,21 @@ describe('ChapterLayout', () => {
     function lineTexts(layout: ChapterLayout): string[] {
       return layout
         .getPage(0)
-        .lines.map((line) =>
-          line.segments
-            .map((segment) => (segment.type === 'ruby' ? segment.base : segment.text))
-            .join(''),
-        );
+        .lines.map((line) => line.segments.map((segment) => segment.text).join(''));
     }
 
     function makeSnapshotLayout(): ChapterLayout {
       const codepoints = toCodepoints(SNAPSHOT_TEXT);
       const inlineAnnotations: InlineAnnotation[] = [
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 0,
           endIndex: 2,
           rubyText: 'かんじ',
-          type: 'jukugo',
+          rubyType: 'jukugo',
           jukugoSplitPoints: [1],
         },
-        { kind: 'link', startIndex: 3, endIndex: 5, href: 'https://example.com' },
+        { type: 'link', startIndex: 3, endIndex: 5, href: 'https://example.com' },
       ];
       const cached: CachedParagraph[] = [
         {
@@ -1548,12 +1590,11 @@ describe('ChapterLayout', () => {
               endIndex: 2,
               rubyText: toCodepoints('かんじ'),
               rubyAdvances: uniformAdvances(3, 5),
-              type: 'jukugo',
+              rubyType: 'jukugo',
               jukugoSplitPoints: [1],
             },
           ],
           headingLevel: 2,
-          isHeading: true,
         },
       ];
       const entries: RenderEntry[] = [
@@ -1562,10 +1603,9 @@ describe('ChapterLayout', () => {
           breakPoints: computedBreakPoints(25),
           inlineAnnotations,
           headingLevel: 2,
-          isHeading: true,
         },
       ];
-      return new ChapterLayout(
+      return createChapterLayout(
         cached,
         entries,
         {
@@ -1573,10 +1613,11 @@ describe('ChapterLayout', () => {
           lineSpacing: 1,
           headingScale: 1.4,
           headingStyles: { 2: { scale: 1.2, gapAfterEm: 0.5 } },
-          mode: 'strict',
+          fontFamily: 'serif',
+          kinsoku: 'strict',
           enableHanging: true,
         },
-        { pageWidth: 400, lineWidth: 100, pagePaddingX: 0, pagePaddingY: 0 },
+        { pageWidth: 400, lineWidth: 100, paddingX: 0, paddingY: 0 },
       );
     }
 
@@ -1596,8 +1637,8 @@ describe('ChapterLayout', () => {
 
     it('shares no object with the live layout', () => {
       const layout = makeSnapshotLayout();
-      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
-      const cached = layout.getCachedParagraphs()[0];
+      layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
+      const cached = chapterLayoutChannel(layout).cachedParagraphs()[0];
       const snap = layout.snapshot();
 
       expect(snap.paragraphs[0].inlineAnnotations).not.toBe(cached.inlineAnnotations);
@@ -1609,7 +1650,7 @@ describe('ChapterLayout', () => {
 
     it('keeps the live layout intact when every array in the snapshot is mutated', () => {
       const layout = makeSnapshotLayout();
-      layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 30, margin: 0 }]);
+      layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 30, margin: 0 }]);
       const before = structuredClone(layout.snapshot());
       const renderedBefore = lineTexts(layout);
 
@@ -1635,7 +1676,7 @@ describe('ChapterLayout', () => {
       const spreadImages = snap.images?.[0];
       if (spreadImages) {
         spreadImages.images[0].x = 999;
-        spreadImages.images.push({ x: 0, y: 0, w: 1, h: 1 });
+        spreadImages.images.push({ x: 0, y: 0, width: 1, height: 1 });
       }
       snap.images?.push({ spreadIndex: 5, images: [] });
 
@@ -1644,7 +1685,7 @@ describe('ChapterLayout', () => {
     });
   });
 
-  it('clears only the target spread when syncImages receives no images', () => {
+  it('clears only the target spread when setImages receives no images', () => {
     const text = 'あ'.repeat(300);
     const codepoints = toCodepoints(text);
     const cached: CachedParagraph[] = [
@@ -1665,9 +1706,9 @@ describe('ChapterLayout', () => {
     const layout = makeLayout(cached, entries);
     layout.resize({ lineWidth: 50 });
 
-    layout.setImages(0, [{ x: 20, y: 10, w: 20, h: 20 }]);
-    layout.setImages(1, [{ x: 20, y: 10, w: 20, h: 20 }]);
-    layout.syncImages(0, []);
+    layout.setImages(0, [{ x: 20, y: 10, width: 20, height: 20 }]);
+    layout.setImages(1, [{ x: 20, y: 10, width: 20, height: 20 }]);
+    layout.setImages(0, []);
 
     expect(layout.hasImages).toBe(true);
     expect(layout.getSpread(1).right.hasImages).toBe(true);

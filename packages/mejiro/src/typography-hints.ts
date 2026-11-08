@@ -86,23 +86,17 @@ interface Span {
  * not how Japanese body text is set — it is useful next to penalties, not
  * instead of them.
  *
- * @param text - The paragraph, NFC-normalized, as handed to the layout engine.
- * @param analysis - Morphemes aligned to `text` in code point offsets.
+ * @param analysis - Morphemes aligned to `analysis.text` in code point offsets;
+ *   that NFC text is the paragraph the hints address.
  * @param options - Which hints to emit and how far the cluster rules reach.
  * @returns The requested hints. Fields whose rules never fired are omitted, so a
- *   caller keeps its "no hints, no preprocessing" fast path. An analysis whose
- *   `text` differs from `text` yields no hints at all rather than an error: its
- *   offsets address a different string, and breaking on character classes alone
- *   is a correct, if less informed, fallback.
+ *   caller keeps its "no hints, no preprocessing" fast path.
  */
 export function deriveTypographyHints(
-  text: string,
   analysis: TextAnalysis,
   options: TypographyHintOptions = {},
 ): TypographyHints {
-  if (analysis.text !== text) return {};
-
-  const codepoints = toCodepoints(text);
+  const codepoints = toCodepoints(analysis.text);
   const morphemes = analysis.morphemes;
   const hints: TypographyHints = {};
 
@@ -245,18 +239,21 @@ function collectClusterSpans(morphemes: readonly MorphemeLike[], textLength: num
 
     const next = morphemes[k + 1];
     const bindsRight =
-      next !== undefined && next.start === morpheme.end && coversSpan(next, textLength);
+      next !== undefined && next.startIndex === morpheme.endIndex && coversSpan(next, textLength);
 
     if (bindsRight && isNumeral(morpheme) && next.extendedPos === POS_SUFFIX) {
-      spans.push({ start: morpheme.start, end: next.end });
+      spans.push({ start: morpheme.startIndex, end: next.endIndex });
     }
 
     if (bindsRight && morpheme.extendedPos === POS_PREFIX && attachesToPrefix(next.extendedPos)) {
-      spans.push({ start: morpheme.start, end: next.end });
+      spans.push({ start: morpheme.startIndex, end: next.endIndex });
     }
 
-    if (morpheme.end - morpheme.start >= 2 && (isNumeral(morpheme) || isLatinWord(morpheme))) {
-      spans.push({ start: morpheme.start, end: morpheme.end });
+    if (
+      morpheme.endIndex - morpheme.startIndex >= 2 &&
+      (isNumeral(morpheme) || isLatinWord(morpheme))
+    ) {
+      spans.push({ start: morpheme.startIndex, end: morpheme.endIndex });
     }
   }
 
@@ -334,15 +331,16 @@ function buildBreakPenalties(
 
     const next = morphemes[k + 1];
     const closesRun = next === undefined || !isFunctionWord(next.extendedPos);
-    raise(morpheme.end - 1, closesRun && runHasContent ? PENALTY_BUNSETSU : PENALTY_MORPHEME);
-    if (isFunction) raise(morpheme.start - 1, PENALTY_BEFORE_FUNCTION_WORD);
+    raise(morpheme.endIndex - 1, closesRun && runHasContent ? PENALTY_BUNSETSU : PENALTY_MORPHEME);
+    if (isFunction) raise(morpheme.startIndex - 1, PENALTY_BEFORE_FUNCTION_WORD);
     if (closesRun) runHasContent = false;
 
     // Only the interior is raised. The boundaries either side of the morpheme
     // are where a break escapes to, and pricing them as if they were inside it
     // would leave the search nowhere cheaper to go.
     if (keptWhole(morpheme, rule.keepWhole)) {
-      for (let i = morpheme.start; i < morpheme.end - 1; i++) raise(i, rule.keepWholePenalty);
+      for (let i = morpheme.startIndex; i < morpheme.endIndex - 1; i++)
+        raise(i, rule.keepWholePenalty);
     }
   }
 
@@ -374,7 +372,7 @@ function clampPenalty(value: number): number {
 function buildTokenBoundaries(morphemes: readonly MorphemeLike[]): Uint32Array {
   if (morphemes.length <= 1) return new Uint32Array(0);
   const boundaries = new Uint32Array(morphemes.length - 1);
-  for (let k = 0; k < morphemes.length - 1; k++) boundaries[k] = morphemes[k].end - 1;
+  for (let k = 0; k < morphemes.length - 1; k++) boundaries[k] = morphemes[k].endIndex - 1;
   return boundaries;
 }
 
@@ -389,9 +387,9 @@ function collectTcyCandidates(morphemes: readonly MorphemeLike[]): TcyCandidate[
   const candidates: TcyCandidate[] = [];
   for (let k = 0; k < morphemes.length; k++) {
     const morpheme = morphemes[k];
-    if (morpheme.end - morpheme.start !== 2 || !isNumeral(morpheme)) continue;
+    if (morpheme.endIndex - morpheme.startIndex !== 2 || !isNumeral(morpheme)) continue;
     if (morphemes[k + 1]?.extendedPos === POS_SUFFIX) continue;
-    candidates.push({ startIndex: morpheme.start, endIndex: morpheme.end });
+    candidates.push({ startIndex: morpheme.startIndex, endIndex: morpheme.endIndex });
   }
   return candidates;
 }
@@ -422,7 +420,7 @@ function isLatinWord(morpheme: MorphemeLike): boolean {
 function matchesSurface(morpheme: MorphemeLike, pattern: RegExp): boolean {
   return (
     pattern.test(morpheme.surface) &&
-    codepointLength(morpheme.surface) === morpheme.end - morpheme.start
+    codepointLength(morpheme.surface) === morpheme.endIndex - morpheme.startIndex
   );
 }
 
@@ -434,11 +432,11 @@ function codepointLength(value: string): number {
 /** True when the morpheme's offsets address a real span of text of `textLength`. */
 function coversSpan(morpheme: MorphemeLike, textLength: number): boolean {
   return (
-    Number.isInteger(morpheme.start) &&
-    Number.isInteger(morpheme.end) &&
-    morpheme.start >= 0 &&
-    morpheme.end <= textLength &&
-    morpheme.end > morpheme.start
+    Number.isInteger(morpheme.startIndex) &&
+    Number.isInteger(morpheme.endIndex) &&
+    morpheme.startIndex >= 0 &&
+    morpheme.endIndex <= textLength &&
+    morpheme.endIndex > morpheme.startIndex
   );
 }
 

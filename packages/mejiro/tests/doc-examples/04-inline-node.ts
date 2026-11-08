@@ -2,7 +2,7 @@ export { node };
 
 import type { RenderSegment } from '@libraz/mejiro/render';
 
-const segment: RenderSegment = { type: 'ruby', base: '漢字', rubyText: 'かんじ' };
+const segment: RenderSegment = { type: 'ruby', text: '漢字', rubyText: 'かんじ' };
 
 // #region doc:inline-node
 import { segmentToInlineNode } from '@libraz/mejiro/render';

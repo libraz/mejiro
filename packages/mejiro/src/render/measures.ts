@@ -1,6 +1,6 @@
-import type { ParagraphKind } from '../book/types.js';
 import type { ColumnSlot } from '../exclusion.js';
 import type { ParagraphMeasure } from '../paginate.js';
+import { DEFAULT_LINE_SPACING, type HeadingLevel, type ParagraphKind } from '../types.js';
 import type { LineMetric, LineMetricsResult, RenderEntry } from './types.js';
 
 /** Style overrides for a specific heading level. */
@@ -15,13 +15,8 @@ export interface HeadingStyle {
 export interface MeasureOptions {
   /** Base font size in pixels. */
   fontSize: number;
-  /** Line spacing multiplier. */
+  /** Line spacing multiplier. @defaultValue DEFAULT_LINE_SPACING (1.8) */
   lineSpacing?: number;
-  /**
-   * Line spacing multiplier.
-   * @deprecated Use `lineSpacing`; retained as a v0.x compatibility alias.
-   */
-  lineHeight?: number;
   /**
    * Heading font scale. A heading without a level takes it as is; levels 1–6
    * scale their {@link DEFAULT_HEADING_STYLES} size in proportion to it,
@@ -73,41 +68,34 @@ const DEFAULT_HEADING_GAP_EM = 1.2;
 /** Heading fields of a paragraph, whichever layer it comes from. */
 export interface HeadingFields {
   /** Heading level (1–6). */
-  headingLevel?: number;
+  headingLevel?: HeadingLevel;
   /** Structural classification. */
   kind?: ParagraphKind;
-  /** Legacy heading flag of {@link RenderEntry}. */
-  isHeading?: boolean;
 }
 
 /**
  * The one heading predicate: a paragraph is a heading when it carries a
- * `headingLevel`, is classified `kind: 'heading'`, or sets the legacy
- * `isHeading` flag. Measurement, rendering and reading-time estimates all ask
- * here, so no two of them can disagree about a paragraph.
+ * `headingLevel` or is classified `kind: 'heading'`. Measurement, rendering and
+ * reading-time estimates all ask here, so no two of them can disagree about a
+ * paragraph.
  */
 export function isHeadingParagraph(p: HeadingFields): boolean {
-  return p.headingLevel != null || p.kind === 'heading' || p.isHeading === true;
+  return p.headingLevel != null || p.kind === 'heading';
 }
 
 /**
- * Resolves the heading classification a {@link RenderParagraph} carries.
+ * Resolves the heading classification a {@link RenderParagraph} carries, so a
+ * renderer deriving its class from `kind` and `headingLevel` alone styles the
+ * paragraph as it was measured.
  *
- * A heading flagged only by the legacy `isHeading` gets `kind: 'heading'`, so
- * a renderer deriving its class from `kind` and `headingLevel` alone styles it
- * as the heading it was measured as.
- *
- * @returns The paragraph's `isHeading`, `headingLevel` and `kind`, as every
- *   page builder emits them.
+ * @returns The paragraph's `headingLevel` and `kind`, as every page builder
+ *   emits them.
  */
 export function paragraphHeading(p: HeadingFields): {
-  isHeading: boolean;
-  headingLevel?: number;
+  headingLevel?: HeadingLevel;
   kind?: ParagraphKind;
 } {
-  const isHeading = isHeadingParagraph(p);
-  const kind = p.kind ?? (isHeading && p.headingLevel == null ? 'heading' : undefined);
-  return { isHeading, headingLevel: p.headingLevel, kind };
+  return { headingLevel: p.headingLevel, kind: p.kind };
 }
 
 /**
@@ -171,7 +159,7 @@ const ANNOTATED_LINE_SPACING = 1.5;
 
 /** Whether any line of the paragraph may hold ruby or emphasis marks. */
 function carriesAnnotationLines(entry: RenderEntry): boolean {
-  return entry.inlineAnnotations.some((a) => a.kind === 'ruby' || a.kind === 'emphasis');
+  return entry.inlineAnnotations.some((a) => a.type === 'ruby' || a.type === 'emphasis');
 }
 
 /** Per-paragraph pitch and gap resolution shared by the measure builders. */
@@ -233,7 +221,7 @@ export function paragraphMetrics(options: MeasureOptions): ParagraphMetrics {
  * @returns Array of paragraph measures suitable for `paginate()`.
  */
 export function buildParagraphMeasures(
-  entries: RenderEntry[],
+  entries: readonly RenderEntry[],
   options: MeasureOptions,
 ): ParagraphMeasure[] {
   const metrics = paragraphMetrics(options);
@@ -259,7 +247,7 @@ export function buildParagraphMeasures(
  * @returns Per-line metrics array, cumulative offsets, and base line pitch.
  */
 export function buildLineMetrics(
-  entries: RenderEntry[],
+  entries: readonly RenderEntry[],
   options: MeasureOptions,
 ): LineMetricsResult {
   const paragraph = paragraphMetrics(options);
@@ -292,7 +280,7 @@ export function buildLineMetrics(
 }
 
 function resolveLineSpacing(options: MeasureOptions): number {
-  return options.lineSpacing ?? options.lineHeight ?? 1;
+  return options.lineSpacing ?? DEFAULT_LINE_SPACING;
 }
 
 /**
@@ -300,46 +288,55 @@ function resolveLineSpacing(options: MeasureOptions): number {
  * and paragraph gaps. The first line on a page uses only its pitch (no gap).
  *
  * @param metrics - Per-line metrics from {@link buildLineMetrics}.
- * @param startIdx - Index of the first line to pack.
+ * @param startIndex - Index of the first line to count from.
  * @param pageWidth - Available page width in pixels.
  * @returns Number of lines that fit.
  */
-export function packPageLines(metrics: LineMetric[], startIdx: number, pageWidth: number): number {
+export function countPageLines(
+  metrics: readonly LineMetric[],
+  startIndex: number,
+  pageWidth: number,
+): number {
   let count = 0;
   let used = 0;
-  while (startIdx + count < metrics.length) {
-    const m = metrics[startIdx + count];
+  while (startIndex + count < metrics.length) {
+    const m = metrics[startIndex + count];
     const addition = count === 0 ? m.pitch : m.gapBefore + m.pitch;
     if (used + addition > pageWidth + 0.5) break;
     used += addition;
     count++;
   }
-  if (count === 0 && startIdx < metrics.length) return 1;
+  if (count === 0 && startIndex < metrics.length) return 1;
   return count;
+}
+
+/** Input of {@link buildColumnSlots}. */
+export interface BuildColumnSlotsInput {
+  /** Per-line metrics from {@link buildLineMetrics}. */
+  metrics: readonly LineMetric[];
+  /** Index of the first line on this page. */
+  startIndex: number;
+  /** Number of lines to include. */
+  count: number;
+  /** Height of each column (vertical content height). */
+  columnHeight: number;
 }
 
 /**
  * Builds column slots for a normal (non-image) page with per-line pitch and
  * paragraph gap offsets baked into each slot's `xPos`.
  *
- * @param metrics - Per-line metrics from {@link buildLineMetrics}.
- * @param startIdx - Index of the first line on this page.
- * @param count - Number of lines to include.
- * @param columnHeight - Height of each column (vertical content height).
+ * @param input - The lines to place and the column height.
  * @returns Array of column slots suitable for absolute positioning.
  */
-export function buildColumnSlots(
-  metrics: LineMetric[],
-  startIdx: number,
-  count: number,
-  columnHeight: number,
-): ColumnSlot[] {
+export function buildColumnSlots(input: BuildColumnSlotsInput): ColumnSlot[] {
+  const { metrics, startIndex, count, columnHeight } = input;
   const slots: ColumnSlot[] = [];
   let xPos = 0;
   for (let i = 0; i < count; i++) {
     if (i > 0) {
-      xPos += metrics[startIdx + i - 1].pitch;
-      xPos += metrics[startIdx + i].gapBefore;
+      xPos += metrics[startIndex + i - 1].pitch;
+      xPos += metrics[startIndex + i].gapBefore;
     }
     slots.push({ xPos, yStart: 0, height: columnHeight, columnIndex: i });
   }
@@ -367,6 +364,23 @@ function slotColumnIndices(slots: readonly ColumnSlot[]): number[] {
   return slots.map((slot) => ranks.get(slot.xPos) as number);
 }
 
+/** Input of {@link adjustExclusionSlots}. */
+export interface AdjustExclusionSlotsInput {
+  /** Column slots from the exclusion engine. */
+  slots: readonly ColumnSlot[];
+  /** Per-line metrics from {@link buildLineMetrics}. */
+  metrics: readonly LineMetric[];
+  /** Global line index of the first slot. */
+  startIndex: number;
+  /** Base body line pitch (from {@link LineMetricsResult.linePitch}). */
+  basePitch: number;
+  /**
+   * Page content-box width (px). When set, overflowing columns are dropped;
+   * when omitted, no trimming is applied.
+   */
+  contentWidth?: number;
+}
+
 /**
  * Adjusts exclusion engine slots by adding heading pitch excess and paragraph
  * gaps. The exclusion engine assumes uniform line pitch; this function corrects
@@ -390,21 +404,12 @@ function slotColumnIndices(slots: readonly ColumnSlot[]): number[] {
  * first gap, so a column is kept whole or not at all. At least one slot is
  * always kept so layout makes progress.
  *
- * @param slots - Column slots from the exclusion engine.
- * @param metrics - Per-line metrics from {@link buildLineMetrics}.
- * @param startIdx - Global line index of the first slot.
- * @param basePitch - Base body line pitch (from {@link LineMetricsResult.linePitch}).
- * @param contentWidth - Page content-box width (px). When set, overflowing
- *   columns are dropped. When omitted, no trimming is applied.
- * @returns New array of adjusted slots (input is not mutated).
+ * @param input - The engine slots, the line metrics they are read against, and
+ *   the pitch and optional content width to adjust for.
+ * @returns New array of adjusted slots (the input is not mutated).
  */
-export function adjustExclusionSlots(
-  slots: ColumnSlot[],
-  metrics: LineMetric[],
-  startIdx: number,
-  basePitch: number,
-  contentWidth?: number,
-): ColumnSlot[] {
+export function adjustExclusionSlots(input: AdjustExclusionSlotsInput): ColumnSlot[] {
+  const { slots, metrics, startIndex, basePitch, contentWidth } = input;
   const columns = slotColumnIndices(slots);
   const offsetByColumn = new Map<number, number>();
   const droppedColumns = new Set<number>();
@@ -414,7 +419,7 @@ export function adjustExclusionSlots(
   for (let i = 0; i < slots.length; i++) {
     // Lines are consumed in the order slots are kept, so a dropped column
     // shifts the following slots onto the lines it would have carried.
-    const li = startIdx + adjusted.length;
+    const li = startIndex + adjusted.length;
     if (li >= metrics.length) break;
     const column = columns[i];
     if (droppedColumns.has(column)) continue;
@@ -473,6 +478,18 @@ export function getImageXOffset(
   return relativeOffsetAt(offsets, spreadStartLine, col);
 }
 
+/** Input of {@link findPhysicalColumn}. */
+export interface FindPhysicalColumnInput {
+  /** Cumulative offsets from {@link LineMetricsResult.offsets}. */
+  offsets: Float32Array;
+  /** Global line index of the spread's first line. */
+  spreadStartLine: number;
+  /** Physical distance from the right content edge (px). */
+  fromRight: number;
+  /** Base body line pitch (px). */
+  basePitch: number;
+}
+
 /**
  * Finds the column index at a given physical distance from the right content edge,
  * accounting for heading pitch differences and paragraph gaps.
@@ -486,19 +503,12 @@ export function getImageXOffset(
  * positive finite number carries no scale to search along, and a non-finite
  * `fromRight` has no column to point at.
  *
- * @param offsets - Cumulative offsets from {@link LineMetricsResult.offsets}.
- * @param spreadStartLine - Global line index of the spread's first line.
- * @param fromRight - Physical distance from the right content edge (px).
- * @param basePitch - Base body line pitch (px).
+ * @param input - The offsets, the spread's first line, and the distance to locate.
  * @returns Column index at that physical distance, always a finite integer in
  *   `[0, offsets.length - spreadStartLine - 1]`.
  */
-export function findPhysicalColumn(
-  offsets: Float32Array,
-  spreadStartLine: number,
-  fromRight: number,
-  basePitch: number,
-): number {
+export function findPhysicalColumn(input: FindPhysicalColumnInput): number {
+  const { offsets, spreadStartLine, fromRight, basePitch } = input;
   const maxCol = Math.max(0, offsets.length - spreadStartLine - 1);
   if (!(basePitch > 0 && Number.isFinite(basePitch) && Number.isFinite(fromRight))) return 0;
   let col = Math.min(maxCol, Math.max(0, Math.floor(fromRight / basePitch)));

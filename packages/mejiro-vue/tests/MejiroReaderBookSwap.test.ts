@@ -6,6 +6,9 @@ import { render } from '@testing-library/vue';
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref, shallowRef } from 'vue';
 import { MejiroReader, type MejiroReaderHandle } from '../src/MejiroReader.js';
+import { giveElementsAClientBox } from './helpers/fixtures.js';
+
+giveElementsAClientBox();
 
 function threeChapterEpub(title: string): EpubBook {
   return {
@@ -27,22 +30,30 @@ async function settle(step?: () => void): Promise<void> {
 }
 
 describe('MejiroReader (Vue) — book swap', () => {
-  it('lays out only chapter 0 of the new book and reports the reset', async () => {
+  it('lays out only chapter 0 of the new book and reports the reset to a v-model host', async () => {
     vi.useFakeTimers();
     const layoutSpy = vi.spyOn(MejiroBook.prototype, 'layoutChapter');
     try {
-      const onChapterChange = vi.fn();
+      const chapterIndex = ref(0);
+      const onChapterChange = vi.fn((next: number) => {
+        chapterIndex.value = next;
+      });
       const reader = ref<MejiroReaderHandle | null>(null);
       const epub = shallowRef(threeChapterEpub('A'));
       render(
         defineComponent({
           setup: () => () =>
-            h(MejiroReader, { ref: reader, epub: epub.value, 'onChapter-change': onChapterChange }),
+            h(MejiroReader, {
+              ref: reader,
+              epub: epub.value,
+              chapterIndex: chapterIndex.value,
+              'onUpdate:chapterIndex': onChapterChange,
+            }),
         }),
       );
       await settle();
       await settle(() => reader.value?.goToChapter(2));
-      expect(reader.value?.getReadingPosition().chapter).toBe(2);
+      expect(reader.value?.getSpreadPosition().chapterIndex).toBe(2);
       layoutSpy.mockClear();
       onChapterChange.mockClear();
 
@@ -54,7 +65,7 @@ describe('MejiroReader (Vue) — book swap', () => {
       expect(layoutSpy).toHaveBeenCalledTimes(1);
       expect(layoutSpy.mock.calls[0][0]).toBe(second.chapters[0]);
       expect(onChapterChange.mock.calls).toEqual([[0]]);
-      expect(reader.value?.getReadingPosition().chapter).toBe(0);
+      expect(reader.value?.getSpreadPosition().chapterIndex).toBe(0);
     } finally {
       layoutSpy.mockRestore();
       vi.useRealTimers();

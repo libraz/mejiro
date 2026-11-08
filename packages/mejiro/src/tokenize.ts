@@ -15,7 +15,7 @@
  * @param tokenLengths - Array of token lengths in codepoints from a morphological analyzer.
  * @returns Uint32Array of boundary indices for use in LayoutInput.
  */
-export function tokenLengthsToBoundaries(tokenLengths: number[]): Uint32Array {
+export function tokenLengthsToBoundaries(tokenLengths: readonly number[]): Uint32Array {
   if (tokenLengths.length <= 1) return new Uint32Array(0);
 
   const boundaries = new Uint32Array(tokenLengths.length - 1);

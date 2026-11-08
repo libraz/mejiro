@@ -1,10 +1,17 @@
-import type { ParagraphKind } from '../book/types.js';
-import type { InlineAnnotation } from '../browser/types.js';
+import type { HeadingLevel, InlineAnnotation, ParagraphKind } from '../types.js';
 
-/** A text segment within a rendered line. */
+/**
+ * A segment of a rendered line: plain text or one inline annotation.
+ *
+ * `text` is the span's content flattened to a string; `children` covers the same
+ * range with the annotations nested inside it. Draw only one of the two, never
+ * both, or the characters appear twice. {@link segmentToInlineNode} resolves
+ * that choice (and the markup policy for links and footnotes) for you. For a
+ * `ruby` segment `text` is the base text and `rubyText` its reading.
+ */
 export type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | { type: 'ruby'; text: string; rubyText: string; children?: readonly RenderSegment[] }
   | {
       type: 'emphasis';
       text: string;
@@ -33,10 +40,8 @@ export interface RenderLine {
 export interface RenderParagraph {
   /** Lines in this paragraph. */
   readonly lines: readonly RenderLine[];
-  /** Whether this paragraph is a heading (true if headingLevel is set). */
-  readonly isHeading: boolean;
   /** Heading level (1–6), or undefined for body text. */
-  readonly headingLevel?: number;
+  readonly headingLevel?: HeadingLevel;
   /**
    * Structural classification carried over from the source paragraph, mapped to
    * the `mejiro-paragraph--*` class the bundled stylesheets expect.
@@ -64,13 +69,13 @@ export interface LineMetric {
   /** Gap before this line in pixels (paragraph or heading gap; 0 for mid-paragraph lines). */
   gapBefore: number;
   /** Heading level if this line belongs to a heading paragraph. */
-  headingLevel?: number;
+  headingLevel?: HeadingLevel;
 }
 
 /** Result of {@link buildLineMetrics}. */
 export interface LineMetricsResult {
   /** One LineMetric per flattened line across all paragraphs. */
-  metrics: LineMetric[];
+  metrics: readonly LineMetric[];
   /** Cumulative x-offset at each line index, accounting for heading pitch excess and paragraph gaps. */
   offsets: Float32Array;
   /** Base body line pitch (fontSize × lineSpacing). */
@@ -80,18 +85,16 @@ export interface LineMetricsResult {
 /** Input entry for render functions, combining layout results with annotations. */
 export interface RenderEntry {
   /** Character array of the paragraph text, indexed by Unicode code point. */
-  chars: string[];
+  chars: readonly string[];
   /** Break points from the line breaking algorithm. */
   breakPoints: Uint32Array;
   /** Inline annotations for this paragraph (ruby, emphasis, tcy, etc.). */
   inlineAnnotations: readonly InlineAnnotation[];
   /**
-   * Whether this paragraph is a heading.
-   * @deprecated Use `headingLevel` instead. When `headingLevel` is set, this field is ignored.
+   * Heading level (1–6), or undefined for body text. A paragraph is a heading
+   * when it has a level or `kind` is `'heading'`.
    */
-  isHeading?: boolean;
-  /** Heading level (1–6), or undefined for body text. */
-  headingLevel?: number;
+  headingLevel?: HeadingLevel;
   /** Structural classification of the source paragraph. @defaultValue 'body' */
   kind?: ParagraphKind;
 }

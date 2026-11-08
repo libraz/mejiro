@@ -17,7 +17,7 @@ const HALFWIDTH_GA = String.fromCodePoint(0xff76, 0xff9e);
 
 /** Builds a morpheme with the fields the aligner moves, leaving the rest inert. */
 function morpheme(surface: string, start: number, end: number): MorphemeLike {
-  return { surface, start, end, pos: 'NOUN', extendedPos: 'NOUN' };
+  return { surface, startIndex: start, endIndex: end, pos: 'NOUN', extendedPos: 'NOUN' };
 }
 
 /** Aligns and fails the test rather than returning null, for the success cases. */
@@ -27,14 +27,14 @@ function align(text: string, normalizedText: string, morphemes: readonly Morphem
   return aligned;
 }
 
-/** Extracts the code points `[start, end)` addresses, the way a caller would. */
+/** Extracts the code points `[startIndex, endIndex)` addresses, the way a caller would. */
 function span(text: string, morphemeLike: MorphemeLike): string {
-  return [...text].slice(morphemeLike.start, morphemeLike.end).join('');
+  return [...text].slice(morphemeLike.startIndex, morphemeLike.endIndex).join('');
 }
 
-/** Every morpheme's span as a `[start, end]` pair, for compact assertions. */
+/** Every morpheme's span as a `[startIndex, endIndex]` pair, for compact assertions. */
 function offsets(morphemes: readonly MorphemeLike[]): number[][] {
-  return morphemes.map((m) => [m.start, m.end]);
+  return morphemes.map((m) => [m.startIndex, m.endIndex]);
 }
 
 describe('alignMorphemeOffsets', () => {
@@ -214,7 +214,10 @@ describe('alignMorphemeOffsets', () => {
 
     expect(aligned.morphemes).toEqual([morpheme('猫', 0, 1)]);
     expect(aligned.warnings).toHaveLength(1);
-    expect(aligned.warnings[0]).toContain('1');
+    expect(aligned.warnings[0]).toMatchObject({
+      code: 'morphemes-dropped',
+      message: expect.stringContaining('1'),
+    });
   });
 
   it('drops morphemes indexed outside the normalized text', () => {

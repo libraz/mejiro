@@ -1,9 +1,9 @@
 /**
  * @vitest-environment node
  */
+import { extractRubyContent, MejiroError, parseEditableEpub, parseEpub } from '@libraz/mejiro/epub';
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { EditableEpub, parseEpub } from '../../src/epub/index.js';
 
 const containerXml = `<?xml version="1.0"?>
 <container>
@@ -44,8 +44,34 @@ describe('EPUB parsing on a runtime without a DOM', () => {
 
     await expect(parseEpub(data)).rejects.toThrow(/DOMParser/);
     await expect(parseEpub(data)).rejects.not.toThrow(ReferenceError);
-    await expect(EditableEpub.load(data)).rejects.toThrow(/DOMParser/);
-    await expect(EditableEpub.load(data)).rejects.not.toThrow(ReferenceError);
+    await expect(parseEditableEpub(data)).rejects.toThrow(/DOMParser/);
+    await expect(parseEditableEpub(data)).rejects.not.toThrow(ReferenceError);
+  });
+
+  it('reports the missing DOM as a dom-unavailable error from every entry point', async () => {
+    const data = await makeEpub();
+    expect(globalThis.DOMParser).toBeUndefined();
+
+    const failures: unknown[] = [];
+    try {
+      extractRubyContent(
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>',
+      );
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await parseEpub(data);
+    } catch (error) {
+      failures.push(error);
+    }
+
+    expect(failures).toHaveLength(2);
+    for (const error of failures) {
+      expect(error).toBeInstanceOf(MejiroError);
+      expect(error).not.toBeInstanceOf(ReferenceError);
+      expect((error as MejiroError).code).toBe('dom-unavailable');
+    }
   });
 
   it('parses once a DOM implementation is registered, as the SSR guide describes', async () => {
@@ -60,8 +86,8 @@ describe('EPUB parsing on a runtime without a DOM', () => {
       const book = await parseEpub(data);
       expect(book.chapters[0].paragraphs[0].text).toBe('本文');
 
-      const editor = await EditableEpub.load(data);
-      expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
+      const editor = await parseEditableEpub(data);
+      expect(editor.chapters[0].blocks[0]).toMatchObject({ text: '本文' });
     } finally {
       const globals = globalThis as Record<string, unknown>;
       globals.DOMParser = undefined;

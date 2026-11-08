@@ -1,5 +1,5 @@
-import type { InlineAnnotation } from './browser/types.js';
 import { mergeAnnotationClusters } from './cluster.js';
+import type { InlineAnnotation, TcyCandidate } from './types.js';
 
 /**
  * A tate-chu-yoko (縦中横) span: characters drawn side by side inside a single
@@ -34,24 +34,25 @@ export interface TcyPreprocessResult {
 }
 
 /**
- * Collects the tate-chu-yoko spans of an inline annotation list.
+ * Collects the tate-chu-yoko spans of an inline annotation list, or turns the
+ * candidates {@link deriveTypographyHints} found into spans.
  *
- * @param annotations - Inline annotations of one paragraph, or `undefined`.
- * @param em - Font size in px of the text the spans sit in; one em is the
+ * @param source - Inline annotations of one paragraph (only the `tcy` variants
+ *   are taken), tate-chu-yoko candidates, or `undefined`.
+ * @param emSize - Font size in px of the text the spans sit in; one em is the
  *   inline extent a combined box occupies.
- * @returns The tcy spans, or `undefined` when the paragraph has none — which
- *   lets callers keep the "no annotations, no preprocessing" fast path.
+ * @returns The tcy spans, or `undefined` when there are none — which lets
+ *   callers keep the "no annotations, no preprocessing" fast path.
  */
 export function buildTcyAnnotations(
-  annotations: readonly InlineAnnotation[] | undefined,
-  em: number,
+  source: readonly InlineAnnotation[] | readonly TcyCandidate[] | undefined,
+  emSize: number,
 ): TcyAnnotation[] | undefined {
-  if (!annotations?.length) return undefined;
+  if (!source?.length) return undefined;
   const spans: TcyAnnotation[] = [];
-  for (const ann of annotations) {
-    if (ann.kind === 'tcy') {
-      spans.push({ startIndex: ann.startIndex, endIndex: ann.endIndex, advance: em });
-    }
+  for (const item of source as readonly (InlineAnnotation | TcyCandidate)[]) {
+    if ('type' in item && item.type !== 'tcy') continue;
+    spans.push({ startIndex: item.startIndex, endIndex: item.endIndex, advance: emSize });
   }
   return spans.length > 0 ? spans : undefined;
 }
@@ -65,11 +66,12 @@ export function buildTcyAnnotations(
  * characters in proportion to their measured advances, so anchor rectangles
  * and hit tests stay monotonic inside the span.
  *
- * Unlike ruby, malformed input is skipped rather than rejected: these spans
- * come from arbitrary EPUB markup, and a broken one must not stop a chapter
- * from being laid out. Ignored are spans that are empty, reversed, out of
- * range, non-integral, carry a non-finite advance, or overlap a span that was
- * already applied (earlier start wins, then the longer one).
+ * Unlike ruby ({@link preprocessRuby}, which throws), malformed input is
+ * skipped rather than rejected: these spans come from arbitrary EPUB markup,
+ * and a broken one must not stop a chapter from being laid out. Ignored are
+ * spans that are empty, reversed, out of range, non-integral, carry a
+ * non-finite advance, or overlap a span that was already applied (earlier
+ * start wins, then the longer one).
  *
  * @param text - Base text codepoints.
  * @param advances - Measured advance widths.

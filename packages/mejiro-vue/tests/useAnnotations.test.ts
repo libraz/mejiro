@@ -3,10 +3,10 @@
 import { parseAnnotations, serializeAnnotations } from '@libraz/mejiro';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type App, createApp, defineComponent, isProxy, nextTick, ref } from 'vue';
-import type { AnnotationsStorage } from '../src/useAnnotations.js';
+import type { MejiroStorage } from '../src/index.js';
 import { useAnnotations } from '../src/useAnnotations.js';
 
-function memoryStorage(): AnnotationsStorage & { data: Map<string, string> } {
+function memoryStorage(): MejiroStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {
     data,
@@ -42,55 +42,59 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('useAnnotations (Vue) — onChange', () => {
+describe('useAnnotations (Vue) — onAnnotationsChange', () => {
   it('fires on add() with the new sorted list', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result, unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onChange }));
+    const { result, unmount } = withSetup(() =>
+      useAnnotations({ key: 'k', storage, onAnnotationsChange }),
+    );
     const added = result.add({
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 3 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 3 },
     });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toHaveLength(1);
-    expect(onChange.mock.calls[0][0][0].id).toBe(added.id);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange.mock.calls[0][0]).toHaveLength(1);
+    expect(onAnnotationsChange.mock.calls[0][0][0].id).toBe(added.id);
     unmount();
   });
 
   it('fires on remove() / update() / clear()', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result, unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onChange }));
+    const { result, unmount } = withSetup(() =>
+      useAnnotations({ key: 'k', storage, onAnnotationsChange }),
+    );
     const { id } = result.add({
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
 
     result.update(id, { color: 'yellow' });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0][0].color).toBe('yellow');
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange.mock.calls[0][0][0].color).toBe('yellow');
 
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     result.remove(id);
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange.mock.calls[0][0]).toHaveLength(0);
+    expect(onAnnotationsChange).toHaveBeenCalledTimes(1);
+    expect(onAnnotationsChange.mock.calls[0][0]).toHaveLength(0);
 
     result.add({
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
-    onChange.mockClear();
+    onAnnotationsChange.mockClear();
     result.clear();
-    expect(onChange).toHaveBeenCalledWith([]);
+    expect(onAnnotationsChange).toHaveBeenCalledWith([]);
     unmount();
   });
 
   it('does not fire on initial hydration', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
     storage.setItem(
       'k',
@@ -99,25 +103,25 @@ describe('useAnnotations (Vue) — onChange', () => {
         annotations: [
           {
             id: 'a',
-            chapter: 0,
-            start: { paragraph: 0, charIndex: 0 },
-            end: { paragraph: 0, charIndex: 1 },
+            chapterIndex: 0,
+            start: { paragraphIndex: 0, charIndex: 0 },
+            end: { paragraphIndex: 0, charIndex: 1 },
           },
         ],
       }),
     );
-    const { unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onChange }));
-    expect(onChange).not.toHaveBeenCalled();
+    const { unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onAnnotationsChange }));
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
     unmount();
   });
 
   it('drops only the malformed entries and keeps the valid ones', () => {
     const storage = memoryStorage();
-    const valid = (id: string, chapter: number) => ({
+    const valid = (id: string, chapterIndex: number) => ({
       id,
-      chapter,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     storage.setItem(
       'k',
@@ -128,11 +132,11 @@ describe('useAnnotations (Vue) — onChange', () => {
           {},
           null,
           7,
-          { ...valid('bad-range', 1), end: { paragraph: 0, charIndex: 'x' } },
+          { ...valid('bad-range', 1), end: { paragraphIndex: 0, charIndex: 'x' } },
           valid('good-2', 2),
           valid('good-1', 3),
           valid('', 1),
-          { ...valid('reversed', 1), start: { paragraph: 1, charIndex: 0 } },
+          { ...valid('reversed', 1), start: { paragraphIndex: 1, charIndex: 0 } },
         ],
       }),
     );
@@ -154,12 +158,14 @@ describe('useAnnotations (Vue) — onChange', () => {
   });
 
   it('does not fire on no-op remove() / update()', () => {
-    const onChange = vi.fn();
+    const onAnnotationsChange = vi.fn();
     const storage = memoryStorage();
-    const { result, unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onChange }));
+    const { result, unmount } = withSetup(() =>
+      useAnnotations({ key: 'k', storage, onAnnotationsChange }),
+    );
     result.remove('does-not-exist');
     result.update('does-not-exist', { color: 'red' });
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
     unmount();
   });
 });
@@ -171,9 +177,9 @@ function storedAnnotation(id: string): string {
     annotations: [
       {
         id,
-        chapter: 0,
-        start: { paragraph: 0, charIndex: 0 },
-        end: { paragraph: 0, charIndex: 1 },
+        chapterIndex: 0,
+        start: { paragraphIndex: 0, charIndex: 0 },
+        end: { paragraphIndex: 0, charIndex: 1 },
       },
     ],
   });
@@ -186,22 +192,22 @@ function storedIds(storage: { data: Map<string, string> }, key: string): string[
 }
 
 describe('useAnnotations (Vue) — server round-trip', () => {
-  it('round-trips through a server mirror fed by onChange', () => {
+  it('round-trips through a server mirror fed by onAnnotationsChange', () => {
     let server: string | null = null;
     const first = withSetup(() =>
       useAnnotations({
         key: 'k',
         storage: memoryStorage(),
-        onChange: (next) => {
+        onAnnotationsChange: (next) => {
           server = serializeAnnotations(next);
         },
       }),
     );
 
     const added = first.result.add({
-      chapter: 2,
-      start: { paragraph: 1, charIndex: 0 },
-      end: { paragraph: 1, charIndex: 8 },
+      chapterIndex: 2,
+      start: { paragraphIndex: 1, charIndex: 0 },
+      end: { paragraphIndex: 1, charIndex: 8 },
       color: 'yellow',
     });
     first.unmount();
@@ -224,17 +230,17 @@ describe('useAnnotations (Vue) — server round-trip', () => {
 });
 
 describe('useAnnotations (Vue) — pending writes', () => {
-  it('flushes a pending mutation when the composable unmounts inside the throttle window', () => {
+  it('flushes a pending mutation when the composable unmounts inside the debounce window', () => {
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage, throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage, debounceMs: 100 }),
     );
 
     result.add({
       id: 'a1',
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     expect(storage.data.get('k')).toBeUndefined();
 
@@ -243,17 +249,17 @@ describe('useAnnotations (Vue) — pending writes', () => {
     expect(storedIds(storage, 'k')).toEqual(['a1']);
   });
 
-  it('writes to storage once the throttle window elapses', () => {
+  it('writes to storage once the debounce window elapses', () => {
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage, throttleMs: 250 }),
+      useAnnotations({ key: 'k', storage, debounceMs: 250 }),
     );
 
     result.add({
       id: 'a1',
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     vi.advanceTimersByTime(249);
     expect(storage.data.get('k')).toBeUndefined();
@@ -263,24 +269,24 @@ describe('useAnnotations (Vue) — pending writes', () => {
     unmount();
   });
 
-  it('collapses several mutations inside one throttle window into a single write', () => {
+  it('collapses several mutations inside one debounce window into a single write', () => {
     const storage = memoryStorage();
     const setItem = vi.spyOn(storage, 'setItem');
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage, throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage, debounceMs: 100 }),
     );
 
     result.add({
       id: 'a1',
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     result.add({
       id: 'a2',
-      chapter: 1,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 1,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     vi.advanceTimersByTime(100);
 
@@ -292,13 +298,13 @@ describe('useAnnotations (Vue) — pending writes', () => {
   it('does not resurrect cleared annotations when the composable unmounts', () => {
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage, throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage, debounceMs: 100 }),
     );
 
     result.add({
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     result.clear();
     unmount();
@@ -308,8 +314,16 @@ describe('useAnnotations (Vue) — pending writes', () => {
 });
 
 describe('useAnnotations (Vue) — throwing storage', () => {
+  // Without onError a storage failure goes to console.warn.
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('mounts with an empty list when getItem throws', () => {
-    const storage: AnnotationsStorage = {
+    const storage: MejiroStorage = {
       getItem: () => {
         throw new Error('storage disabled');
       },
@@ -325,7 +339,7 @@ describe('useAnnotations (Vue) — throwing storage', () => {
   });
 
   it('degrades to an empty list when getItem throws on a key change', async () => {
-    const storage: AnnotationsStorage = {
+    const storage: MejiroStorage = {
       getItem: (k) => {
         if (k === 'b') throw new Error('storage disabled');
         return storedAnnotation('a1');
@@ -345,11 +359,19 @@ describe('useAnnotations (Vue) — throwing storage', () => {
 });
 
 describe('useAnnotations (Vue) — throwing write paths', () => {
+  // Without onError a storage failure goes to console.warn.
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   /** Storage whose named operations throw, as a disabled or full one does. */
   function throwingStorage(
     failing: ReadonlyArray<'setItem' | 'removeItem'>,
     seed?: string,
-  ): AnnotationsStorage {
+  ): MejiroStorage {
     return {
       getItem: () => seed ?? null,
       setItem: () => {
@@ -361,16 +383,16 @@ describe('useAnnotations (Vue) — throwing write paths', () => {
     };
   }
 
-  it('keeps the in-memory copy when the throttled setItem throws', () => {
+  it('keeps the in-memory copy when the debounced setItem throws', () => {
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), debounceMs: 100 }),
     );
 
     result.add({
       id: 'a1',
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     expect(() => vi.advanceTimersByTime(100)).not.toThrow();
 
@@ -380,14 +402,14 @@ describe('useAnnotations (Vue) — throwing write paths', () => {
 
   it('keeps the in-memory copy when a flush on unmount hits a throwing setItem', () => {
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), throttleMs: 100 }),
+      useAnnotations({ key: 'k', storage: throwingStorage(['setItem']), debounceMs: 100 }),
     );
 
     result.add({
       id: 'a1',
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
 
     expect(() => unmount()).not.toThrow();
@@ -410,17 +432,17 @@ describe('useAnnotations (Vue) — throwing write paths', () => {
 });
 
 describe('useAnnotations (Vue) — key changes', () => {
-  it('keeps a throttled write in the key that was active when the mutation happened', async () => {
+  it('keeps a debounced write in the key that was active when the mutation happened', async () => {
     const storage = memoryStorage();
     storage.setItem('b', storedAnnotation('b1'));
     const key = ref('a');
-    const { result, unmount } = withSetup(() => useAnnotations({ key, storage, throttleMs: 100 }));
+    const { result, unmount } = withSetup(() => useAnnotations({ key, storage, debounceMs: 100 }));
 
     result.add({
       id: 'a1',
-      chapter: 0,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 0,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     key.value = 'b';
     await nextTick();
@@ -436,7 +458,7 @@ describe('useAnnotations (Vue) — key changes', () => {
     storage.setItem('a', storedAnnotation('a1'));
     storage.setItem('b', storedAnnotation('b1'));
     const key = ref('a');
-    const { result, unmount } = withSetup(() => useAnnotations({ key, storage, throttleMs: 100 }));
+    const { result, unmount } = withSetup(() => useAnnotations({ key, storage, debounceMs: 100 }));
 
     expect(result.annotations.value.map((a) => a.id)).toEqual(['a1']);
     key.value = 'b';
@@ -445,9 +467,9 @@ describe('useAnnotations (Vue) — key changes', () => {
 
     result.add({
       id: 'b2',
-      chapter: 1,
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 0, charIndex: 1 },
+      chapterIndex: 1,
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 0, charIndex: 1 },
     });
     vi.advanceTimersByTime(100);
 
@@ -459,15 +481,19 @@ describe('useAnnotations (Vue) — key changes', () => {
 
 describe('useAnnotations (Vue) — plain payloads and clear', () => {
   const range = {
-    chapter: 0,
-    start: { paragraph: 0, charIndex: 0 },
-    end: { paragraph: 0, charIndex: 1 },
+    chapterIndex: 0,
+    start: { paragraphIndex: 0, charIndex: 0 },
+    end: { paragraphIndex: 0, charIndex: 1 },
   };
 
-  it('passes structured-cloneable lists to onChange after add, update and remove', () => {
+  it('passes structured-cloneable lists to onAnnotationsChange after add, update and remove', () => {
     const lists: unknown[] = [];
     const { result, unmount } = withSetup(() =>
-      useAnnotations({ key: 'k', storage: memoryStorage(), onChange: (l) => lists.push(l) }),
+      useAnnotations({
+        key: 'k',
+        storage: memoryStorage(),
+        onAnnotationsChange: (l) => lists.push(l),
+      }),
     );
     result.add({ ...range, id: 'a' });
     result.add({ ...range, id: 'b' });
@@ -482,10 +508,12 @@ describe('useAnnotations (Vue) — plain payloads and clear', () => {
   it('clear() on an empty list neither notifies nor touches storage', () => {
     const storage = memoryStorage();
     const removeItem = vi.spyOn(storage, 'removeItem');
-    const onChange = vi.fn();
-    const { result, unmount } = withSetup(() => useAnnotations({ key: 'k', storage, onChange }));
+    const onAnnotationsChange = vi.fn();
+    const { result, unmount } = withSetup(() =>
+      useAnnotations({ key: 'k', storage, onAnnotationsChange }),
+    );
     result.clear();
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onAnnotationsChange).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
     unmount();
   });

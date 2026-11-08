@@ -1,5 +1,6 @@
-import type { InlineAnnotation } from '../browser/types.js';
-import type { ColumnSlot, ImageRect, SpreadPageImages } from '../exclusion.js';
+import type { FontFamily } from '../browser/types.js';
+import { MejiroError } from '../errors.js';
+import type { ColumnSlot, SpreadImageRect, SpreadPageImages } from '../exclusion.js';
 import { splitSpreadImages } from '../exclusion.js';
 import { computeBreaks } from '../layout.js';
 import type { PageSlice } from '../paginate.js';
@@ -19,17 +20,33 @@ import type { LineMetric, RenderEntry, RenderLine, RenderParagraph } from '../re
 import { preprocessRuby, type RubyAnnotation } from '../ruby.js';
 import { preprocessTcy, type TcyAnnotation } from '../tcy.js';
 import { normalizeText } from '../text.js';
-import type { BreakCostOptions } from '../types.js';
+import type {
+  AnalyzerIdentity,
+  BreakCostOptions,
+  HeadingLevel,
+  InlineAnnotation,
+  KinsokuMode,
+} from '../types.js';
 import type { AnchorLocation, AnchorRange, AnchorRect, InChapterAnchor } from './anchor.js';
 import { ColumnFlow, type SpreadLayoutInfo } from './column-flow.js';
 import type { FindTextOptions, SearchMatch } from './search.js';
-import type { ChapterLayoutSnapshot, LayoutRubySnapshot, ParagraphSnapshot } from './snapshot.js';
 import type {
+  ChapterLayoutSnapshot,
+  LayoutRubySnapshot,
+  ParagraphSnapshot,
+  SpreadImagesSnapshot,
+} from './snapshot.js';
+import type {
+  AnchorAtOptions,
   BookImage,
+  BookOptionsPatch,
+  ChapterTypography,
+  PageGeometry,
   PageLine,
   PageResult,
   PageSize,
   ParagraphKind,
+  SpreadPoint,
   SpreadResult,
 } from './types.js';
 
@@ -37,7 +54,7 @@ import type {
 export interface CachedParagraph {
   text: Uint32Array;
   advances: Float32Array;
-  chars: string[];
+  chars: readonly string[];
   inlineAnnotations: readonly InlineAnnotation[];
   layoutRubyAnnotations?: RubyAnnotation[];
   /**
@@ -47,8 +64,7 @@ export interface CachedParagraph {
    * and refuses to split it, exactly as the initial layout did.
    */
   layoutTcyAnnotations?: TcyAnnotation[];
-  isHeading?: boolean;
-  headingLevel?: number;
+  headingLevel?: HeadingLevel;
   /**
    * Structural classification of the source paragraph, kept here so a re-break
    * (resize, re-measure, image exclusion) can put it back on the render entry.
@@ -74,11 +90,13 @@ export interface CachedParagraph {
 
 /** @internal Layout configuration snapshot. */
 export interface LayoutConfig {
+  /** Family the cached advances were measured in. */
+  fontFamily: FontFamily;
   fontSize: number;
   lineSpacing: number;
   headingStyles?: Record<number, HeadingStyle>;
   headingScale: number;
-  mode: 'strict' | 'loose';
+  kinsoku: KinsokuMode;
   enableHanging: boolean;
   /** Weights for the penalty search. Inert unless a paragraph carries penalties. */
   breakCost?: BreakCostOptions;
@@ -86,23 +104,30 @@ export interface LayoutConfig {
    * Identity of the analyzer the cached paragraphs' hints came from, carried so
    * a snapshot can record which analysis its break points depend on.
    */
-  analyzer?: { name: string; version: string };
+  analyzer?: AnalyzerIdentity;
 }
 
 /** @internal Fields of a {@link LayoutConfig} that cached advances are measured against. */
-type MeasurementConfig = Pick<LayoutConfig, 'fontSize' | 'headingScale' | 'headingStyles'>;
+type MeasurementConfig = Pick<
+  LayoutConfig,
+  'fontFamily' | 'fontSize' | 'headingScale' | 'headingStyles'
+>;
+
+/** @internal Fields that size a paragraph's font. */
+type ParagraphSizeConfig = Pick<LayoutConfig, 'fontSize' | 'headingScale' | 'headingStyles'>;
 
 /**
  * @internal The font size a paragraph is measured and drawn at: the body size,
  * or the heading scale applied and rounded to whole pixels.
  */
-export function paragraphFontSize(p: HeadingFields, config: MeasurementConfig): number {
+export function paragraphFontSize(p: HeadingFields, config: ParagraphSizeConfig): number {
   if (!isHeadingParagraph(p)) return config.fontSize;
   return Math.round(config.fontSize * resolveHeadingScale(p, config));
 }
 
-/** True when both configs resolve every heading level to the same scale. */
+/** True when both configs measure in the same family and resolve every heading level to the same scale. */
 function sameMeasurement(a: MeasurementConfig, b: MeasurementConfig): boolean {
+  if (a.fontFamily !== b.fontFamily) return false;
   if (a.fontSize !== b.fontSize || a.headingScale !== b.headingScale) return false;
   if (a.headingStyles === b.headingStyles) return true;
   const levels = new Set([
@@ -134,7 +159,7 @@ interface NormalCache {
   /** Global line span `[start, end)` of every page, in page order. */
   pageRanges: { start: number; end: number }[];
   paraLineStarts: number[];
-  metrics: LineMetric[];
+  metrics: readonly LineMetric[];
 }
 
 interface ExclusionCache {
@@ -143,7 +168,7 @@ interface ExclusionCache {
   entries: RenderEntry[];
   /** Global index of each paragraph's first line, parallel to `entries`. */
   paraLineStarts: number[];
-  metrics: LineMetric[];
+  metrics: readonly LineMetric[];
   spreadLayouts: SpreadLayoutInfo[];
   totalPages: number;
 }
@@ -233,7 +258,7 @@ function consumingRegexTerm(): RegexTerm {
 function commitRegexTerm(group: RegexGroupState, term: RegexTerm | undefined): void {
   if (!term) return;
   if (term.startsQuantified && group.quantifierOpen) {
-    throw new Error('Unsafe regex search pattern: adjacent quantifiers');
+    throw new MejiroError('regex-unsafe', 'Unsafe regex search pattern: adjacent quantifiers');
   }
   group.startsQuantified ||= term.startsQuantified && !group.consumes;
   group.quantifierOpen = term.endsQuantified || (group.quantifierOpen && !term.consumes);
@@ -260,35 +285,53 @@ function regexGroupPrefixLength(source: string, index: number): number {
 }
 
 /**
- * Rejects a {@link ChapterLayout.resize} dimension that cannot produce a
- * consistent layout. `undefined` means "leave this dimension alone".
+ * Rejects a page dimension that cannot produce a consistent layout.
+ * `undefined` means "absent", which only an optional dimension may be.
  */
-function assertResizeDimension(name: string, value: number | undefined, positive: boolean): void {
-  if (value == null) return;
-  if (!Number.isFinite(value) || (positive ? value <= 0 : value < 0)) {
+function assertDimension(
+  where: string,
+  name: string,
+  value: number | undefined,
+  kind: 'positive' | 'non-negative' | 'optional-positive',
+): void {
+  if (value === undefined && kind !== 'positive') return;
+  const positive = kind !== 'non-negative';
+  if (typeof value !== 'number' || !Number.isFinite(value) || (positive ? value <= 0 : value < 0)) {
     const requirement = positive ? 'positive' : 'non-negative';
-    throw new RangeError(`ChapterLayout.resize: ${name} must be a ${requirement} finite number`);
+    throw new RangeError(`${where}: ${name} must be a ${requirement} finite number`);
+  }
+}
+
+/**
+ * @internal Validates a complete page size the way {@link MejiroBook.setPageSize}
+ * and {@link ChapterLayout.resize} both require: positive finite page and line
+ * widths, non-negative finite paddings, side padding below half the page width,
+ * and positive finite heights when a {@link PageGeometry} supplies them.
+ *
+ * @throws RangeError naming the first dimension that fails.
+ */
+export function assertPageSize(size: PageSize & Partial<PageGeometry>, where: string): void {
+  assertDimension(where, 'pageWidth', size.pageWidth, 'positive');
+  assertDimension(where, 'lineWidth', size.lineWidth, 'positive');
+  assertDimension(where, 'paddingX', size.paddingX, 'non-negative');
+  assertDimension(where, 'paddingY', size.paddingY, 'non-negative');
+  assertDimension(where, 'pageHeight', size.pageHeight, 'optional-positive');
+  assertDimension(where, 'contentHeight', size.contentHeight, 'optional-positive');
+  if ((size.paddingX ?? 0) * 2 >= size.pageWidth) {
+    throw new RangeError(`${where}: paddingX must be less than half of pageWidth`);
   }
 }
 
 /**
  * Returns the flags {@link ChapterLayout.findText} compiles a query with.
  *
- * Matching is always global and Unicode-aware. A `RegExp` query keeps its own
- * `i` / `m` / `s` flags, and its `v` mode instead of `u`; an explicit
- * `caseSensitive` option overrides the pattern's own `i` flag. A string query
- * is case-insensitive unless `caseSensitive` is `true`.
+ * Matching is always global. A `RegExp` query keeps every flag of its own but
+ * `g` and `y`, which would make the search depend on its `lastIndex`. A string
+ * query is Unicode-aware and case-insensitive unless `caseSensitive` is `true`.
  */
-function searchFlags(query: string | RegExp, caseSensitive?: boolean): string {
-  const pattern = query instanceof RegExp ? query : undefined;
-  const ignoreCase = caseSensitive != null ? !caseSensitive : (pattern?.ignoreCase ?? true);
-  return [
-    'g',
-    ignoreCase ? 'i' : '',
-    pattern?.multiline ? 'm' : '',
-    pattern?.dotAll ? 's' : '',
-    pattern?.flags.includes('v') ? 'v' : 'u',
-  ].join('');
+function searchFlags(query: string | RegExp, caseSensitive: boolean): string {
+  if (query instanceof RegExp) return `${query.flags.replace(/[gy]/g, '')}g`;
+  return caseSensitive ? 'gu' : 'giu';
 }
 
 function emptyPageResult(): PageResult {
@@ -306,7 +349,8 @@ function isNonNegativeSafeInteger(value: number): boolean {
  */
 function normalizeAnchorRange(range: AnchorRange): AnchorRange | null {
   const cmp =
-    range.start.paragraph - range.end.paragraph || range.start.charIndex - range.end.charIndex;
+    range.start.paragraphIndex - range.end.paragraphIndex ||
+    range.start.charIndex - range.end.charIndex;
   if (cmp === 0) return null;
   return cmp < 0 ? range : { start: range.end, end: range.start };
 }
@@ -323,7 +367,7 @@ function normalizeAnchorRange(range: AnchorRange): AnchorRange | null {
  * codepoints (surrogate pairs). Both halves of a surrogate pair map to the
  * same codepoint index.
  */
-function buildJsToCpOffsetMap(chars: string[], jsLength: number): Uint32Array {
+function buildJsToCpOffsetMap(chars: readonly string[], jsLength: number): Uint32Array {
   const map = new Uint32Array(jsLength + 1);
   let pos = 0;
   for (let i = 0; i < chars.length; i++) {
@@ -369,7 +413,7 @@ function lineEndChar(breakPoints: Uint32Array, inParaLine: number, charCount: nu
  * with the source. Only the ruby variant carries a nested array.
  */
 function cloneInlineAnnotation(annotation: InlineAnnotation): InlineAnnotation {
-  if (annotation.kind === 'ruby' && annotation.jukugoSplitPoints) {
+  if (annotation.type === 'ruby' && annotation.jukugoSplitPoints) {
     return { ...annotation, jukugoSplitPoints: [...annotation.jukugoSplitPoints] };
   }
   return { ...annotation };
@@ -385,8 +429,65 @@ function cloneHeadingStyles(styles: Record<number, HeadingStyle>): Record<number
 }
 
 /**
+ * @internal What {@link MejiroBook} needs from a layout beyond its public
+ * surface, reached through {@link chapterLayoutChannel}.
+ */
+export interface ChapterLayoutChannel {
+  /** Whether the cached advances were measured for the family, size and heading scales of `config`. */
+  measuredAt(config: MeasurementConfig): boolean;
+  /**
+   * Applies a layout config that changes no measured field, marking the line
+   * breaks stale when `kinsoku` / `enableHanging` / `breakCost` change.
+   *
+   * @throws Error if `config` changes a measured field; that change goes
+   *   through {@link ChapterLayoutChannel.recomputeAfterMeasurement}.
+   */
+  applyConfig(config: LayoutConfig): void;
+  /** The config the layout currently holds, for a re-measure that must not change it. */
+  getConfig(): LayoutConfig;
+  /** The cached paragraphs, for re-measuring their advances in place. */
+  cachedParagraphs(): CachedParagraph[];
+  /**
+   * Adopts `config` after the cached paragraphs' advances / ruby / tate-chu-yoko
+   * were re-measured against it, and marks the line breaks stale.
+   */
+  recomputeAfterMeasurement(config: LayoutConfig): void;
+  /** Adopts the image exclusions of a snapshot, deferring the reflow to the next read. */
+  restoreImages(spreads: readonly SpreadImagesSnapshot[]): void;
+}
+
+/** The book-side operations of every layout, kept off the instances' public surface. */
+const channels = new WeakMap<ChapterLayout, ChapterLayoutChannel>();
+
+/** @internal The geometry a layout was given: a page size, and its heights when they are known. */
+type LayoutSize = Required<PageSize> & Partial<Pick<PageGeometry, 'pageHeight' | 'contentHeight'>>;
+
+/**
+ * @internal Creates a {@link ChapterLayout}. The only way one is made: by
+ * {@link MejiroBook}, and by tests that need a layout over hand-built paragraphs.
+ *
+ * @param size - Page size; `pageHeight` and `contentHeight` are kept when given.
+ */
+export function createChapterLayout(
+  cached: CachedParagraph[],
+  entries: RenderEntry[],
+  config: LayoutConfig,
+  size: LayoutSize,
+): ChapterLayout {
+  return new ChapterLayout(cached, entries, config, size);
+}
+
+/** @internal The book-side operations of `layout`. */
+export function chapterLayoutChannel(layout: ChapterLayout): ChapterLayoutChannel {
+  const channel = channels.get(layout);
+  if (!channel) throw new TypeError('chapterLayoutChannel: not a ChapterLayout');
+  return channel;
+}
+
+/**
  * Manages the layout of a single chapter with pagination, heading support,
- * and image exclusion. Created by {@link MejiroBook.layoutChapter}.
+ * and image exclusion. Created by {@link MejiroBook.layoutChapter},
+ * {@link MejiroBook.layoutManuscript} and {@link MejiroBook.layoutFromSnapshot}.
  *
  * Supports lazy computation: layout is only computed when data is first requested
  * via {@link getSpread} or {@link getPage}, and is cached until invalidated by
@@ -396,27 +497,27 @@ export class ChapterLayout {
   private cached: CachedParagraph[];
   private entries: RenderEntry[];
   /**
-   * @internal Per paragraph: the advances `entries[i].breakPoints` were
-   * computed from. Filled on re-break and lazily for externally supplied
-   * entries; see {@link ChapterLayout.layoutAdvancesOf}.
+   * Per paragraph: the advances `entries[i].breakPoints` were computed from.
+   * Filled on re-break and lazily for externally supplied entries; see
+   * {@link ChapterLayout.layoutAdvancesOf}.
    */
   private layoutAdvances: (Float32Array | undefined)[] = [];
   // Set by an option or font change; the re-break runs on the next read, so a
   // layout replaced before anyone reads it never pays for one.
   private breaksStale = false;
   private config: LayoutConfig;
-  private size: Required<PageSize>;
+  private size: LayoutSize;
   private images = new Map<number, BookImage[]>();
 
   private normal: NormalCache | null = null;
   private excl: ExclusionCache | null = null;
 
-  /** @internal Created by MejiroBook — do not construct directly. */
+  /** @internal Use {@link createChapterLayout}. */
   constructor(
     cached: CachedParagraph[],
     entries: RenderEntry[],
     config: LayoutConfig,
-    size: Required<PageSize>,
+    size: LayoutSize,
   ) {
     this.cached = cached;
     this.entries = entries;
@@ -427,10 +528,23 @@ export class ChapterLayout {
     }
     this.config = { ...config };
     this.size = { ...size };
+    channels.set(this, {
+      measuredAt: (c) => sameMeasurement(this.config, c),
+      applyConfig: (c) => this.applyConfig(c),
+      getConfig: () => ({ ...this.config }),
+      cachedParagraphs: () => this.cached,
+      recomputeAfterMeasurement: (c) => this.recomputeAfterMeasurement(c),
+      restoreImages: (spreads) => {
+        for (const { spreadIndex, images } of spreads) {
+          if (images.length > 0) this.images.set(spreadIndex, [...images]);
+        }
+        this.invalidate(true);
+      },
+    });
   }
 
-  /** Total number of pages in the current layout. */
-  get totalPages(): number {
+  /** Number of pages in the current layout. */
+  get pageCount(): number {
     if (this.images.size > 0) {
       this.ensureExclusion();
       return this.exclusionTotalPages(this.excl?.spreadLayouts ?? []);
@@ -451,29 +565,30 @@ export class ChapterLayout {
   }
 
   /**
-   * @internal Whether the cached advances were measured for the font size and
-   * heading scales of `config`, so it can be applied without re-measuring.
+   * Page geometry the layout breaks and paginates for: the page size it was
+   * last laid out or resized to. When that size carried no heights, the content
+   * box is taken to be `lineWidth` tall and the page pads it by `paddingY` at
+   * both ends.
    */
-  measuredAt(config: MeasurementConfig): boolean {
-    return sameMeasurement(this.config, config);
+  get geometry(): PageGeometry {
+    const { pageWidth, lineWidth, paddingX, paddingY } = this.size;
+    const contentHeight = this.size.contentHeight ?? lineWidth;
+    const pageHeight = this.size.pageHeight ?? contentHeight + paddingY * 2;
+    return { pageWidth, lineWidth, paddingX, paddingY, pageHeight, contentHeight };
   }
 
-  /**
-   * @internal Applies a layout config from {@link MejiroBook.setOptions} that
-   * changes no measured field.
-   *
-   * Marks the line breaks stale when `mode` / `enableHanging` / `breakCost` change, and
-   * invalidates the rendered caches so the next read reflects the new options.
-   *
-   * @throws If `config` changes a field the advances were measured with; that
-   *   change goes through {@link ChapterLayout.recomputeAfterMeasurement}.
-   */
-  applyConfig(config: LayoutConfig): void {
-    if (!this.measuredAt(config)) {
+  /** Typography the layout's advances were last measured with. */
+  get typography(): ChapterTypography {
+    const { fontFamily, fontSize, lineSpacing } = this.config;
+    return { fontFamily, fontSize, lineSpacing };
+  }
+
+  private applyConfig(config: LayoutConfig): void {
+    if (!sameMeasurement(this.config, config)) {
       throw new Error('ChapterLayout.applyConfig: a measured field changed without re-measuring');
     }
     const breakSensitiveChanged =
-      config.mode !== this.config.mode ||
+      config.kinsoku !== this.config.kinsoku ||
       config.enableHanging !== this.config.enableHanging ||
       !sameBreakCost(config.breakCost, this.config.breakCost);
     this.config = this.adopt(config);
@@ -486,25 +601,7 @@ export class ChapterLayout {
     return { ...config, analyzer: this.config.analyzer };
   }
 
-  /**
-   * @internal The config the layout currently holds, for a re-measure that must
-   * not change it.
-   */
-  getConfig(): LayoutConfig {
-    return { ...this.config };
-  }
-
-  /** @internal Exposes cached paragraphs so {@link MejiroBook} can re-measure on font change. */
-  getCachedParagraphs(): CachedParagraph[] {
-    return this.cached;
-  }
-
-  /**
-   * @internal Adopts `config` after {@link MejiroBook} has re-measured each
-   * cached paragraph's `advances` / ruby / tate-chu-yoko against it, and marks
-   * the line breaks stale so the next read re-breaks against them.
-   */
-  recomputeAfterMeasurement(config: LayoutConfig): void {
+  private recomputeAfterMeasurement(config: LayoutConfig): void {
     this.config = this.adopt(config);
     this.breaksStale = true;
     this.invalidate();
@@ -514,71 +611,71 @@ export class ChapterLayout {
    * Updates page geometry and/or line spacing.
    * Re-computes line breaks if `lineWidth` changes.
    *
-   * The update is applied as a unit: dimensions are validated and the new line
-   * breaks are computed before any visible state changes, so a rejected size
-   * leaves the layout on its previous geometry, entries and caches.
+   * The update is applied as a unit: the resulting size is validated and the
+   * new line breaks are computed before any visible state changes, so a
+   * rejected size leaves the layout on its previous geometry, entries and
+   * caches. A {@link PageGeometry} from {@link MejiroBook.fitPageSize} can be
+   * passed as it is.
    *
-   * @param size - Partial page size overrides plus optional `lineSpacing`.
-   * @throws RangeError If `lineWidth` / `pageWidth` / `lineSpacing` is not a
-   *   positive finite number, or a padding is not a non-negative finite number.
+   * @param size - Page size overrides plus optional `lineSpacing`.
+   * @throws RangeError If the resulting size fails the checks of
+   *   {@link MejiroBook.setPageSize}, or `lineSpacing` is not a positive finite number.
    */
-  resize(size: Partial<PageSize> & { lineSpacing?: number }): void {
-    assertResizeDimension('lineWidth', size.lineWidth, true);
-    assertResizeDimension('pageWidth', size.pageWidth, true);
-    assertResizeDimension('lineSpacing', size.lineSpacing, true);
-    assertResizeDimension('pagePaddingX', size.pagePaddingX, false);
-    assertResizeDimension('pagePaddingY', size.pagePaddingY, false);
+  resize(size: Partial<PageGeometry> & Pick<BookOptionsPatch, 'lineSpacing'>): void {
+    assertDimension('ChapterLayout.resize', 'lineSpacing', size.lineSpacing, 'optional-positive');
+    const next: LayoutSize = { ...this.size };
+    for (const key of ['pageWidth', 'lineWidth', 'paddingX', 'paddingY'] as const) {
+      const value = size[key];
+      if (value !== undefined) next[key] = value;
+    }
+    // Heights describe the page as a whole; a new width or top padding without
+    // them leaves the previous ones describing another page.
+    if (size.pageHeight !== undefined && size.contentHeight !== undefined) {
+      next.pageHeight = size.pageHeight;
+      next.contentHeight = size.contentHeight;
+    } else if (next.lineWidth !== this.size.lineWidth || next.paddingY !== this.size.paddingY) {
+      next.pageHeight = undefined;
+      next.contentHeight = undefined;
+    }
+    assertPageSize(next, 'ChapterLayout.resize');
 
-    const nextLineWidth = size.lineWidth ?? this.size.lineWidth;
     // Break with the new width first: if it throws, nothing has been committed.
     const rebroken =
-      nextLineWidth !== this.size.lineWidth ? this.breakEntries(nextLineWidth) : null;
+      next.lineWidth !== this.size.lineWidth ? this.breakEntries(next.lineWidth) : null;
 
-    this.size.lineWidth = nextLineWidth;
-    if (size.pageWidth != null) this.size.pageWidth = size.pageWidth;
-    if (size.pagePaddingX != null) this.size.pagePaddingX = size.pagePaddingX;
-    if (size.pagePaddingY != null) this.size.pagePaddingY = size.pagePaddingY;
+    this.size = next;
     if (size.lineSpacing != null) this.config.lineSpacing = size.lineSpacing;
     if (rebroken) this.commitBreaks(rebroken);
     this.invalidate();
   }
 
   /**
-   * Sets image exclusions for a spread. Passing an empty array removes images for that spread.
+   * Sets the image exclusions of a spread, reflows, and returns that spread.
+   * An empty array removes the spread's images.
    *
    * @param spreadIndex - Zero-based spread index.
    * @param images - Image rectangles relative to the right page's top-left corner.
+   * @returns The spread at `spreadIndex` after the reflow.
    */
-  setImages(spreadIndex: number, images: BookImage[]): void {
+  setImages(spreadIndex: number, images: readonly BookImage[]): SpreadResult {
     if (images.length === 0) {
       this.images.delete(spreadIndex);
     } else {
       this.images.set(spreadIndex, [...images]);
     }
     this.invalidate(true);
-  }
-
-  /** Removes all image exclusions. */
-  clearImages(): void {
-    this.images.clear();
-    this.invalidate(true);
+    return this.getSpread(spreadIndex);
   }
 
   /**
-   * Sets or clears images for a spread and returns the updated spread result.
-   * Combines {@link setImages} / {@link clearImages} with {@link getSpread}.
+   * Removes image exclusions.
    *
-   * @param spreadIndex - Zero-based spread index.
-   * @param images - Image rectangles, or `undefined` / empty array to clear this spread.
-   * @returns Updated spread result for the given spread.
+   * @param spreadIndex - Spread whose images to remove; every spread's when omitted.
    */
-  syncImages(spreadIndex: number, images?: BookImage[]): SpreadResult {
-    if (images && images.length > 0) {
-      this.setImages(spreadIndex, images);
-    } else {
-      this.setImages(spreadIndex, []);
-    }
-    return this.getSpread(spreadIndex);
+  clearImages(spreadIndex?: number): void {
+    if (spreadIndex === undefined) this.images.clear();
+    else this.images.delete(spreadIndex);
+    this.invalidate(true);
   }
 
   /**
@@ -588,7 +685,7 @@ export class ChapterLayout {
    * @returns Spread result containing right and left page data.
    */
   getSpread(spreadIndex: number): SpreadResult {
-    const tp = this.totalPages;
+    const tp = this.pageCount;
     if (this.images.size > 0) {
       return this.getExclusionSpread(spreadIndex, tp);
     }
@@ -621,13 +718,13 @@ export class ChapterLayout {
    *   or the chapter is empty.
    */
   locateAnchor(anchor: InChapterAnchor): AnchorLocation | null {
-    const { paragraph, charIndex } = anchor;
-    if (!this.isAnchorInRange(paragraph, charIndex)) return null;
+    const { paragraphIndex, charIndex } = anchor;
+    if (!this.isAnchorInRange(paragraphIndex, charIndex)) return null;
 
     if (this.images.size > 0) {
-      return this.locateAnchorInExclusion(paragraph, charIndex);
+      return this.locateAnchorInExclusion(paragraphIndex, charIndex);
     }
-    return this.locateAnchorInNormal(paragraph, charIndex);
+    return this.locateAnchorInNormal(paragraphIndex, charIndex);
   }
 
   /**
@@ -637,12 +734,12 @@ export class ChapterLayout {
    * that survives reflow.
    *
    * @param spreadIndex - Zero-based spread index.
-   * @param side - Page side. `'right'` (default) is the first page in
-   *   vertical-rl reading order; `'left'` is the second page.
+   * @param options - Which page of the spread to read.
    * @returns An in-chapter anchor pointing at the first character of the
    *   chosen page, or `null` if the spread / page does not exist.
    */
-  anchorAt(spreadIndex: number, side: 'right' | 'left' = 'right'): InChapterAnchor | null {
+  anchorAt(spreadIndex: number, options: AnchorAtOptions = {}): InChapterAnchor | null {
+    const side = options.side ?? 'right';
     if (this.images.size > 0) {
       return this.anchorAtInExclusion(spreadIndex, side);
     }
@@ -658,7 +755,7 @@ export class ChapterLayout {
   endAnchor(): InChapterAnchor | null {
     const last = this.cached.length - 1;
     if (last < 0) return null;
-    return { paragraph: last, charIndex: this.cached[last].text.length };
+    return { paragraphIndex: last, charIndex: this.cached[last].text.length };
   }
 
   /**
@@ -676,7 +773,7 @@ export class ChapterLayout {
    * @returns Character rectangle, or `null` when the anchor cannot be located.
    */
   coordOfAnchor(anchor: InChapterAnchor): AnchorRect | null {
-    if (!this.isAnchorInRange(anchor.paragraph, anchor.charIndex)) return null;
+    if (!this.isAnchorInRange(anchor.paragraphIndex, anchor.charIndex)) return null;
     if (this.images.size > 0) return this.coordOfAnchorInExclusion(anchor);
     return this.coordOfAnchorInNormal(anchor);
   }
@@ -702,14 +799,14 @@ export class ChapterLayout {
    * left-page x is `[-contentWidth, 0]`. `y` covers the inline-direction
    * column height `[0, lineWidth]`.
    *
-   * @param spreadIdx - Zero-based spread index.
-   * @param x - Spread-local x in pixels.
-   * @param y - Spread-local y in pixels.
+   * @param spreadIndex - Zero-based spread index.
+   * @param point - Spread-local coordinate in pixels.
    * @returns Anchor at the coordinate, or `null` if outside any column.
    */
-  anchorAtCoord(spreadIdx: number, x: number, y: number): InChapterAnchor | null {
-    if (this.images.size > 0) return this.anchorAtCoordInExclusion(spreadIdx, x, y);
-    return this.anchorAtCoordInNormal(spreadIdx, x, y);
+  anchorAtCoord(spreadIndex: number, point: SpreadPoint): InChapterAnchor | null {
+    const { x, y } = point;
+    if (this.images.size > 0) return this.anchorAtCoordInExclusion(spreadIndex, x, y);
+    return this.anchorAtCoordInNormal(spreadIndex, x, y);
   }
 
   /**
@@ -739,10 +836,10 @@ export class ChapterLayout {
    * build-time pre-computation. Pair with {@link MejiroBook.layoutFromSnapshot}
    * to skip the measurement round-trip on the client.
    *
-   * The snapshot bakes in the current config (font / size / line spacing /
-   * page geometry); restoring with a different config requires either
-   * passing the snapshot to a fresh `MejiroBook` whose options match, or
-   * calling `setOptions` afterwards (which re-measures from scratch).
+   * The snapshot bakes in the current config (font size / line spacing / page
+   * geometry); restoring with a different config requires either passing the
+   * snapshot to a fresh `MejiroBook` whose options match, or calling
+   * `updateOptions` afterwards (which re-measures from scratch).
    */
   snapshot(): ChapterLayoutSnapshot {
     this.ensureBreaks();
@@ -753,32 +850,32 @@ export class ChapterLayout {
         advances: Array.from(para.advances),
         breakPoints: Array.from(entry.breakPoints),
         inlineAnnotations: para.inlineAnnotations.map(cloneInlineAnnotation),
+        ...(para.headingLevel != null ? { headingLevel: para.headingLevel } : {}),
+        ...(para.kind != null && para.kind !== 'body' ? { kind: para.kind } : {}),
+        ...(para.layoutRubyAnnotations
+          ? {
+              layoutRubyAnnotations: para.layoutRubyAnnotations.map(
+                (r): LayoutRubySnapshot => ({
+                  startIndex: r.startIndex,
+                  endIndex: r.endIndex,
+                  rubyText: Array.from(r.rubyText),
+                  rubyAdvances: Array.from(r.rubyAdvances),
+                  ...(r.rubyType ? { rubyType: r.rubyType } : {}),
+                  ...(r.jukugoSplitPoints ? { jukugoSplitPoints: [...r.jukugoSplitPoints] } : {}),
+                }),
+              ),
+            }
+          : {}),
+        ...(para.layoutTcyAnnotations
+          ? { layoutTcyAnnotations: para.layoutTcyAnnotations.map((t) => ({ ...t })) }
+          : {}),
+        // Break points depend on the hints, so a snapshot that omitted them would
+        // restore a layout whose first re-break moves text the reader is looking at.
+        ...(para.hintClusterIds ? { hintClusterIds: Array.from(para.hintClusterIds) } : {}),
+        ...(para.hintBreakPenalties
+          ? { hintBreakPenalties: Array.from(para.hintBreakPenalties) }
+          : {}),
       };
-      if (para.isHeading === true) snap.isHeading = true;
-      if (para.headingLevel != null) snap.headingLevel = para.headingLevel;
-      if (para.kind != null && para.kind !== 'body') snap.kind = para.kind;
-      if (para.layoutRubyAnnotations) {
-        snap.layoutRubyAnnotations = para.layoutRubyAnnotations.map((r): LayoutRubySnapshot => {
-          const out: LayoutRubySnapshot = {
-            startIndex: r.startIndex,
-            endIndex: r.endIndex,
-            rubyText: Array.from(r.rubyText),
-            rubyAdvances: Array.from(r.rubyAdvances),
-          };
-          if (r.type) out.type = r.type;
-          if (r.jukugoSplitPoints) out.jukugoSplitPoints = [...r.jukugoSplitPoints];
-          return out;
-        });
-      }
-      if (para.layoutTcyAnnotations) {
-        snap.layoutTcyAnnotations = para.layoutTcyAnnotations.map((t) => ({ ...t }));
-      }
-      // Break points depend on the hints, so a snapshot that omitted them would
-      // restore a layout whose first re-break moves text the reader is looking at.
-      if (para.hintClusterIds) snap.hintClusterIds = Array.from(para.hintClusterIds);
-      if (para.hintBreakPenalties) {
-        snap.hintBreakPenalties = Array.from(para.hintBreakPenalties);
-      }
       return snap;
     });
     const images =
@@ -788,14 +885,15 @@ export class ChapterLayout {
             images: spreadImages.map((image) => ({ ...image })),
           }))
         : undefined;
+    const { pageWidth, lineWidth, paddingX, paddingY } = this.size;
 
     return {
-      version: 2,
+      version: 3,
       config: {
         fontSize: this.config.fontSize,
         lineSpacing: this.config.lineSpacing,
         headingScale: this.config.headingScale,
-        mode: this.config.mode,
+        kinsoku: this.config.kinsoku,
         enableHanging: this.config.enableHanging,
         ...(this.config.headingStyles
           ? { headingStyles: cloneHeadingStyles(this.config.headingStyles) }
@@ -803,7 +901,7 @@ export class ChapterLayout {
         ...(this.config.breakCost ? { breakCost: { ...this.config.breakCost } } : {}),
         ...(this.config.analyzer ? { analyzer: { ...this.config.analyzer } } : {}),
       },
-      size: { ...this.size },
+      size: { pageWidth, lineWidth, paddingX, paddingY },
       paragraphs,
       ...(images ? { images } : {}),
     };
@@ -814,45 +912,38 @@ export class ChapterLayout {
    * matches resolved to anchor + layout location.
    *
    * Search is paragraph-local — matches do not span paragraph boundaries.
-   * Codepoint offsets (`charStart` / `charEnd`) are compatible with
+   * Codepoint offsets (`startIndex` / `endIndex`) are compatible with
    * {@link InChapterAnchor.charIndex} and survive reflow.
    *
-   * @param query - Literal substring (default), normalized the way the layout
-   *   text is, so a decomposed `か\u3099` finds `が`; a regex source string
-   *   (when {@link FindTextOptions.regex} is `true`), left as written; or a
-   *   `RegExp` — whose `source`
-   *   takes the regex path whatever {@link FindTextOptions.regex} says. A
-   *   `RegExp` keeps its own `i` / `m` / `s` flags unless
-   *   {@link FindTextOptions.caseSensitive} is set, which then wins; `g` and
-   *   Unicode mode are always applied and `y` is ignored.
-   * @param options - Search options.
-   * @returns Matches in document order. Empty array when `query` is empty,
-   *   `maxResults` is `0`, or no matches are found.
-   * @throws RangeError If `maxResults` is negative or `NaN`.
-   * @throws If the pattern is invalid or exceeds the regex safety limits. To
-   *   keep matching time bounded, the guard also refuses patterns that can
-   *   backtrack catastrophically: a quantified group that itself contains a
-   *   quantifier or an alternation, and two quantified terms in the same
-   *   concatenation with nothing between them that always consumes input
-   *   (`a*a*b`, `a*b?a*c`). A term that always consumes anchors the quantifiers
-   *   on either side of it, so `\d+年\d+月` is accepted.
+   * @param query - A string, matched literally after the same NFC
+   *   normalization the layout text takes, so a decomposed `か\u3099` finds
+   *   `が`; or a `RegExp`, matched with its own flags. Its `g` and `y` flags are
+   *   ignored and its `lastIndex` is neither read nor written.
+   * @param options - Search options; `caseSensitive` applies to a string query only.
+   * @returns Matches in document order. Empty array when `query` is an empty
+   *   string or no matches are found.
+   * @throws RangeError If `maxResults` is given and is not a number of at least `1`.
+   * @throws MejiroError `regex-unsafe` if a `RegExp` exceeds the safety limits
+   *   or the chapter text is too long to search with one. To keep matching
+   *   time bounded, the guard also refuses patterns that can backtrack
+   *   catastrophically: a quantified group that itself contains a quantifier
+   *   or an alternation, and two quantified terms in the same concatenation
+   *   with nothing between them that always consumes input (`a*a*b`,
+   *   `a*b?a*c`). A term that always consumes anchors the quantifiers on
+   *   either side of it, so `\d+年\d+月` is accepted.
    */
   findText(query: string | RegExp, options: FindTextOptions = {}): SearchMatch[] {
-    const { regex = false, caseSensitive, maxResults } = options;
-    if (maxResults != null && !(maxResults >= 0)) {
-      throw new RangeError('ChapterLayout.findText: maxResults must be a non-negative number');
+    const { caseSensitive = false, maxResults } = options;
+    if (maxResults !== undefined && !(maxResults >= 1)) {
+      throw new RangeError('ChapterLayout.findText: maxResults must be at least 1');
     }
     const isRegExp = query instanceof RegExp;
-    const limit = maxResults == null ? Number.POSITIVE_INFINITY : Math.floor(maxResults);
-    if (!(isRegExp || query) || limit === 0) return [];
+    const limit = maxResults === undefined ? Number.POSITIVE_INFINITY : Math.floor(maxResults);
+    if (!(isRegExp || query)) return [];
 
-    const asRegex = isRegExp || regex;
-    // A literal query takes the layout text's normalization. A regex source is
-    // left alone, since normalizing it can change what the pattern means.
-    const source = isRegExp ? query.source : asRegex ? query : normalizeText(query);
-    if (asRegex) assertSafeRegexSearch(source);
+    if (isRegExp) assertSafeRegexSearch(query.source);
     const pattern = new RegExp(
-      asRegex ? source : source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+      isRegExp ? query.source : normalizeText(query).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
       searchFlags(query, caseSensitive),
     );
 
@@ -862,10 +953,11 @@ export class ChapterLayout {
       const chars = this.cached[pIdx].chars;
       if (chars.length === 0) continue;
       const joined = chars.join('');
-      if (asRegex) {
+      if (isRegExp) {
         regexTextLength += joined.length;
         if (regexTextLength > MAX_REGEX_SEARCH_TEXT_LENGTH) {
-          throw new RangeError(
+          throw new MejiroError(
+            'regex-unsafe',
             `Regex search input exceeds ${MAX_REGEX_SEARCH_TEXT_LENGTH} UTF-16 code units`,
           );
         }
@@ -878,16 +970,16 @@ export class ChapterLayout {
         const idx = m.index ?? 0;
         const startCp = jsToCp[idx];
         const endCp = jsToCp[idx + matchText.length];
-        const loc = this.locateAnchor({ paragraph: pIdx, charIndex: startCp });
+        const loc = this.locateAnchor({ paragraphIndex: pIdx, charIndex: startCp });
         if (!loc) continue;
         results.push({
-          paragraph: pIdx,
-          charStart: startCp,
-          charEnd: endCp,
+          paragraphIndex: pIdx,
+          startIndex: startCp,
+          endIndex: endCp,
           match: matchText,
-          spreadIdx: loc.spreadIdx,
-          pageIdx: loc.pageIdx,
-          lineIdx: loc.lineIdx,
+          spreadIndex: loc.spreadIndex,
+          pageIndex: loc.pageIndex,
+          lineIndex: loc.lineIndex,
           side: loc.side,
         });
         if (results.length >= limit) return results;
@@ -899,7 +991,7 @@ export class ChapterLayout {
   // ── Private helpers ──
 
   private contentWidth(): number {
-    return this.size.pageWidth - this.size.pagePaddingX * 2;
+    return this.size.pageWidth - this.size.paddingX * 2;
   }
 
   /**
@@ -907,7 +999,7 @@ export class ChapterLayout {
    * pixel size over the body size, so `scale × fontSize` is the measured size.
    */
   private scaledParagraph(paragraph: RenderParagraph): RenderParagraph {
-    if (!paragraph.isHeading) return paragraph;
+    if (!isHeadingParagraph(paragraph)) return paragraph;
     const scale = paragraphFontSize(paragraph, this.config) / this.config.fontSize;
     return { ...paragraph, scale };
   }
@@ -915,7 +1007,7 @@ export class ChapterLayout {
   /** Flattens a render paragraph into slot-mode lines. */
   private pageLinesOf(paragraph: RenderParagraph): PageLine[] {
     const fontSize = paragraphFontSize(paragraph, this.config);
-    const kind = paragraph.kind ?? (paragraph.isHeading ? 'heading' : undefined);
+    const kind = paragraph.kind ?? (isHeadingParagraph(paragraph) ? 'heading' : undefined);
     return paragraph.lines.map((line) => ({
       segments: line.segments,
       headingLevel: paragraph.headingLevel,
@@ -931,7 +1023,7 @@ export class ChapterLayout {
   private measureOpts(): MeasureOptions {
     return {
       fontSize: this.config.fontSize,
-      lineHeight: this.config.lineSpacing,
+      lineSpacing: this.config.lineSpacing,
       headingStyles: this.config.headingStyles,
       headingScale: this.config.headingScale,
     };
@@ -966,7 +1058,7 @@ export class ChapterLayout {
         text: para.text,
         advances: para.advances,
         lineWidth,
-        mode: this.config.mode,
+        kinsoku: this.config.kinsoku,
         enableHanging: this.config.enableHanging,
         rubyAnnotations: para.layoutRubyAnnotations,
         tcyAnnotations: para.layoutTcyAnnotations,
@@ -982,7 +1074,6 @@ export class ChapterLayout {
         chars: para.chars,
         breakPoints: br.breakPoints,
         inlineAnnotations: para.inlineAnnotations,
-        isHeading: para.isHeading,
         headingLevel: para.headingLevel,
         kind: para.kind,
       });
@@ -1056,7 +1147,7 @@ export class ChapterLayout {
     return {
       right: this.buildNormalPage(spreadIndex * 2),
       left: this.buildNormalPage(spreadIndex * 2 + 1),
-      totalPages,
+      pageCount: totalPages,
     };
   }
 
@@ -1076,7 +1167,12 @@ export class ChapterLayout {
 
     const firstSlice = slices[0];
     const startLine = paraLineStarts[firstSlice.paragraphIndex] + firstSlice.lineStart;
-    const slots = buildColumnSlots(metrics, startLine, lines.length, this.size.lineWidth);
+    const slots = buildColumnSlots({
+      metrics,
+      startIndex: startLine,
+      count: lines.length,
+      columnHeight: this.size.lineWidth,
+    });
 
     return { page, lines, slots, hasImages: false };
   }
@@ -1096,14 +1192,21 @@ export class ChapterLayout {
 
     const pageImages = new Map<number, SpreadPageImages>();
     for (const [si, imgs] of this.images) {
-      const rects: ImageRect[] = imgs.map((img) => ({
+      const rects: SpreadImageRect[] = imgs.map((img) => ({
         x: img.x,
         y: img.y,
-        w: img.w,
-        h: img.h,
+        width: img.width,
+        height: img.height,
         inlineMargin: img.margin ?? fontSize,
       }));
-      pageImages.set(si, splitSpreadImages(rects, this.size));
+      pageImages.set(
+        si,
+        splitSpreadImages(rects, {
+          pageWidth: this.size.pageWidth,
+          paddingX: this.size.paddingX,
+          paddingY: this.size.paddingY,
+        }),
+      );
     }
     const flow = new ColumnFlow(
       {
@@ -1123,7 +1226,6 @@ export class ChapterLayout {
         chars: para.chars,
         breakPoints: new Uint32Array(0),
         inlineAnnotations: para.inlineAnnotations,
-        isHeading: para.isHeading,
         headingLevel: para.headingLevel,
         kind: para.kind,
       };
@@ -1214,7 +1316,7 @@ export class ChapterLayout {
       advances: para.advances,
       lineWidth: this.size.lineWidth,
       lineWidths,
-      mode: this.config.mode,
+      kinsoku: this.config.kinsoku,
       enableHanging: this.config.enableHanging,
       rubyAnnotations: para.layoutRubyAnnotations,
       tcyAnnotations: para.layoutTcyAnnotations,
@@ -1232,13 +1334,13 @@ export class ChapterLayout {
     const sl = spreadLayouts[spreadIndex];
 
     if (!sl) {
-      return { right: emptyPageResult(), left: emptyPageResult(), totalPages };
+      return { right: emptyPageResult(), left: emptyPageResult(), pageCount: totalPages };
     }
 
     return {
       right: this.buildExclusionSide(sl, 'right'),
       left: this.buildExclusionSide(sl, 'left'),
-      totalPages,
+      pageCount: totalPages,
     };
   }
 
@@ -1311,9 +1413,9 @@ export class ChapterLayout {
     const range = pageRanges[lo];
     if (!range || globalLine < range.start) return null;
     return {
-      spreadIdx: Math.floor(lo / 2),
-      pageIdx: lo,
-      lineIdx: globalLine,
+      spreadIndex: Math.floor(lo / 2),
+      pageIndex: lo,
+      lineIndex: globalLine,
       side: lo % 2 === 0 ? 'right' : 'left',
     };
   }
@@ -1337,9 +1439,9 @@ export class ChapterLayout {
     if (!sl || globalLine >= sl.lineStart + sl.slotCount) return null;
     const isRight = globalLine < sl.lineStart + sl.rightSlotCount;
     return {
-      spreadIdx: s,
-      pageIdx: s * 2 + (isRight ? 0 : 1),
-      lineIdx: globalLine,
+      spreadIndex: s,
+      pageIndex: s * 2 + (isRight ? 0 : 1),
+      lineIndex: globalLine,
       side: isRight ? 'right' : 'left',
     };
   }
@@ -1354,7 +1456,7 @@ export class ChapterLayout {
     const inParaLine = first.lineStart;
     const bp = this.entries[first.paragraphIndex].breakPoints;
     const charIndex = lineStartChar(bp, inParaLine);
-    return { paragraph: first.paragraphIndex, charIndex };
+    return { paragraphIndex: first.paragraphIndex, charIndex };
   }
 
   private anchorAtInExclusion(spreadIndex: number, side: 'right' | 'left'): InChapterAnchor | null {
@@ -1365,52 +1467,52 @@ export class ChapterLayout {
     const [targetLine, end] = this.exclusionSideRange(sl, side);
     // A side an image blocks entirely owns no lines; its range start belongs to another page.
     if (targetLine >= end || targetLine >= lineParaIndex.length) return null;
-    const paragraph = lineParaIndex[targetLine];
-    const inParaLine = targetLine - paraLineStarts[paragraph];
-    const bp = entries[paragraph].breakPoints;
+    const paragraphIndex = lineParaIndex[targetLine];
+    const inParaLine = targetLine - paraLineStarts[paragraphIndex];
+    const bp = entries[paragraphIndex].breakPoints;
     const charIndex = lineStartChar(bp, inParaLine);
-    return { paragraph, charIndex };
+    return { paragraphIndex, charIndex };
   }
 
   // ── Coord ↔ anchor helpers ──
 
   private coordOfAnchorInNormal(anchor: InChapterAnchor): AnchorRect | null {
-    const loc = this.locateAnchorInNormal(anchor.paragraph, anchor.charIndex);
+    const loc = this.locateAnchorInNormal(anchor.paragraphIndex, anchor.charIndex);
     if (!loc) return null;
     const { pages, paraLineStarts, metrics } = this.normal as NormalCache;
-    const slices = pages[loc.pageIdx];
+    const slices = pages[loc.pageIndex];
     const first = slices?.[0];
     if (!first) return null;
     const pageStart = paraLineStarts[first.paragraphIndex] + first.lineStart;
-    const slotIdx = loc.lineIdx - pageStart;
-    const page = this.buildNormalPage(loc.pageIdx);
+    const slotIdx = loc.lineIndex - pageStart;
+    const page = this.buildNormalPage(loc.pageIndex);
     const slot = page.slots[slotIdx];
     if (!slot) return null;
     return this.makeAnchorRect(
       anchor,
       slot,
-      metrics[loc.lineIdx]?.pitch ?? this.linePitch(),
+      metrics[loc.lineIndex]?.pitch ?? this.linePitch(),
       loc,
-      this.entries[anchor.paragraph].breakPoints,
+      this.entries[anchor.paragraphIndex].breakPoints,
     );
   }
 
   private coordOfAnchorInExclusion(anchor: InChapterAnchor): AnchorRect | null {
-    const loc = this.locateAnchorInExclusion(anchor.paragraph, anchor.charIndex);
+    const loc = this.locateAnchorInExclusion(anchor.paragraphIndex, anchor.charIndex);
     if (!loc) return null;
     const { entries, metrics, spreadLayouts } = this.excl as ExclusionCache;
-    const sl = spreadLayouts[loc.spreadIdx];
+    const sl = spreadLayouts[loc.spreadIndex];
     if (!sl) return null;
-    const offset = loc.lineIdx - sl.lineStart;
+    const offset = loc.lineIndex - sl.lineStart;
     const onRight = offset < sl.rightSlotCount;
     const slot = onRight ? sl.rightSlots[offset] : sl.leftSlots[offset - sl.rightSlotCount];
     if (!slot) return null;
     return this.makeAnchorRect(
       anchor,
       slot,
-      metrics[loc.lineIdx]?.pitch ?? this.linePitch(),
+      metrics[loc.lineIndex]?.pitch ?? this.linePitch(),
       loc,
-      entries[anchor.paragraph].breakPoints,
+      entries[anchor.paragraphIndex].breakPoints,
     );
   }
 
@@ -1421,7 +1523,7 @@ export class ChapterLayout {
     loc: AnchorLocation,
     breakPoints: Uint32Array,
   ): AnchorRect {
-    const advances = this.layoutAdvancesOf(anchor.paragraph);
+    const advances = this.layoutAdvancesOf(anchor.paragraphIndex);
     const inParaLine = findInParaLine(breakPoints, anchor.charIndex);
     const lineStart = lineStartChar(breakPoints, inParaLine);
     let yOffset = 0;
@@ -1431,8 +1533,8 @@ export class ChapterLayout {
     const contentWidth = this.contentWidth();
     const rightEdge = loc.side === 'right' ? contentWidth - slot.xPos : -slot.xPos;
     return {
-      spreadIdx: loc.spreadIdx,
-      pageIdx: loc.pageIdx,
+      spreadIndex: loc.spreadIndex,
+      pageIndex: loc.pageIndex,
       side: loc.side,
       x: rightEdge - colPitch,
       y: slot.yStart + yOffset,
@@ -1449,12 +1551,13 @@ export class ChapterLayout {
    */
   private selectionRuns(range: AnchorRange, entries: readonly RenderEntry[]): SelectionRun[] {
     const runs: SelectionRun[] = [];
-    const firstPara = Math.max(0, range.start.paragraph);
-    const lastPara = Math.min(range.end.paragraph, this.cached.length - 1, entries.length - 1);
+    const firstPara = Math.max(0, range.start.paragraphIndex);
+    const lastPara = Math.min(range.end.paragraphIndex, this.cached.length - 1, entries.length - 1);
     for (let p = firstPara; p <= lastPara; p++) {
       const charCount = this.cached[p].chars.length;
-      const lo = p === range.start.paragraph ? Math.max(0, range.start.charIndex) : 0;
-      const hi = p === range.end.paragraph ? Math.min(range.end.charIndex, charCount) : charCount;
+      const lo = p === range.start.paragraphIndex ? Math.max(0, range.start.charIndex) : 0;
+      const hi =
+        p === range.end.paragraphIndex ? Math.min(range.end.charIndex, charCount) : charCount;
       const bp = entries[p].breakPoints;
       let c = lo;
       for (let line = findInParaLine(bp, lo); line <= bp.length && c < hi; line++) {
@@ -1495,9 +1598,9 @@ export class ChapterLayout {
       if (!slot) continue;
       rects.push(
         this.makeRunRect(run, slot, metrics[globalLine]?.pitch ?? this.linePitch(), {
-          spreadIdx: Math.floor(pageIdx / 2),
-          pageIdx,
-          lineIdx: globalLine,
+          spreadIndex: Math.floor(pageIdx / 2),
+          pageIndex: pageIdx,
+          lineIndex: globalLine,
           side: pageIdx % 2 === 0 ? 'right' : 'left',
         }),
       );
@@ -1528,9 +1631,9 @@ export class ChapterLayout {
       if (!slot) continue;
       rects.push(
         this.makeRunRect(run, slot, metrics[globalLine]?.pitch ?? this.linePitch(), {
-          spreadIdx: s,
-          pageIdx: s * 2 + (onRight ? 0 : 1),
-          lineIdx: globalLine,
+          spreadIndex: s,
+          pageIndex: s * 2 + (onRight ? 0 : 1),
+          lineIndex: globalLine,
           side: onRight ? 'right' : 'left',
         }),
       );
@@ -1552,8 +1655,8 @@ export class ChapterLayout {
     for (let i = run.charStart; i < run.charEnd; i++) height += advances[i];
     const rightEdge = loc.side === 'right' ? this.contentWidth() - slot.xPos : -slot.xPos;
     return {
-      spreadIdx: loc.spreadIdx,
-      pageIdx: loc.pageIdx,
+      spreadIndex: loc.spreadIndex,
+      pageIndex: loc.pageIndex,
       side: loc.side,
       x: rightEdge - colPitch,
       y: slot.yStart + yOffset,
@@ -1651,14 +1754,14 @@ export class ChapterLayout {
     const advances = this.layoutAdvancesOf(paragraph);
     const lineStart = lineStartChar(breakPoints, inParaLine);
     const lineEnd = lineEndChar(breakPoints, inParaLine, advances.length);
-    if (yInLine <= 0) return { paragraph, charIndex: lineStart };
+    if (yInLine <= 0) return { paragraphIndex: paragraph, charIndex: lineStart };
     let acc = 0;
     for (let i = lineStart; i < lineEnd; i++) {
       const half = advances[i] / 2;
-      if (acc + half >= yInLine) return { paragraph, charIndex: i };
+      if (acc + half >= yInLine) return { paragraphIndex: paragraph, charIndex: i };
       acc += advances[i];
     }
-    return { paragraph, charIndex: lineEnd };
+    return { paragraphIndex: paragraph, charIndex: lineEnd };
   }
 }
 
@@ -1680,7 +1783,8 @@ export class ChapterLayout {
  */
 function assertSafeRegexSearch(source: string): void {
   if (source.length > MAX_REGEX_SEARCH_PATTERN_LENGTH) {
-    throw new RangeError(
+    throw new MejiroError(
+      'regex-unsafe',
       `Regex search pattern exceeds ${MAX_REGEX_SEARCH_PATTERN_LENGTH} characters`,
     );
   }
@@ -1758,7 +1862,10 @@ function assertSafeRegexSearch(source: string): void {
     if (quantifier > i) {
       if (term) {
         if (term.group?.hasQuantifiedTerm || term.group?.hasAlternation) {
-          throw new Error('Unsafe regex search pattern: quantified complex group');
+          throw new MejiroError(
+            'regex-unsafe',
+            'Unsafe regex search pattern: quantified complex group',
+          );
         }
         group.hasQuantifiedTerm = true;
         // A quantified term may match nothing, so it never separates.

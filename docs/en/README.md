@@ -16,6 +16,7 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 | 08 | [React & Vue](08-react-and-vue.md) | Framework components |
 | 09 | [Advanced](09-advanced.md) | Custom kinsoku, token boundaries, performance, server-side usage, custom rendering, image exclusion, novel-posting site integration |
 | 10 | [API Reference](10-api-reference.md) | Complete API reference |
+| 11 | [Migrating to 0.11](11-migrating-to-0.11.md) | Every breaking change, behaviour change and stored-format change, before → after |
 
 ## What Should I Read?
 
@@ -39,6 +40,9 @@ Japanese vertical text layout engine for the web — line breaking, kinsoku shor
 
 **I want the reader/editor surface**
 → [React & Vue](08-react-and-vue.md) → [API Reference](10-api-reference.md)
+
+**I am upgrading from 0.10**
+→ [Migrating to 0.11](11-migrating-to-0.11.md)
 
 ---
 

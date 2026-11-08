@@ -2,6 +2,7 @@
  * @vitest-environment happy-dom
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { chapterLayoutChannel } from '../../src/book/chapter-layout.js';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { BookOptions, PageResult } from '../../src/book/types.js';
 import type {
@@ -65,8 +66,8 @@ function segment(text: string): MorphemeLike[] {
     const extendedPos = extendedPosOf(surface);
     morphemes.push({
       surface,
-      start,
-      end: start + length,
+      startIndex: start,
+      endIndex: start + length,
       pos: extendedPos.split('_')[0],
       extendedPos,
     });
@@ -144,7 +145,7 @@ describe('word-aware breaking', () => {
     const layout = await book.layoutChapter(CHAPTER);
 
     expect(analyzer.calls).toEqual([]);
-    for (const para of layout.getCachedParagraphs()) {
+    for (const para of chapterLayoutChannel(layout).cachedParagraphs()) {
       expect(para.hintClusterIds).toBeUndefined();
       expect(para.hintBreakPenalties).toBeUndefined();
     }
@@ -158,7 +159,7 @@ describe('word-aware breaking', () => {
     const layout = await book.layoutChapter(CHAPTER);
 
     expect(analyzer.calls).toEqual(CHAPTER.paragraphs.map((p) => p.text));
-    for (const para of layout.getCachedParagraphs()) {
+    for (const para of chapterLayoutChannel(layout).cachedParagraphs()) {
       expect(para.hintClusterIds).toBeInstanceOf(Uint32Array);
       expect(para.hintClusterIds?.length).toBe(para.text.length);
       // The safe stage adds no penalties, so break positions stay what the
@@ -175,7 +176,7 @@ describe('word-aware breaking', () => {
     const layout = await book.layoutChapter(CHAPTER);
 
     expect(analyzer.calls).toHaveLength(2);
-    for (const para of layout.getCachedParagraphs()) {
+    for (const para of chapterLayoutChannel(layout).cachedParagraphs()) {
       expect(para.hintClusterIds).toBeInstanceOf(Uint32Array);
       expect(para.hintBreakPenalties).toBeInstanceOf(Uint8Array);
       expect(para.hintBreakPenalties?.length).toBe(para.text.length);
@@ -208,7 +209,7 @@ describe('word-aware breaking', () => {
     // the cached hints, an image would silently undo the clustering — a
     // divergence that only appears once something reflows.
     const paragraphs = [{ text: 'あいうえABCDEFかきくけこさしすせそ'.repeat(4) }];
-    const image = [{ x: 10, y: 0, w: 40, h: 200, margin: 0 }];
+    const image = [{ x: 10, y: 0, width: 40, height: 200, margin: 0 }];
 
     const plainBook = new MejiroBook(baseOptions);
     const hintedBook = new MejiroBook({
@@ -249,15 +250,15 @@ describe('word-aware breaking', () => {
     expect(breakPointsOf(layout)).not.toEqual(initialBreaks);
 
     // So does an image exclusion reflow, on the other `computeBreaks` path.
-    layout.setImages(0, [{ x: 20, y: 10, w: 60, h: 60, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 10, width: 60, height: 60, margin: 0 }]);
     expect(layout.getSpread(0).right.hasImages).toBe(true);
 
     // And so does a font change, which re-measures before re-breaking.
-    await book.setOptions({ fontSize: 24 });
+    await book.updateOptions({ fontSize: 24 });
     expect(layout.getSpread(0)).toBeDefined();
 
     expect(analyzer.calls).toHaveLength(2);
-    for (const para of layout.getCachedParagraphs()) {
+    for (const para of chapterLayoutChannel(layout).cachedParagraphs()) {
       expect(para.hintClusterIds).toBeInstanceOf(Uint32Array);
       expect(para.hintBreakPenalties).toBeInstanceOf(Uint8Array);
     }
@@ -273,12 +274,15 @@ describe('word-aware breaking', () => {
     // What a reader does on resize: new page size, fresh layout of the same chapter.
     book.setPageSize({ pageWidth: 300, lineWidth: 120 });
     const resized = await book.layoutChapter(CHAPTER);
-    // And on an option change: setOptions, then a fresh layout.
-    await book.setOptions({ fontSize: 20, lineSpacing: 2 });
+    // And on an option change: updateOptions, then a fresh layout.
+    await book.updateOptions({ fontSize: 20, lineSpacing: 2 });
     const restyled = await book.layoutChapter(CHAPTER);
 
     expect(analyzer.calls).toHaveLength(2);
-    const hintsOf = (l: typeof first) => l.getCachedParagraphs().map((p) => p.hintClusterIds);
+    const hintsOf = (l: typeof first) =>
+      chapterLayoutChannel(l)
+        .cachedParagraphs()
+        .map((p) => p.hintClusterIds);
     expect(hintsOf(resized)).toEqual(hintsOf(first));
     expect(hintsOf(restyled)).toEqual(hintsOf(first));
   });
@@ -321,7 +325,7 @@ describe('word-aware breaking', () => {
     });
 
     expect(analyzer.calls).toEqual(['第１２章です。']);
-    expect(layout.getCachedParagraphs()[0].hintClusterIds).toBe(clusterIds);
+    expect(chapterLayoutChannel(layout).cachedParagraphs()[0].hintClusterIds).toBe(clusterIds);
   });
 
   it('lays the chapter out anyway when the analyzer throws', async () => {
@@ -332,9 +336,9 @@ describe('word-aware breaking', () => {
 
     const layout = await book.layoutChapter(CHAPTER);
 
-    expect(layout.totalPages).toBeGreaterThan(0);
+    expect(layout.pageCount).toBeGreaterThan(0);
     expect(layout.getSpread(0).right.lines.length).toBeGreaterThan(0);
-    for (const para of layout.getCachedParagraphs()) {
+    for (const para of chapterLayoutChannel(layout).cachedParagraphs()) {
       expect(para.hintClusterIds).toBeUndefined();
       expect(para.hintBreakPenalties).toBeUndefined();
     }
@@ -369,8 +373,8 @@ describe('word-aware breaking', () => {
 
     // Nothing was analysed: the identities were compared, not re-derived.
     expect(restoring.calls).toEqual([]);
-    expect(restored.getCachedParagraphs()[0].hintBreakPenalties).toEqual(
-      layout.getCachedParagraphs()[0].hintBreakPenalties,
+    expect(chapterLayoutChannel(restored).cachedParagraphs()[0].hintBreakPenalties).toEqual(
+      chapterLayoutChannel(layout).cachedParagraphs()[0].hintBreakPenalties,
     );
 
     // The decisive property: re-breaking both at the same new width agrees.
@@ -398,7 +402,7 @@ describe('word-aware breaking', () => {
 
     // Dropped, not re-derived: nothing was analysed at all.
     expect(other.calls).toEqual([]);
-    for (const para of restored.getCachedParagraphs()) {
+    for (const para of chapterLayoutChannel(restored).cachedParagraphs()) {
       expect(para.hintClusterIds).toBeUndefined();
     }
     // A snapshot of the restored layout no longer claims an analysis it lost.
@@ -416,7 +420,7 @@ describe('word-aware breaking', () => {
 
     const analyzer = createAnalyzer();
     const fresh = new MejiroBook({ ...baseOptions, analyzer, wordAwareBreaking: 'full' });
-    expect(fresh.layoutFromSnapshot(snapshot).totalPages).toBeGreaterThan(0);
+    expect(fresh.layoutFromSnapshot(snapshot).pageCount).toBeGreaterThan(0);
     expect(analyzer.calls).toEqual([]);
   });
 });
@@ -475,7 +479,10 @@ describe('word-aware breaking — keeping a word whole', () => {
     // The list reached the hints as well as the break: both positions inside the
     // conjunction carry the keep-whole price, the one it ends on does not.
     expect(
-      [...(keptLayout.getCachedParagraphs()[0].hintBreakPenalties as Uint8Array)].slice(6, 9),
+      [
+        ...(chapterLayoutChannel(keptLayout).cachedParagraphs()[0]
+          .hintBreakPenalties as Uint8Array),
+      ].slice(6, 9),
     ).toEqual([4, 4, 0]);
   });
 
@@ -505,7 +512,10 @@ describe('word-aware breaking — keeping a word whole', () => {
     // here, rather than being absent.
     expect(breakPointsOf(clustered)[0][0]).toBe(7);
     expect(
-      [...(keptLayout.getCachedParagraphs()[0].hintBreakPenalties as Uint8Array)].slice(4, 10),
+      [
+        ...(chapterLayoutChannel(keptLayout).cachedParagraphs()[0]
+          .hintBreakPenalties as Uint8Array),
+      ].slice(4, 10),
     ).toEqual([4, 4, 4, 4, 4, 0]);
   });
 

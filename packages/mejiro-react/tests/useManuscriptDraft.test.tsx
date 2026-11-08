@@ -10,7 +10,7 @@ describe('useManuscriptDraft (React)', () => {
   it('starts with one empty chapter when initialChapters is omitted', () => {
     const { result } = renderHook(() => useManuscriptDraft());
     expect(result.current.chapters).toHaveLength(1);
-    expect(result.current.selected).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
   });
 
   it('adds, patches, reorders, and removes chapters', () => {
@@ -24,18 +24,18 @@ describe('useManuscriptDraft (React)', () => {
     );
     act(() => result.current.addChapter({ id: 'c', title: 'C' }));
     expect(result.current.chapters.map((c) => c.id)).toEqual(['a', 'b', 'c']);
-    expect(result.current.selected).toBe(2);
+    expect(result.current.selectedChapterIndex).toBe(2);
 
-    act(() => result.current.patchChapter(0, { title: 'A!' }));
+    act(() => result.current.updateChapter(0, { title: 'A!' }));
     expect(result.current.chapters[0].title).toBe('A!');
 
     act(() => result.current.reorderChapters(0, 2));
     expect(result.current.chapters.map((c) => c.id)).toEqual(['b', 'c', 'a']);
-    expect(result.current.selected).toBe(1);
+    expect(result.current.selectedChapterIndex).toBe(1);
 
     act(() => result.current.removeChapter(0));
     expect(result.current.chapters.map((c) => c.id)).toEqual(['c', 'a']);
-    expect(result.current.selected).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
   });
 
   it('clamps direct selection and replaces empty chapter lists with a draft chapter', () => {
@@ -48,16 +48,16 @@ describe('useManuscriptDraft (React)', () => {
       }),
     );
 
-    act(() => result.current.setSelected(99));
-    expect(result.current.selected).toBe(1);
+    act(() => result.current.setSelectedChapterIndex(99));
+    expect(result.current.selectedChapterIndex).toBe(1);
 
     act(() => result.current.setChapters([result.current.chapters[1], result.current.chapters[0]]));
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['b', 'a']);
-    expect(result.current.selected).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
 
     act(() => result.current.setChapters([]));
     expect(result.current.chapters).toHaveLength(1);
-    expect(result.current.selected).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
   });
 
   it('does not let undefined addChapter fields erase generated chapter data', () => {
@@ -67,7 +67,7 @@ describe('useManuscriptDraft (React)', () => {
 
     const second = result.current.chapters[1];
     expect(second.id).toMatch(/^chapter-/);
-    expect(second.title).toBe('第2話');
+    expect(second.title).toBe('');
     expect(second.body).toBe('');
   });
 
@@ -104,18 +104,18 @@ describe('useManuscriptDraft (React)', () => {
         { wrapper },
       );
 
-      act(() => result.current.setSelected(3));
+      act(() => result.current.setSelectedChapterIndex(3));
       act(() => result.current.removeChapter(1));
       expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'c', 'd']);
-      expect(result.current.selected).toBe(2);
+      expect(result.current.selectedChapterIndex).toBe(2);
 
       act(() => result.current.reorderChapters(0, 2));
       expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'd', 'a']);
-      expect(result.current.selected).toBe(1);
+      expect(result.current.selectedChapterIndex).toBe(1);
 
       act(() => result.current.addChapter({ id: 'e', title: 'E' }));
       expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'd', 'a', 'e']);
-      expect(result.current.selected).toBe(3);
+      expect(result.current.selectedChapterIndex).toBe(3);
     });
   }
 
@@ -123,10 +123,10 @@ describe('useManuscriptDraft (React)', () => {
     vi.useFakeTimers();
     const save = vi.fn();
     const { result } = renderHook(() =>
-      useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+      useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
     );
 
-    act(() => result.current.patchChapter(0, { body: 'changed' }));
+    act(() => result.current.updateChapter(0, { body: 'changed' }));
     expect(save).not.toHaveBeenCalled();
 
     act(() => {
@@ -142,10 +142,10 @@ describe('useManuscriptDraft (React)', () => {
     try {
       const save = vi.fn();
       const { result, unmount } = renderHook(() =>
-        useManuscriptDraft({ onAutosave: save, autosaveDelay: 1000 }),
+        useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 1000 }),
       );
 
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       expect(save).not.toHaveBeenCalled();
 
       unmount();
@@ -164,10 +164,10 @@ describe('useManuscriptDraft (React)', () => {
         throw new Error('save failed');
       });
       const { result } = renderHook(() =>
-        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
       );
 
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       await act(async () => {
         vi.advanceTimersByTime(150);
         await Promise.resolve();
@@ -189,10 +189,10 @@ describe('useManuscriptDraft (React)', () => {
         if (attempt === 1) throw new Error('offline');
       });
       const { result } = renderHook(() =>
-        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
       );
 
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       await act(async () => {
         vi.advanceTimersByTime(150);
         await Promise.resolve();
@@ -235,12 +235,12 @@ describe('useManuscriptDraft (React)', () => {
         }),
     );
     const { result, unmount } = renderHook(() =>
-      useManuscriptDraft({ onAutosave: save, autosaveDelay: 10_000 }),
+      useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 10_000 }),
     );
 
-    act(() => result.current.patchChapter(0, { body: 'v1' }));
+    act(() => result.current.updateChapter(0, { body: 'v1' }));
     act(() => result.current.flushAutosave());
-    act(() => result.current.patchChapter(0, { body: 'v2' }));
+    act(() => result.current.updateChapter(0, { body: 'v2' }));
     act(() => result.current.flushAutosave());
     expect(pending.map((call) => call.body)).toEqual(['v1']);
 
@@ -248,7 +248,7 @@ describe('useManuscriptDraft (React)', () => {
     await act(async () => pending[0].settle(new Error('offline')));
     expect(pending.map((call) => call.body)).toEqual(['v1', 'v2']);
 
-    act(() => result.current.patchChapter(0, { body: 'v3' }));
+    act(() => result.current.updateChapter(0, { body: 'v3' }));
     unmount();
     await act(async () => pending[1].settle());
     expect(pending.map((call) => call.body)).toEqual(['v1', 'v2', 'v3']);
@@ -263,10 +263,10 @@ describe('useManuscriptDraft (React)', () => {
     try {
       const save = vi.fn(async () => {});
       const { result } = renderHook(() =>
-        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
       );
 
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       await act(async () => {
         vi.advanceTimersByTime(150);
         await Promise.resolve();
@@ -289,7 +289,7 @@ describe('useManuscriptDraft (React)', () => {
     vi.useFakeTimers();
     try {
       const save = vi.fn();
-      renderHook(() => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }));
+      renderHook(() => useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }));
 
       act(() => {
         vi.advanceTimersByTime(150);
@@ -306,7 +306,7 @@ describe('useManuscriptDraft (React)', () => {
     try {
       const save = vi.fn();
       const { unmount } = renderHook(
-        () => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        () => useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
         { wrapper: StrictMode },
       );
       act(() => {
@@ -324,10 +324,10 @@ describe('useManuscriptDraft (React)', () => {
     try {
       const save = vi.fn();
       const { result } = renderHook(
-        () => useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        () => useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
         { wrapper: StrictMode },
       );
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       act(() => {
         vi.advanceTimersByTime(150);
       });
@@ -343,9 +343,9 @@ describe('useManuscriptDraft (React)', () => {
     try {
       const save = vi.fn();
       const { result } = renderHook(() =>
-        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
       );
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       expect(save).not.toHaveBeenCalled();
       window.dispatchEvent(new Event(type));
       expect(save).toHaveBeenCalledTimes(1);
@@ -355,7 +355,7 @@ describe('useManuscriptDraft (React)', () => {
     }
   });
 
-  it('autosaves a mapped payload and reacts to autosaveKey changes', () => {
+  it('autosaves a mapped payload and reacts to autosaveDeps changes', () => {
     vi.useFakeTimers();
     try {
       const save = vi.fn();
@@ -363,14 +363,14 @@ describe('useManuscriptDraft (React)', () => {
         ({ title }: { title: string }) =>
           useManuscriptDraft<{ title: string; chapters: unknown[] }>({
             onAutosave: save,
-            autosaveDelay: 100,
-            autosaveKey: title,
+            autosaveDebounceMs: 100,
+            autosaveDeps: [title],
             autosavePayload: (chapters) => ({ title, chapters }),
           }),
         { initialProps: { title: 'Draft' } },
       );
 
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       act(() => {
         vi.advanceTimersByTime(150);
       });
@@ -395,19 +395,19 @@ describe('useManuscriptDraft (React)', () => {
       const second = vi.fn();
       const { result, rerender } = renderHook(
         ({ onAutosave }: { onAutosave?: (draft: unknown) => void }) =>
-          useManuscriptDraft({ onAutosave, autosaveDelay: 100 }),
+          useManuscriptDraft({ onAutosave, autosaveDebounceMs: 100 }),
         { initialProps: {} as { onAutosave?: (draft: unknown) => void } },
       );
 
       rerender({ onAutosave: first });
-      act(() => result.current.patchChapter(0, { body: 'one' }));
+      act(() => result.current.updateChapter(0, { body: 'one' }));
       act(() => {
         vi.advanceTimersByTime(150);
       });
       expect(first).toHaveBeenCalledTimes(1);
 
       rerender({ onAutosave: second });
-      act(() => result.current.patchChapter(0, { body: 'two' }));
+      act(() => result.current.updateChapter(0, { body: 'two' }));
       act(() => {
         vi.advanceTimersByTime(150);
       });
@@ -424,9 +424,9 @@ describe('useManuscriptDraft (React)', () => {
     try {
       const save = vi.fn();
       const { result } = renderHook(() =>
-        useManuscriptDraft({ onAutosave: save, autosaveDelay: 100 }),
+        useManuscriptDraft({ onAutosave: save, autosaveDebounceMs: 100 }),
       );
-      act(() => result.current.patchChapter(0, { body: 'changed' }));
+      act(() => result.current.updateChapter(0, { body: 'changed' }));
       act(() => result.current.flushAutosave());
       expect(structuredClone(save.mock.calls[0][0])).toEqual(save.mock.calls[0][0]);
     } finally {

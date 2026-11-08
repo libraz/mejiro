@@ -38,11 +38,11 @@ Vue の peer dependency は `vue >= 3.3` です。
 
 ## クイックスタート: EPUB リーダー（推奨）
 
-この例では `MejiroBook` で EPUB を読み込み、最初の章を見開きページとして表示します。mejiro を試すなら、まずこの流れから始めるのが分かりやすいです。
+この例では `MejiroBook` で EPUB を読み込み、最初の章を見開きページとして表示します。見出しには既定の見出しスタイルが付くので、book に見出しのオプションは要りません。mejiro を試すなら、まずこの流れから始めるのが分かりやすいです。
 
 <!-- doc-example: 01-quick-start.ts#dom -->
 ```ts
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { paragraphClassName } from '@libraz/mejiro/render';
 import '@libraz/mejiro/render/mejiro.css';
@@ -52,12 +52,11 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// 2. 表示領域からページサイズを計算する
+// 2. コンテナを測り、ページサイズを book に保存
 const container = document.getElementById('reader')!;
-const { pageWidth, pageHeight } = book.computePageSize(container);
+const { pageWidth, pageHeight } = book.fitPageSize(container);
 
 // 3. EPUB を読み込んで解析する
 const response = await fetch('/book.epub');
@@ -71,7 +70,7 @@ const spread = layout.getSpread(0);
 
 // spread.right  — 右ページの PageResult
 // spread.left   — 左ページの PageResult
-// spread.totalPages — 総ページ数
+// spread.pageCount  — 章のページ数
 
 // 6. DOM で表示する（右ページだけの例）
 const pageEl = document.createElement('div');
@@ -140,13 +139,13 @@ const layout = await book.layoutChapter({
 
 | API | 説明 |
 |-----|------|
-| `new MejiroBook({ fontFamily, fontSize, lineSpacing, headingStyles })` | 組版オプションを指定してレイアウトエンジンを作成 |
-| `book.computePageSize(container)` | DOM 要素からページサイズを自動計算 |
+| `new MejiroBook({ fontFamily, fontSize, lineSpacing, pageSize? })` | 組版オプションを指定してレイアウトエンジンを作成 |
+| `book.fitPageSize(container)` | DOM 要素を測り、ページサイズを book に保存 |
 | `await book.layoutChapter(chapter)` | 章をレイアウト（フォント読み込み＋改行処理＋ページ分割） |
 | `layout.getSpread(index)` | 見開きページの結果を取得 |
-| `layout.totalPages` | 総ページ数 |
-| `layout.syncImages(index, images)` | 画像回り込みを設定し、テキストを再レイアウト |
-| `layout.resize({ pageWidth, lineWidth })` | ウィンドウリサイズ時のリフロー |
+| `layout.pageCount` | ページ数 |
+| `layout.setImages(spreadIndex, images)` | 見開きの画像回り込みを設定し、流し直した見開きを返す |
+| `layout.resize(geometry)` | ウィンドウリサイズ時のリフロー。`fitPageSize()` が返す `PageGeometry` を受け取る |
 
 ## クイックスタート: React
 
@@ -155,7 +154,7 @@ const layout = await book.layoutChapter({
 <!-- doc-example: 01-react-reader.tsx#reader -->
 ```tsx
 import type { SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-react';
 import { useEffect, useRef, useState } from 'react';
@@ -165,21 +164,20 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 function Reader() {
   const surfaceRef = useRef<HTMLDivElement>(null);
   const [spread, setSpread] = useState<SpreadResult | null>(null);
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     (async () => {
       if (!surfaceRef.current) return;
 
       // Compute page dimensions from container
-      const { pageWidth, pageHeight } = book.computePageSize(surfaceRef.current);
-      setPageSize({ w: pageWidth, h: pageHeight });
+      const { pageWidth, pageHeight } = book.fitPageSize(surfaceRef.current);
+      setPageSize({ width: pageWidth, height: pageHeight });
 
       // Load EPUB and lay out the first chapter
       const res = await fetch('/book.epub');
@@ -194,8 +192,8 @@ function Reader() {
   if (!spread) return <div ref={surfaceRef} style={{ width: '100%', height: '100vh' }} />;
 
   const style = {
-    width: pageSize.w,
-    height: pageSize.h,
+    width: pageSize.width,
+    height: pageSize.height,
     fontSize: 16,
     fontFamily: '"Noto Serif JP", serif',
     lineHeight: 1.8,
@@ -230,7 +228,7 @@ function Reader() {
 ```vue
 <script setup lang="ts">
 import type { SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
 import { onMounted, ref, shallowRef } from 'vue';
@@ -240,7 +238,6 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 const surfaceEl = ref<HTMLDivElement | null>(null);
@@ -252,7 +249,7 @@ onMounted(async () => {
   if (!surfaceEl.value) return;
 
   // Compute page dimensions from container
-  const { pageWidth, pageHeight } = book.computePageSize(surfaceEl.value);
+  const { pageWidth, pageHeight } = book.fitPageSize(surfaceEl.value);
   pageW.value = pageWidth;
   pageH.value = pageHeight;
 

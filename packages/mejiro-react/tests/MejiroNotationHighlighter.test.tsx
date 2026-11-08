@@ -17,7 +17,7 @@ function Harness({
   return (
     <MejiroNotationHighlighter
       value={value}
-      onChange={(next) => setValue(normalize(next))}
+      onValueChange={(next) => setValue(normalize(next))}
       data-testid="ta"
     />
   );

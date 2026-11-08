@@ -1,5 +1,24 @@
-import type { RubyAnnotation } from './ruby.js';
+import type { MejiroWarning } from './errors.js';
+import type { RubyAnnotation, RubyType } from './ruby.js';
 import type { TcyAnnotation } from './tcy.js';
+
+/**
+ * Binary data accepted as input.
+ *
+ * A `Uint8Array` is read through its own view (`byteOffset` and `byteLength`),
+ * never through the whole underlying `ArrayBuffer`, so a Node `Buffer` or a
+ * subarray works as expected. The input is neither retained nor modified.
+ */
+export type BinaryInput = ArrayBuffer | Uint8Array;
+
+/** Heading level of a paragraph: `1` (largest) to `6`. */
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * Default line spacing multiplier: the pitch between adjacent columns as a
+ * multiple of the font size.
+ */
+export const DEFAULT_LINE_SPACING = 1.8;
 
 /**
  * Input parameters for the line breaking algorithm.
@@ -20,14 +39,19 @@ export interface LayoutInput {
    * Lines beyond the array length fall back to `lineWidth`.
    */
   lineWidths?: Float32Array;
-  /** Kinsoku (line break prohibition) mode. @defaultValue 'strict' */
-  mode?: KinsokuMode;
+  /**
+   * Kinsoku (line break prohibition) rules: a built-in mode, or custom rules
+   * from {@link buildKinsokuRules}. Custom rules replace the built-in ones
+   * entirely.
+   * @defaultValue 'strict'
+   */
+  kinsoku?: KinsokuMode | KinsokuRules;
   /** Whether to enable hanging punctuation. @defaultValue true */
   enableHanging?: boolean;
   /** Cluster IDs — characters sharing the same ID cannot be split across lines. */
   clusterIds?: Uint32Array;
   /** Ruby annotations for furigana support. */
-  rubyAnnotations?: RubyAnnotation[];
+  rubyAnnotations?: readonly RubyAnnotation[];
   /**
    * Tate-chu-yoko spans. Each one is collapsed to a single indivisible box of
    * its own width before breaking, so a combined run is never split across a
@@ -55,8 +79,6 @@ export interface LayoutInput {
   breakPenalties?: Uint8Array;
   /** Weights for the penalty search. Ignored unless `breakPenalties` is given. */
   breakCost?: BreakCostOptions;
-  /** Custom kinsoku rules. When provided, overrides the default rules. */
-  kinsokuRules?: KinsokuRules;
 }
 
 /**
@@ -145,9 +167,9 @@ export interface MorphemeLike {
   /** Surface form. Used to verify character classes, not to re-locate the span. */
   surface: string;
   /** Inclusive start index in code points. */
-  start: number;
+  startIndex: number;
   /** Exclusive end index in code points. */
-  end: number;
+  endIndex: number;
   /** Coarse part-of-speech code. */
   pos: string;
   /** Fine-grained part-of-speech code, the main input to the hint rules. */
@@ -174,8 +196,8 @@ export interface TextAnalysis {
   morphemes: readonly MorphemeLike[];
   /** Which analyzer produced this, for cache keys and snapshot validation. */
   analyzer: AnalyzerIdentity;
-  /** Diagnostics raised while analysing or aligning. Empty when clean. */
-  warnings: readonly string[];
+  /** Degradations raised while analysing or aligning. Empty when clean. */
+  warnings: readonly MejiroWarning[];
 }
 
 /**
@@ -195,7 +217,10 @@ export interface TextAnalyzer {
   readonly identity: AnalyzerIdentity;
   /** Analyses one paragraph of NFC text. */
   analyze(text: string): TextAnalysis;
-  /** Releases any native resources held by the analyzer. */
+  /**
+   * Releases the analyzer's native resources; terminal — `analyze` after this
+   * throws a `MejiroError` with code `analyzer-disposed`. Calling it again is a no-op.
+   */
   dispose(): void;
 }
 
@@ -315,10 +340,11 @@ export interface BreakResult {
   breakPoints: Uint32Array;
   /**
    * Hanging overhang in pixels for each line, including the last one
-   * (`breakPoints.length + 1` entries for non-empty text). 0 where the line's
-   * final character does not hang. Present when `enableHanging` is true.
+   * (`breakPoints.length + 1` entries for non-empty text, none for empty text).
+   * 0 where the line's final character does not hang, and 0 throughout when
+   * `enableHanging` is false.
    */
-  hangingAdjustments?: Float32Array;
+  hangingAdjustments: Float32Array;
   /**
    * Per-character effective advances after tate-chu-yoko collapsing and ruby
    * width distribution. Present when either kind of annotation was provided.
@@ -338,19 +364,236 @@ export type KinsokuMode = 'strict' | 'loose';
 /**
  * Custom kinsoku (line break prohibition) rules.
  *
- * Use {@link buildKinsokuRules} to create an instance from raw codepoint arrays.
+ * Create one with {@link buildKinsokuRules}, or start from the defaults with
+ * {@link getDefaultKinsokuRules} and {@link extendKinsokuRules}. The lists are
+ * frozen: a rule set never changes after it is built, so it can be shared and
+ * reused across layouts.
  */
 export interface KinsokuRules {
   /** Codepoints prohibited at the start of a line. */
-  lineStartProhibited: number[];
+  readonly lineStartProhibited: readonly number[];
   /** Codepoints prohibited at the end of a line. */
-  lineEndProhibited: number[];
+  readonly lineEndProhibited: readonly number[];
   /** Adjacent codepoint pairs that must not be split across lines. */
-  unbreakablePairs: Array<readonly [number, number]>;
-  /** Pre-computed lookup set for lineStartProhibited. */
-  lineStartProhibitedSet: Set<number>;
-  /** Pre-computed lookup set for lineEndProhibited. */
-  lineEndProhibitedSet: Set<number>;
-  /** Pre-computed lookup set for unbreakablePairs. */
-  unbreakablePairSet: Set<string>;
+  readonly unbreakablePairs: readonly (readonly [number, number])[];
+}
+
+/**
+ * A position within a single chapter, expressed as a paragraph index and a
+ * Unicode code point offset into that paragraph's `text` after NFC
+ * normalization — the text the layout works from. Slicing a paragraph's
+ * original `text` by an anchor addresses the same characters only when that
+ * text is already NFC.
+ *
+ * Code point offsets are stable under reflow (font / size / line-width changes),
+ * which is what makes them suitable for cross-device reading-position resume.
+ */
+export interface InChapterAnchor {
+  /** Zero-based paragraph index within the chapter. */
+  paragraphIndex: number;
+  /** Unicode code point offset into the paragraph's NFC-normalized `text`. */
+  charIndex: number;
+}
+
+/**
+ * A full reading position across an entire book — a chapter index combined
+ * with an {@link InChapterAnchor}.
+ *
+ * Persist this struct (e.g. via `useReadingPosition`) to restore the user's
+ * exact position even after a layout change that invalidates spread indices.
+ */
+export interface ReadingAnchor extends InChapterAnchor {
+  /** Zero-based chapter index. */
+  chapterIndex: number;
+}
+
+/** Ruby variant of {@link InlineAnnotation}. */
+export interface InlineRubyAnnotation {
+  /**
+   * Discriminant of the {@link InlineAnnotation} union. `'ruby'` and `'tcy'` are
+   * the two variants the line breaker consumes; the rest are render-only.
+   */
+  type: 'ruby';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+  /** Ruby text string. */
+  rubyText: string;
+  /** @defaultValue 'mono' */
+  rubyType?: RubyType;
+  /** For jukugo ruby: base-text-relative indices where line breaks are permitted. */
+  jukugoSplitPoints?: readonly number[];
+}
+
+/** Emphasis-dot (傍点) annotation. */
+export interface InlineEmphasisAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
+  type: 'emphasis';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+  /** Dot glyph style. @defaultValue 'sesame' */
+  style?: 'sesame' | 'dot' | 'circle';
+}
+
+/**
+ * Tate-chu-yoko (縦中横) annotation — display the span horizontally inside a
+ * vertical column.
+ *
+ * Reaches the line breaker: the span is given a fresh cluster ID of its own, so
+ * it cannot be split across a column boundary, and its effective advances sum to
+ * exactly one em — the width `text-combine-upright: all` draws — distributed
+ * over the span's characters in proportion to their measured advances.
+ *
+ * Preprocessing runs before ruby, so a ruby span covering a combined box
+ * distributes its excess over the collapsed width rather than over the measured
+ * widths the box has already replaced. Unlike ruby, a malformed span (empty,
+ * reversed, out of range, non-integral, non-finite advance, or overlapping an
+ * already-applied span) is skipped instead of throwing, because these spans come
+ * from arbitrary EPUB markup and one broken span must not fail a whole chapter.
+ */
+export interface InlineTcyAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
+  type: 'tcy';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+}
+
+/** Italic emphasis (`<em>`). */
+export interface InlineEmAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
+  type: 'em';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+}
+
+/** Strong emphasis (`<strong>`). */
+export interface InlineStrongAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
+  type: 'strong';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+}
+
+/** Hyperlink annotation. */
+export interface InlineLinkAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
+  type: 'link';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+  /**
+   * Destination URL, stored as authored. Renderers sanitize it on the way out:
+   * a scheme other than `http`, `https` or `mailto` drops only the anchor, and
+   * the linked content, nested ruby and emphasis included, is still rendered.
+   */
+  href: string;
+  /** Advisory text for the link's `title` attribute. */
+  title?: string;
+}
+
+/** Footnote reference annotation. */
+export interface InlineFootnoteAnnotation {
+  /** Discriminant of the {@link InlineAnnotation} union. */
+  type: 'footnote-ref';
+  /** Start index in the base text string (character index, not byte). */
+  startIndex: number;
+  /** End index in the base text string (exclusive). */
+  endIndex: number;
+  /** Identifier of the corresponding footnote entry. */
+  noteId: string;
+}
+
+/**
+ * Inline annotation that applies to a contiguous span of base text.
+ *
+ * A discriminated union on `type`, so the same model carries ruby, emphasis
+ * dots, tate-chu-yoko, simple emphasis, hyperlinks, and footnote references
+ * through the layout / render pipeline.
+ *
+ * The `ruby` and `tcy` variants reach the line breaker — both are resolved to
+ * effective advances and cluster IDs before breaking (tate-chu-yoko first, so
+ * ruby distributes over the already-collapsed width). Every other variant is
+ * render-only: it contributes no cluster ID and no advance correction, so the
+ * breaker may split such a span across a column boundary.
+ */
+export type InlineAnnotation =
+  | InlineRubyAnnotation
+  | InlineEmphasisAnnotation
+  | InlineTcyAnnotation
+  | InlineEmAnnotation
+  | InlineStrongAnnotation
+  | InlineLinkAnnotation
+  | InlineFootnoteAnnotation;
+
+/**
+ * Structural classification of a {@link BookParagraph}.
+ *
+ * - `'body'` — ordinary body text (the default when `kind` is omitted).
+ * - `'heading'` — heading paragraph; pair with {@link BookParagraph.headingLevel}.
+ * - `'blockquote'` — quoted block.
+ * - `'sceneBreak'` — visible scene divider (e.g. `* * *`); typically rendered
+ *   without body text.
+ * - `'pre'` — preformatted text (no automatic line breaks). Reserved.
+ * - `'figure'` — figure container (image + optional caption). Reserved.
+ */
+export type ParagraphKind = 'body' | 'heading' | 'blockquote' | 'sceneBreak' | 'pre' | 'figure';
+
+/** A paragraph to lay out, compatible with EPUB chapter paragraphs. */
+export interface BookParagraph {
+  /** Text string to lay out. */
+  text: string;
+  /**
+   * Structural kind of the paragraph. Defaults to `'heading'` if
+   * {@link BookParagraph.headingLevel} is set, otherwise `'body'`.
+   */
+  kind?: ParagraphKind;
+  /** Inline annotations (ruby, emphasis, tcy, em/strong, link, footnote). */
+  inlineAnnotations?: readonly InlineAnnotation[];
+  /** Heading level, or undefined for body text. */
+  headingLevel?: HeadingLevel;
+  /**
+   * Pre-computed line breaking hints for this paragraph, bypassing the book's
+   * own analyzer entirely — a caller that has already analysed its text, or
+   * that wants a different rule set for one paragraph, supplies them here and
+   * the analyzer is not consulted for it.
+   *
+   * Offsets are code point indices into the NFC form of `text`, which is what
+   * the layout runs on. Use {@link deriveTypographyHints} to produce them.
+   */
+  hints?: TypographyHints;
+}
+
+/**
+ * The paragraphs of one chapter, as the layout and estimation functions take
+ * them.
+ *
+ * Structural on purpose: an `EpubChapter` or a bare object literal satisfies
+ * it, so a chapter need not be wrapped before it is laid out or measured.
+ */
+export interface ChapterSource {
+  /** Paragraphs in reading order. */
+  readonly paragraphs: readonly BookParagraph[];
+}
+
+/**
+ * A chapter authored as manuscript text: a title and a body in manuscript
+ * notation, with blank lines separating paragraphs.
+ */
+export interface ManuscriptChapter {
+  /** Identifies the chapter to the caller; consumers that do not key chapters ignore it. */
+  id?: string;
+  /** Chapter title, laid out as a level-1 heading above the body. */
+  title: string;
+  /** Raw manuscript body. Blank lines separate paragraphs. */
+  body: string;
 }

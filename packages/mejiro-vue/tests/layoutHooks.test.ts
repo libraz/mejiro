@@ -78,18 +78,27 @@ const manuscripts: ManuscriptChapter[] = [
   { id: 'b', title: 'B', body: 'b' },
 ];
 
+const GEOMETRY = { pageWidth: 320, lineWidth: 400, pageHeight: 480, contentHeight: 400 };
+
 const cases: LayoutHookCase[] = [
   {
     name: 'useChapterLayout',
     setup(impl, surface, source, onError) {
       const calls = vi.fn(impl);
       const book = {
-        computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+        fitPageSize: vi.fn(() => GEOMETRY),
         layoutChapter: calls,
       } as unknown as MejiroBook;
       return {
         calls,
-        use: () => useChapterLayout(book, epub, source, surface, { resizeDebounce: 0, onError }),
+        use: () =>
+          useChapterLayout(book, {
+            epub,
+            chapterIndex: source,
+            surface,
+            resizeDebounceMs: 0,
+            onError,
+          }),
       };
     },
   },
@@ -98,10 +107,10 @@ const cases: LayoutHookCase[] = [
     setup(impl, surface, source, onError) {
       const calls = vi.fn(impl);
       const book = {
-        computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+        fitPageSize: vi.fn(() => GEOMETRY),
         layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) => {
           const layout = await calls();
-          return new Map([[chapters[0].id ?? '', layout]]);
+          return chapters.map(() => layout);
         }),
       } as unknown as MejiroBook;
       const chapter = shallowRef<ManuscriptChapter | null>(manuscripts[source.value]);
@@ -109,7 +118,12 @@ const cases: LayoutHookCase[] = [
         calls,
         use: () => {
           // Follow `source` the way a draft store would hand over another chapter.
-          const ctx = useManuscriptLayout(book, chapter, surface, { resizeDebounce: 0, onError });
+          const ctx = useManuscriptLayout(book, {
+            chapter,
+            surface,
+            resizeDebounceMs: 0,
+            onError,
+          });
           return {
             ...ctx,
             select: (i: number) => {

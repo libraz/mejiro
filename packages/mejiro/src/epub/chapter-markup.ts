@@ -5,8 +5,8 @@
  * inline annotation serialization live only here, so the same paragraph text
  * yields the same markup from `EditableEpub.export()` and `EpubProject.export()`.
  */
-import type { InlineAnnotation } from '../browser/types.js';
 import { buildInlineNodes, type InlineNode, inlineNodeContent } from '../render/inline-tree.js';
+import type { InlineAnnotation } from '../types.js';
 import { sanitizeUrl } from '../url.js';
 
 /** XHTML namespace of every chapter document. */

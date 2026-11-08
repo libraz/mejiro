@@ -1,51 +1,64 @@
+import type { ManuscriptChapter } from '@libraz/mejiro';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toError } from './errors.js';
-import type { ManuscriptEditorChapter } from './MejiroManuscriptEditor.js';
 import {
   createDraftChangeTracker,
   flushOnPageHide,
+  sameDeps,
   snapshotChapters,
   uniqueChapterId,
 } from './persistence.js';
 
 /** Options for {@link useManuscriptDraft}. */
-export interface UseManuscriptDraftOptions<TAutosave = ManuscriptEditorChapter[]> {
-  /** Initial chapters. Defaults to a single empty chapter. */
-  initialChapters?: ManuscriptEditorChapter[];
+export interface UseManuscriptDraftOptions<TAutosave = ManuscriptChapter[]> {
   /**
-   * Called when the draft changes (debounced). Use to persist to
-   * localStorage, IndexedDB, or upload to a server.
+   * Initial chapters, read on mount. Defaults to a single chapter with an
+   * empty title and body.
+   */
+  initialChapters?: readonly ManuscriptChapter[];
+  /**
+   * Called when the draft changes (debounced). This is the persistence
+   * channel of the hook, and it may be async: return a promise to have the
+   * next save wait for it and to have a rejection land in `autosaveError`.
+   * Use it to write to localStorage or IndexedDB, or to upload to a server.
    */
   onAutosave?: (draft: TAutosave) => void | Promise<void>;
   /** Maps chapters to the autosave payload. Defaults to the chapter array. */
-  autosavePayload?: (chapters: ManuscriptEditorChapter[]) => TAutosave;
-  /** Extra key that triggers autosave when non-chapter metadata changes. */
-  autosaveKey?: string;
+  autosavePayload?: (chapters: readonly ManuscriptChapter[]) => TAutosave;
+  /**
+   * Values outside the chapters that the autosave payload depends on (a
+   * title, an author). A change to any of them, compared with `Object.is`,
+   * schedules an autosave like a chapter edit does.
+   */
+  autosaveDeps?: readonly unknown[];
   /** Debounce delay in milliseconds. @defaultValue 800 */
-  autosaveDelay?: number;
-  /** Creates the default title for a generated chapter. */
+  autosaveDebounceMs?: number;
+  /** Creates the title of a generated chapter. @defaultValue `() => ''` */
   defaultChapterTitle?: (index: number) => string;
-  /** Creates the default body for a generated chapter. */
+  /** Creates the body of a generated chapter. @defaultValue `() => ''` */
   defaultChapterBody?: (index: number) => string;
 }
 
 /** Return value of {@link useManuscriptDraft}. */
 export interface UseManuscriptDraftReturn {
   /** Current chapters, in reading order. */
-  chapters: ManuscriptEditorChapter[];
+  chapters: readonly ManuscriptChapter[];
   /** Index of the chapter currently being edited. */
-  selected: number;
+  selectedChapterIndex: number;
   /** Selects a chapter, clamped to the chapter range. */
-  setSelected(index: number): void;
+  setSelectedChapterIndex(index: number): void;
   /**
    * Replaces every chapter; an empty list becomes one generated chapter. The
    * selected chapter is kept by id when it survives.
    */
-  setChapters(chapters: ManuscriptEditorChapter[]): void;
+  setChapters(chapters: readonly ManuscriptChapter[]): void;
   /** Merges `patch` into the chapter at `index`. */
-  patchChapter(index: number, patch: Partial<ManuscriptEditorChapter>): void;
-  /** Appends a chapter (generated defaults fill omitted fields) and selects it. */
-  addChapter(chapter?: Partial<ManuscriptEditorChapter>): void;
+  updateChapter(index: number, patch: Partial<ManuscriptChapter>): void;
+  /**
+   * Appends a chapter and selects it. Omitted fields are generated: a unique
+   * id, and the title and body of `defaultChapterTitle` / `defaultChapterBody`.
+   */
+  addChapter(chapter?: Partial<ManuscriptChapter>): void;
   /** Removes the chapter at `index`; the last remaining chapter is never removed. */
   removeChapter(index: number): void;
   /** Moves the chapter at `from` to `to`, keeping the same chapter selected. */
@@ -57,12 +70,13 @@ export interface UseManuscriptDraftReturn {
 }
 
 const DEFAULT_DELAY = 800;
+const NO_DEPS: readonly unknown[] = [];
 
 function defaultChapter(
-  existing: readonly ManuscriptEditorChapter[],
-  titleFor: (index: number) => string = (i) => `第${i + 1}話`,
+  existing: readonly ManuscriptChapter[],
+  titleFor: (index: number) => string = () => '',
   bodyFor: (index: number) => string = () => '',
-): ManuscriptEditorChapter {
+): ManuscriptChapter {
   const index = existing.length;
   return { id: uniqueChapterId(existing), title: titleFor(index), body: bodyFor(index) };
 }
@@ -74,14 +88,14 @@ function defaultChapter(
  * patching individual chapters, plus a debounced autosave hook that fires
  * `onAutosave` whenever the chapter list settles.
  */
-export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
+export function useManuscriptDraft<TAutosave = ManuscriptChapter[]>(
   options: UseManuscriptDraftOptions<TAutosave> = {},
 ): UseManuscriptDraftReturn {
   const {
     onAutosave,
-    autosaveDelay = DEFAULT_DELAY,
+    autosaveDebounceMs = DEFAULT_DELAY,
     autosavePayload,
-    autosaveKey,
+    autosaveDeps = NO_DEPS,
     defaultChapterTitle,
     defaultChapterBody,
   } = options;
@@ -89,12 +103,12 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   titleForRef.current = defaultChapterTitle;
   const bodyForRef = useRef(defaultChapterBody);
   bodyForRef.current = defaultChapterBody;
-  const [chapters, setChaptersState] = useState<ManuscriptEditorChapter[]>(() =>
+  const [chapters, setChaptersState] = useState<readonly ManuscriptChapter[]>(() =>
     options.initialChapters?.length
       ? options.initialChapters
       : [defaultChapter([], defaultChapterTitle, defaultChapterBody)],
   );
-  const [selected, setSelectedState] = useState(0);
+  const [selectedChapterIndex, setSelectedState] = useState(0);
   const [autosaveError, setAutosaveError] = useState<Error | null>(null);
 
   const saveRef = useRef(onAutosave);
@@ -107,13 +121,21 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   // repeat.
   const chaptersRef = useRef(chapters);
   chaptersRef.current = chapters;
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
+  const selectedRef = useRef(selectedChapterIndex);
+  selectedRef.current = selectedChapterIndex;
   // Seeded with the mount-time draft, so a re-run mount effect (StrictMode)
   // is not mistaken for an edit.
   const trackerRef = useRef<ReturnType<typeof createDraftChangeTracker> | null>(null);
-  if (!trackerRef.current)
-    trackerRef.current = createDraftChangeTracker(chapters, autosaveKey ?? '');
+  if (!trackerRef.current) trackerRef.current = createDraftChangeTracker(chapters, autosaveDeps);
+  // Bumped when the content of `autosaveDeps` changes, so a new array holding
+  // the same values does not restart the debounce.
+  const depsRef = useRef(autosaveDeps);
+  const depsVersionRef = useRef(0);
+  if (!sameDeps(depsRef.current, autosaveDeps)) {
+    depsRef.current = autosaveDeps;
+    depsVersionRef.current += 1;
+  }
+  const depsVersion = depsVersionRef.current;
   const dirtyRef = useRef(false);
   const mountedRef = useRef(true);
   // Bumped on every change that needs persisting. A save only clears the dirty
@@ -164,8 +186,9 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
       });
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `depsVersion` stands for the content of `autosaveDeps`, whose array identity changes every render.
   useEffect(() => {
-    if (trackerRef.current?.changed(chapters, autosaveKey ?? '')) {
+    if (trackerRef.current?.changed(chapters, depsRef.current)) {
       dirtyRef.current = true;
       revisionRef.current += 1;
       setAutosaveError(null);
@@ -173,9 +196,9 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     if (!(saveRef.current && dirtyRef.current)) return undefined;
     const timer = setTimeout(() => {
       flushAutosave();
-    }, autosaveDelay);
+    }, autosaveDebounceMs);
     return () => clearTimeout(timer);
-  }, [chapters, autosaveKey, autosaveDelay, flushAutosave]);
+  }, [chapters, depsVersion, autosaveDebounceMs, flushAutosave]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -187,21 +210,21 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     };
   }, [flushAutosave]);
 
-  const commit = useCallback((nextChapters: ManuscriptEditorChapter[], nextSelected: number) => {
+  const commit = useCallback((nextChapters: readonly ManuscriptChapter[], nextSelected: number) => {
     chaptersRef.current = nextChapters;
     selectedRef.current = nextSelected;
     setChaptersState(nextChapters);
     setSelectedState(nextSelected);
   }, []);
 
-  const setSelected = useCallback((index: number) => {
+  const setSelectedChapterIndex = useCallback((index: number) => {
     const next = Math.max(0, Math.min(index, chaptersRef.current.length - 1));
     selectedRef.current = next;
     setSelectedState(next);
   }, []);
 
   const setChapters = useCallback(
-    (next: ManuscriptEditorChapter[]) => {
+    (next: readonly ManuscriptChapter[]) => {
       const normalized = next.length
         ? next
         : [defaultChapter([], titleForRef.current, bodyForRef.current)];
@@ -218,7 +241,7 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
     [commit],
   );
 
-  const patchChapter = useCallback((index: number, patch: Partial<ManuscriptEditorChapter>) => {
+  const updateChapter = useCallback((index: number, patch: Partial<ManuscriptChapter>) => {
     const next = chaptersRef.current.map((chapter, i) =>
       i === index ? { ...chapter, ...patch } : chapter,
     );
@@ -227,7 +250,7 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
   }, []);
 
   const addChapter = useCallback(
-    (chapter: Partial<ManuscriptEditorChapter> = {}) => {
+    (chapter: Partial<ManuscriptChapter> = {}) => {
       const current = chaptersRef.current;
       const generated = defaultChapter(current, titleForRef.current, bodyForRef.current);
       const next = [
@@ -278,10 +301,10 @@ export function useManuscriptDraft<TAutosave = ManuscriptEditorChapter[]>(
 
   return {
     chapters,
-    selected,
-    setSelected,
+    selectedChapterIndex,
+    setSelectedChapterIndex,
     setChapters,
-    patchChapter,
+    updateChapter,
     addChapter,
     removeChapter,
     reorderChapters,

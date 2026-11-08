@@ -2,7 +2,7 @@
 // Opt in to the demo webfonts (Shippori Mincho / Noto Serif JP /
 // Zen Kaku Gothic New). Skip this line for system fonts.
 import '@libraz/mejiro/render/mejiro-fonts.css';
-import { type ManuscriptEditorChapter, MejiroManuscriptEditor } from '@libraz/mejiro-vue';
+import { type ManuscriptChapter, MejiroManuscriptEditor } from '@libraz/mejiro-vue';
 
 /*
  * MejiroManuscriptEditor is the author flow for writing a NEW EPUB from
@@ -17,7 +17,7 @@ import { type ManuscriptEditorChapter, MejiroManuscriptEditor } from '@libraz/me
  * The preview is debounced and rebuilds whenever metadata or chapters
  * change. For editing an existing EPUB, see the `vue-editor` example.
  */
-const initialChapters: ManuscriptEditorChapter[] = [
+const initialChapters: ManuscriptChapter[] = [
   {
     id: 'chapter-1',
     title: '第一話 出会い',
@@ -32,7 +32,7 @@ const initialChapters: ManuscriptEditorChapter[] = [
   },
 ];
 
-function onExport(buffer: ArrayBuffer): void {
+function onExport(buffer: Uint8Array): void {
   // The editor also triggers a browser download. Use this hook to upload to
   // your backend, replace the URL, run a server-side validator, etc.
   // eslint-disable-next-line no-console

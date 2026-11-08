@@ -8,19 +8,22 @@ import { useRef, useState } from 'react';
 export function ReflowReader({
   book,
   epub,
-  chapter,
+  chapterIndex,
 }: {
   book: MejiroBook;
   epub: EpubBook;
-  chapter: number;
+  chapterIndex: number;
 }) {
   const surface = useRef<HTMLDivElement>(null);
-  const [spreadIdx, setSpreadIdx] = useState(0);
+  const [spreadIndex, setSpreadIndex] = useState(0);
   // #region doc:react
-  const layout = useChapterLayout(book, epub, chapter, surface, {
-    capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
-    restorePosition: (l, anchor) => setSpreadIdx(l.locateAnchor(anchor)?.spreadIdx ?? 0),
+  const layout = useChapterLayout(book, {
+    epub,
+    chapterIndex,
+    surface,
+    capturePosition: (l) => l.anchorAt(spreadIndex),
+    restorePosition: (l, anchor) => setSpreadIndex(l.locateAnchor(anchor)?.spreadIndex ?? 0),
   });
   // #endregion doc:react
-  return <div ref={surface}>{layout.layout ? `spread ${spreadIdx}` : 'Loading'}</div>;
+  return <div ref={surface}>{layout.layout ? `spread ${spreadIndex}` : 'Loading'}</div>;
 }

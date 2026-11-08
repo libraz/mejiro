@@ -10,9 +10,9 @@ import type {
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick, ref } from 'vue';
-import { useChapterLayout } from '../src/useChapterLayout.js';
+import { type UseChapterLayoutOptions, useChapterLayout } from '../src/useChapterLayout.js';
+import { useImageOverlay } from '../src/useImageOverlay.js';
 import { useManuscriptLayout } from '../src/useManuscriptLayout.js';
-import { useMultiImageOverlay } from '../src/useMultiImageOverlay.js';
 
 function withSetup<T>(setup: () => T): { result: T; unmount: () => void } {
   let result!: T;
@@ -30,9 +30,9 @@ function withSetup<T>(setup: () => T): { result: T; unmount: () => void } {
 
 function mockLayout(): ChapterLayout {
   return {
-    totalPages: 8,
-    getSpread: vi.fn((i: number) => ({ spreadIdx: i }) as unknown as SpreadResult),
-    setImages: vi.fn(),
+    pageCount: 8,
+    getSpread: vi.fn((i: number) => ({ spreadIndex: i }) as unknown as SpreadResult),
+    setImages: vi.fn((i: number) => ({ spreadIndex: i }) as unknown as SpreadResult),
     clearImages: vi.fn(),
   } as unknown as ChapterLayout;
 }
@@ -41,9 +41,14 @@ function makeBook(layouts: ChapterLayout[]): MejiroBook {
   let i = 0;
   const next = () => layouts[Math.min(i++, layouts.length - 1)];
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 120, pageHeight: 174, contentHeight: 150 })),
+    fitPageSize: vi.fn(() => ({
+      pageWidth: 120,
+      lineWidth: 150,
+      pageHeight: 174,
+      contentHeight: 150,
+    })),
     layoutChapter: vi.fn(async () => next()),
-    layoutManuscript: vi.fn(async () => new Map([['c', next()]])),
+    layoutManuscript: vi.fn(async () => [next()]),
   } as unknown as MejiroBook;
 }
 
@@ -55,14 +60,37 @@ async function flush(): Promise<void> {
 
 const EPUB = { chapters: [{ title: 'x', paragraphs: [] }] } as unknown as EpubBook;
 const MANUSCRIPT: ManuscriptChapter = { title: 'x', body: 'y' };
-const ANCHOR: InChapterAnchor = { paragraph: 0, charIndex: 5 };
+const ANCHOR: InChapterAnchor = { paragraphIndex: 0, charIndex: 5 };
+
+/** A surface element with a measurable box, as a mounted reader has. */
+function sizedSurface(): HTMLElement {
+  const el = document.createElement('div');
+  Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => 640 });
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 480 });
+  return el;
+}
+
+/** The behavior options both layout composables share. */
+type ReflowOptions = Pick<
+  UseChapterLayoutOptions,
+  'enableResize' | 'capturePosition' | 'restorePosition'
+>;
 
 describe('reflow position restore (Vue)', () => {
   const composables = {
-    useChapterLayout: (book: MejiroBook, options: Parameters<typeof useChapterLayout>[4]) =>
-      useChapterLayout(book, ref(EPUB), ref(0), ref(document.createElement('div')), options),
-    useManuscriptLayout: (book: MejiroBook, options: Parameters<typeof useManuscriptLayout>[3]) =>
-      useManuscriptLayout(book, ref(MANUSCRIPT), ref(document.createElement('div')), options),
+    useChapterLayout: (book: MejiroBook, options: ReflowOptions) =>
+      useChapterLayout(book, {
+        epub: ref(EPUB),
+        chapterIndex: ref(0),
+        surface: ref(sizedSurface()),
+        ...options,
+      }),
+    useManuscriptLayout: (book: MejiroBook, options: ReflowOptions) =>
+      useManuscriptLayout(book, {
+        chapter: ref(MANUSCRIPT),
+        surface: ref(sizedSurface()),
+        ...options,
+      }),
   };
 
   for (const [name, useLayout] of Object.entries(composables)) {
@@ -82,7 +110,7 @@ describe('reflow position restore (Vue)', () => {
       await result.recompute({ blank: false });
       expect(restorePosition).toHaveBeenCalledTimes(1);
       expect(restorePosition).toHaveBeenCalledWith(l1, ANCHOR);
-      expect(result.pendingRestore.current).toBeNull();
+      expect(result.pendingRestore.value).toBeNull();
       unmount();
     });
 
@@ -94,33 +122,32 @@ describe('reflow position restore (Vue)', () => {
       await flush();
       await result.recompute({ blank: false });
       expect(result.layout.value).toBe(l1);
-      expect(result.pendingRestore.current).toEqual(ANCHOR);
+      expect(result.pendingRestore.value).toEqual(ANCHOR);
       unmount();
     });
   }
 });
 
-describe('useMultiImageOverlay reflow (Vue)', () => {
-  it('sets every spread on a replaced layout before reading any back', async () => {
+describe('useImageOverlay reflow (Vue)', () => {
+  it('sets every spread on a replaced layout and reports each reflowed spread', async () => {
     const layout = ref<ChapterLayout | null>(mockLayout());
-    const spreadIdx = ref(0);
-    const { result, unmount } = withSetup(() =>
-      useMultiImageOverlay(layout, spreadIdx, { onUpdate: vi.fn() }),
-    );
+    const spreadIndex = ref(0);
+    const onReflow = vi.fn();
+    const { result, unmount } = withSetup(() => useImageOverlay(layout, { spreadIndex, onReflow }));
     for (const s of [0, 1, 2]) {
-      spreadIdx.value = s;
-      result.addImage();
+      spreadIndex.value = s;
+      result.addOverlay();
     }
+    onReflow.mockClear();
 
     const replaced = mockLayout();
     layout.value = replaced;
     await flush();
 
-    const setOrder = vi.mocked(replaced.setImages).mock.invocationCallOrder;
-    const getOrder = vi.mocked(replaced.getSpread).mock.invocationCallOrder;
-    expect(setOrder).toHaveLength(3);
-    expect(getOrder).toHaveLength(3);
-    expect(Math.max(...setOrder)).toBeLessThan(Math.min(...getOrder));
+    expect(vi.mocked(replaced.setImages).mock.calls.map((call) => call[0])).toEqual([0, 1, 2]);
+    expect(onReflow.mock.calls.map(([spread]) => spread)).toEqual(
+      vi.mocked(replaced.setImages).mock.results.map((r) => r.value),
+    );
     unmount();
   });
 });

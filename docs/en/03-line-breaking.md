@@ -41,14 +41,13 @@ interface LayoutInput {
   advances: Float32Array;                 // Per-character advance widths (px)
   lineWidth: number;                      // Available line width (px)
   lineWidths?: Float32Array;              // Per-line widths overriding lineWidth
-  mode?: KinsokuMode;                     // 'strict' (default) | 'loose'
+  kinsoku?: KinsokuMode | KinsokuRules;   // 'strict' (default) | 'loose' | custom rules
   enableHanging?: boolean;                // Default: true
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
-  rubyAnnotations?: RubyAnnotation[];       // Core-level ruby preprocessing (see 04-ruby.md)
+  rubyAnnotations?: readonly RubyAnnotation[]; // Core-level ruby preprocessing (see 04-ruby.md)
   tokenBoundaries?: Uint32Array | readonly number[]; // Preferred break positions
   breakPenalties?: Uint8Array;            // Per-position break cost (see section 8)
   breakCost?: BreakCostOptions;           // Weights for the penalty search
-  kinsokuRules?: KinsokuRules;            // Custom prohibition rules
 }
 ```
 
@@ -58,14 +57,13 @@ interface LayoutInput {
 | `advances`         | Yes      | --         | Per-character advance widths in pixels. Must have the same length as `text`. |
 | `lineWidth`        | Yes      | --         | Maximum line width in pixels.                                      |
 | `lineWidths`       | No       | --         | Per-line widths in pixels. The i-th line uses `lineWidths[i]`; lines beyond the array fall back to `lineWidth`. Used by image exclusion, where each column has its own available height. |
-| `mode`             | No       | `'strict'` | Kinsoku processing mode. See section 4.                            |
+| `kinsoku`          | No       | `'strict'` | Kinsoku rules: a built-in mode or custom `KinsokuRules`, which replace the built-in rules entirely. See section 4. |
 | `enableHanging`    | No       | `true`     | Whether to allow hanging punctuation. See section 5.               |
 | `clusterIds`       | No       | --         | Cluster IDs for indivisible character groups. See section 6.       |
 | `rubyAnnotations`  | No       | --         | Core-level ruby annotations. Triggers ruby preprocessing before line breaking. |
 | `tokenBoundaries`  | No       | --         | Indices of the last codepoint in each token. The algorithm prefers breaking at these positions. Use `tokenLengthsToBoundaries()` to convert from morphological analyzer output. |
 | `breakPenalties`   | No       | --         | Cost of breaking after each index, one entry per codepoint. Switches the backward search to a bounded cost search and supersedes `tokenBoundaries`. See section 8. |
 | `breakCost`        | No       | --         | Weights for that cost search. Ignored unless `breakPenalties` is given. |
-| `kinsokuRules`     | No       | --         | Custom kinsoku rules. Overrides the built-in rules entirely.       |
 
 ### Minimal Usage
 
@@ -95,10 +93,9 @@ const result = computeBreaks({
   text: toCodepoints('あいうえお、かきくけこ'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
-  mode: 'loose',
+  kinsoku: customRules,
   enableHanging: true,
   tokenBoundaries: new Uint32Array([4, 10]),
-  kinsokuRules: customRules,
 });
 ```
 
@@ -111,7 +108,7 @@ The `computeBreaks` function returns a `BreakResult`:
 ```ts
 interface BreakResult {
   breakPoints: Uint32Array;             // Indices of last char before each break
-  hangingAdjustments?: Float32Array;    // Hanging overhang per line (px), 0 if none
+  hangingAdjustments: Float32Array;     // Hanging overhang per line (px), 0 if none
   effectiveAdvances?: Float32Array;     // Per-char advances after tate-chu-yoko and ruby
   lineWidths?: Float32Array;            // Width actually used per line
 }
@@ -129,7 +126,7 @@ For example, given text of length 15 and `breakPoints = [4, 9]`:
 
 ### hangingAdjustments
 
-Present when `enableHanging` is `true` (the default). It holds one entry per line — `breakPoints.length + 1` for non-empty text, the last line included. A non-zero value indicates that the line's final character hangs past the line edge by that many pixels.
+Always present. It holds one entry per line — `breakPoints.length + 1` for non-empty text, the last line included. A non-zero value indicates that the line's final character hangs past the line edge by that many pixels; with `enableHanging: false` every entry is zero.
 
 ### effectiveAdvances
 
@@ -194,9 +191,7 @@ This is implemented by `canBreakAt()`:
 function canBreakAt(
   text: Uint32Array,
   pos: number,
-  clusterIds?: Uint32Array,
-  mode?: KinsokuMode,
-  rules?: KinsokuRules,
+  options?: CanBreakAtOptions, // { kinsoku?, clusterIds? }
 ): boolean;
 ```
 
@@ -214,20 +209,20 @@ const advances = new Float32Array(11).fill(16);
 // Strict mode: っ (small tsu) is prohibited at line start.
 // The naive break after index 4 (あいうえお) would put っ at the start of line 2.
 // The algorithm backtracks to index 3 to avoid this.
-const strict = computeBreaks({ text, advances, lineWidth: 80, mode: 'strict' });
+const strict = computeBreaks({ text, advances, lineWidth: 80, kinsoku: 'strict' });
 // strict.breakPoints → [3, 8]
 // Line 1: あいうえ (4 chars), Line 2 starts with おっ...
 
 // Loose mode: っ is allowed at line start.
 // The break can stay at index 4.
-const loose = computeBreaks({ text, advances, lineWidth: 80, mode: 'loose' });
+const loose = computeBreaks({ text, advances, lineWidth: 80, kinsoku: 'loose' });
 // loose.breakPoints → [4, 9]
 // Line 1: あいうえお (5 chars), Line 2 starts with っか...
 ```
 
 ### Custom Kinsoku Rules
 
-Use `buildKinsokuRules()` to create custom rules with pre-computed lookup sets:
+Use `buildKinsokuRules()` to create custom rules, and pass them as `kinsoku`:
 
 <!-- doc-example: 03-custom-rules.ts#custom-rules -->
 ```ts
@@ -242,11 +237,11 @@ const result = computeBreaks({
   text: toCodepoints('あいう「えお'),
   advances: new Float32Array(6).fill(16),
   lineWidth: 48,
-  kinsokuRules: rules,
+  kinsoku: rules,
 });
 ```
 
-When `kinsokuRules` is provided, it **replaces** the built-in rules entirely. Use `getDefaultKinsokuRules()` as a starting point if you want to extend the defaults.
+Custom rules passed as `kinsoku` **replace** the built-in rules entirely. To add to the defaults instead, pass `getDefaultKinsokuRules()` to `extendKinsokuRules()` (see [Advanced](09-advanced.md)).
 
 ---
 
@@ -306,7 +301,7 @@ const result = computeBreaks({
 // Line 3: けこ
 ```
 
-Note: When `enableHanging` is `false`, `hangingAdjustments` is `undefined` in the result.
+Note: When `enableHanging` is `false`, `hangingAdjustments` is still present, with one zero per line.
 
 ---
 
@@ -517,7 +512,7 @@ A code matches when it equals either the morpheme's `extendedPos` or its `pos`, 
 ```ts
 import { DEFAULT_KEEP_WHOLE_POS, deriveTypographyHints } from '@libraz/mejiro';
 
-const hints = deriveTypographyHints(text, analysis, {
+const hints = deriveTypographyHints(analysis, {
   penalties: true,
   keepWholePos: [...DEFAULT_KEEP_WHOLE_POS, 'NOUN_形式'],
 });
@@ -575,14 +570,24 @@ const book = new MejiroBook({
 
 `BookOptions.keepWholePos` and `BookOptions.keepWholePenalty` forward to `deriveTypographyHints()` unchanged. They are read only under `'full'`, the one stage that emits penalties.
 
-`createSuzumeAnalyzer()` rejects when the optional peer dependency `@libraz/suzume` is not installed, because calling it is an explicit request for that analyzer. A caller that would rather degrade quietly catches the rejection and constructs the book without an analyzer.
+`createSuzumeAnalyzer()` rejects with `MejiroError` `analyzer-unavailable` when the optional peer dependency `@libraz/suzume` is not installed, because calling it is an explicit request for that analyzer. A caller that would rather degrade quietly catches the rejection and constructs the book without an analyzer.
 
 Four properties of the integration are worth knowing:
 
 - **Analysis runs once per paragraph, before layout.** Resizing, changing the font, or reflowing around an image replays the first pass; none of them re-analyses. Analysis is not on the interactive path.
-- **A failing analyzer costs quality, never availability.** If the analyzer is missing or throws, the paragraph is laid out on the character-class rules alone, which is a correct layout. One console notice is emitted per book, not per paragraph.
+- **A failing analyzer costs quality, never availability.** If the analyzer is missing or throws, the paragraph is laid out on the character-class rules alone, which is a correct layout. The failure is reported once per book, not per paragraph, as an `analyzer-failed` `MejiroError` to `BookOptions.onError` (to `console.warn` when no `onError` is given).
 - **A paragraph can carry its own hints.** `BookParagraph.hints` bypasses the book's analyzer for that paragraph, which is how a caller supplies a pre-computed analysis or a different rule set for one paragraph.
 - **Hints survive a snapshot only when the analyzer matches.** `ChapterLayout.snapshot()` records the analyzer's identity, and `layoutFromSnapshot()` keeps the stored hints only if the book it is restored into is configured with the same analyzer name and version. Nothing is re-analysed during a restore.
+
+How each failure and degradation of the analysis path shows up:
+
+| Situation | What the caller sees | Layout |
+|---|---|---|
+| `@libraz/suzume` missing or its module fails to load | `createSuzumeAnalyzer()` rejects with `analyzer-unavailable` | Book built without an analyzer: character-class rules |
+| `analyze()` called after `dispose()` | Throws `analyzer-disposed` | — |
+| Analyzer throws during layout | `analyzer-failed` to `BookOptions.onError`, once per book | That paragraph: character-class rules |
+| Analyzer output cannot be aligned with the text | `TextAnalysis.warnings` holds `alignment-failed`; `morphemes` is empty | No hints for the paragraph |
+| Some morphemes do not fit the text | `TextAnalysis.warnings` holds `morphemes-dropped` | Hints from the morphemes that fit |
 
 To run the pieces yourself, call `deriveTypographyHints()` on a `TextAnalysis` and pass the result to `computeBreaks()` — the two examples above are exactly what that produces.
 

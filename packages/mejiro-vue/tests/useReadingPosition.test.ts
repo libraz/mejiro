@@ -3,10 +3,10 @@
 import { parseReadingPosition, serializeReadingPosition } from '@libraz/mejiro';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type App, createApp, defineComponent, nextTick, ref } from 'vue';
-import type { ReadingPositionStorage } from '../src/useReadingPosition.js';
+import type { MejiroStorage } from '../src/index.js';
 import { useReadingPosition } from '../src/useReadingPosition.js';
 
-function memoryStorage(): ReadingPositionStorage & { data: Map<string, string> } {
+function memoryStorage(): MejiroStorage & { data: Map<string, string> } {
   const data = new Map<string, string>();
   return {
     data,
@@ -54,23 +54,23 @@ describe('useReadingPosition (Vue)', () => {
     const storage = memoryStorage();
     storage.setItem('k', JSON.stringify({ version: 2, chapter: 2, paragraph: 7, charIndex: 12 }));
     const { result, unmount } = withSetup(() => useReadingPosition({ key: 'k', storage }));
-    expect(result.position.value).toEqual({ chapter: 2, paragraph: 7, charIndex: 12 });
+    expect(result.position.value).toEqual({ chapterIndex: 2, paragraphIndex: 7, charIndex: 12 });
     unmount();
   });
 
-  it('save() updates position immediately and writes a v2 payload after throttle', () => {
+  it('save() updates position immediately and writes a v3 payload after the debounce', () => {
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+      useReadingPosition({ key: 'k', storage, debounceMs: 100 }),
     );
-    result.save({ chapter: 1, paragraph: 3, charIndex: 5 });
-    expect(result.position.value).toEqual({ chapter: 1, paragraph: 3, charIndex: 5 });
+    result.save({ chapterIndex: 1, paragraphIndex: 3, charIndex: 5 });
+    expect(result.position.value).toEqual({ chapterIndex: 1, paragraphIndex: 3, charIndex: 5 });
     expect(storage.data.get('k')).toBeUndefined();
     vi.advanceTimersByTime(100);
     expect(JSON.parse(storage.data.get('k') ?? '{}')).toEqual({
-      version: 2,
-      chapter: 1,
-      paragraph: 3,
+      version: 3,
+      chapterIndex: 1,
+      paragraphIndex: 3,
       charIndex: 5,
     });
     unmount();
@@ -89,7 +89,9 @@ describe('useReadingPosition (Vue)', () => {
   it('ignores malformed storage payloads', () => {
     const storage = memoryStorage();
     storage.setItem('k', 'not-json');
-    const { result, unmount } = withSetup(() => useReadingPosition({ key: 'k', storage }));
+    const { result, unmount } = withSetup(() =>
+      useReadingPosition({ key: 'k', storage, onError: () => {} }),
+    );
     expect(result.position.value).toBeNull();
     unmount();
   });
@@ -107,14 +109,14 @@ describe('useReadingPosition (Vue)', () => {
         storage,
       }),
     );
-    expect(result.position.value).toEqual({ chapter: 1, paragraph: 1, charIndex: 0 });
+    expect(result.position.value).toEqual({ chapterIndex: 1, paragraphIndex: 1, charIndex: 0 });
     key.value = 'b';
     await nextTick();
-    expect(result.position.value).toEqual({ chapter: 2, paragraph: 2, charIndex: 0 });
+    expect(result.position.value).toEqual({ chapterIndex: 2, paragraphIndex: 2, charIndex: 0 });
     unmount();
   });
 
-  it('writes throttled saves to the key that was active when save() was called', async () => {
+  it('writes debounced saves to the key that was active when save() was called', async () => {
     const storage = memoryStorage();
     const key = ref('a');
     const { result, unmount } = withSetup(() =>
@@ -123,40 +125,40 @@ describe('useReadingPosition (Vue)', () => {
           return key.value;
         },
         storage,
-        throttleMs: 100,
+        debounceMs: 100,
       }),
     );
 
-    result.save({ chapter: 1, paragraph: 1, charIndex: 1 });
+    result.save({ chapterIndex: 1, paragraphIndex: 1, charIndex: 1 });
     key.value = 'b';
     await nextTick();
     vi.advanceTimersByTime(100);
 
     expect(JSON.parse(storage.data.get('a') ?? '{}')).toEqual({
-      version: 2,
-      chapter: 1,
-      paragraph: 1,
+      version: 3,
+      chapterIndex: 1,
+      paragraphIndex: 1,
       charIndex: 1,
     });
     expect(storage.data.get('b')).toBeUndefined();
     unmount();
   });
 
-  it('flushes a pending save() when the composable unmounts inside the throttle window', () => {
+  it('flushes a pending save() when the composable unmounts inside the debounce window', () => {
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+      useReadingPosition({ key: 'k', storage, debounceMs: 100 }),
     );
 
-    result.save({ chapter: 3, paragraph: 2, charIndex: 8 });
+    result.save({ chapterIndex: 3, paragraphIndex: 2, charIndex: 8 });
     expect(storage.data.get('k')).toBeUndefined();
 
     unmount();
 
     expect(JSON.parse(storage.data.get('k') ?? '{}')).toEqual({
-      version: 2,
-      chapter: 3,
-      paragraph: 2,
+      version: 3,
+      chapterIndex: 3,
+      paragraphIndex: 2,
       charIndex: 8,
     });
   });
@@ -164,10 +166,10 @@ describe('useReadingPosition (Vue)', () => {
   it('does not resurrect a cleared position when the composable unmounts', () => {
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key: 'k', storage, throttleMs: 100 }),
+      useReadingPosition({ key: 'k', storage, debounceMs: 100 }),
     );
 
-    result.save({ chapter: 3, paragraph: 2, charIndex: 8 });
+    result.save({ chapterIndex: 3, paragraphIndex: 2, charIndex: 8 });
     result.clear();
     unmount();
 
@@ -180,21 +182,21 @@ describe('useReadingPosition (Vue)', () => {
     storage.setItem('b', JSON.stringify({ version: 2, chapter: 2, paragraph: 2, charIndex: 0 }));
     const key = ref('a');
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key, storage, throttleMs: 100 }),
+      useReadingPosition({ key, storage, debounceMs: 100 }),
     );
 
-    expect(result.position.value).toEqual({ chapter: 1, paragraph: 1, charIndex: 0 });
+    expect(result.position.value).toEqual({ chapterIndex: 1, paragraphIndex: 1, charIndex: 0 });
     key.value = 'b';
     await nextTick();
-    expect(result.position.value).toEqual({ chapter: 2, paragraph: 2, charIndex: 0 });
+    expect(result.position.value).toEqual({ chapterIndex: 2, paragraphIndex: 2, charIndex: 0 });
 
-    result.save({ chapter: 9, paragraph: 0, charIndex: 4 });
+    result.save({ chapterIndex: 9, paragraphIndex: 0, charIndex: 4 });
     vi.advanceTimersByTime(100);
 
     expect(JSON.parse(storage.data.get('b') ?? '{}')).toEqual({
-      version: 2,
-      chapter: 9,
-      paragraph: 0,
+      version: 3,
+      chapterIndex: 9,
+      paragraphIndex: 0,
       charIndex: 4,
     });
     expect(JSON.parse(storage.data.get('a') ?? '{}')).toEqual({
@@ -211,18 +213,18 @@ describe('useReadingPosition (Vue)', () => {
     storage.setItem('b', JSON.stringify({ version: 2, chapter: 2, paragraph: 2, charIndex: 0 }));
     const key = ref('a');
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key, storage, throttleMs: 100 }),
+      useReadingPosition({ key, storage, debounceMs: 100 }),
     );
 
-    result.save({ chapter: 1, paragraph: 3, charIndex: 5 });
+    result.save({ chapterIndex: 1, paragraphIndex: 3, charIndex: 5 });
     key.value = 'b';
     await nextTick();
     vi.advanceTimersByTime(100);
 
     expect(JSON.parse(storage.data.get('a') ?? '{}')).toEqual({
-      version: 2,
-      chapter: 1,
-      paragraph: 3,
+      version: 3,
+      chapterIndex: 1,
+      paragraphIndex: 3,
       charIndex: 5,
     });
     expect(JSON.parse(storage.data.get('b') ?? '{}')).toEqual({
@@ -234,66 +236,76 @@ describe('useReadingPosition (Vue)', () => {
     unmount();
   });
 
-  it('migrates legacy {chapter, spreadIdx} payloads to chapter start', () => {
+  it('resumes a stored position that names only a chapter at the chapter start', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const storage = memoryStorage();
     storage.setItem('k', JSON.stringify({ chapter: 5, spreadIdx: 12 }));
     const { result, unmount } = withSetup(() => useReadingPosition({ key: 'k', storage }));
-    expect(result.position.value).toEqual({ chapter: 5, paragraph: 0, charIndex: 0 });
-    expect(warn).toHaveBeenCalledOnce();
+    expect(result.position.value).toEqual({ chapterIndex: 5, paragraphIndex: 0, charIndex: 0 });
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
     unmount();
   });
 
-  it('onChange fires synchronously on save() with the new anchor', () => {
-    const onChange = vi.fn();
+  it('onPositionChange fires synchronously on save() with the new anchor', () => {
+    const onPositionChange = vi.fn();
     const storage = memoryStorage();
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key: 'k', storage, onChange }),
+      useReadingPosition({ key: 'k', storage, onPositionChange }),
     );
-    result.save({ chapter: 2, paragraph: 1, charIndex: 9 });
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith({ chapter: 2, paragraph: 1, charIndex: 9 });
+    result.save({ chapterIndex: 2, paragraphIndex: 1, charIndex: 9 });
+    expect(onPositionChange).toHaveBeenCalledTimes(1);
+    expect(onPositionChange).toHaveBeenCalledWith({
+      chapterIndex: 2,
+      paragraphIndex: 1,
+      charIndex: 9,
+    });
     unmount();
   });
 
-  it('onChange fires with null on clear()', () => {
-    const onChange = vi.fn();
+  it('onPositionChange fires with null on clear()', () => {
+    const onPositionChange = vi.fn();
     const storage = memoryStorage();
     storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
     const { result, unmount } = withSetup(() =>
-      useReadingPosition({ key: 'k', storage, onChange }),
+      useReadingPosition({ key: 'k', storage, onPositionChange }),
     );
     result.clear();
-    expect(onChange).toHaveBeenCalledWith(null);
+    expect(onPositionChange).toHaveBeenCalledWith(null);
     unmount();
   });
 
-  it('onChange is not invoked during initial hydration', () => {
-    const onChange = vi.fn();
+  it('onPositionChange is not invoked during initial hydration', () => {
+    const onPositionChange = vi.fn();
     const storage = memoryStorage();
     storage.setItem('k', JSON.stringify({ version: 2, chapter: 1, paragraph: 0, charIndex: 0 }));
-    const { unmount } = withSetup(() => useReadingPosition({ key: 'k', storage, onChange }));
-    expect(onChange).not.toHaveBeenCalled();
+    const { unmount } = withSetup(() =>
+      useReadingPosition({ key: 'k', storage, onPositionChange }),
+    );
+    expect(onPositionChange).not.toHaveBeenCalled();
     unmount();
   });
 
-  it('round-trips through a server mirror fed by onChange', () => {
+  it('round-trips through a server mirror fed by onPositionChange', () => {
     let server: string | null = null;
     const first = withSetup(() =>
       useReadingPosition({
         key: 'k',
         storage: memoryStorage(),
-        onChange: (next) => {
+        onPositionChange: (next) => {
           server = next === null ? null : serializeReadingPosition(next);
         },
       }),
     );
 
-    first.result.save({ chapter: 4, paragraph: 6, charIndex: 11 });
+    first.result.save({ chapterIndex: 4, paragraphIndex: 6, charIndex: 11 });
     first.unmount();
 
-    expect(parseReadingPosition(server)).toEqual({ chapter: 4, paragraph: 6, charIndex: 11 });
+    expect(parseReadingPosition(server)).toEqual({
+      chapterIndex: 4,
+      paragraphIndex: 6,
+      charIndex: 11,
+    });
 
     const revisit = withSetup(() =>
       useReadingPosition({
@@ -305,7 +317,11 @@ describe('useReadingPosition (Vue)', () => {
         },
       }),
     );
-    expect(revisit.result.position.value).toEqual({ chapter: 4, paragraph: 6, charIndex: 11 });
+    expect(revisit.result.position.value).toEqual({
+      chapterIndex: 4,
+      paragraphIndex: 6,
+      charIndex: 11,
+    });
     revisit.unmount();
   });
 });

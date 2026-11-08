@@ -17,7 +17,7 @@ const TCY_END = 5;
 function paragraph(withTcy: boolean): BookParagraph {
   return {
     text: '昭和五十六年に刊行された作品である',
-    inlineAnnotations: withTcy ? [{ kind: 'tcy', startIndex: TCY_START, endIndex: TCY_END }] : [],
+    inlineAnnotations: withTcy ? [{ type: 'tcy', startIndex: TCY_START, endIndex: TCY_END }] : [],
   };
 }
 
@@ -48,12 +48,12 @@ function splitsSpan(points: readonly number[]): boolean {
 function spanLineIndices(layout: ChapterLayout): (number | null)[] {
   const lines: (number | null)[] = [];
   for (let charIndex = TCY_START; charIndex < TCY_END; charIndex++) {
-    lines.push(layout.locateAnchor({ paragraph: 0, charIndex })?.lineIdx ?? null);
+    lines.push(layout.locateAnchor({ paragraphIndex: 0, charIndex })?.lineIndex ?? null);
   }
   return lines;
 }
 
-const IMAGES: BookImage[] = [{ x: 40, y: 0, w: 120, h: 18, margin: 4 }];
+const IMAGES: BookImage[] = [{ x: 40, y: 0, width: 120, height: 18, margin: 4 }];
 
 describe('tate-chu-yoko in the book layout', () => {
   it('reserves one em for the span and keeps it on one line', async () => {
@@ -88,7 +88,7 @@ describe('tate-chu-yoko in the book layout', () => {
     const changed = await layoutChapter({ lineWidth: 38, fontSize: 20 });
     const before = breakPoints(changed.layout);
 
-    await changed.book.setOptions({ fontSize: 16 });
+    await changed.book.updateOptions({ fontSize: 16 });
 
     expect(breakPoints(changed.layout)).toEqual(breakPoints(fresh.layout));
     expect(breakPoints(changed.layout)).not.toEqual(before);

@@ -1,7 +1,7 @@
-import type { PageResult } from '@libraz/mejiro/book';
+import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import { paragraphClassName } from '@libraz/mejiro/render';
-import { defineComponent, h, type PropType, type VNode } from 'vue';
+import { defineComponent, h, type PropType, toRaw, type VNode } from 'vue';
 import { MejiroPage } from './MejiroPage.js';
 import { renderSegment } from './renderInlineNode.js';
 
@@ -11,6 +11,9 @@ import { renderSegment } from './renderInlineNode.js';
  * Automatically selects the rendering strategy:
  * - **Normal mode** (no images): Uses CSS `writing-mode: vertical-rl` via `MejiroPage`.
  * - **Slot mode** (images present): Uses absolute-positioned columns with per-line sizing.
+ *
+ * Given `layout`, the slot-mode font family and line spacing default to the
+ * typography that layout was measured with.
  *
  * @example
  * ```vue
@@ -25,11 +28,21 @@ export const MejiroPageView = defineComponent({
       type: Object as PropType<PageResult>,
       required: true,
     },
-    /** CSS font family for slot-based rendering (used when images are present). */
+    /** Layout the page comes from; its `typography` supplies the font props that are not given. */
+    layout: {
+      type: Object as PropType<ChapterLayout>,
+    },
+    /**
+     * CSS font family for slot-based rendering (used when images are present).
+     * @defaultValue `layout.typography.fontFamily`
+     */
     fontFamily: {
       type: [String, Array] as PropType<FontFamily>,
     },
-    /** Line spacing multiplier for slot-based rendering (used when images are present). */
+    /**
+     * Line spacing multiplier for slot-based rendering (used when images are present).
+     * @defaultValue `layout.typography.lineSpacing`
+     */
     lineSpacing: {
       type: Number,
     },
@@ -40,7 +53,10 @@ export const MejiroPageView = defineComponent({
   },
   setup(props) {
     return () => {
-      const { result, fontFamily, lineSpacing, slotMode } = props;
+      const { result, slotMode } = props;
+      const typography = toRaw(props.layout)?.typography;
+      const fontFamily = props.fontFamily ?? typography?.fontFamily;
+      const lineSpacing = props.lineSpacing ?? typography?.lineSpacing;
       const fontFamilyCss = fontFamily != null ? normalizeFontFamily(fontFamily) : undefined;
 
       if (result.hasImages || slotMode) {

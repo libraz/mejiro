@@ -17,12 +17,12 @@ export interface RubyAnnotation {
   /** Advance widths of each ruby character in px. */
   rubyAdvances: Float32Array;
   /** @defaultValue 'mono' */
-  type?: RubyType;
+  rubyType?: RubyType;
   /**
    * For jukugo ruby: base-text-relative indices where line breaks are permitted.
    * E.g., 東京都 (indices 0,1,2) with splitPoints [1,2] allows breaks after 東 and 京.
    */
-  jukugoSplitPoints?: number[];
+  jukugoSplitPoints?: readonly number[];
 }
 
 /**
@@ -63,16 +63,28 @@ export function isKana(cp: number): boolean {
  * it only contributes split points, while the covered annotations own the
  * ruby text and therefore the width. Annotations must not otherwise overlap.
  *
+ * Unlike tate-chu-yoko ({@link preprocessTcy}), which skips a span it cannot
+ * honour, malformed ruby is rejected: a ruby annotation is authored data whose
+ * silent loss would drop a reading, while tate-chu-yoko spans come from
+ * arbitrary markup where one broken span must not stop a chapter.
+ *
  * @param text - Base text codepoints.
  * @param advances - Original advance widths.
- * @param annotations - Ruby annotations sorted by startIndex.
+ * @param annotations - Ruby annotations in any order; they are not modified.
  * @param existingClusterIds - Optional pre-existing cluster IDs to merge with.
  * @returns Effective advances and merged cluster IDs.
+ * @throws RangeError when `advances` or `existingClusterIds` do not have one
+ *   entry per code point of `text`; when an advance is negative or not finite;
+ *   when an annotation range is non-integral, empty or outside the text; when
+ *   annotations overlap other than as a jukugo aggregate over the ruby it
+ *   covers; when `rubyAdvances` and `rubyText` differ in length or hold a
+ *   negative or non-finite advance; or when a `mono` annotation does not cover
+ *   exactly one base character.
  */
 export function preprocessRuby(
   text: Uint32Array,
   advances: Float32Array,
-  annotations: RubyAnnotation[],
+  annotations: readonly RubyAnnotation[],
   existingClusterIds?: Uint32Array,
 ): RubyPreprocessResult {
   // Sort annotations (outermost first) for consistent processing
@@ -121,7 +133,7 @@ export function preprocessRuby(
   // annotation's stronger constraint wins over the aggregate's split points.
   for (const ann of sorted) {
     const { startIndex, endIndex } = ann;
-    const type = ann.type ?? 'mono';
+    const type = ann.rubyType ?? 'mono';
 
     if (type === 'group') {
       const cid = nextClusterId++;
@@ -208,7 +220,7 @@ function validateRubyInput(
         );
       }
     }
-    if ((ann.type ?? 'mono') === 'mono' && ann.endIndex - ann.startIndex !== 1) {
+    if ((ann.rubyType ?? 'mono') === 'mono' && ann.endIndex - ann.startIndex !== 1) {
       throw new RangeError(
         'preprocessRuby: mono ruby annotations must cover exactly one base char',
       );
@@ -223,7 +235,7 @@ export interface JukugoSpan {
   /** End index in base text (exclusive). */
   readonly endIndex: number;
   /** @defaultValue 'mono' */
-  readonly type?: RubyType;
+  readonly rubyType?: RubyType;
 }
 
 /**
@@ -262,11 +274,11 @@ export function resolveJukugoAggregates<T extends JukugoSpan>(
     for (; h < n && byStart[h].startIndex === start; h++) {
       const ann = byStart[h];
       if (ann.endIndex < minEnd) minEnd = ann.endIndex;
-      if ((ann.type ?? 'mono') !== 'jukugo') nonJukugoEnds.add(ann.endIndex);
+      if ((ann.rubyType ?? 'mono') !== 'jukugo') nonJukugoEnds.add(ann.endIndex);
     }
     for (let k = g; k < h; k++) {
       const ann = byStart[k];
-      if ((ann.type ?? 'mono') !== 'jukugo') continue;
+      if ((ann.rubyType ?? 'mono') !== 'jukugo') continue;
       if (
         minEnd < ann.endIndex ||
         minEndFrom[h] <= ann.endIndex ||
@@ -287,7 +299,7 @@ export function resolveJukugoAggregates<T extends JukugoSpan>(
     for (; h < n && byStart[h].startIndex === start; h++) {
       const ann = byStart[h];
       if (
-        (ann.type ?? 'mono') !== 'jukugo' &&
+        (ann.rubyType ?? 'mono') !== 'jukugo' &&
         maxAggregateEnd >= Math.max(ann.startIndex, ann.endIndex)
       ) {
         continuations.add(ann);
@@ -306,7 +318,7 @@ function normalizeRubyAnnotations(annotations: readonly RubyAnnotation[]): RubyA
   return [...annotations]
     .sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex)
     .map((ann) => {
-      if ((ann.type ?? 'mono') !== 'jukugo') return ann;
+      if ((ann.rubyType ?? 'mono') !== 'jukugo') return ann;
       const span = ann.endIndex - ann.startIndex;
       const splitPoints = Array.from(
         new Set(

@@ -4,9 +4,16 @@
 import { MejiroBook } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { act, render } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { markBookIdentity } from '../src/bookIdentity.js';
 import { MejiroReader } from '../src/MejiroReader.js';
+import { measurableReaderSurface } from './helpers/fixtures.js';
+
+let restoreSurface: () => void = () => {};
+beforeEach(() => {
+  restoreSurface = measurableReaderSurface();
+});
+afterEach(() => restoreSurface());
 
 function book(text: (chapter: number) => string): EpubBook {
   return {

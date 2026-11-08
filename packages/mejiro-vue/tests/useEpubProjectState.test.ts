@@ -11,7 +11,7 @@ const chapters = [
   { id: 'b', title: 'B', body: '本文B' },
 ];
 
-const COVER = { href: 'OPS/Images/cover.jpg', url: 'https://cdn.example.test/cover.jpg' };
+const COVER = { url: 'https://cdn.example.test/cover.jpg', mediaType: 'image/jpeg' };
 const COVER_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0]);
 
 function harness<T>(setup: () => T): { result: { current: T }; unmount: () => void } {
@@ -47,9 +47,11 @@ afterEach(() => {
 
 describe('useEpubProject actions read the latest state (Vue)', () => {
   it('builds from setter values applied earlier in the same tick', () => {
-    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = harness(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
-    result.current.setMetadata({ title: 'Renamed' });
+    result.current.updateMetadata({ title: 'Renamed' });
     result.current.setCover(COVER);
     result.current.setAssets([{ href: 'OPS/Images/figure.png', data: COVER_BYTES }]);
     result.current.addChapter({ id: 'c', title: 'C', body: '本文C' });
@@ -66,7 +68,7 @@ describe('useEpubProject actions read the latest state (Vue)', () => {
   it('exports the cover set in the same tick', async () => {
     const assetResolver = vi.fn(() => COVER_BYTES);
     const { result } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 10_000, assetResolver }),
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000, assetResolver }),
     );
 
     result.current.setCover(COVER);
@@ -78,7 +80,9 @@ describe('useEpubProject actions read the latest state (Vue)', () => {
 
 describe('useEpubProject package identifier (Vue)', () => {
   it('keeps one identifier across builds of the same project', () => {
-    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = harness(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
     const first = result.current.buildProject().metadata.identifier;
     const second = result.current.buildProject().metadata.identifier;
@@ -90,23 +94,29 @@ describe('useEpubProject package identifier (Vue)', () => {
 
   it('keeps a caller-supplied identifier', () => {
     const { result } = harness(() =>
-      useEpubProject({ chapters, metadata: { identifier: 'urn:isbn:1' }, debounceMs: 10_000 }),
+      useEpubProject({
+        initialChapters: chapters,
+        initialMetadata: { identifier: 'urn:isbn:1' },
+        debounceMs: 10_000,
+      }),
     );
 
     expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:1');
   });
 
-  it('keeps the identifier when setMetadata clears or blanks it', () => {
-    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+  it('keeps the identifier when updateMetadata clears or blanks it', () => {
+    const { result } = harness(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
     const seeded = result.current.buildProject().metadata.identifier;
 
     for (const identifier of [undefined, '', '   ']) {
-      result.current.setMetadata({ identifier });
+      result.current.updateMetadata({ identifier });
       expect(result.current.buildProject().metadata.identifier).toBe(seeded);
     }
-    result.current.setMetadata({ identifier: 'urn:isbn:2' });
+    result.current.updateMetadata({ identifier: 'urn:isbn:2' });
     expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:2');
-    result.current.setMetadata({ identifier: undefined });
+    result.current.updateMetadata({ identifier: undefined });
     expect(result.current.buildProject().metadata.identifier).toBe('urn:isbn:2');
   });
 });
@@ -129,28 +139,35 @@ describe('useEpubProject generated chapter ids (Vue)', () => {
 describe('useEpubProject preview pipeline (Vue)', () => {
   it('publishes a rebuilt preview and reports it through onPreview', async () => {
     const onPreview = vi.fn();
-    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 0, onPreview }));
+    const { result } = harness(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 0, onPreview }),
+    );
 
-    await vi.waitFor(() => expect(result.current.previewBook.value).not.toBeNull());
+    await vi.waitFor(() => expect(result.current.previewEpub.value).not.toBeNull());
     expect(result.current.previewing.value).toBe(false);
     expect(result.current.previewError.value).toBeNull();
-    expect(onPreview).toHaveBeenCalledWith(result.current.previewBook.value);
+    expect(onPreview).toHaveBeenCalledWith(result.current.previewEpub.value);
   });
 
   it('aborts the asset resolution of a superseded preview and ignores its failure', async () => {
     const { resolver, signals } = pendingResolver();
     const assetResolver = vi.fn(resolver);
     const { result } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 0, cover: COVER, assetResolver }),
+      useEpubProject({
+        initialChapters: chapters,
+        debounceMs: 0,
+        initialCover: COVER,
+        assetResolver,
+      }),
     );
     await vi.waitFor(() => expect(signals).toHaveLength(1));
 
     assetResolver.mockImplementation(() => Promise.resolve(COVER_BYTES));
-    result.current.setMetadata({ title: 'Edited' });
+    result.current.updateMetadata({ title: 'Edited' });
     await nextTick();
 
     expect(signals[0]?.aborted).toBe(true);
-    await vi.waitFor(() => expect(result.current.previewBook.value?.title).toBe('Edited'));
+    await vi.waitFor(() => expect(result.current.previewEpub.value?.title).toBe('Edited'));
     expect(result.current.previewError.value).toBeNull();
   });
 
@@ -158,7 +175,13 @@ describe('useEpubProject preview pipeline (Vue)', () => {
     const { resolver, signals } = pendingResolver();
     const onPreview = vi.fn();
     const { unmount } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 0, cover: COVER, assetResolver: resolver, onPreview }),
+      useEpubProject({
+        initialChapters: chapters,
+        debounceMs: 0,
+        initialCover: COVER,
+        assetResolver: resolver,
+        onPreview,
+      }),
     );
     await vi.waitFor(() => expect(signals).toHaveLength(1));
 
@@ -171,7 +194,12 @@ describe('useEpubProject preview pipeline (Vue)', () => {
   it('never starts a preview whose debounce is still pending at unmount', async () => {
     const assetResolver = vi.fn(() => COVER_BYTES);
     const { unmount } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 20, cover: COVER, assetResolver }),
+      useEpubProject({
+        initialChapters: chapters,
+        debounceMs: 20,
+        initialCover: COVER,
+        assetResolver,
+      }),
     );
 
     unmount();

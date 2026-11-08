@@ -4,8 +4,15 @@
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { act, fireEvent, render } from '@testing-library/react';
 import { createRef } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MejiroReader, type MejiroReaderHandle } from '../src/MejiroReader.js';
+import { measurableReaderSurface } from './helpers/fixtures.js';
+
+let restoreSurface: () => void = () => {};
+beforeEach(() => {
+  restoreSurface = measurableReaderSurface();
+});
+afterEach(() => restoreSurface());
 
 /** Minimal stand-in for a real `IntersectionObserver`, driven manually by the tests. */
 interface ObserverStub {
@@ -92,12 +99,13 @@ describe('MejiroReader (React) — scroll mode page wiring', () => {
       <MejiroReader
         epub={longEpub()}
         mode="scroll"
-        enableImageOverlay
+        title="T"
+        showImageOverlayButton
         annotations={[
           {
-            chapter: 0,
-            start: { paragraph: 0, charIndex: 0 },
-            end: { paragraph: 0, charIndex: 8 },
+            chapterIndex: 0,
+            start: { paragraphIndex: 0, charIndex: 0 },
+            end: { paragraphIndex: 0, charIndex: 8 },
             color: 'rgb(255, 235, 59)',
           },
         ]}
@@ -142,7 +150,7 @@ describe('MejiroReader (React) — scroll mode page wiring', () => {
         );
       });
 
-      expect(ref.current?.getReadingPosition().spreadIdx).toBe(1);
+      expect(ref.current?.getSpreadPosition().spreadIndex).toBe(1);
       expect(scroller.scrollTop).toBe(330);
 
       // A programmatic turn still scrolls to its spread.

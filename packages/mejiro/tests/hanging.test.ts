@@ -45,7 +45,7 @@ describe('computeHangingAdjustment', () => {
       lineWidth: 88,
     });
 
-    expect(result.hangingAdjustments?.[0]).toBeCloseTo(8);
+    expect(result.hangingAdjustments[0]).toBeCloseTo(8);
     expect(computeHangingAdjustment(0x3001, 16)).toBe(16);
   });
 });
@@ -64,8 +64,8 @@ describe('half-width punctuation', () => {
       const a = run(full);
       const b = run(half);
       expect([...b.breakPoints], half).toEqual([...a.breakPoints]);
-      expect([...(b.hangingAdjustments ?? [])], half).toEqual([...(a.hangingAdjustments ?? [])]);
-      expect([...(b.hangingAdjustments ?? [])][0], half).toBe(16);
+      expect([...b.hangingAdjustments], half).toEqual([...a.hangingAdjustments]);
+      expect([...b.hangingAdjustments][0], half).toBe(16);
     }
   });
 });
@@ -80,8 +80,8 @@ describe('BreakResult optional fields', () => {
     for (const [s, lineWidth, expected] of cases) {
       const text = toCodepoints(s);
       const result = computeBreaks({ text, advances: uniformAdvances(text.length, 16), lineWidth });
-      expect(result.hangingAdjustments?.length, s).toBe(result.breakPoints.length + 1);
-      expect([...(result.hangingAdjustments ?? [])], s).toEqual(expected);
+      expect(result.hangingAdjustments.length, s).toBe(result.breakPoints.length + 1);
+      expect([...result.hangingAdjustments], s).toEqual(expected);
     }
   });
 
@@ -96,7 +96,7 @@ describe('BreakResult optional fields', () => {
     expect(result.hangingAdjustments).toEqual(new Float32Array(0));
   });
 
-  it('omits hangingAdjustments for empty text when hanging is disabled', () => {
+  it('returns zero-length hangingAdjustments for empty text when hanging is disabled', () => {
     const result = computeBreaks({
       text: new Uint32Array(0),
       advances: new Float32Array(0),
@@ -104,7 +104,7 @@ describe('BreakResult optional fields', () => {
       enableHanging: false,
     });
 
-    expect(result.hangingAdjustments).toBeUndefined();
+    expect(result.hangingAdjustments).toEqual(new Float32Array(0));
   });
 
   it('returns zero-length lineWidths for empty text when per-line widths are given', () => {

@@ -22,17 +22,30 @@ class StubResizeObserver {
 
 function stubBook(): MejiroBook {
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+    fitPageSize: vi.fn(() => ({
+      pageWidth: 320,
+      lineWidth: 400,
+      pageHeight: 480,
+      contentHeight: 400,
+    })),
     layoutChapter: vi.fn(async () => null),
-    layoutManuscript: vi.fn(async () => new Map()),
+    layoutManuscript: vi.fn(async () => []),
     getOptions: vi.fn(() => ({ fontSize: 16 })),
   } as unknown as MejiroBook;
 }
 
-function mockLayout(totalPages = 8): ChapterLayout {
+/** A surface element with a measurable box, as a mounted reader has. */
+function sizedSurface(): HTMLElement {
+  const el = document.createElement('div');
+  Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => 640 });
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 480 });
+  return el;
+}
+
+function mockLayout(pageCount = 8): ChapterLayout {
   return {
-    totalPages,
-    getSpread: vi.fn((i: number) => ({ spreadIdx: i, totalPages }) as unknown as SpreadResult),
+    pageCount,
+    getSpread: vi.fn((i: number) => ({ spreadIndex: i, pageCount }) as unknown as SpreadResult),
   } as unknown as ChapterLayout;
 }
 
@@ -45,10 +58,14 @@ describe('composable cleanup in a bare effectScope', () => {
 
   it('useChapterLayout disconnects its ResizeObserver when the scope stops', async () => {
     vi.stubGlobal('ResizeObserver', StubResizeObserver);
-    const surface = ref<HTMLElement | null>(document.createElement('div'));
+    const surface = ref<HTMLElement | null>(sizedSurface());
     const scope = effectScope();
     scope.run(() =>
-      useChapterLayout(stubBook(), shallowRef<EpubBook | null>(null), ref(0), surface),
+      useChapterLayout(stubBook(), {
+        epub: shallowRef<EpubBook | null>(null),
+        chapterIndex: ref(0),
+        surface,
+      }),
     );
     await nextTick();
     const before = disconnects.length;
@@ -58,9 +75,9 @@ describe('composable cleanup in a bare effectScope', () => {
 
   it('useManuscriptLayout disconnects its ResizeObserver when the scope stops', async () => {
     vi.stubGlobal('ResizeObserver', StubResizeObserver);
-    const surface = ref<HTMLElement | null>(document.createElement('div'));
+    const surface = ref<HTMLElement | null>(sizedSurface());
     const scope = effectScope();
-    scope.run(() => useManuscriptLayout(stubBook(), ref(null), surface));
+    scope.run(() => useManuscriptLayout(stubBook(), { chapter: ref(null), surface }));
     await nextTick();
     const before = disconnects.length;
     scope.stop();
@@ -72,7 +89,11 @@ describe('composable cleanup in a bare effectScope', () => {
     const remove = vi.spyOn(window, 'removeEventListener');
     const scope = effectScope();
     scope.run(() =>
-      useChapterLayout(stubBook(), shallowRef<EpubBook | null>(null), ref(0), ref(null)),
+      useChapterLayout(stubBook(), {
+        epub: shallowRef<EpubBook | null>(null),
+        chapterIndex: ref(0),
+        surface: ref(null),
+      }),
     );
     scope.stop();
     expect(remove).toHaveBeenCalledWith('resize', expect.any(Function));
@@ -83,11 +104,11 @@ describe('composable cleanup in a bare effectScope', () => {
     vi.useFakeTimers();
     const layout = shallowRef<ChapterLayout | null>(mockLayout());
     const scope = effectScope();
-    const spread = scope.run(() => useSpread(layout, { turnDuration: 100 }));
+    const spread = scope.run(() => useSpread(layout, { turnDurationMs: 100 }));
     spread?.goTo(1);
     scope.stop();
     vi.advanceTimersByTime(200);
-    expect(spread?.spreadIdx.value).toBe(0);
+    expect(spread?.index.value).toBe(0);
   });
 });
 
@@ -114,7 +135,12 @@ describe('layout composables abandon an in-flight layout when the scope stops', 
     const epub = shallowRef({ chapters: [{ title: 'c' }] } as unknown as EpubBook);
     const scope = effectScope();
     const state = scope.run(() =>
-      useChapterLayout(book, epub, ref(0), ref(document.createElement('div')), { onError }),
+      useChapterLayout(book, {
+        epub,
+        chapterIndex: ref(0),
+        surface: ref(sizedSurface()),
+        onError,
+      }),
     );
     await nextTick();
     expect(book.layoutChapter).toHaveBeenCalledTimes(1);
@@ -137,7 +163,12 @@ describe('layout composables abandon an in-flight layout when the scope stops', 
     const epub = shallowRef({ chapters: [{ title: 'c' }] } as unknown as EpubBook);
     const scope = effectScope();
     scope.run(() =>
-      useChapterLayout(book, epub, ref(0), ref(document.createElement('div')), { onError }),
+      useChapterLayout(book, {
+        epub,
+        chapterIndex: ref(0),
+        surface: ref(sizedSurface()),
+        onError,
+      }),
     );
     await nextTick();
 
@@ -151,24 +182,23 @@ describe('layout composables abandon an in-flight layout when the scope stops', 
 
   it('useManuscriptLayout assigns nothing and skips restorePosition after the scope stops', async () => {
     vi.stubGlobal('ResizeObserver', StubResizeObserver);
-    const pending = deferred<Map<string, ChapterLayout>>();
+    const pending = deferred<ChapterLayout[]>();
     const book = stubBook();
     vi.mocked(book.layoutManuscript).mockReturnValue(pending.promise);
     const restorePosition = vi.fn();
     const scope = effectScope();
     const state = scope.run(() =>
-      useManuscriptLayout(
-        book,
-        ref({ id: 'c1', title: 'T', body: 'B' }),
-        ref(document.createElement('div')),
-        { restorePosition },
-      ),
+      useManuscriptLayout(book, {
+        chapter: ref({ id: 'c1', title: 'T', body: 'B' }),
+        surface: ref(sizedSurface()),
+        restorePosition,
+      }),
     );
     await nextTick();
     expect(book.layoutManuscript).toHaveBeenCalledTimes(1);
 
     scope.stop();
-    pending.resolve(new Map([['c1', mockLayout()]]));
+    pending.resolve([mockLayout()]);
     await pending.promise;
     await nextTick();
 

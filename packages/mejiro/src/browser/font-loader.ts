@@ -1,3 +1,5 @@
+import { MejiroError } from '../errors.js';
+
 /**
  * Representative character per Unicode range, asked about when the caller does
  * not name the text it is about to measure.
@@ -19,6 +21,15 @@ const FULL_COVERAGE_SAMPLE = 'A、あア漢Ａ';
 function coverageSample(text?: string): string {
   if (text === undefined) return FULL_COVERAGE_SAMPLE;
   return [...new Set(text)].join('');
+}
+
+/** Options for {@link FontLoader}. */
+export interface FontLoaderOptions {
+  /**
+   * Called after each `loadingdone`, once cached readiness has been discarded,
+   * so the host can invalidate width caches measured against the previous faces.
+   */
+  onFontsLoaded?: () => void;
 }
 
 /**
@@ -49,10 +60,9 @@ export class FontLoader {
    * `document.fonts`), which keeps SSR and Node test runs working; readiness
    * checks then resolve without waiting on anything.
    *
-   * @param options - `onFontsLoaded` fires after each `loadingdone`, letting the
-   *   host invalidate width caches measured against the previous faces.
+   * @param options - See {@link FontLoaderOptions}.
    */
-  constructor(options: { onFontsLoaded?: () => void } = {}) {
+  constructor(options: FontLoaderOptions = {}) {
     this.onFontsLoaded = options.onFontsLoaded;
     this.subscribe();
   }
@@ -114,8 +124,8 @@ export class FontLoader {
    * @param text - Text about to be measured with this spec; every distinct
    *   character in it must be renderable before this resolves. Defaults to a
    *   representative sample spanning every range mejiro measures.
-   * @throws If the font fails to load. Resolves at once when the runtime has
-   *   no `document.fonts`.
+   * @throws {@link MejiroError} `font-load-failed` if the font fails to load.
+   *   Resolves at once when the runtime has no `document.fonts`.
    */
   async ensureLoaded(fontSpec: string, text?: string): Promise<void> {
     // Without a font set there is nothing to wait on.
@@ -155,9 +165,13 @@ export class FontLoader {
 
   /** Requests the font from the host and verifies it really became usable. */
   private async load(fontSpec: string, text: string | undefined, sample: string): Promise<void> {
-    await document.fonts.load(fontSpec, sample);
+    try {
+      await document.fonts.load(fontSpec, sample);
+    } catch (cause) {
+      throw new MejiroError('font-load-failed', `Font load failed: ${fontSpec}`, { cause });
+    }
     if (!this.isAvailable(fontSpec, text)) {
-      throw new Error(`Font load failed: ${fontSpec}`);
+      throw new MejiroError('font-load-failed', `Font load failed: ${fontSpec}`);
     }
   }
 

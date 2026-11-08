@@ -265,7 +265,7 @@ export class ColumnFlow {
     const { lineWidth } = this.geometry;
     return images.some((img) => {
       const margin = img.inlineMargin ?? 0;
-      return Math.min(lineWidth, img.y + img.h + margin) > Math.max(0, img.y - margin);
+      return Math.min(lineWidth, img.y + img.height + margin) > Math.max(0, img.y - margin);
     });
   }
 }

@@ -40,10 +40,10 @@ export interface OverlayDragSessionOptions {
    * call gets a fresh object; the start rectangle is the base each time, so
    * rounding never accumulates across a gesture.
    */
-  onChange: (rect: ImageOverlayRect) => void;
+  onRectChange: (rect: ImageOverlayRect) => void;
   /**
    * Called exactly once when the gesture ends, however it ended: `pointerup`,
-   * `pointercancel`, loss of pointer capture, or `cancel()`.
+   * `pointercancel`, loss of pointer capture, or `dispose()`.
    */
   onEnd?: () => void;
   /**
@@ -59,10 +59,11 @@ export interface OverlayDragSession {
   /** Whether the gesture is still running. */
   readonly active: boolean;
   /**
-   * Ends the gesture and releases every listener, dropping any update not yet
-   * delivered. Idempotent.
+   * Ends the gesture for good and releases every listener, dropping any update
+   * not yet delivered. A session cannot be restarted; start a new one instead.
+   * Idempotent.
    */
-  cancel: () => void;
+  dispose: () => void;
 }
 
 /**
@@ -87,7 +88,7 @@ export function isPrimaryPointerPress(
  * hooks: it owns pointer capture, the drag class, the document-level
  * `pointermove` / `pointerup` / `pointercancel` / `lostpointercapture`
  * listeners, animation-frame coalescing and teardown, leaving each host with
- * nothing but its own state update in {@link OverlayDragSessionOptions.onChange}. Call it from a pointer-down
+ * nothing but its own state update in {@link OverlayDragSessionOptions.onRectChange}. Call it from a pointer-down
  * handler after the host has decided the gesture applies — at least that the
  * press passes {@link isPrimaryPointerPress}.
  *
@@ -102,10 +103,10 @@ export function isPrimaryPointerPress(
  *
  * The rectangle is never clamped to the content area beyond the `'resize'`
  * minimum size, so an overlay can be dragged partly out of view; a host needing
- * containment clamps inside `onChange`.
+ * containment clamps inside `onRectChange`.
  *
  * @param options - Gesture description and callbacks.
- * @returns A handle whose `cancel()` ends the gesture early.
+ * @returns A handle whose `dispose()` ends the gesture early.
  */
 export function createOverlayDragSession(options: OverlayDragSessionOptions): OverlayDragSession {
   const { mode, rect, startX, startY, pointerId, captureElement, activeElement, dragClass } =
@@ -116,7 +117,7 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
 
   let active = true;
   let frame = 0;
-  // Rect computed by the latest move and not yet handed to `onChange`.
+  // Rect computed by the latest move and not yet handed to `onRectChange`.
   let pending: ImageOverlayRect | null = null;
 
   const owns = (event: PointerEvent): boolean =>
@@ -126,7 +127,7 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
     frame = 0;
     const next = pending;
     pending = null;
-    if (next) options.onChange(next);
+    if (next) options.onRectChange(next);
   };
 
   const handleMove = (event: PointerEvent): void => {
@@ -142,7 +143,7 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
   };
 
   // The one teardown path. A gesture the browser ended delivers its last
-  // position first; an explicit cancel() drops it.
+  // position first; an explicit dispose() drops it.
   const end = (settle: boolean): void => {
     if (!active) return;
     active = false;
@@ -155,7 +156,7 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
     target?.removeEventListener('pointerup', handleEnd);
     target?.removeEventListener('pointercancel', handleEnd);
     target?.removeEventListener('lostpointercapture', handleEnd);
-    options.registry?.delete(cancel);
+    options.registry?.delete(dispose);
     options.onEnd?.();
   };
 
@@ -163,7 +164,7 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
     if (owns(event)) end(true);
   };
 
-  const cancel = (): void => end(false);
+  const dispose = (): void => end(false);
 
   if (pointerId !== undefined) captureElement?.setPointerCapture(pointerId);
   if (dragClass) activeElement?.classList.add(dragClass);
@@ -171,12 +172,12 @@ export function createOverlayDragSession(options: OverlayDragSessionOptions): Ov
   target?.addEventListener('pointerup', handleEnd);
   target?.addEventListener('pointercancel', handleEnd);
   target?.addEventListener('lostpointercapture', handleEnd);
-  options.registry?.add(cancel);
+  options.registry?.add(dispose);
 
   return {
     get active() {
       return active;
     },
-    cancel,
+    dispose,
   };
 }

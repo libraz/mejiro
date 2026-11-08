@@ -9,8 +9,9 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_HEADING_STYLES } from '../src/book/constants.js';
 import {
-  buildKinsokuRules,
   computeBreaks,
+  DEFAULT_LINE_SPACING,
+  extendKinsokuRules,
   getDefaultKinsokuRules,
   paginate,
   preprocessRuby,
@@ -35,7 +36,7 @@ describe('ruby preprocessing example', () => {
         endIndex: 2,
         rubyText: toCodepoints('かんじ'),
         rubyAdvances: new Float32Array([8, 8, 8]),
-        type: 'group',
+        rubyType: 'group',
       },
     ]);
 
@@ -50,7 +51,10 @@ describe('kinsoku extension recipe', () => {
       resolve(import.meta.dirname, `../../../docs/${locale}/09-advanced.md`),
       'utf8',
     );
-    const added = /\[\.\.\.defaults\.lineStartProhibited, (0x[0-9a-f]+)\]/u.exec(doc);
+    const added =
+      /extendKinsokuRules\(getDefaultKinsokuRules\(\), \{ lineStartProhibited: \[(0x[0-9a-f]+)\] \}\)/u.exec(
+        doc,
+      );
     const sample = /text: toCodepoints\('([^']+)'\),\n\s+advances: new Float32Array\((\d+)\)/u.exec(
       doc,
     );
@@ -65,12 +69,8 @@ describe('kinsoku extension recipe', () => {
     const text = toCodepoints(sample[1]);
     expect(text.length).toBe(Number(sample[2]));
     const advances = new Float32Array(text.length).fill(16);
-    const rules = buildKinsokuRules({
-      lineStartProhibited: [...defaults.lineStartProhibited, codepoint],
-      lineEndProhibited: defaults.lineEndProhibited,
-      unbreakablePairs: defaults.unbreakablePairs,
-    });
-    const custom = computeBreaks({ text, advances, lineWidth: 80, kinsokuRules: rules });
+    const rules = extendKinsokuRules(defaults, { lineStartProhibited: [codepoint] });
+    const custom = computeBreaks({ text, advances, lineWidth: 80, kinsoku: rules });
     const builtin = computeBreaks({ text, advances, lineWidth: 80 });
     expect([...custom.breakPoints]).toEqual(breaks[1].split(', ').map(Number));
     expect([...custom.breakPoints]).not.toEqual([...builtin.breakPoints]);
@@ -82,7 +82,7 @@ describe('manuscript tate-chu-yoko limit', () => {
     const result = parseManuscript('〔12345〕');
 
     expect(result.text).toBe('12345');
-    expect(result.inlineAnnotations).toEqual([{ kind: 'tcy', startIndex: 0, endIndex: 5 }]);
+    expect(result.inlineAnnotations).toEqual([{ type: 'tcy', startIndex: 0, endIndex: 5 }]);
   });
 
   it('leaves a six-character payload as body text', () => {
@@ -137,15 +137,18 @@ describe('pagination walkthrough example', () => {
     ]);
   });
 
-  it('treats lineSpacing as the documented default of 1', () => {
+  it('treats lineSpacing as the documented default of DEFAULT_LINE_SPACING', () => {
     const entries = [docsEntry('本文', {})];
-    expect(buildParagraphMeasures(entries, { fontSize: 16 })[0].linePitch).toBe(16);
+    expect(DEFAULT_LINE_SPACING).toBe(1.8);
+    expect(buildParagraphMeasures(entries, { fontSize: 16 })[0].linePitch).toBe(
+      16 * DEFAULT_LINE_SPACING,
+    );
     expect(buildParagraphMeasures(entries, { fontSize: 16, lineSpacing: 1.8 })[0].linePitch).toBe(
       16 * 1.8,
     );
   });
 
-  it('never assigns the deprecated isHeading field in a walkthrough sample', async () => {
+  it('never assigns an isHeading field in a walkthrough sample', async () => {
     const repoRoot = resolve(import.meta.dirname, '../../..');
     // Matches an object-literal assignment, not the `isHeading: boolean`
     // declaration in the printed `RenderParagraph` interface.

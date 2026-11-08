@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FontLoader } from '../../src/browser/font-loader.js';
-import { MejiroBrowser } from '../../src/browser/integration.js';
+import { MejiroBrowser, measurerOf } from '../../src/browser/integration.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -241,7 +241,7 @@ describe('FontLoader', () => {
     const { restore } = withLoadingDoneSupport();
     try {
       const browser = new MejiroBrowser();
-      const cache = browser.getMeasurer().getCache();
+      const cache = measurerOf(browser).getCache();
       // A width taken against a fallback face before the view was hidden.
       cache.set('16px serif', 0x3042, 999);
       browser.dispose();

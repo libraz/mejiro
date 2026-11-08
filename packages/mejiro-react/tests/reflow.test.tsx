@@ -11,13 +11,14 @@ import type { EpubBook } from '@libraz/mejiro/epub';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useChapterLayout } from '../src/useChapterLayout.js';
+import { useImageOverlay } from '../src/useImageOverlay.js';
 import { useManuscriptLayout } from '../src/useManuscriptLayout.js';
-import { useMultiImageOverlay } from '../src/useMultiImageOverlay.js';
+import { sizedSurface } from './helpers/fixtures.js';
 
 function mockLayout(): ChapterLayout {
   return {
-    totalPages: 8,
-    getSpread: vi.fn((i: number) => ({ spreadIdx: i }) as unknown as SpreadResult),
+    pageCount: 8,
+    getSpread: vi.fn(() => ({ pageCount: 8 }) as unknown as SpreadResult),
     setImages: vi.fn(),
     clearImages: vi.fn(),
   } as unknown as ChapterLayout;
@@ -27,23 +28,27 @@ function makeBook(layouts: ChapterLayout[]): MejiroBook {
   let i = 0;
   const next = () => layouts[Math.min(i++, layouts.length - 1)];
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 120, pageHeight: 174, contentHeight: 150 })),
+    fitPageSize: vi.fn(() => ({ pageWidth: 120, pageHeight: 174, contentHeight: 150 })),
     layoutChapter: vi.fn(async () => next()),
-    layoutManuscript: vi.fn(async () => new Map([['c', next()]])),
+    layoutManuscript: vi.fn(async () => [next()]),
   } as unknown as MejiroBook;
 }
 
 const EPUB = { chapters: [{ title: 'x', paragraphs: [] }] } as unknown as EpubBook;
 const MANUSCRIPT: ManuscriptChapter = { title: 'x', body: 'y' };
-const ANCHOR: InChapterAnchor = { paragraph: 0, charIndex: 5 };
-const SURFACE = { current: document.createElement('div') };
+const ANCHOR: InChapterAnchor = { paragraphIndex: 0, charIndex: 5 };
+const SURFACE = { current: sizedSurface() };
 
 describe('reflow position restore (React)', () => {
   const hooks = {
-    useChapterLayout: (book: MejiroBook, options: Parameters<typeof useChapterLayout>[4]) =>
-      useChapterLayout(book, EPUB, 0, SURFACE, options),
-    useManuscriptLayout: (book: MejiroBook, options: Parameters<typeof useManuscriptLayout>[3]) =>
-      useManuscriptLayout(book, MANUSCRIPT, SURFACE, options),
+    useChapterLayout: (
+      book: MejiroBook,
+      options: Partial<Parameters<typeof useChapterLayout>[1]>,
+    ) => useChapterLayout(book, { epub: EPUB, chapterIndex: 0, surface: SURFACE, ...options }),
+    useManuscriptLayout: (
+      book: MejiroBook,
+      options: Partial<Parameters<typeof useManuscriptLayout>[1]>,
+    ) => useManuscriptLayout(book, { chapter: MANUSCRIPT, surface: SURFACE, ...options }),
   };
 
   for (const [name, useLayout] of Object.entries(hooks)) {
@@ -85,12 +90,12 @@ describe('reflow position restore (React)', () => {
   }
 });
 
-describe('useMultiImageOverlay reflow (React)', () => {
+describe('useImageOverlay reflow (React)', () => {
   it('sets every spread on a replaced layout before reading any back', () => {
-    const onUpdate = vi.fn();
+    const onReflow = vi.fn();
     const { result, rerender } = renderHook(
       ({ layout, s }: { layout: ChapterLayout; s: number }) =>
-        useMultiImageOverlay(layout, s, { onUpdate }),
+        useImageOverlay(layout, { spreadIndex: s, onReflow }),
       { initialProps: { layout: mockLayout(), s: 0 } },
     );
     const first = mockLayout();
@@ -98,7 +103,7 @@ describe('useMultiImageOverlay reflow (React)', () => {
     for (const s of [0, 1, 2]) {
       rerender({ layout: first, s });
       act(() => {
-        result.current.addImage();
+        result.current.addOverlay();
       });
     }
 

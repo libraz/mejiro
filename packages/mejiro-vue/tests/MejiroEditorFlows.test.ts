@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h } from 'vue';
 
 const readerState = vi.hoisted(() => ({
-  props: [] as Array<{ chapter?: number }>,
+  props: [] as Array<{ chapterIndex?: number }>,
   goToAnchor: vi.fn(async (_anchor: unknown) => {}),
 }));
 
@@ -14,61 +14,57 @@ vi.mock('../src/MejiroReader.js', () => ({
   // biome-ignore lint/style/useNamingConvention: mocked export name matches the public component.
   MejiroReader: defineComponent({
     name: 'FakeReader',
-    props: { chapter: { type: Number, default: undefined }, epub: { type: Object } },
+    props: { chapterIndex: { type: Number, default: undefined }, epub: { type: Object } },
     setup(props, { expose }) {
       expose({ goToAnchor: readerState.goToAnchor });
       return () => {
-        readerState.props.push({ chapter: props.chapter });
+        readerState.props.push({ chapterIndex: props.chapterIndex });
         return h('div', { class: 'fake-reader' });
       };
     },
   }),
 }));
 
-/** Two chapters with two paragraphs each; every command regenerates the paragraph mirror. */
+const exportMock = vi.hoisted(() => vi.fn(async () => new Uint8Array(8)));
+const loadMock = vi.hoisted(() => vi.fn());
+
+/** Two chapters with two paragraphs each; every command replaces the block it edits. */
 function twoChapterEditor(): EditableEpub {
   const chapter = (n: number) => ({
     title: `Ch${n}`,
     href: `OPS/Text/ch${n}.xhtml`,
-    paragraphs: [
-      { text: `c${n}p1`, inlineAnnotations: [] },
-      { text: `c${n}p2`, inlineAnnotations: [] },
-    ],
+    originalXhtml: '',
     blocks: [
       { kind: 'paragraph', id: `c${n}-1`, text: `c${n}p1`, inlineAnnotations: [] },
       { kind: 'paragraph', id: `c${n}-2`, text: `c${n}p2`, inlineAnnotations: [] },
     ],
     imageAssets: new Map(),
   });
-  const book = {
+  const epub = {
     title: 'Two',
     author: 'A',
     chapters: [chapter(1), chapter(2)],
-    packageData: { rootfilePath: 'OPS/package.opf', opfDir: 'OPS/', opfXml: '', files: new Map() },
-  };
-  const remirror = (ci: number) => {
-    book.chapters[ci].paragraphs = book.chapters[ci].paragraphs.map((p) => ({ ...p }));
   };
   return {
-    book,
-    title: book.title,
-    author: book.author,
-    updateParagraph: vi.fn((ci: number, pi: number, patch: { text: string }) => {
-      book.chapters[ci].paragraphs[pi] = { ...book.chapters[ci].paragraphs[pi], text: patch.text };
-      remirror(ci);
+    epub,
+    title: epub.title,
+    author: epub.author,
+    subscribe: () => () => {},
+    updateParagraph: vi.fn((ci: number, blockId: string, patch: { text: string }) => {
+      epub.chapters[ci].blocks = epub.chapters[ci].blocks.map((block) =>
+        block.id === blockId ? { ...block, text: patch.text } : block,
+      );
     }),
-    addImage: vi.fn((ci: number) => remirror(ci)),
+    setInlineAnnotations: vi.fn(),
+    transaction: (fn: () => void) => fn(),
+    addImage: vi.fn(),
+    export: exportMock,
   } as unknown as EditableEpub;
 }
 
-const exportMock = vi.hoisted(() => vi.fn(async () => new ArrayBuffer(8)));
-const loadMock = vi.hoisted(() => vi.fn());
-
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@libraz/mejiro/epub')>()),
-  // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
-  EditableEpub: { load: loadMock },
-  exportEditableEpub: exportMock,
+  parseEditableEpub: loadMock,
 }));
 
 import { MejiroEditor } from '../src/MejiroEditor.js';
@@ -103,7 +99,7 @@ afterEach(() => {
   readerState.props.length = 0;
   readerState.goToAnchor.mockClear();
   exportMock.mockReset();
-  exportMock.mockImplementation(async () => new ArrayBuffer(8));
+  exportMock.mockImplementation(async () => new Uint8Array(8));
 });
 
 describe('MejiroEditor (Vue) — preview follows the selection', () => {
@@ -120,10 +116,10 @@ describe('MejiroEditor (Vue) — preview follows the selection', () => {
     );
     await waitFor(() => expect(readerState.goToAnchor.mock.calls.length).toBeGreaterThan(2));
 
-    expect(readerState.props.at(-1)?.chapter).toBe(1);
+    expect(readerState.props.at(-1)?.chapterIndex).toBe(1);
     expect(readerState.goToAnchor).toHaveBeenLastCalledWith({
-      chapter: 1,
-      paragraph: 1,
+      chapterIndex: 1,
+      paragraphIndex: 1,
       charIndex: 0,
     });
   });
@@ -155,9 +151,9 @@ describe('MejiroEditor (Vue) — export and image-insert failures', () => {
     expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('packaging failed');
   });
 
-  it('reports a failing encrypt step', async () => {
+  it('reports a failing transform step', async () => {
     const { button, errors } = await renderEditor({
-      exportPolicy: { encrypt: () => Promise.reject(new Error('drm down')) },
+      exportPolicy: { transform: () => Promise.reject(new Error('drm down')) },
     });
     await fireEvent.click(button('Export EPUB'));
     await waitFor(() => expect(errors()).toHaveLength(1));
@@ -175,14 +171,15 @@ describe('MejiroEditor (Vue) — export and image-insert failures', () => {
     expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('unreadable');
   });
 
-  it('lets exportPolicy.allowDownload alone decide the download', async () => {
+  it('emits and downloads the bytes exportPolicy.transform returns', async () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    const { button, emitted } = await renderEditor({
-      onBeforeExport: () => false,
-      exportPolicy: { allowDownload: true },
-    });
+    const wrapped = new Uint8Array([7, 7, 7]);
+    const transform = vi.fn(async (_bytes: Uint8Array) => wrapped);
+    const { button, emitted } = await renderEditor({ exportPolicy: { transform } });
     await fireEvent.click(button('Export EPUB'));
     await waitFor(() => expect(emitted().export).toHaveLength(1));
+    expect(transform.mock.calls[0][0]).toBeInstanceOf(Uint8Array);
+    expect(emitted().export[0]).toEqual([wrapped]);
     expect(click).toHaveBeenCalledTimes(1);
   });
 });

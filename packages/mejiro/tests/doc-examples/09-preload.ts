@@ -3,8 +3,8 @@ import { MejiroBrowser } from '@libraz/mejiro/browser';
 export async function preload(text: string) {
   // #region doc:preload
   const mejiro = new MejiroBrowser({
-    fixedFontFamily: '"Noto Serif JP"',
-    fixedFontSize: 16,
+    fontFamily: '"Noto Serif JP"',
+    fontSize: 16,
   });
 
   // Preload during app initialization

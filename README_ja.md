@@ -64,8 +64,8 @@ import { getLineRanges, paginate, toCodepoints } from '@libraz/mejiro';
 import { MejiroBrowser } from '@libraz/mejiro/browser';
 
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
 });
 
 const text = '吾輩は猫である。名前はまだ無い。';
@@ -90,30 +90,29 @@ const pages = paginate(400, [
 `MejiroBook` は高レベルの入口です。計測、改行計算、ページ分割をまとめて引き受けるため、リーダー側は章と見開きだけを扱えば済みます。
 
 ```ts
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// コンテナ要素からページサイズを自動計算
-book.computePageSize(document.querySelector('.reading-surface')!);
+// コンテナ要素を測り、ページサイズを book に保存
+book.fitPageSize(document.querySelector('.reading-surface')!);
 
-const epub = await parseEpub(epubArrayBuffer);
+const epub = await parseEpub(epubBytes);
 const layout = await book.layoutChapter(epub.chapters[0]);
 
 // 見開きを取得
 const spread = layout.getSpread(0);
 // spread.right.page → RenderPage（段落 → 行 → セグメント）
 // spread.right.lines / spread.right.slots → 絶対配置用
-// spread.totalPages → 総ページ数
+// spread.pageCount → 章のページ数
 
 // 画像を配置して本文を回り込ませる（更新後の見開きが返る）
-const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
+const updated = layout.setImages(0, [{ x: 80, y: 100, width: 120, height: 160 }]);
 ```
 
 ### React
@@ -141,7 +140,7 @@ Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます
 
 **解析を使った改行**は任意の機能で、既定では無効です。optional peer dependency の `@libraz/suzume` を入れると、形態素解析の結果から改行ヒントを導けます。第 1 段階は改行位置を文字種規則のままに保ち、分割すると組版の誤りになる単位を割る位置だけを止めます。第 2 段階では位置ごとの罰則が加わり、改行位置そのものが動きます。この段階では、接続詞や副詞の内部に改行が落ちることも避けます。対象とする品詞は設定で変えられます。「語の切れ目で改行する」機能ではありません。日本語の本文は禁則が許すかぎりどの文字間でも改行して組むもので、語の切れ目だけで折り返すと行が緩みます。解析器の導入コストは、辞書を同梱した WebAssembly でおよそ 628 KB、gzip 後で 260 KB ほどです。入れない場合も、それ以外の動作は変わりません。
 
-独自の禁則ルールを使いたい場合は、コアの `computeBreaks()` に `LayoutInput.kinsokuRules` を渡してください。禁則文字の一覧、規格との対応、実例は [改行処理](docs/ja/03-line-breaking.md) にまとめてあります。
+独自の禁則ルールを使いたい場合は、コアの `computeBreaks()` に `LayoutInput.kinsoku` として渡してください。既定に追加するなら `extendKinsokuRules()` を使います。禁則文字の一覧、規格との対応、実例は [改行処理](docs/ja/03-line-breaking.md) にまとめてあります。
 
 ## アーキテクチャ
 
@@ -161,7 +160,7 @@ Vue でも `@libraz/mejiro-vue` から同じコンポーネントを使えます
 
 - **学ぶ** — [はじめかた](docs/ja/01-getting-started.md) · [コアの考え方](docs/ja/02-core-concepts.md) · [改行処理](docs/ja/03-line-breaking.md) · [ルビ](docs/ja/04-ruby.md)
 - **組み込む** — [ブラウザ連携](docs/ja/05-browser-integration.md) · [EPUB](docs/ja/06-epub.md) · [ページ分割とレンダリング](docs/ja/07-pagination-and-rendering.md) · [React と Vue](docs/ja/08-react-and-vue.md)
-- **詳細** — [応用](docs/ja/09-advanced.md) · [API リファレンス](docs/ja/10-api-reference.md)
+- **詳細** — [応用](docs/ja/09-advanced.md) · [API リファレンス](docs/ja/10-api-reference.md) · [0.11 への移行](docs/ja/11-migrating-to-0.11.md)
 
 ## 設計方針
 

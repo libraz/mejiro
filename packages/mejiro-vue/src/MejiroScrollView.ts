@@ -1,4 +1,4 @@
-import type { AnchorRect, ChapterLayout, PageResult } from '@libraz/mejiro/book';
+import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { type FontFamily, normalizeFontFamily } from '@libraz/mejiro/browser';
 import { type PageNumberDisplay, pageNumberFor } from '@libraz/mejiro/render';
 import {
@@ -9,35 +9,38 @@ import {
   onMounted,
   type PropType,
   ref,
+  toRaw,
   watch,
 } from 'vue';
-import { MejiroImageOverlay } from './MejiroImageOverlay.js';
+import { MejiroImagePlaceholder } from './MejiroImagePlaceholder.js';
 import { MejiroPageView } from './MejiroPageView.js';
 import { MejiroSelectionLayer } from './MejiroSelectionLayer.js';
-import { type MultiImageItem, overlayPageSide } from './useMultiImageOverlay.js';
+import type { SelectionRect } from './MejiroSpread.js';
+import { type MultiImageItem, overlayPageSide } from './useImageOverlay.js';
 
 /**
  * Continuous-scroll variant of {@link MejiroSpread} for Vue. Stacks every
  * page in the chapter inside a vertically scrollable container. The visible
  * page is detected via `IntersectionObserver` and reported through the
- * `visible-page-change` event as the viewport scrolls.
+ * `update:visiblePage` event as the viewport scrolls. Page geometry and
+ * typography default to the values `layout` was measured with.
  */
 export const MejiroScrollView = defineComponent({
   name: 'MejiroScrollView',
   props: {
     /** Layout containing the pages to render. */
     layout: { type: Object as PropType<ChapterLayout>, required: true },
-    /** Page width in px. */
-    pageWidth: { type: Number, required: true },
-    /** Page height in px. */
-    pageHeight: { type: Number, required: true },
-    /** Content area height (px). */
-    contentHeight: { type: Number, required: true },
-    /** CSS font family applied to the content. */
+    /** Page width in px. @defaultValue `layout.geometry.pageWidth` */
+    pageWidth: { type: Number, default: undefined },
+    /** Page height in px. @defaultValue `layout.geometry.pageHeight` */
+    pageHeight: { type: Number, default: undefined },
+    /** Content area height (px). @defaultValue `layout.geometry.contentHeight` */
+    contentHeight: { type: Number, default: undefined },
+    /** CSS font family applied to the content. @defaultValue `layout.typography.fontFamily` */
     fontFamily: { type: [String, Array] as PropType<FontFamily>, default: undefined },
-    /** Font size override (px). */
+    /** Font size of the content (px). @defaultValue `layout.typography.fontSize` */
     fontSize: { type: Number, default: undefined },
-    /** Line spacing multiplier. */
+    /** Line spacing multiplier. @defaultValue `layout.typography.lineSpacing` */
     lineSpacing: { type: Number, default: undefined },
     /** Force slot-based rendering on every page. */
     slotMode: { type: Boolean, default: undefined },
@@ -51,22 +54,22 @@ export const MejiroScrollView = defineComponent({
     /**
      * Selection rectangles to highlight. Compute via
      * `ChapterLayout.selectionRects`; each entry is painted on the page its
-     * `pageIdx` addresses. An entry may carry a `color` fill.
+     * `pageIndex` addresses. An entry may carry a `color` fill.
      */
     selectionRects: {
-      type: Array as PropType<readonly (AnchorRect & { color?: string })[]>,
+      type: Array as PropType<readonly SelectionRect[]>,
       default: undefined,
     },
     /** Zero-based spread whose pages carry `images`. */
-    spreadIdx: { type: Number, default: undefined },
+    spreadIndex: { type: Number, default: undefined },
     /**
-     * Image overlays on the spread at `spreadIdx`. Each renders on the page
-     * whose area contains its centre (see `overlayPageSide`), matching
-     * `MejiroSpread`'s single-page routing. The layout reflows in place when
-     * its images change, so a new array here is also what re-reads the pages;
-     * `useMultiImageOverlay`'s `currentImages` provides one on every change.
+     * Image overlays on the spread at `spreadIndex`. Each renders on the page
+     * whose area contains its centre, matching `MejiroSpread`'s single-mode
+     * routing. The layout reflows in place when its images change, so a new
+     * array here is also what re-reads the pages; `useImageOverlay`'s
+     * `currentImages` provides one on every change.
      */
-    images: { type: Array as PropType<MultiImageItem[]>, default: () => [] },
+    images: { type: Array as PropType<readonly MultiImageItem[]>, default: () => [] },
     /**
      * Which pages print their page number in the running head, by the same
      * rule as the paginated reader. @defaultValue 'both'
@@ -79,16 +82,13 @@ export const MejiroScrollView = defineComponent({
      * page with the largest intersection with the viewport is treated as
      * visible. `source` is `'programmatic'` while the view is settling a
      * {@link MejiroScrollViewProps.scrollToPage} request, so hosts can ignore
-     * their own scrolls instead of feeding them back as navigation. Declared in
-     * camelCase so the derived props type exposes a typed
-     * `onVisiblePageChange`; template listeners may still use
-     * `@visible-page-change`.
+     * their own scrolls instead of feeding them back as navigation.
      */
-    visiblePageChange: (_pageIdx: number, _source: 'user' | 'programmatic') => true,
+    'update:visiblePage': (_pageIndex: number, _source: 'user' | 'programmatic') => true,
     /** Pointer-down on an image overlay. */
-    'image-pointerdown': (_id: string, _e: PointerEvent) => true,
+    'image-pointer-down': (_id: string, _e: PointerEvent) => true,
     /** Pointer-down on an image resize handle. */
-    'image-resize-pointerdown': (_id: string, _e: PointerEvent) => true,
+    'image-resize-pointer-down': (_id: string, _e: PointerEvent) => true,
     /** Image overlay close button. */
     'image-close': (_id: string) => true,
   },
@@ -99,20 +99,27 @@ export const MejiroScrollView = defineComponent({
     const pages = computed<PageResult[]>(() => {
       // The layout reflows in place when images change, so `images` keys this too.
       void props.images;
-      const total = props.layout.totalPages;
-      return Array.from({ length: total }, (_, i) => props.layout.getPage(i));
+      const layout = toRaw(props.layout);
+      return Array.from({ length: layout.pageCount }, (_, i) => layout.getPage(i));
     });
     const rectsByPage = computed(() => {
-      const byPage: Array<(AnchorRect & { color?: string })[]> = [];
+      const byPage: SelectionRect[][] = [];
       for (const rect of props.selectionRects ?? []) {
-        const list = byPage[rect.pageIdx] ?? [];
+        const list = byPage[rect.pageIndex] ?? [];
         list.push(rect);
-        byPage[rect.pageIdx] = list;
+        byPage[rect.pageIndex] = list;
       }
       return byPage;
     });
-    const rightPage = computed(() => (props.spreadIdx != null ? props.spreadIdx * 2 : -1));
-    const leftPage = computed(() => (props.spreadIdx != null ? props.spreadIdx * 2 + 1 : -1));
+    const rightPage = computed(() => (props.spreadIndex != null ? props.spreadIndex * 2 : -1));
+    const leftPage = computed(() => (props.spreadIndex != null ? props.spreadIndex * 2 + 1 : -1));
+    const geometry = computed(() => toRaw(props.layout).geometry);
+    const typography = computed(() => toRaw(props.layout).typography);
+    const pageWidth = computed(() => props.pageWidth ?? geometry.value.pageWidth);
+    const pageHeight = computed(() => props.pageHeight ?? geometry.value.pageHeight);
+    const contentHeight = computed(() => props.contentHeight ?? geometry.value.contentHeight);
+    const fontFamily = computed(() => props.fontFamily ?? typography.value.fontFamily);
+    const lineSpacing = computed(() => props.lineSpacing ?? typography.value.lineSpacing);
     // Each overlay renders on the page whose area contains its centre, matching
     // MejiroSpread's single-page routing.
     const rightImages = computed(() =>
@@ -122,10 +129,11 @@ export const MejiroScrollView = defineComponent({
       props.images.filter((item) => overlayPageSide(item.rect) === 'left'),
     );
     const contentStyle = computed(() => {
-      const style: Record<string, string | number> = { height: `${props.contentHeight}px` };
-      if (props.fontFamily) style.fontFamily = normalizeFontFamily(props.fontFamily);
-      if (props.fontSize != null) style.fontSize = `${props.fontSize}px`;
-      if (props.lineSpacing != null) style.lineHeight = String(props.lineSpacing);
+      const style: Record<string, string | number> = { height: `${contentHeight.value}px` };
+      if (fontFamily.value) style.fontFamily = normalizeFontFamily(fontFamily.value);
+      const fontSize = props.fontSize ?? typography.value.fontSize;
+      if (fontSize != null) style.fontSize = `${fontSize}px`;
+      if (lineSpacing.value != null) style.lineHeight = String(lineSpacing.value);
       return style;
     });
 
@@ -168,7 +176,7 @@ export const MejiroScrollView = defineComponent({
           if (mostVisibleIdx >= 0) {
             const source = programmaticScroll ? 'programmatic' : 'user';
             if (source === 'user') userPage = mostVisibleIdx;
-            emit('visiblePageChange', mostVisibleIdx, source);
+            emit('update:visiblePage', mostVisibleIdx, source);
           }
         },
         { root: container, threshold: [0.25, 0.5, 0.75] },
@@ -244,8 +252,8 @@ export const MejiroScrollView = defineComponent({
                 'data-page-idx': i,
                 class: 'mejiro-reader-page',
                 style: {
-                  width: `${props.pageWidth}px`,
-                  height: `${props.pageHeight}px`,
+                  width: `${pageWidth.value}px`,
+                  height: `${pageHeight.value}px`,
                   flexShrink: 0,
                   overflow:
                     (i === rightPage.value && rightImages.value.length > 0) ||
@@ -269,14 +277,14 @@ export const MejiroScrollView = defineComponent({
                     'div',
                     {
                       class: 'mejiro-reader-page-clip',
-                      style: { height: `${props.contentHeight}px` },
+                      style: { height: `${contentHeight.value}px` },
                     },
                     [
                       h(MejiroPageView, {
                         result,
                         slotMode: props.slotMode,
-                        fontFamily: props.fontFamily,
-                        lineSpacing: props.lineSpacing,
+                        fontFamily: fontFamily.value,
+                        lineSpacing: lineSpacing.value,
                         class: 'mejiro-reader-page-content',
                         style: contentStyle.value,
                       }),
@@ -291,26 +299,26 @@ export const MejiroScrollView = defineComponent({
                 ]),
                 ...(i === rightPage.value
                   ? rightImages.value.map((item) =>
-                      h(MejiroImageOverlay, {
+                      h(MejiroImagePlaceholder, {
                         key: item.id,
                         rect: item.rect,
-                        onOverlayPointerdown: (e: PointerEvent) =>
-                          emit('image-pointerdown', item.id, e),
-                        onResizePointerdown: (e: PointerEvent) =>
-                          emit('image-resize-pointerdown', item.id, e),
+                        onOverlayPointerDown: (e: PointerEvent) =>
+                          emit('image-pointer-down', item.id, e),
+                        onResizePointerDown: (e: PointerEvent) =>
+                          emit('image-resize-pointer-down', item.id, e),
                         onClose: () => emit('image-close', item.id),
                       }),
                     )
                   : []),
                 ...(i === leftPage.value
                   ? leftImages.value.map((item) =>
-                      h(MejiroImageOverlay, {
+                      h(MejiroImagePlaceholder, {
                         key: item.id,
-                        rect: { ...item.rect, x: item.rect.x + props.pageWidth },
-                        onOverlayPointerdown: (e: PointerEvent) =>
-                          emit('image-pointerdown', item.id, e),
-                        onResizePointerdown: (e: PointerEvent) =>
-                          emit('image-resize-pointerdown', item.id, e),
+                        rect: { ...item.rect, x: item.rect.x + pageWidth.value },
+                        onOverlayPointerDown: (e: PointerEvent) =>
+                          emit('image-pointer-down', item.id, e),
+                        onResizePointerDown: (e: PointerEvent) =>
+                          emit('image-resize-pointer-down', item.id, e),
                         onClose: () => emit('image-close', item.id),
                       }),
                     )

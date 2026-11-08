@@ -9,7 +9,7 @@ import { useChapterLayout } from '../src/useChapterLayout.js';
 import { useManuscriptLayout } from '../src/useManuscriptLayout.js';
 
 function mockLayout(): ChapterLayout {
-  return { totalPages: 4, getSpread: vi.fn(), resize: vi.fn() } as unknown as ChapterLayout;
+  return { pageCount: 4, getSpread: vi.fn(), resize: vi.fn() } as unknown as ChapterLayout;
 }
 
 /** Gives `el` a client box, as layout would; the hooks re-flow only when it changes. */
@@ -85,13 +85,19 @@ const cases: LayoutHookCase[] = [
     setup(impl, surface) {
       const calls = vi.fn(impl);
       const book = {
-        computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+        fitPageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
         layoutChapter: calls,
       } as unknown as MejiroBook;
       return {
         calls,
         render: (source, options) =>
-          useChapterLayout(book, epub, source, surface, { resizeDebounce: 0, ...options }),
+          useChapterLayout(book, {
+            epub,
+            chapterIndex: source,
+            surface,
+            resizeDebounceMs: 0,
+            ...options,
+          }),
       };
     },
   },
@@ -100,17 +106,16 @@ const cases: LayoutHookCase[] = [
     setup(impl, surface) {
       const calls = vi.fn(impl);
       const book = {
-        computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
-        layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) => {
-          const layout = await calls();
-          return new Map([[chapters[0].id ?? '', layout]]);
-        }),
+        fitPageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+        layoutManuscript: vi.fn(async () => [await calls()]),
       } as unknown as MejiroBook;
       return {
         calls,
         render: (source, options) =>
-          useManuscriptLayout(book, manuscripts[source], surface, {
-            resizeDebounce: 0,
+          useManuscriptLayout(book, {
+            chapter: manuscripts[source],
+            surface,
+            resizeDebounceMs: 0,
             ...options,
           }),
       };

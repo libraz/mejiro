@@ -11,8 +11,8 @@ const engine = new ExclusionEngine({
 });
 
 // Add images (content-area coordinates)
-engine.addImage({ x: 100, y: 50, w: 120, h: 160 });
-engine.addImage({ x: 50, y: 300, w: 80, h: 100 });
+engine.addImage({ x: 100, y: 50, width: 120, height: 160 });
+engine.addImage({ x: 50, y: 300, width: 80, height: 100 });
 
 // Compute column slots and line widths
 const { slots, lineWidths } = engine.compute();

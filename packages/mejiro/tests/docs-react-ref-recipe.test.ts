@@ -41,7 +41,12 @@ export function useLayoutEffect(effect: () => void | (() => void), deps?: readon
 const CORE_STUB = `
 export type InChapterAnchor = any;
 export type ChapterLayout = any;
-export type ComputePageSizeOptions = any;
+export type FitPageSizeOptions = any;
+export type PageGeometry = any;
+export type BinaryInput = any;
+export declare class MejiroError extends Error {
+  constructor(code: string, message: string, options?: { cause?: unknown });
+}
 export type ManuscriptChapter = any;
 export type MejiroBook = any;
 export type EpubBook = any;
@@ -69,8 +74,10 @@ describe('pendingRestore recipe under @types/react@18', () => {
       `${JSON.stringify({ name: 'react', version: '18.0.0', types: 'index.d.ts' }, null, 2)}\n`,
     );
     await writeFile(resolve(root, 'core-stub.d.ts'), CORE_STUB);
-
     await mkdir(resolve(root, 'src'), { recursive: true });
+    // `errors.ts` reads one type from `useEpub.ts`, whose own imports are not under test.
+    await writeFile(resolve(root, 'src/useEpub.ts'), 'export type FetchEpubOptions = any;\n');
+
     for (const file of [...hooks.map((hook) => hook.file), ...supportFiles]) {
       await copyFile(
         resolve(repoRoot, 'packages/mejiro-react/src', file),

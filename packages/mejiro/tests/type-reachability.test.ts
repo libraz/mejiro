@@ -41,6 +41,7 @@ const CORE: PublicPackage = {
     'src/render/index.ts',
     'src/book/index.ts',
     'src/image/index.ts',
+    'src/analysis/index.ts',
   ],
 };
 
@@ -50,6 +51,29 @@ const FRAMEWORK_PACKAGES: readonly PublicPackage[] = [
 ];
 
 const PUBLIC_PACKAGES = [CORE, ...FRAMEWORK_PACKAGES];
+
+/**
+ * Repo-relative source path prefixes from `MEJIRO_CHECK_MODULES`
+ * (comma-separated). When set, only the barrels under one of them are walked,
+ * and a prefix list that matches no barrel fails the run instead of passing empty.
+ */
+const CHECK_PREFIXES = (process.env.MEJIRO_CHECK_MODULES ?? '')
+  .split(',')
+  .map((prefix) => prefix.trim())
+  .filter(Boolean);
+
+/** True when the barrel at absolute path `file` is within the requested prefixes. */
+function isChecked(file: string): boolean {
+  const repoPath = `packages/${path.relative(PACKAGES_ROOT, file)}`;
+  return (
+    CHECK_PREFIXES.length === 0 || CHECK_PREFIXES.some((prefix) => repoPath.startsWith(prefix))
+  );
+}
+
+/** Barrels of `pkg` that this run walks. */
+function checkedBarrels(pkg: PublicPackage): string[] {
+  return pkg.barrels.filter((barrel) => isChecked(absolute(pkg, barrel)));
+}
 
 /**
  * Types that a public signature reaches but that their own module keeps
@@ -66,7 +90,6 @@ const UNREACHABLE_TYPES = [
   // Reached only through the deprecated `EditableEpubChapter.paragraphRefs`,
   // and itself deprecated: exporting it would publish a shape scheduled for
   // removal, so it stays private until the field goes.
-  'mejiro/src/epub/types.ts:EditableParagraphRef',
 ];
 
 /** A type reachable from a public signature but not exported by any barrel. */
@@ -100,7 +123,7 @@ let cachedProgram: { program: ts.Program; checker: ts.TypeChecker } | undefined;
  */
 function createProgram(): { program: ts.Program; checker: ts.TypeChecker } {
   if (cachedProgram) return cachedProgram;
-  const subpaths = ['browser', 'epub', 'render', 'book', 'image'];
+  const subpaths = ['browser', 'epub', 'render', 'book', 'image', 'analysis'];
   const program = ts.createProgram(ALL_BARRELS, {
     target: ts.ScriptTarget.ES2022,
     module: ts.ModuleKind.ESNext,
@@ -310,7 +333,7 @@ function scanUnreachable(pkg: PublicPackage): Finding[] {
     }
   };
 
-  for (const barrel of pkg.barrels) {
+  for (const barrel of checkedBarrels(pkg)) {
     for (const exported of exportsOfBarrel(absolute(pkg, barrel))) {
       const symbol = resolveAlias(exported);
       const label = `${exported.getName()} (${pkg.dir}/${barrel})`;
@@ -335,19 +358,83 @@ function scanUnreachable(pkg: PublicPackage): Finding[] {
 /** Types the audited signatures reach, listed per entry point they must come from. */
 const REQUIRED_EXPORTS: readonly { entry: string; barrel: string; types: readonly string[] }[] = [
   {
+    entry: '@libraz/mejiro',
+    barrel: absolute(CORE, 'src/index.ts'),
+    types: [
+      'BinaryInput',
+      'CanBreakAtOptions',
+      'ChapterSource',
+      'HeadingLevel',
+      'KinsokuCheckOptions',
+      'KinsokuRuleSource',
+      'MejiroErrorCode',
+      'MejiroWarning',
+      'MejiroWarningCode',
+      'ParsedManuscript',
+      'ExclusionResult',
+      'ComputeExclusionSlotsInput',
+    ],
+  },
+  {
+    entry: '@libraz/mejiro/browser',
+    barrel: absolute(CORE, 'src/browser/index.ts'),
+    types: [
+      'CharMeasurerOptions',
+      'FontLoaderOptions',
+      'LayoutTextOptions',
+      'ParagraphsLayoutResult',
+      'WidthCacheStats',
+    ],
+  },
+  {
+    entry: '@libraz/mejiro/render',
+    barrel: absolute(CORE, 'src/render/index.ts'),
+    types: ['AdjustExclusionSlotsInput', 'BuildColumnSlotsInput', 'FindPhysicalColumnInput'],
+  },
+  {
+    entry: '@libraz/mejiro/epub',
+    barrel: absolute(CORE, 'src/epub/index.ts'),
+    types: [
+      'CoverInput',
+      'EditHistoryState',
+      'EditableEpubExportOptions',
+      'EpubProjectImageInput',
+      'ManuscriptChapter',
+      'EpubExportOptions',
+      'MergeParagraphsInput',
+      'NewParagraph',
+      'ParagraphPatch',
+      'ParsedManuscript',
+    ],
+  },
+  {
+    entry: '@libraz/mejiro/analysis',
+    barrel: absolute(CORE, 'src/analysis/index.ts'),
+    types: ['SuzumeAnalysis', 'SuzumeInstance', 'SuzumeMorpheme'],
+  },
+  {
     entry: '@libraz/mejiro/book',
     barrel: absolute(CORE, 'src/book/index.ts'),
-    types: ['MejiroBookOptions', 'SpreadImagesSnapshot'],
+    types: [
+      'AnchorAtOptions',
+      'BookOptionsPatch',
+      'ChapterTypography',
+      'FitPageSizeOptions',
+      'FormatReadingTimeOptions',
+      'PageGeometry',
+      'ResolvedBookOptions',
+      'SpreadImagesSnapshot',
+      'SpreadPoint',
+    ],
   },
   {
     entry: '@libraz/mejiro-react',
     barrel: absolute(FRAMEWORK_PACKAGES[0], 'src/index.ts'),
     types: [
       'ImageOverlayRect',
+      'ChapterLayoutRecomputeOptions',
       'ManuscriptAutosaveDraft',
-      'ManuscriptRecomputeOptions',
       'MejiroReaderManuscriptProps',
-      'RecomputeOptions',
       'UseMejiroBookOptions',
     ],
   },
@@ -356,35 +443,46 @@ const REQUIRED_EXPORTS: readonly { entry: string; barrel: string; types: readonl
     barrel: absolute(FRAMEWORK_PACKAGES[1], 'src/index.ts'),
     types: [
       'ImageOverlayRect',
+      'ChapterLayoutRecomputeOptions',
       'ManuscriptAutosaveDraft',
-      'ManuscriptRecomputeOptions',
-      'RecomputeOptions',
       'UseMejiroBookOptions',
     ],
   },
 ];
 
 describe('type reachability from public entry points', () => {
-  it.each(PUBLIC_PACKAGES.map((pkg) => [pkg.dir, pkg] as const))(
-    'names every type reachable from the public surface of %s',
-    (_dir, pkg) => {
-      const unexpected = findUnreachable(pkg)
-        .filter((finding) => !UNREACHABLE_TYPES.includes(finding.key))
-        .map((finding) => {
-          const [module, symbol] = finding.key.split(':');
-          return `${module}:${finding.line} ${symbol} (reached from ${finding.from})`;
-        });
+  it.each(
+    PUBLIC_PACKAGES.filter((pkg) => checkedBarrels(pkg).length > 0).map(
+      (pkg) => [pkg.dir, pkg] as const,
+    ),
+  )('names every type reachable from the public surface of %s', (_dir, pkg) => {
+    const unexpected = findUnreachable(pkg)
+      .filter((finding) => !UNREACHABLE_TYPES.includes(finding.key))
+      .map((finding) => {
+        const [module, symbol] = finding.key.split(':');
+        return `${module}:${finding.line} ${symbol} (reached from ${finding.from})`;
+      });
 
-      expect(
-        unexpected,
-        'These types appear in a public signature but cannot be imported by name. ' +
-          'Add them to the barrel of the entry point that exposes them rather than ' +
-          'extending the ratchet list.',
-      ).toEqual([]);
+    expect(
+      unexpected,
+      'These types appear in a public signature but cannot be imported by name. ' +
+        'Add them to the barrel of the entry point that exposes them rather than ' +
+        'extending the ratchet list.',
+    ).toEqual([]);
+  });
+
+  it.runIf(CHECK_PREFIXES.length > 0)(
+    'walks at least one barrel under MEJIRO_CHECK_MODULES',
+    () => {
+      const exported = PUBLIC_PACKAGES.flatMap((pkg) =>
+        checkedBarrels(pkg).flatMap((barrel) => exportsOfBarrel(absolute(pkg, barrel))),
+      );
+      expect(exported).not.toEqual([]);
     },
   );
 
-  it('keeps every ratchet entry grounded in a real gap', () => {
+  // With a prefix filter, gaps behind the barrels left out would read as stale.
+  it.skipIf(CHECK_PREFIXES.length > 0)('keeps every ratchet entry grounded in a real gap', () => {
     const gaps = new Set(PUBLIC_PACKAGES.flatMap((pkg) => findUnreachable(pkg)).map((f) => f.key));
 
     // A stale entry would silently absorb a future regression under the same
@@ -392,11 +490,12 @@ describe('type reachability from public entry points', () => {
     expect(UNREACHABLE_TYPES.filter((entry) => !gaps.has(entry))).toEqual([]);
   });
 
-  it.each(REQUIRED_EXPORTS.map((required) => [required.entry, required] as const))(
-    'exports the audited type names from %s',
-    (_entry, required) => {
-      const exported = new Set(exportsOfBarrel(required.barrel).map((symbol) => symbol.getName()));
-      expect(required.types.filter((name) => !exported.has(name))).toEqual([]);
-    },
-  );
+  it.each(
+    REQUIRED_EXPORTS.filter((required) => isChecked(required.barrel)).map(
+      (required) => [required.entry, required] as const,
+    ),
+  )('exports the audited type names from %s', (_entry, required) => {
+    const exported = new Set(exportsOfBarrel(required.barrel).map((symbol) => symbol.getName()));
+    expect(required.types.filter((name) => !exported.has(name))).toEqual([]);
+  });
 });

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 import { MejiroPageView } from '@libraz/mejiro-vue';
 import { onMounted, ref, shallowRef } from 'vue';
@@ -10,7 +10,6 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP", serif',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 const surfaceEl = ref<HTMLDivElement | null>(null);
@@ -22,7 +21,7 @@ onMounted(async () => {
   if (!surfaceEl.value) return;
 
   // Compute page dimensions from container
-  const { pageWidth, pageHeight } = book.computePageSize(surfaceEl.value);
+  const { pageWidth, pageHeight } = book.fitPageSize(surfaceEl.value);
   pageW.value = pageWidth;
   pageH.value = pageHeight;
 

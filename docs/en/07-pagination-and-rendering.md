@@ -13,7 +13,7 @@ This document covers steps 1--3 and vanilla DOM rendering. For React and Vue com
 
 ## 1. RenderEntry
 
-`RenderEntry` is the bridge between layout results and the rendering pipeline. Build one per paragraph from the output of `layoutChapter()`:
+`RenderEntry` is the bridge between layout results and the rendering pipeline. Build one per paragraph from the output of `MejiroBrowser.layoutParagraphs()`:
 
 <!-- doc-example: 07-walkthrough.ts#entries -->
 ```ts
@@ -30,12 +30,11 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `chars` | `string[]` | The paragraph text as one entry per Unicode code point, index-aligned with the code points `breakPoints` refers to. A variation selector or combining mark is its own entry; line breaking never separates it from its base. |
+| `chars` | `readonly string[]` | The paragraph text as one entry per Unicode code point, index-aligned with the code points `breakPoints` refers to. A variation selector or combining mark is its own entry; line breaking never separates it from its base. |
 | `breakPoints` | `Uint32Array` | Break points from the line breaking algorithm. |
-| `inlineAnnotations` | `InlineAnnotation[]` | Inline ruby / emphasis / tcy / link annotations for this paragraph. |
+| `inlineAnnotations` | `readonly InlineAnnotation[]` | Inline ruby / emphasis / tcy / link annotations for this paragraph. |
 | `kind` | `ParagraphKind \| undefined` | Structural classification (`'body'`, `'heading'`, `'blockquote'`, `'sceneBreak'`, `'pre'`, `'figure'`). Survives pagination into `RenderParagraph.kind`, where it selects the `mejiro-paragraph--*` class. Defaults to `'body'`. |
-| `headingLevel` | `number \| undefined` | Heading level (1--6). Carry it through: without it every heading gets the same size, because per-level `headingStyles` are keyed on it, and the class falls back to the generic `--heading` modifier. |
-| `isHeading` | `boolean \| undefined` | Deprecated. Set `kind: 'heading'` (with `headingLevel` when the level is known) instead. Ignored when `headingLevel` is set. |
+| `headingLevel` | `HeadingLevel \| undefined` | Heading level (1--6). Carry it through: without it every heading gets the same size, because per-level `headingStyles` are keyed on it, and the class falls back to the generic `--heading` modifier. |
 
 ## 2. buildParagraphMeasures()
 
@@ -58,8 +57,7 @@ const measures = buildParagraphMeasures(entries, {
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `fontSize` | `number` | (required) | Base font size in px. |
-| `lineSpacing` | `number` | `1` | Line spacing multiplier. A paragraph containing ruby or emphasis budgets at least `1.5` em per line whatever the value, the height the browser draws such a line at. |
-| `lineHeight` | `number` | -- | Deprecated alias for `lineSpacing`, used only when `lineSpacing` is absent. |
+| `lineSpacing` | `number` | `DEFAULT_LINE_SPACING` (1.8) | Line spacing multiplier. A paragraph containing ruby or emphasis budgets at least `1.5` em per line whatever the value, the height the browser draws such a line at. |
 | `headingScale` | `number` | `1.4` | Heading font scale. A heading without a level takes it as is (`16 * 1.4 = 22.4`); levels 1--6 scale their `DEFAULT_HEADING_STYLES` size (1.6 / 1.4 / 1.2 / 1.1 / 1 / 1, the sizes the stylesheet draws) in proportion to it, so `2.8` doubles every level. A level's own `headingStyles` scale wins. |
 | `paragraphGapEm` | `number` | `0.4` | Gap before body paragraphs in em units. |
 | `headingGapEm` | `number` | -- | Gap after heading paragraphs in em units, for every level `headingStyles` does not override. Unset, each level takes its `DEFAULT_HEADING_STYLES` gap (1.4 / 1.2 / 1 / 0.8 / 0.6 / 0.6), which the stylesheet also draws, and a heading without a level takes `1.2`. |
@@ -125,23 +123,23 @@ const renderPage = buildRenderPage(pages[0], entries);
 
 ```ts
 interface RenderPage {
-  paragraphs: RenderParagraph[];
+  readonly paragraphs: readonly RenderParagraph[];
 }
 
 interface RenderParagraph {
-  lines: RenderLine[];
-  isHeading: boolean;
-  headingLevel?: number;
-  kind?: ParagraphKind;
+  readonly lines: readonly RenderLine[];
+  readonly headingLevel?: HeadingLevel;
+  readonly kind?: ParagraphKind;
+  readonly scale?: number;
 }
 
 interface RenderLine {
-  segments: RenderSegment[];
+  readonly segments: readonly RenderSegment[];
 }
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | { type: 'ruby'; text: string; rubyText: string; children?: readonly RenderSegment[] }
   | {
       type: 'emphasis';
       text: string;
@@ -155,9 +153,9 @@ type RenderSegment =
   | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
 
-Each line is split into segments. `text` contains plain text, `ruby` contains a base string and its ruby (furigana) reading, and other segment types represent inline emphasis, tate-chu-yoko, semantic emphasis, links, and footnote references.
+Each line is split into segments. `text` contains plain text, `ruby` contains its base text under `text` and its ruby (furigana) reading under `rubyText`, and other segment types represent inline emphasis, tate-chu-yoko, semantic emphasis, links, and footnote references.
 
-`children` carries nested annotations (ruby inside emphasis, tate-chu-yoko inside a link, and so on). When it is present, render the children instead of the parent's own `text`/`base`; the parent still carries the flattened text of the whole span, so a renderer that only needs plain text can ignore `children` entirely.
+`text` is the span's content flattened to a string, and `children` covers the same range with the annotations nested inside it (ruby inside emphasis, tate-chu-yoko inside a link, and so on). Draw one of the two, never both, or the characters appear twice: when `children` is present, render the children instead of the parent's own `text`. A renderer that only needs plain text reads `text` and ignores `children`. `segmentToInlineNode()` makes that choice for you.
 
 ## 5. mejiro.css
 
@@ -274,14 +272,14 @@ import '@libraz/mejiro/render/mejiro.css';
 // 1. Create a MejiroBrowser instance
 const fontSize = 16;
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: fontSize,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: fontSize,
 });
 
 // 2. Lay out a chapter. The level-1 heading is broken at the size
 // buildParagraphMeasures() measures it at: its scale, rounded to whole pixels.
 const headingSize = Math.round(fontSize * (DEFAULT_HEADING_STYLES[1].scale ?? 1));
-const result = await mejiro.layoutChapter({
+const result = await mejiro.layoutParagraphs({
   paragraphs: [
     { text: '第一章', fontSize: headingSize },
     { text: '吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。' },

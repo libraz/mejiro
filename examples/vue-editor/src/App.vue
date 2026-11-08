@@ -21,7 +21,7 @@ function onLoad(editor: unknown): void {
   console.log('[editor] loaded', editor);
 }
 
-function onExport(buffer: ArrayBuffer): void {
+function onExport(buffer: Uint8Array): void {
   // The editor also triggers a browser download. Use this hook to upload to
   // your backend, replace the URL, run a server-side validator, etc.
   // eslint-disable-next-line no-console

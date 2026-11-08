@@ -5,6 +5,7 @@ import type { ChapterLayout, PageResult } from '@libraz/mejiro/book';
 import { act, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MejiroScrollView } from '../src/MejiroScrollView.js';
+import { FAKE_LAYOUT_METRICS } from './helpers/fixtures.js';
 
 // The Vue suite (MejiroScrollView.test.ts) drives the identical scenarios.
 
@@ -89,9 +90,10 @@ function pageResult(text: string): PageResult {
   } as unknown as PageResult;
 }
 
-function fakeScrollLayout(totalPages: number): ChapterLayout {
+function fakeScrollLayout(pageCount: number): ChapterLayout {
   return {
-    totalPages,
+    ...FAKE_LAYOUT_METRICS,
+    pageCount,
     getPage: (index: number) => pageResult(`頁${index + 1}`),
   } as unknown as ChapterLayout;
 }
@@ -233,11 +235,16 @@ describe('MejiroScrollView (React) — image overlay routing', () => {
   it('routes each overlay to the page whose area contains its centre', () => {
     installIntersectionObserver();
     const images = [
-      { id: 'on-right', rect: { x: 80, y: 100, w: 120, h: 160 } },
-      { id: 'on-left', rect: { x: -200, y: 100, w: 120, h: 160 } },
+      { id: 'on-right', rect: { x: 80, y: 100, width: 120, height: 160 } },
+      { id: 'on-left', rect: { x: -200, y: 100, width: 120, height: 160 } },
     ];
     const { container } = render(
-      <MejiroScrollView layout={fakeScrollLayout(4)} {...geometry} spreadIdx={1} images={images} />,
+      <MejiroScrollView
+        layout={fakeScrollLayout(4)}
+        {...geometry}
+        spreadIndex={1}
+        images={images}
+      />,
     );
     const pages = container.querySelectorAll<HTMLElement>('.mejiro-reader-page');
     const rightPage = pages[2];

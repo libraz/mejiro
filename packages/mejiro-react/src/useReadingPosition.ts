@@ -1,27 +1,21 @@
 import {
+  type MejiroError,
   type MejiroStorage,
   parseReadingPosition,
-  type ReadingPositionValue,
+  type ReadingAnchor,
   serializeReadingPosition,
 } from '@libraz/mejiro';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createPendingWrite,
   flushOnPageHide,
-  readStorage,
+  type HydratedValue,
+  hydrateStorage,
   removeStorage,
+  reportStorageError,
   resolveDefaultStorage,
+  storageWriteError,
 } from './persistence.js';
-
-/**
- * Persisted reading position. Anchor-shaped — pair with
- * {@link MejiroReaderHandle.goToAnchor} to restore the user's exact location
- * even after a reflow that invalidates spread indices.
- */
-export type { ReadingPositionValue };
-
-/** Minimal storage interface required by {@link useReadingPosition}. */
-export type ReadingPositionStorage = MejiroStorage;
 
 /** Options for {@link useReadingPosition}. */
 export interface UseReadingPositionOptions {
@@ -31,25 +25,35 @@ export interface UseReadingPositionOptions {
    * Storage backend. Defaults to `window.localStorage` when available.
    * SSR consumers can omit this and the hook will fall back to in-memory.
    */
-  storage?: ReadingPositionStorage;
+  storage?: MejiroStorage;
   /**
-   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and unmount. @defaultValue 250
+   * Debounce delay (ms): the latest value is written this long after the last
+   * change. A pending write is flushed on page hide, key change and unmount.
+   * @defaultValue 250
    */
-  throttleMs?: number;
+  debounceMs?: number;
   /**
    * Called immediately after `save()` (with the new anchor) or `clear()`
    * (with `null`). Use to mirror the position to a server alongside the
    * local `storage`. Not invoked on initial hydration or `key` changes.
    */
-  onChange?: (next: ReadingPositionValue | null) => void;
+  onPositionChange?: (next: ReadingAnchor | null) => void;
+  /**
+   * Receives a storage failure: `storage-read-failed` or `storage-corrupt` when
+   * hydrating (the position starts as `null`, and the stored value is left
+   * alone until the next `save()`), `storage-write-failed` when a write or
+   * removal throws (the in-memory position is kept). Without it the error goes
+   * to `console.warn`.
+   */
+  onError?: (error: MejiroError) => void;
 }
 
 /** Return value of {@link useReadingPosition}. */
 export interface UseReadingPositionReturn {
   /** Most recently persisted position, or `null` if none. */
-  position: ReadingPositionValue | null;
-  /** Persist a new position (debounced by `throttleMs`). */
-  save(next: ReadingPositionValue): void;
+  position: ReadingAnchor | null;
+  /** Persist a new position (debounced by `debounceMs`). */
+  save(next: ReadingAnchor): void;
   /** Remove the persisted position. */
   clear(): void;
 }
@@ -77,30 +81,51 @@ export interface UseReadingPositionReturn {
  * }, [save]);
  * ```
  *
- * Legacy `{ chapter, spreadIdx }` JSON from v0.4 is migrated automatically:
- * the chapter is preserved, `spreadIdx` is dropped (it does not survive
- * reflow), and the position is treated as the start of the chapter.
+ * Every stored layout {@link parseReadingPosition} reads is accepted; one
+ * that names only a chapter and a spread resumes at the start of the chapter,
+ * because a spread index does not survive reflow.
  */
 export function useReadingPosition(options: UseReadingPositionOptions): UseReadingPositionReturn {
-  const { key, throttleMs = 250 } = options;
+  const { key, debounceMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
 
   const storageRef = useRef(storage);
   storageRef.current = storage;
+  const onErrorRef = useRef(options.onError);
+  onErrorRef.current = options.onError;
+  const report = useCallback(
+    (error: MejiroError) => reportStorageError(onErrorRef.current, error),
+    [],
+  );
 
   // The value is kept with the key it was read for, so a key change is
   // re-hydrated in the same render instead of one commit late.
-  const [hydrated, setHydrated] = useState<{ key: string; value: ReadingPositionValue | null }>(
-    () => ({ key, value: readStorage(storage, key, parseReadingPosition, null) }),
+  const [hydrated, setHydrated] = useState<HydratedValue<ReadingAnchor | null>>(() =>
+    hydrateStorage(storage, key, parseReadingPosition, null),
   );
   let position = hydrated.value;
   if (hydrated.key !== key) {
-    position = readStorage(storage, key, parseReadingPosition, null);
-    setHydrated({ key, value: position });
+    const next = hydrateStorage(storage, key, parseReadingPosition, null);
+    position = next.value;
+    setHydrated(next);
   }
 
+  // A failed read is reported once, after the render that made it commits.
+  const reportedRef = useRef<HydratedValue<ReadingAnchor | null> | null>(null);
+  useEffect(() => {
+    if (!hydrated.error || reportedRef.current === hydrated) return;
+    reportedRef.current = hydrated;
+    report(hydrated.error);
+  }, [hydrated, report]);
+
+  // Key of the write in flight, so a failure names the slot it targeted.
+  const writeKeyRef = useRef(key);
   const pendingRef = useRef<ReturnType<typeof createPendingWrite> | null>(null);
-  if (!pendingRef.current) pendingRef.current = createPendingWrite();
+  if (!pendingRef.current) {
+    pendingRef.current = createPendingWrite((cause) =>
+      report(storageWriteError(writeKeyRef.current, cause)),
+    );
+  }
   const pending = pendingRef.current;
 
   // Closing the tab mid-debounce must not lose the last save().
@@ -112,29 +137,30 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
   // biome-ignore lint/correctness/useExhaustiveDependencies: `key` is the trigger — each key change runs the previous cleanup.
   useEffect(() => pending.flush, [key, pending]);
 
-  const onChangeRef = useRef(options.onChange);
-  onChangeRef.current = options.onChange;
+  const onChangeRef = useRef(options.onPositionChange);
+  onChangeRef.current = options.onPositionChange;
 
   const save = useCallback(
-    (next: ReadingPositionValue) => {
-      setHydrated({ key, value: next });
+    (next: ReadingAnchor) => {
+      setHydrated({ key, value: next, error: null });
       const currentStorage = storageRef.current;
       if (currentStorage) {
         pending.schedule(() => {
+          writeKeyRef.current = key;
           currentStorage.setItem(key, serializeReadingPosition(next));
-        }, throttleMs);
+        }, debounceMs);
       }
       onChangeRef.current?.(next);
     },
-    [key, throttleMs, pending],
+    [key, debounceMs, pending],
   );
 
   const clear = useCallback(() => {
-    setHydrated({ key, value: null });
+    setHydrated({ key, value: null, error: null });
     pending.cancel();
-    removeStorage(storageRef.current, key);
+    removeStorage(storageRef.current, key, report);
     onChangeRef.current?.(null);
-  }, [key, pending]);
+  }, [key, pending, report]);
 
   return { position, save, clear };
 }

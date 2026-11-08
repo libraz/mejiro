@@ -1,9 +1,17 @@
-import type { InlineAnnotation } from '../browser/types.js';
+import { MejiroError } from '../errors.js';
 import type { HeadingStyle } from '../render/measures.js';
+import type { RubyType } from '../ruby.js';
 import type { TcyAnnotation } from '../tcy.js';
 import { normalizeText } from '../text.js';
-import type { BreakCostOptions } from '../types.js';
-import type { BookImage, PageSize, ParagraphKind } from './types.js';
+import type {
+  AnalyzerIdentity,
+  BreakCostOptions,
+  HeadingLevel,
+  InlineAnnotation,
+  KinsokuMode,
+  ParagraphKind,
+} from '../types.js';
+import type { BookImage, PageSize } from './types.js';
 
 /**
  * Serializable snapshot of a {@link ChapterLayout}.
@@ -15,12 +23,12 @@ import type { BookImage, PageSize, ParagraphKind } from './types.js';
  * `MejiroBook.layoutFromSnapshot(snapshot)` to skip the measurement round-trip.
  *
  * **Owns its data:** a snapshot shares no object with the layout it was taken
- * from, so it can be mutated, transferred or serialized freely without the live
- * layout observing the change.
+ * from, so it can be transferred or serialized freely without the live layout
+ * observing anything.
  *
  * **Authoritative config:** the snapshot bakes in the `fontSize` / `lineSpacing`
  * / `pageWidth` / `lineWidth` / etc. that were active when it was taken. The
- * first `setOptions` after `layoutFromSnapshot` re-measures the layout when its
+ * first `updateOptions` after `layoutFromSnapshot` re-measures the layout when its
  * font size or heading scales differ from the book's — see the
  * {@link MejiroBook.layoutFromSnapshot} docs.
  *
@@ -31,24 +39,22 @@ import type { BookImage, PageSize, ParagraphKind } from './types.js';
  */
 export interface ChapterLayoutSnapshot {
   /**
-   * Snapshot format version. Bump when the shape changes.
+   * Snapshot format version. {@link ChapterLayout.snapshot} writes `3`.
    *
-   * There is no migration path: {@link MejiroBook.layoutFromSnapshot} rejects
-   * any other value, the same way it rejects a malformed snapshot — one whose
-   * arrays do not fit the paragraph they belong to. A snapshot
-   * is a cache of work that can always be redone by laying the chapter out
-   * again, so refusing a stale one costs a re-layout, while replaying one whose
-   * shape has drifted would put wrong break points on screen.
+   * {@link MejiroBook.layoutFromSnapshot} also reads the version 2 format
+   * written before it, translating its key names; any other version is
+   * rejected the same way a malformed snapshot is, because replaying a shape
+   * it does not know would put wrong break points on screen.
    */
-  version: 2;
+  version: 3;
   /** Layout configuration at snapshot time. */
   config: ChapterLayoutSnapshotConfig;
   /** Page geometry at snapshot time. */
   size: Required<PageSize>;
   /** Per-paragraph data. */
-  paragraphs: ParagraphSnapshot[];
+  paragraphs: readonly ParagraphSnapshot[];
   /** Image exclusions keyed by spread index. Omitted for snapshots without images. */
-  images?: SpreadImagesSnapshot[];
+  images?: readonly SpreadImagesSnapshot[];
 }
 
 /**
@@ -68,7 +74,7 @@ export interface ChapterLayoutSnapshotConfig {
   /** Scale applied to heading font sizes with no per-level `headingStyles` entry. */
   headingScale: number;
   /** Kinsoku mode the break points were produced under. */
-  mode: 'strict' | 'loose';
+  kinsoku: KinsokuMode;
   /** Whether hanging punctuation was enabled when breaking. */
   enableHanging: boolean;
   /** Per-level heading overrides (levels 1–6). Omitted when none were set. */
@@ -94,7 +100,7 @@ export interface ChapterLayoutSnapshotConfig {
    * comparison treats absence as an identity of its own, so a caller-supplied
    * set of hints survives a restore into a book that likewise has no analyzer.
    */
-  analyzer?: { name: string; version: string };
+  analyzer?: AnalyzerIdentity;
 }
 
 /** Per-paragraph snapshot entry. */
@@ -102,7 +108,7 @@ export interface ParagraphSnapshot {
   /** Original paragraph text (JS string). `text` and `chars` are rebuilt from this. */
   text: string;
   /** Per-codepoint advance widths (px). */
-  advances: number[];
+  advances: readonly number[];
   /**
    * Break points in the `BreakResult` convention: the inclusive codepoint index
    * of the last character before each break. A paragraph therefore has
@@ -110,38 +116,39 @@ export interface ParagraphSnapshot {
    * `[breakPoints[i - 1] + 1, breakPoints[i] + 1)` — the ranges `getLineRanges`
    * produces from the same array.
    */
-  breakPoints: number[];
+  breakPoints: readonly number[];
   /**
-   * Inline annotations (kept as the original kind-tagged objects). Copies, not
+   * Inline annotations (kept as the original type-tagged objects). Copies, not
    * references into the live layout.
    */
   inlineAnnotations: readonly InlineAnnotation[];
-  /** Legacy/generic heading marker when no heading level is available. */
-  isHeading?: boolean;
   /** Heading level (1–6), if any. */
-  headingLevel?: number;
-  /** Structural classification of the paragraph. Omitted for `'body'`. */
+  headingLevel?: HeadingLevel;
+  /**
+   * Structural classification of the paragraph. Omitted for `'body'`. A
+   * paragraph is a heading when it has a `headingLevel` or is `'heading'`.
+   */
   kind?: ParagraphKind;
   /** Pre-resolved ruby layout (after width measurement). */
-  layoutRubyAnnotations?: LayoutRubySnapshot[];
+  layoutRubyAnnotations?: readonly LayoutRubySnapshot[];
   /**
    * Pre-resolved tate-chu-yoko layout: the spans the line breaker collapses to
    * one box, with the box width already resolved against the paragraph's font
    * size. {@link TcyAnnotation} holds only numbers, so it needs no serializable
    * counterpart the way {@link LayoutRubySnapshot} does for its typed arrays.
    */
-  layoutTcyAnnotations?: TcyAnnotation[];
+  layoutTcyAnnotations?: readonly TcyAnnotation[];
   /**
    * Cluster IDs the typography hints contributed, one per codepoint. Kept
    * because they are an input to the break points stored above: a restore that
    * dropped them would re-break this paragraph differently on the first resize.
    */
-  hintClusterIds?: number[];
+  hintClusterIds?: readonly number[];
   /**
    * Per-position break penalties the typography hints contributed, one per
    * codepoint. Present only for a layout broken at the `'full'` stage.
    */
-  hintBreakPenalties?: number[];
+  hintBreakPenalties?: readonly number[];
 }
 
 /**
@@ -154,17 +161,17 @@ export interface LayoutRubySnapshot {
   /** End index in the base text's codepoint array (exclusive). */
   endIndex: number;
   /** Ruby text codepoints. */
-  rubyText: number[];
+  rubyText: readonly number[];
   /** Per-codepoint advances for the ruby text. */
-  rubyAdvances: number[];
+  rubyAdvances: readonly number[];
   /** Ruby distribution rule per JLReq. @defaultValue 'mono' */
-  type?: 'mono' | 'group' | 'jukugo';
+  rubyType?: RubyType;
   /**
    * For jukugo ruby: base-text-relative indices where line breaks are
    * permitted. E.g. 東京都 (indices 0,1,2) with `[1, 2]` allows breaks after
    * 東 and 京.
    */
-  jukugoSplitPoints?: number[];
+  jukugoSplitPoints?: readonly number[];
 }
 
 /** Serializable image exclusions for one spread. */
@@ -172,12 +179,12 @@ export interface SpreadImagesSnapshot {
   /** Zero-based index of the spread the images belong to. */
   spreadIndex: number;
   /** Image rectangles excluded on that spread, in right-page coordinates. */
-  images: BookImage[];
+  images: readonly BookImage[];
 }
 
 /** Throws the boundary error for a snapshot that fails validation. */
 function malformed(detail: string): never {
-  throw new Error(`Malformed ChapterLayoutSnapshot: ${detail}`);
+  throw new MejiroError('snapshot-invalid', `Malformed ChapterLayoutSnapshot: ${detail}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -344,28 +351,108 @@ function checkParagraph(value: unknown, where: string): void {
   }
 }
 
+/** Version 2 inline annotation discriminants that version 3 spells differently. */
+const V2_ANNOTATION_TYPES: Readonly<Record<string, string>> = { footnote: 'footnote-ref' };
+
+/** Renames `from` to `to` on a copy of `value`, dropping `from` when it is absent. */
+function renamed(
+  value: Record<string, unknown>,
+  from: string,
+  to: string,
+): Record<string, unknown> {
+  if (!(from in value)) return value;
+  const { [from]: moved, ...rest } = value;
+  return moved === undefined ? rest : { ...rest, [to]: moved };
+}
+
+function mapRecords(
+  value: unknown,
+  map: (record: Record<string, unknown>) => Record<string, unknown>,
+): unknown {
+  return Array.isArray(value) ? value.map((v) => (isRecord(v) ? map(v) : v)) : value;
+}
+
+function v2InlineAnnotation(annotation: Record<string, unknown>): Record<string, unknown> {
+  const { kind, ...rest } = annotation;
+  const type = typeof kind === 'string' ? (V2_ANNOTATION_TYPES[kind] ?? kind) : kind;
+  // A version 2 ruby carried its distribution rule under `type`.
+  return { type, ...(type === 'ruby' ? renamed(rest, 'type', 'rubyType') : rest) };
+}
+
+/** Reads a version 2 ruby entry, whose `type` key is the `rubyType` of version 3. */
+function v2LayoutRuby(ruby: Record<string, unknown>): Record<string, unknown> {
+  return renamed(ruby, 'type', 'rubyType');
+}
+
+function v2Paragraph(paragraph: Record<string, unknown>): Record<string, unknown> {
+  const { isHeading, ...rest } = paragraph;
+  const out: Record<string, unknown> = {
+    ...rest,
+    inlineAnnotations: mapRecords(rest.inlineAnnotations, (a) =>
+      'kind' in a ? v2InlineAnnotation(a) : a,
+    ),
+  };
+  if (rest.layoutRubyAnnotations !== undefined) {
+    out.layoutRubyAnnotations = mapRecords(rest.layoutRubyAnnotations, v2LayoutRuby);
+  }
+  // A generic heading marker without a kind is the heading kind.
+  if (isHeading === true && rest.kind === undefined) out.kind = 'heading';
+  return out;
+}
+
+/** Translates the key names of a version 2 snapshot to version 3, leaving validation to the caller. */
+function fromV2(value: Record<string, unknown>): Record<string, unknown> {
+  const { config, size, paragraphs, images } = value;
+  return {
+    ...value,
+    version: 3,
+    config: isRecord(config) ? renamed(config, 'mode', 'kinsoku') : config,
+    size: isRecord(size)
+      ? renamed(renamed(size, 'pagePaddingX', 'paddingX'), 'pagePaddingY', 'paddingY')
+      : size,
+    paragraphs: mapRecords(paragraphs, v2Paragraph),
+    ...(images === undefined
+      ? {}
+      : {
+          images: mapRecords(images, (spread) => ({
+            ...spread,
+            images: mapRecords(spread.images, (image) =>
+              renamed(renamed(image, 'w', 'width'), 'h', 'height'),
+            ),
+          })),
+        }),
+  };
+}
+
 /**
  * @internal The boundary check {@link MejiroBook.layoutFromSnapshot} runs
- * before adopting a snapshot, which may arrive as untrusted JSON. Every array
- * the layout indexes is checked against the paragraph it belongs to, so a
- * truncated or tampered snapshot fails here instead of producing NaN advances
- * or out-of-range breaks later.
+ * before adopting a snapshot, which may arrive as untrusted JSON. A version 2
+ * snapshot is translated to the version 3 shape first. Every array the layout
+ * indexes is checked against the paragraph it belongs to, so a truncated or
+ * tampered snapshot fails here instead of producing NaN advances or
+ * out-of-range breaks later.
  *
- * @throws Error naming the first malformed field, or the unsupported version.
+ * @returns The snapshot in the version 3 shape.
+ * @throws MejiroError `snapshot-invalid` naming the first malformed field, or
+ *   the unsupported version.
  */
-export function assertChapterLayoutSnapshot(
-  value: unknown,
-): asserts value is ChapterLayoutSnapshot {
+export function readChapterLayoutSnapshot(value: unknown): ChapterLayoutSnapshot {
   if (!isRecord(value)) malformed('not an object');
-  if (value.version !== 2) {
-    throw new Error(`Unsupported ChapterLayoutSnapshot version: ${String(value.version)}`);
+  if (value.version === 2) return readChapterLayoutSnapshot(fromV2(value));
+  if (value.version !== 3) {
+    throw new MejiroError(
+      'snapshot-invalid',
+      `Unsupported ChapterLayoutSnapshot version: ${String(value.version)}`,
+    );
   }
   const { config, size, paragraphs, images } = value;
   if (!isRecord(config)) malformed('config is not an object');
   for (const key of ['fontSize', 'lineSpacing', 'headingScale'] as const) {
     if (!isFinitePositive(config[key])) malformed(`config.${key} is not a positive number`);
   }
-  if (config.mode !== 'strict' && config.mode !== 'loose') malformed('config.mode is invalid');
+  if (config.kinsoku !== 'strict' && config.kinsoku !== 'loose') {
+    malformed('config.kinsoku is invalid');
+  }
   if (typeof config.enableHanging !== 'boolean') malformed('config.enableHanging is invalid');
   checkHeadingStyles(config.headingStyles);
   checkBreakCost(config.breakCost);
@@ -374,7 +461,7 @@ export function assertChapterLayoutSnapshot(
   for (const key of ['pageWidth', 'lineWidth'] as const) {
     if (!isFinitePositive(size[key])) malformed(`size.${key} is not a positive number`);
   }
-  for (const key of ['pagePaddingX', 'pagePaddingY'] as const) {
+  for (const key of ['paddingX', 'paddingY'] as const) {
     if (!isFiniteNonNegative(size[key])) malformed(`size.${key} is not a non-negative number`);
   }
   if (!Array.isArray(paragraphs)) malformed('paragraphs is not an array');
@@ -391,10 +478,11 @@ export function assertChapterLayoutSnapshot(
       spread.images.forEach((image, j) => {
         const ok =
           isRecord(image) &&
-          (['x', 'y', 'w', 'h'] as const).every((k) => Number.isFinite(image[k])) &&
+          (['x', 'y', 'width', 'height'] as const).every((k) => Number.isFinite(image[k])) &&
           (image.margin === undefined || isFiniteNonNegative(image.margin));
         if (!ok) malformed(`images[${i}].images[${j}] is not a valid image rectangle`);
       });
     });
   }
+  return value as unknown as ChapterLayoutSnapshot;
 }

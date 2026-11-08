@@ -13,21 +13,14 @@ import { defineComponent, h, nextTick, type Ref, ref, shallowRef, watch } from '
 import { useManuscriptLayout } from '../src/useManuscriptLayout.js';
 import { useSpread } from '../src/useSpread.js';
 
-function mockLayout(totalPages = 8): ChapterLayout {
+function mockLayout(pageCount = 8): ChapterLayout {
   return {
-    totalPages,
-    getSpread: vi.fn(
-      (i: number) =>
-        ({
-          spreadIdx: i,
-          totalPages,
-          totalSpreads: Math.ceil(totalPages / 2),
-        }) as unknown as SpreadResult,
-    ),
+    pageCount,
+    getSpread: vi.fn((i: number) => ({ spreadIndex: i, pageCount }) as unknown as SpreadResult),
     // Anchors encode the spread they came from, so a capture/restore round trip
     // is observable in the test.
-    anchorAt: vi.fn((i: number) => ({ paragraph: 0, charIndex: i * 10 })),
-    locateAnchor: vi.fn((a: InChapterAnchor) => ({ spreadIdx: Math.floor(a.charIndex / 10) })),
+    anchorAt: vi.fn((i: number) => ({ paragraphIndex: 0, charIndex: i * 10 })),
+    locateAnchor: vi.fn((a: InChapterAnchor) => ({ spreadIndex: Math.floor(a.charIndex / 10) })),
     setImages: vi.fn(),
     clearImages: vi.fn(),
     syncImages: vi.fn(),
@@ -35,15 +28,13 @@ function mockLayout(totalPages = 8): ChapterLayout {
   } as unknown as ChapterLayout;
 }
 
+const GEOMETRY = { pageWidth: 320, lineWidth: 400, pageHeight: 480, contentHeight: 400 };
+
 function mockBook(layout: ChapterLayout = mockLayout()): MejiroBook {
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+    fitPageSize: vi.fn(() => GEOMETRY),
     layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) => {
-      const map = new Map<string, ChapterLayout>();
-      for (const chapter of chapters) {
-        map.set(chapter.id ?? 'fallback', layout);
-      }
-      return map;
+      return chapters.map(() => layout);
     }),
     getOptions: vi.fn(() => ({ fontSize: 16 })),
   } as unknown as MejiroBook;
@@ -53,14 +44,10 @@ function mockBook(layout: ChapterLayout = mockLayout()): MejiroBook {
 function mockBookSequence(layouts: ChapterLayout[]): MejiroBook {
   let i = 0;
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+    fitPageSize: vi.fn(() => GEOMETRY),
     layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) => {
-      const map = new Map<string, ChapterLayout>();
       const layout = layouts[Math.min(i++, layouts.length - 1)];
-      for (const chapter of chapters) {
-        map.set(chapter.id ?? 'fallback', layout);
-      }
-      return map;
+      return chapters.map(() => layout);
     }),
     getOptions: vi.fn(() => ({ fontSize: 16 })),
   } as unknown as MejiroBook;
@@ -70,6 +57,13 @@ function mockBookSequence(layouts: ChapterLayout[]): MejiroBook {
 function setBox(el: HTMLElement, width: number, height: number): void {
   Object.defineProperty(el, 'clientWidth', { configurable: true, get: () => width });
   Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => height });
+}
+
+/** A surface element with a measurable box, as a mounted reader has. */
+function sizedSurface(): HTMLElement {
+  const el = document.createElement('div');
+  setBox(el, 640, 480);
+  return el;
 }
 
 function harness<T>(setup: () => T): { result: { current: T }; app: ReturnType<typeof mount> } {
@@ -87,14 +81,14 @@ function harness<T>(setup: () => T): { result: { current: T }; app: ReturnType<t
 describe('useManuscriptLayout (Vue)', () => {
   it('lays out a single manuscript chapter via layoutManuscript', async () => {
     const book = mockBook();
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const chapter: Ref<ManuscriptChapter | null> = shallowRef({
       id: 'c1',
       title: 'T',
       body: 'B',
     });
     const surface = ref(surfaceEl);
-    const { result } = harness(() => useManuscriptLayout(book, chapter, surface));
+    const { result } = harness(() => useManuscriptLayout(book, { chapter, surface }));
 
     await nextTick();
     await nextTick();
@@ -108,14 +102,14 @@ describe('useManuscriptLayout (Vue)', () => {
 
   it('clears layout when chapter becomes null', async () => {
     const book = mockBook();
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const chapter: Ref<ManuscriptChapter | null> = shallowRef({
       id: 'c1',
       title: 'T',
       body: 'B',
     });
     const surface = ref(surfaceEl);
-    const { result } = harness(() => useManuscriptLayout(book, chapter, surface));
+    const { result } = harness(() => useManuscriptLayout(book, { chapter, surface }));
     await nextTick();
     await nextTick();
     expect(result.current.layout.value).not.toBeNull();
@@ -130,8 +124,8 @@ describe('useManuscriptLayout (Vue)', () => {
   it('re-lays out exactly once with the new text when the chapter body is mutated in place', async () => {
     const book = mockBook();
     const chapter = ref<ManuscriptChapter | null>({ id: 'c1', title: 'T', body: 'one' });
-    const surface = ref(document.createElement('div'));
-    harness(() => useManuscriptLayout(book, chapter, surface));
+    const surface = ref(sizedSurface());
+    harness(() => useManuscriptLayout(book, { chapter, surface }));
     await nextTick();
     await nextTick();
     expect(book.layoutManuscript).toHaveBeenCalledTimes(1);
@@ -147,8 +141,8 @@ describe('useManuscriptLayout (Vue)', () => {
   it('does not re-lay out when the chapter is replaced by an equal object', async () => {
     const book = mockBook();
     const chapter = shallowRef<ManuscriptChapter | null>({ id: 'c1', title: 'T', body: 'B' });
-    const surface = ref(document.createElement('div'));
-    harness(() => useManuscriptLayout(book, chapter, surface));
+    const surface = ref(sizedSurface());
+    harness(() => useManuscriptLayout(book, { chapter, surface }));
     await nextTick();
     await nextTick();
 
@@ -161,7 +155,7 @@ describe('useManuscriptLayout (Vue)', () => {
 
   it('honors a reactive dialect option', async () => {
     const book = mockBook();
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const chapter: Ref<ManuscriptChapter | null> = shallowRef({
       id: 'c1',
       title: 'T',
@@ -169,7 +163,7 @@ describe('useManuscriptLayout (Vue)', () => {
     });
     const surface = ref(surfaceEl);
     const dialect = shallowRef<'mejiro' | 'narou'>('mejiro');
-    harness(() => useManuscriptLayout(book, chapter, surface, { dialect }));
+    harness(() => useManuscriptLayout(book, { chapter, surface, dialect }));
 
     await nextTick();
     await nextTick();
@@ -188,8 +182,8 @@ describe('useManuscriptLayout (Vue)', () => {
     const bookB = mockBookSequence([l1]);
     const book = shallowRef(bookA);
     const chapter: Ref<ManuscriptChapter | null> = shallowRef({ id: 'c1', title: 'T', body: 'B' });
-    const surface = ref(document.createElement('div'));
-    const { result } = harness(() => useManuscriptLayout(book, chapter, surface));
+    const surface = ref(sizedSurface());
+    const { result } = harness(() => useManuscriptLayout(book, { chapter, surface }));
 
     await nextTick();
     await nextTick();
@@ -225,16 +219,18 @@ describe('useManuscriptLayout (Vue)', () => {
         title: 'T',
         body: 'B',
       });
-      const surfaceEl = document.createElement('div');
+      const surfaceEl = sizedSurface();
       const surface = ref(surfaceEl);
       const seen: (ChapterLayout | null)[] = [];
 
       const { result } = harness(() => {
-        const layoutCtx = useManuscriptLayout(book, chapter, surface, {
-          resizeDebounce: 0,
-          capturePosition: (l) => l.anchorAt(spreadCtx.spreadIdx.value, 'right'),
+        const layoutCtx = useManuscriptLayout(book, {
+          chapter,
+          surface,
+          resizeDebounceMs: 0,
+          capturePosition: (l) => l.anchorAt(spreadCtx.spreadIndex.value, { side: 'right' }),
           restorePosition: (l, anchor) =>
-            spreadCtx.setSpread(l.locateAnchor(anchor)?.spreadIdx ?? 0),
+            spreadCtx.goTo(l.locateAnchor(anchor)?.spreadIndex ?? 0, { animate: false }),
         });
         const spreadCtx = useSpread(layoutCtx.layout, { enableKeyboard: false });
         watch(layoutCtx.layout, (v) => seen.push(v), { flush: 'sync' });
@@ -246,8 +242,8 @@ describe('useManuscriptLayout (Vue)', () => {
       expect(observe).toHaveBeenCalledWith(surfaceEl);
       expect(result.current.layoutCtx.layout.value).toBe(first);
 
-      result.current.spreadCtx.setSpread(2);
-      expect(result.current.spreadCtx.spreadIdx.value).toBe(2);
+      result.current.spreadCtx.goTo(2, { animate: false });
+      expect(result.current.spreadCtx.index.value).toBe(2);
       seen.length = 0;
 
       // Only the surface reports a new size — no window resize event is fired.
@@ -265,10 +261,10 @@ describe('useManuscriptLayout (Vue)', () => {
       expect(seen).toEqual([second]);
       // The spread the reader was on survives the reflow, and reads through to
       // the replacement layout.
-      expect(result.current.spreadCtx.spreadIdx.value).toBe(2);
+      expect(result.current.spreadCtx.index.value).toBe(2);
       expect(second.getSpread).toHaveBeenCalledWith(2);
       expect(result.current.spreadCtx.spread.value).toEqual(
-        expect.objectContaining({ spreadIdx: 2 }),
+        expect.objectContaining({ spreadIndex: 2 }),
       );
     } finally {
       vi.stubGlobal('ResizeObserver', originalResizeObserver);

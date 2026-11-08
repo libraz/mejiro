@@ -1,65 +1,72 @@
 import {
+  type MejiroError,
   type MejiroStorage,
   parseReadingPosition,
-  type ReadingPositionValue,
+  type ReadingAnchor,
   serializeReadingPosition,
 } from '@libraz/mejiro';
-import { onScopeDispose, type Ref, ref, watch } from 'vue';
+import {
+  type MaybeRefOrGetter,
+  onScopeDispose,
+  type Ref,
+  shallowReadonly,
+  shallowRef,
+  toValue,
+  watch,
+} from 'vue';
+import { nonFatalReporter } from './errors.js';
 import {
   createPendingWrite,
   flushOnPageHide,
   readStorage,
   removeStorage,
   resolveDefaultStorage,
+  writeStorage,
 } from './persistence.js';
-
-/**
- * Persisted reading position. Anchor-shaped — pair with
- * {@link MejiroReaderHandle.goToAnchor} to restore the user's exact location
- * even after a reflow that invalidates spread indices.
- */
-export type { ReadingPositionValue };
-
-/** Minimal storage interface required by {@link useReadingPosition}. */
-export type ReadingPositionStorage = MejiroStorage;
 
 /** Options for {@link useReadingPosition}. */
 export interface UseReadingPositionOptions {
   /**
    * Storage key — usually scoped per-book (e.g. `mejiro:position:${bookId}`).
-   * A `Ref` (or a reactive getter property) re-hydrates the position when the
-   * key changes; a plain string is read once.
+   * A ref or getter re-hydrates the position when the key changes; a plain
+   * string is read once.
    */
-  key: Ref<string> | string;
+  key: MaybeRefOrGetter<string>;
   /**
    * Storage backend. Defaults to `window.localStorage` when available.
    * SSR consumers can omit this and the composable will fall back to in-memory.
    */
-  storage?: ReadingPositionStorage;
+  storage?: MejiroStorage;
   /**
-   * Debounce delay (ms): the latest value is written this long after the last change. A pending write is flushed on page hide, key change and scope dispose. @defaultValue 250
+   * Debounce delay (ms): the latest value is written this long after the last
+   * change. A pending write is flushed on page hide, key change and scope
+   * dispose. @defaultValue 250
    */
-  throttleMs?: number;
+  debounceMs?: number;
   /**
    * Called immediately after `save()` (with the new anchor) or `clear()`
    * (with `null`). Use to mirror the position to a server alongside the
    * local `storage`. Not invoked on initial hydration or `key` changes.
    */
-  onChange?: (next: ReadingPositionValue | null) => void;
+  onPositionChange?: (next: ReadingAnchor | null) => void;
+  /**
+   * Called when the storage throws (`storage-read-failed` /
+   * `storage-write-failed`) or holds data that cannot be read back
+   * (`storage-corrupt`). The position stays usable in memory; unreadable data
+   * is left in place until the next `save()` overwrites it. Without it the
+   * failure goes to `console.warn`.
+   */
+  onError?: (error: MejiroError) => void;
 }
 
 /** Return value of {@link useReadingPosition}. */
 export interface UseReadingPositionReturn {
-  /** Most recently persisted position, or `null` if none. */
-  position: Ref<ReadingPositionValue | null>;
-  /** Persist a new position (debounced by `throttleMs`). */
-  save(next: ReadingPositionValue): void;
+  /** Most recently persisted position, or `null` if none. Change it through `save` / `clear`. */
+  position: Readonly<Ref<ReadingAnchor | null>>;
+  /** Persist a new position (debounced by `debounceMs`). */
+  save(next: ReadingAnchor): void;
   /** Remove the persisted position. */
   clear(): void;
-}
-
-function unwrapKey(key: Ref<string> | string): string {
-  return typeof key === 'string' ? key : key.value;
 }
 
 /**
@@ -67,46 +74,46 @@ function unwrapKey(key: Ref<string> | string): string {
  * debounced saver. Pair with {@link MejiroReaderHandle.goToAnchor} and
  * {@link MejiroReaderHandle.subscribe} for exact reflow-safe restore.
  *
- * Legacy `{ chapter, spreadIdx }` JSON from v0.4 is migrated automatically:
- * the chapter is preserved, `spreadIdx` is dropped (it does not survive
- * reflow), and the position is treated as the start of the chapter.
+ * Every stored layout {@link parseReadingPosition} reads is accepted; a stored
+ * position that only names a chapter resumes at the start of that chapter.
  */
 export function useReadingPosition(options: UseReadingPositionOptions): UseReadingPositionReturn {
-  const { throttleMs = 250 } = options;
+  const { debounceMs = 250 } = options;
   const storage = options.storage ?? resolveDefaultStorage();
-  const keyRef = ref(unwrapKey(options.key));
+  const report = nonFatalReporter(options.onError);
+  let key = toValue(options.key);
 
-  const position = ref<ReadingPositionValue | null>(
-    readStorage(storage, keyRef.value, parseReadingPosition, null),
+  const position = shallowRef<ReadingAnchor | null>(
+    readStorage(storage, key, parseReadingPosition, null, report),
   );
   const pending = createPendingWrite();
 
   watch(
-    () => unwrapKey(options.key),
-    (k) => {
+    () => toValue(options.key),
+    (next) => {
       // A write scheduled under the previous key must land there, not in the new book's slot.
       pending.flush();
-      keyRef.value = k;
-      position.value = readStorage(storage, k, parseReadingPosition, null);
+      key = next;
+      position.value = readStorage(storage, next, parseReadingPosition, null, report);
     },
   );
 
-  function save(next: ReadingPositionValue): void {
+  function save(next: ReadingAnchor): void {
     position.value = next;
     if (storage) {
-      const keyAtSave = keyRef.value;
+      const keyAtSave = key;
       pending.schedule(() => {
-        storage.setItem(keyAtSave, serializeReadingPosition(next));
-      }, throttleMs);
+        writeStorage(storage, keyAtSave, serializeReadingPosition(next), report);
+      }, debounceMs);
     }
-    options.onChange?.(next);
+    options.onPositionChange?.(next);
   }
 
   function clear(): void {
     position.value = null;
     pending.cancel();
-    removeStorage(storage, keyRef.value);
-    options.onChange?.(null);
+    removeStorage(storage, key, report);
+    options.onPositionChange?.(null);
   }
 
   // Closing the tab or disposing the scope mid-debounce must not lose the last save().
@@ -116,5 +123,5 @@ export function useReadingPosition(options: UseReadingPositionOptions): UseReadi
     pending.flush();
   });
 
-  return { position, save, clear };
+  return { position: shallowReadonly(position), save, clear };
 }

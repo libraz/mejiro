@@ -11,18 +11,18 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { useManuscriptLayout } from '../src/useManuscriptLayout.js';
+import { sizedSurface } from './helpers/fixtures.js';
 
-function mockLayout(totalPages = 4): ChapterLayout {
+function mockLayout(pageCount = 4): ChapterLayout {
   return {
-    totalPages,
+    pageCount,
     getSpread: vi.fn(),
     // Anchors encode the spread they came from, so a capture/restore round trip
     // is observable in the test.
-    anchorAt: vi.fn((i: number) => ({ paragraph: 0, charIndex: i * 10 })),
-    locateAnchor: vi.fn((a: InChapterAnchor) => ({ spreadIdx: Math.floor(a.charIndex / 10) })),
+    anchorAt: vi.fn((i: number) => ({ paragraphIndex: 0, charIndex: i * 10 })),
+    locateAnchor: vi.fn((a: InChapterAnchor) => ({ spreadIndex: Math.floor(a.charIndex / 10) })),
     setImages: vi.fn(),
     clearImages: vi.fn(),
-    syncImages: vi.fn(),
     resize: vi.fn(),
   } as unknown as ChapterLayout;
 }
@@ -31,14 +31,10 @@ function mockLayout(totalPages = 4): ChapterLayout {
 function mockBookSequence(layouts: ChapterLayout[]): MejiroBook {
   let i = 0;
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+    fitPageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
     layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) => {
-      const map = new Map<string, ChapterLayout>();
       const layout = layouts[Math.min(i++, layouts.length - 1)];
-      for (const chapter of chapters) {
-        map.set(chapter.id ?? 'fallback', layout);
-      }
-      return map;
+      return chapters.map(() => layout);
     }),
     getOptions: vi.fn(() => ({ fontSize: 16 })),
   } as unknown as MejiroBook;
@@ -46,14 +42,10 @@ function mockBookSequence(layouts: ChapterLayout[]): MejiroBook {
 
 function mockBook(layout: ChapterLayout = mockLayout()): MejiroBook {
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
-    layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) => {
-      const map = new Map<string, ChapterLayout>();
-      for (const chapter of chapters) {
-        map.set(chapter.id ?? 'fallback', layout);
-      }
-      return map;
-    }),
+    fitPageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+    layoutManuscript: vi.fn(async ({ chapters }: { chapters: ManuscriptChapter[] }) =>
+      chapters.map(() => layout),
+    ),
     getOptions: vi.fn(() => ({ fontSize: 16 })),
   } as unknown as MejiroBook;
 }
@@ -66,14 +58,14 @@ function setBox(el: HTMLElement, width: number, height: number): void {
 
 function setupHook(initialChapter: ManuscriptChapter | null) {
   const book = mockBook();
-  const surfaceEl = document.createElement('div');
+  const surfaceEl = sizedSurface();
   return {
     book,
     surfaceEl,
     hook: renderHook(
       ({ chapter }: { chapter: ManuscriptChapter | null }) => {
         const surface = useRef<HTMLElement | null>(surfaceEl);
-        return useManuscriptLayout(book, chapter, surface);
+        return useManuscriptLayout(book, { chapter, surface });
       },
       { initialProps: { chapter: initialChapter } },
     ),
@@ -98,11 +90,11 @@ describe('useManuscriptLayout (React)', () => {
 
   it('honors the dialect option', async () => {
     const book = mockBook();
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const chapter: ManuscriptChapter = { id: 'c1', title: 'T', body: 'B' };
     const { result } = renderHook(() => {
       const surface = useRef<HTMLElement | null>(surfaceEl);
-      return useManuscriptLayout(book, chapter, surface, { dialect: 'narou' });
+      return useManuscriptLayout(book, { chapter, surface, dialect: 'narou' });
     });
     await waitFor(() => expect(result.current.layout).not.toBeNull());
     expect(book.layoutManuscript).toHaveBeenCalledWith({
@@ -149,11 +141,11 @@ describe('useManuscriptLayout (React)', () => {
 
     try {
       const book = mockBook();
-      const surfaceEl = document.createElement('div');
+      const surfaceEl = sizedSurface();
       const chapter: ManuscriptChapter = { id: 'c1', title: 'T', body: 'B' };
       const { unmount } = renderHook(() => {
         const surface = useRef<HTMLElement | null>(surfaceEl);
-        return useManuscriptLayout(book, chapter, surface, { resizeDebounce: 0 });
+        return useManuscriptLayout(book, { chapter, surface, resizeDebounceMs: 0 });
       });
 
       await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(1));
@@ -166,7 +158,7 @@ describe('useManuscriptLayout (React)', () => {
       setBox(surfaceEl, 640, 600);
       act(() => resizeCallback?.([], {} as ResizeObserver));
       await waitFor(() => expect(book.layoutManuscript).toHaveBeenCalledTimes(3));
-      expect(book.computePageSize).toHaveBeenCalledTimes(3);
+      expect(book.fitPageSize).toHaveBeenCalledTimes(3);
       unmount();
       expect(disconnect).toHaveBeenCalled();
     } finally {
@@ -190,18 +182,20 @@ describe('useManuscriptLayout (React)', () => {
       const first = mockLayout(8);
       const second = mockLayout(8);
       const book = mockBookSequence([first, second]);
-      const surfaceEl = document.createElement('div');
+      const surfaceEl = sizedSurface();
       const chapter: ManuscriptChapter = { id: 'c1', title: 'T', body: 'B' };
       const seen: (ChapterLayout | null)[] = [];
       // The reader's spread index lives outside the hook; capture it the same
       // way `MejiroReader` does so the reflow round trip is observable.
-      const spreadIdx = 2;
+      const spreadIndex = 2;
 
       const { result } = renderHook(() => {
         const surface = useRef<HTMLElement | null>(surfaceEl);
-        const ctx = useManuscriptLayout(book, chapter, surface, {
-          resizeDebounce: 0,
-          capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
+        const ctx = useManuscriptLayout(book, {
+          chapter,
+          surface,
+          resizeDebounceMs: 0,
+          capturePosition: (l) => l.anchorAt(spreadIndex),
         });
         seen.push(ctx.layout);
         return ctx;
@@ -224,8 +218,8 @@ describe('useManuscriptLayout (React)', () => {
       expect(seen).not.toContain(null);
       // The spread the reader was on is handed back for restoration.
       const anchor = result.current.pendingRestore.current;
-      expect(anchor).toEqual({ paragraph: 0, charIndex: 20 });
-      expect(second.locateAnchor(anchor as InChapterAnchor)?.spreadIdx).toBe(2);
+      expect(anchor).toEqual({ paragraphIndex: 0, charIndex: 20 });
+      expect(second.locateAnchor(anchor as InChapterAnchor)?.spreadIndex).toBe(2);
     } finally {
       vi.stubGlobal('ResizeObserver', originalResizeObserver);
     }
@@ -236,12 +230,12 @@ describe('useManuscriptLayout (React)', () => {
     const l1 = mockLayout(8);
     const bookA = mockBookSequence([l0]);
     const bookB = mockBookSequence([l1]);
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const chapter: ManuscriptChapter = { id: 'c1', title: 'T', body: 'B' };
     const { result, rerender } = renderHook(
       ({ book }: { book: MejiroBook }) => {
         const surface = useRef<HTMLElement | null>(surfaceEl);
-        return useManuscriptLayout(book, chapter, surface, { enableResize: false });
+        return useManuscriptLayout(book, { chapter, surface, enableResize: false });
       },
       { initialProps: { book: bookA } },
     );
@@ -254,12 +248,14 @@ describe('useManuscriptLayout (React)', () => {
 
   it('lays out once for an inline chapter literal recreated on every render', async () => {
     const book = mockBook();
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const { result, rerender } = renderHook(
       ({ tick }: { tick: number }) => {
         void tick;
         const surface = useRef<HTMLElement | null>(surfaceEl);
-        return useManuscriptLayout(book, { id: 'c1', title: 'T', body: 'B' }, surface, {
+        return useManuscriptLayout(book, {
+          chapter: { id: 'c1', title: 'T', body: 'B' },
+          surface,
           enableResize: false,
         });
       },
@@ -276,11 +272,13 @@ describe('useManuscriptLayout (React)', () => {
 
   it('lays out again when the chapter body changes in a new object', async () => {
     const book = mockBook();
-    const surfaceEl = document.createElement('div');
+    const surfaceEl = sizedSurface();
     const { result, rerender } = renderHook(
       ({ body }: { body: string }) => {
         const surface = useRef<HTMLElement | null>(surfaceEl);
-        return useManuscriptLayout(book, { id: 'c1', title: 'T', body }, surface, {
+        return useManuscriptLayout(book, {
+          chapter: { id: 'c1', title: 'T', body },
+          surface,
           enableResize: false,
         });
       },

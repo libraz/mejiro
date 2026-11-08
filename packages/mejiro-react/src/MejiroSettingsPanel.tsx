@@ -1,11 +1,19 @@
-import type { EditableSettings, FontChoice } from '@libraz/mejiro';
+import type { EditableSettings, FontChoice, KinsokuMode } from '@libraz/mejiro';
 import { normalizeFontFamily } from '@libraz/mejiro/browser';
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  forwardRef,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react';
 import { useI18n } from './i18n.js';
 
 export type { EditableSettings, FontChoice };
 
-const DEFAULT_FONTS: FontChoice[] = [
+const DEFAULT_FONTS: readonly FontChoice[] = [
   { value: 'serif', label: 'System Serif' },
   { value: 'sans-serif', label: 'System Sans' },
 ];
@@ -91,16 +99,19 @@ function CommittedNumberInput({
   );
 }
 
-/** Props for {@link MejiroSettingsPanel}. */
-export interface MejiroSettingsPanelProps {
+/** Props for {@link MejiroSettingsPanel}; other `div` attributes go to the root element. */
+export interface MejiroSettingsPanelProps extends ComponentPropsWithoutRef<'div'> {
   /** Whether the panel is expanded. */
   open: boolean;
   /** Current editable settings. */
   settings: EditableSettings;
-  /** Called when a setting changes. */
-  onChange: (next: EditableSettings) => void;
+  /**
+   * Called when the user changes a setting, with the whole settings value:
+   * {@link MejiroSettingsPanelProps.settings} with that one field replaced.
+   */
+  onSettingsChange: (next: EditableSettings) => void;
   /** Font choices. */
-  fonts?: FontChoice[];
+  fonts?: readonly FontChoice[];
   /** Min font size. @defaultValue 10 */
   minFontSize?: number;
   /** Max font size. @defaultValue 48 */
@@ -110,138 +121,149 @@ export interface MejiroSettingsPanelProps {
 /**
  * Reader settings panel: font, size, kinsoku mode, hanging punctuation, line spacing.
  */
-export function MejiroSettingsPanel({
-  open,
-  settings,
-  onChange,
-  fonts = DEFAULT_FONTS,
-  minFontSize = 10,
-  maxFontSize = 48,
-}: MejiroSettingsPanelProps): ReactNode {
-  const messages = useI18n();
-  // Per-instance ids keep label associations valid when two panels share a page.
-  const uid = useId();
-  const patch = (next: Partial<EditableSettings>) => onChange({ ...settings, ...next });
+export const MejiroSettingsPanel = forwardRef<HTMLDivElement, MejiroSettingsPanelProps>(
+  function MejiroSettingsPanel(
+    {
+      open,
+      settings,
+      onSettingsChange,
+      fonts = DEFAULT_FONTS,
+      minFontSize = 10,
+      maxFontSize = 48,
+      className,
+      ...rest
+    },
+    ref,
+  ): ReactNode {
+    const messages = useI18n();
+    // Per-instance ids keep label associations valid when two panels share a page.
+    const uid = useId();
+    const patch = (next: Partial<EditableSettings>) => onSettingsChange({ ...settings, ...next });
 
-  // Show the active font even when the host's `fonts` list doesn't include it,
-  // so the selector never renders blank (e.g. an embed that sets a custom
-  // family but passes no matching choice).
-  const currentFont = normalizeFontFamily(settings.fontFamily);
-  const fontOptions = fonts.some((f) => f.value === currentFont)
-    ? fonts
-    : [{ value: currentFont, label: fontLabelFromCss(currentFont) }, ...fonts];
+    // Show the active font even when the host's `fonts` list doesn't include it,
+    // so the selector never renders blank (e.g. an embed that sets a custom
+    // family but passes no matching choice).
+    const currentFont = normalizeFontFamily(settings.fontFamily);
+    const fontOptions = fonts.some((f) => f.value === currentFont)
+      ? fonts
+      : [{ value: currentFont, label: fontLabelFromCss(currentFont) }, ...fonts];
 
-  return (
-    <div className={`mejiro-reader-settings-panel${open ? ' is-open' : ''}`}>
-      <div className="mejiro-reader-settings-inner">
-        <div className="mejiro-reader-settings-content">
-          <div className="mejiro-reader-settings-group">
-            <span className="mejiro-reader-settings-group-title">{messages.settingsFont}</span>
-            <div className="mejiro-reader-control">
-              <select
-                aria-label={messages.settingsFont}
-                value={currentFont}
-                onChange={(e) => patch({ fontFamily: e.target.value })}
-              >
-                {fontOptions.map((f) => (
-                  <option key={f.value} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
+    return (
+      <div
+        {...rest}
+        ref={ref}
+        className={`mejiro-reader-settings-panel${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`}
+      >
+        <div className="mejiro-reader-settings-inner">
+          <div className="mejiro-reader-settings-content">
+            <div className="mejiro-reader-settings-group">
+              <span className="mejiro-reader-settings-group-title">{messages.settingsFont}</span>
+              <div className="mejiro-reader-control">
+                <select
+                  aria-label={messages.settingsFont}
+                  value={currentFont}
+                  onChange={(e) => patch({ fontFamily: e.target.value })}
+                >
+                  {fontOptions.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mejiro-reader-control">
+                <label className="mejiro-reader-control-label" htmlFor={`${uid}-font-size`}>
+                  {messages.settingsSize}
+                </label>
+                <button
+                  type="button"
+                  className="mejiro-reader-btn mejiro-reader-btn--icon"
+                  aria-label={messages.settingsSizeDown}
+                  onClick={() =>
+                    patch({
+                      fontSize: clampNumber(
+                        settings.fontSize - 1,
+                        minFontSize,
+                        maxFontSize,
+                        minFontSize,
+                      ),
+                    })
+                  }
+                >
+                  A−
+                </button>
+                <CommittedNumberInput
+                  id={`${uid}-font-size`}
+                  value={settings.fontSize}
+                  min={minFontSize}
+                  max={maxFontSize}
+                  onCommit={(fontSize) => patch({ fontSize })}
+                />
+                <button
+                  type="button"
+                  className="mejiro-reader-btn mejiro-reader-btn--icon"
+                  aria-label={messages.settingsSizeUp}
+                  onClick={() =>
+                    patch({
+                      fontSize: clampNumber(
+                        settings.fontSize + 1,
+                        minFontSize,
+                        maxFontSize,
+                        minFontSize,
+                      ),
+                    })
+                  }
+                >
+                  A+
+                </button>
+              </div>
             </div>
-            <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor={`${uid}-font-size`}>
-                {messages.settingsSize}
-              </label>
-              <button
-                type="button"
-                className="mejiro-reader-btn mejiro-reader-btn--icon"
-                aria-label={messages.settingsSizeDown}
-                onClick={() =>
-                  patch({
-                    fontSize: clampNumber(
-                      settings.fontSize - 1,
-                      minFontSize,
-                      maxFontSize,
-                      minFontSize,
-                    ),
-                  })
-                }
-              >
-                A−
-              </button>
-              <CommittedNumberInput
-                id={`${uid}-font-size`}
-                value={settings.fontSize}
-                min={minFontSize}
-                max={maxFontSize}
-                onCommit={(fontSize) => patch({ fontSize })}
-              />
-              <button
-                type="button"
-                className="mejiro-reader-btn mejiro-reader-btn--icon"
-                aria-label={messages.settingsSizeUp}
-                onClick={() =>
-                  patch({
-                    fontSize: clampNumber(
-                      settings.fontSize + 1,
-                      minFontSize,
-                      maxFontSize,
-                      minFontSize,
-                    ),
-                  })
-                }
-              >
-                A+
-              </button>
-            </div>
-          </div>
-          <div className="mejiro-reader-settings-group">
-            <span className="mejiro-reader-settings-group-title">{messages.settingsLayout}</span>
-            <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor={`${uid}-kinsoku`}>
-                {messages.settingsKinsoku}
-              </label>
-              <select
-                id={`${uid}-kinsoku`}
-                value={settings.mode ?? 'strict'}
-                onChange={(e) => patch({ mode: e.target.value as 'strict' | 'loose' })}
-              >
-                <option value="strict">{messages.settingsStrict}</option>
-                <option value="loose">{messages.settingsLoose}</option>
-              </select>
-            </div>
-            <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor={`${uid}-hanging`}>
-                {messages.settingsHanging}
-              </label>
-              <select
-                id={`${uid}-hanging`}
-                value={String(settings.enableHanging ?? true)}
-                onChange={(e) => patch({ enableHanging: e.target.value === 'true' })}
-              >
-                <option value="true">{messages.toggleOn}</option>
-                <option value="false">{messages.toggleOff}</option>
-              </select>
-            </div>
-            <div className="mejiro-reader-control">
-              <label className="mejiro-reader-control-label" htmlFor={`${uid}-line-spacing`}>
-                {messages.settingsLineSpacing}
-              </label>
-              <CommittedNumberInput
-                id={`${uid}-line-spacing`}
-                className="mejiro-reader-control--wide"
-                value={settings.lineSpacing ?? 1.8}
-                min={1.0}
-                max={3.0}
-                step={0.1}
-                onCommit={(lineSpacing) => patch({ lineSpacing })}
-              />
+            <div className="mejiro-reader-settings-group">
+              <span className="mejiro-reader-settings-group-title">{messages.settingsLayout}</span>
+              <div className="mejiro-reader-control">
+                <label className="mejiro-reader-control-label" htmlFor={`${uid}-kinsoku`}>
+                  {messages.settingsKinsoku}
+                </label>
+                <select
+                  id={`${uid}-kinsoku`}
+                  value={settings.kinsoku ?? 'strict'}
+                  onChange={(e) => patch({ kinsoku: e.target.value as KinsokuMode })}
+                >
+                  <option value="strict">{messages.settingsStrict}</option>
+                  <option value="loose">{messages.settingsLoose}</option>
+                </select>
+              </div>
+              <div className="mejiro-reader-control">
+                <label className="mejiro-reader-control-label" htmlFor={`${uid}-hanging`}>
+                  {messages.settingsHanging}
+                </label>
+                <select
+                  id={`${uid}-hanging`}
+                  value={String(settings.enableHanging ?? true)}
+                  onChange={(e) => patch({ enableHanging: e.target.value === 'true' })}
+                >
+                  <option value="true">{messages.toggleOn}</option>
+                  <option value="false">{messages.toggleOff}</option>
+                </select>
+              </div>
+              <div className="mejiro-reader-control">
+                <label className="mejiro-reader-control-label" htmlFor={`${uid}-line-spacing`}>
+                  {messages.settingsLineSpacing}
+                </label>
+                <CommittedNumberInput
+                  id={`${uid}-line-spacing`}
+                  className="mejiro-reader-control--wide"
+                  value={settings.lineSpacing ?? 1.8}
+                  min={1.0}
+                  max={3.0}
+                  step={0.1}
+                  onCommit={(lineSpacing) => patch({ lineSpacing })}
+                />
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);

@@ -12,28 +12,28 @@ const result = await mejiro.layout({
   lineWidth: 200,
   inlineAnnotations: [
     {
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: 0,
       endIndex: 2,
       rubyText: 'かんじ',
-      type: 'group',
+      rubyType: 'group',
     },
   ],
 });
 // #endregion doc:layout
 
 // #region doc:chapter
-const chapterResult = await mejiro.layoutChapter({
+const chapterResult = await mejiro.layoutParagraphs({
   paragraphs: [
     {
       text: '漢字を読む',
       inlineAnnotations: [
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 0,
           endIndex: 2,
           rubyText: 'かんじ',
-          type: 'group',
+          rubyType: 'group',
         },
       ],
     },

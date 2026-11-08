@@ -1,17 +1,19 @@
-import type { InlineAnnotation } from '@libraz/mejiro/browser';
+import type { BinaryInput, InlineAnnotation } from '@libraz/mejiro';
 import {
   type AssetResolver,
-  cloneEditableEpubBook,
-  EditableEpub,
+  type EditableEpub,
   type EditableEpubBook,
+  type EditableEpubExportOptions,
   type EditableParagraphBlock,
   type EpubParseLimits,
-  exportEditableEpub,
+  editableEpubToEpubBook,
+  parseEditableEpub,
 } from '@libraz/mejiro/epub';
 import {
   computed,
   defineComponent,
   h,
+  markRaw,
   onMounted,
   type PropType,
   ref,
@@ -20,10 +22,13 @@ import {
 } from 'vue';
 import { markBookIdentity } from './bookIdentity.js';
 import { fetchEpubBuffer, readEpubFile, toError, withErrorReporting } from './errors.js';
-import { format, useI18n } from './i18n.js';
+import { formatMessage, useI18n } from './i18n.js';
 import { MejiroDropZone } from './MejiroDropZone.js';
+import type { ManuscriptPreviewProps } from './MejiroManuscriptEditor.js';
 import { MejiroReader, type MejiroReaderHandle } from './MejiroReader.js';
 import type { FontChoice } from './MejiroSettingsPanel.js';
+import { mergeDefined } from './persistence.js';
+import type { FetchEpubOptions } from './useEpub.js';
 import { createRequestToken } from './useRequestToken.js';
 
 /**
@@ -34,10 +39,25 @@ import { createRequestToken } from './useRequestToken.js';
 export const MejiroEditor = defineComponent({
   name: 'MejiroEditor',
   props: {
-    /** URL fetched and loaded on mount. */
+    /** URL fetched and loaded once mounted, and again whenever it changes. */
     epubUrl: { type: String, default: undefined },
+    /** Extra options merged into the EPUB `fetch` call. Its `signal` is replaced by the editor's own. */
+    fetchOptions: { type: Object as PropType<RequestInit>, default: undefined },
+    /** Custom EPUB loader used in place of the global `fetch`; overrides `fetchOptions`. */
+    fetchEpub: {
+      type: Function as PropType<(url: string, options: FetchEpubOptions) => Promise<BinaryInput>>,
+      default: undefined,
+    },
     /** Font choices passed to the preview reader. */
-    fonts: { type: Array as PropType<FontChoice[]>, default: undefined },
+    fonts: { type: Array as PropType<readonly FontChoice[]>, default: undefined },
+    /**
+     * Props forwarded to the embedded {@link MejiroReader} preview. The book,
+     * the chapter and the fonts stay driven by the editor.
+     */
+    previewProps: {
+      type: Object as PropType<ManuscriptPreviewProps>,
+      default: undefined,
+    },
     /**
      * Allow editing paragraph text (the "Proofread" section). When `false` and
      * `enableRuby` is on, the paragraph text stays visible read-only so a ruby
@@ -56,34 +76,19 @@ export const MejiroEditor = defineComponent({
      */
     enableImages: { type: Boolean, default: true },
     /**
-     * Allow exporting the edited EPUB. SaaS publishers can disable this to
-     * restrict downloads (e.g. server-side export only).
+     * Show the export button. Hide it to restrict downloads (e.g. server-side
+     * export only).
      * @defaultValue true
      */
-    enableExport: { type: Boolean, default: true },
-    /**
-     * Called before the export buffer is offered as a download. Return `false`
-     * (or a `Promise<false>`) to suppress the browser download — useful for
-     * uploading the buffer to a backend instead.
-     */
-    onBeforeExport: {
-      type: Function as PropType<
-        (buffer: ArrayBuffer) => boolean | undefined | Promise<boolean | undefined>
-      >,
-      default: undefined,
-    },
-    /**
-     * Declarative export policy. When set, supersedes `onBeforeExport` for
-     * download control and threads watermark / encrypt transforms through
-     * the export pipeline.
-     */
+    showExportButton: { type: Boolean, default: true },
+    /** What an export does with the bytes it produces: transform, watermark, download. */
     exportPolicy: {
-      type: Object as PropType<MejiroExportPolicy>,
+      type: Object as PropType<ExportPolicy>,
       default: undefined,
     },
     /**
-     * Resolves URL-only image assets ({@link EditableImageAsset.url} set,
-     * `data` unset) into bytes at export time. Forwarded to `editor.export()`.
+     * Resolves URL-only image assets into bytes at export time. Forwarded to
+     * `editor.export()`.
      */
     assetResolver: {
       type: Function as PropType<AssetResolver>,
@@ -99,7 +104,14 @@ export const MejiroEditor = defineComponent({
       default: undefined,
     },
   },
-  emits: ['load', 'export', 'error'],
+  emits: {
+    /** An EPUB was loaded into the editor. */
+    load: (_editor: EditableEpub) => true,
+    /** An export completed; carries the bytes after `exportPolicy.transform`. */
+    export: (_bytes: Uint8Array<ArrayBuffer>) => true,
+    /** Loading, inserting an image, exporting or the preview failed. */
+    error: (_error: Error) => true,
+  },
   setup(props, { emit }) {
     const messages = useI18n();
     const imageInput = ref<HTMLInputElement | null>(null);
@@ -119,30 +131,26 @@ export const MejiroEditor = defineComponent({
     const rubyEnd = ref(1);
     const rubyText = ref('');
     const request = createRequestToken();
+    let controller: AbortController | null = null;
 
-    const book = computed(() => editor.value?.book ?? null);
+    const book = computed(() => editor.value?.epub ?? null);
     const chapter = computed(() => book.value?.chapters[chapterIndex.value] ?? null);
     const paragraph = computed(() => {
-      // Editor commands replace the paragraph mirror, so the revision counter
-      // is what re-evaluates this computed.
+      // Editor commands replace the block in place, so the revision counter is
+      // what re-evaluates this computed.
       void revision.value;
-      return chapter.value?.paragraphs[paragraphIndex.value] ?? null;
+      return chapter.value ? (paragraphBlock(chapter.value, paragraphIndex.value) ?? null) : null;
     });
     // A scene break exports as a bare divider, so it carries no editable text.
-    const sceneBreak = computed(() => {
-      void revision.value;
-      return chapter.value
-        ? paragraphBlock(chapter.value, paragraphIndex.value)?.paragraphKind === 'sceneBreak'
-        : false;
-    });
+    const sceneBreak = computed(() => paragraph.value?.paragraphKind === 'sceneBreak');
     const rubyRange = computed(() =>
       clampRubyRange(rubyStart.value, rubyEnd.value, [...text.value].length),
     );
     // Each copy is tagged with the loaded editor, so an edit is not a book swap to the reader.
-    const previewBook = computed(() => {
+    const previewEpub = computed(() => {
       void revision.value;
       return book.value && editor.value
-        ? markBookIdentity(cloneEditableEpubBook(book.value), editor.value)
+        ? markBookIdentity(editableEpubToEpubBook(book.value), editor.value)
         : null;
     });
 
@@ -157,11 +165,23 @@ export const MejiroEditor = defineComponent({
       error.value = null;
     }
 
-    async function loadBufferForRequest(buffer: ArrayBuffer, token: number): Promise<void> {
+    /** Starts a load, aborting the one in flight; returns its token and signal. */
+    function beginLoad(): { token: number; signal: AbortSignal } {
+      controller?.abort();
+      const own = new AbortController();
+      controller = own;
+      return { token: request.begin(), signal: own.signal };
+    }
+
+    async function loadBytesForRequest(
+      bytes: BinaryInput,
+      token: number,
+      signal: AbortSignal,
+    ): Promise<void> {
       loading.value = true;
       clearError();
       try {
-        const next = await EditableEpub.load(buffer, { limits: props.limits });
+        const next = markRaw(await parseEditableEpub(bytes, { limits: props.limits, signal }));
         if (!request.isCurrent(token)) return;
         editor.value = next;
         chapterIndex.value = 0;
@@ -176,17 +196,24 @@ export const MejiroEditor = defineComponent({
     }
 
     async function loadFile(file: File): Promise<void> {
-      const token = request.begin();
+      const { token, signal } = beginLoad();
       loading.value = true;
       clearError();
       try {
-        await loadBufferForRequest(await readEpubFile(file, props.limits), token);
+        await loadBytesForRequest(await readEpubFile(file, props.limits), token, signal);
       } catch (err) {
         if (request.isCurrent(token)) {
           reportError(toError(err));
           loading.value = false;
         }
       }
+    }
+
+    /** Fetches `url` through `fetchEpub`, else the global `fetch` with `fetchOptions`. */
+    function fetchBytes(url: string, signal: AbortSignal): Promise<BinaryInput> {
+      return props.fetchEpub
+        ? props.fetchEpub(url, { signal })
+        : fetchEpubBuffer(url, { ...props.fetchOptions, signal });
     }
 
     // Deferred to mount so server-side setup never fetches. A URL load still in
@@ -196,19 +223,21 @@ export const MejiroEditor = defineComponent({
         () => props.epubUrl,
         (url, _previous, onCleanup) => {
           if (!url) return;
-          const token = request.begin();
+          const { token, signal } = beginLoad();
           onCleanup(() => {
             if (!request.isCurrent(token)) return;
             request.invalidate();
+            controller?.abort();
+            controller = null;
             loading.value = false;
           });
           void (async () => {
             loading.value = true;
             clearError();
             try {
-              const buffer = await fetchEpubBuffer(url);
+              const bytes = await fetchBytes(url, signal);
               if (!request.isCurrent(token)) return;
-              await loadBufferForRequest(buffer, token);
+              await loadBytesForRequest(bytes, token, signal);
             } catch (err) {
               if (request.isCurrent(token)) reportError(toError(err));
             } finally {
@@ -245,12 +274,13 @@ export const MejiroEditor = defineComponent({
     // Keep the preview on the selected paragraph, including after each edit
     // re-clones the preview book.
     watch(
-      [previewBook, chapterIndex, paragraphIndex, readerEl],
+      [previewEpub, chapterIndex, paragraphIndex, readerEl],
       () => {
-        if (!previewBook.value) return;
+        const target = paragraph.value;
+        if (!(previewEpub.value && chapter.value && target)) return;
         void readerEl.value?.goToAnchor({
-          chapter: chapterIndex.value,
-          paragraph: paragraphIndex.value,
+          chapterIndex: chapterIndex.value,
+          paragraphIndex: previewParagraphIndex(chapter.value, target.id),
           charIndex: 0,
         });
       },
@@ -270,10 +300,9 @@ export const MejiroEditor = defineComponent({
 
     /** Flushes the proofread buffer, plus `ruby` when given, into the document. */
     function commitEdit(ruby?: PendingRuby): void {
-      if (!editor.value) return;
-      if (
-        commitPendingEdit(editor.value, chapterIndex.value, paragraphIndex.value, text.value, ruby)
-      ) {
+      const target = paragraph.value;
+      if (!(editor.value && target)) return;
+      if (commitPendingEdit(editor.value, chapterIndex.value, target, text.value, ruby)) {
         revision.value++;
       }
     }
@@ -300,8 +329,8 @@ export const MejiroEditor = defineComponent({
         const target = editor.value;
         if (!(target && chapter.value)) return;
         const ci = chapterIndex.value;
-        const afterBlockId = paragraphBlock(chapter.value, paragraphIndex.value)?.id;
-        const data = await file.arrayBuffer();
+        const afterBlockId = paragraph.value?.id;
+        const data = new Uint8Array(await file.arrayBuffer());
         target.addImage(ci, {
           filename: file.name,
           mediaType: file.type || 'application/octet-stream',
@@ -320,20 +349,13 @@ export const MejiroEditor = defineComponent({
         if (!target) return;
         commitEdit();
         const policy = props.exportPolicy;
-        const source = policy?.watermark
-          ? watermarkedBook(target.book, policy.watermark)
-          : target.book;
-        const resolver = props.assetResolver;
-        let buffer = await exportEditableEpub(
-          source,
-          resolver ? { assetResolver: resolver } : undefined,
-        );
-        if (policy?.encrypt) buffer = await policy.encrypt(buffer);
-        const decision = await props.onBeforeExport?.(buffer);
-        emit('export', buffer);
-        // An export policy supersedes onBeforeExport for download control.
-        const allowDownload = policy ? policy.allowDownload !== false : decision !== false;
-        if (allowDownload) downloadEpub(buffer, `${target.title || 'edited'}.epub`);
+        const options: EditableEpubExportOptions = {};
+        if (props.assetResolver) options.assetResolver = props.assetResolver;
+        if (policy?.watermark) options.watermark = `${WATERMARK_PREFIX} ${policy.watermark}`;
+        let bytes = await target.export(options);
+        if (policy?.transform) bytes = await policy.transform(bytes);
+        emit('export', bytes);
+        if (policy?.download !== false) downloadEpub(bytes, `${target.title || 'edited'}.epub`);
         clearError();
       }, reportError);
     }
@@ -341,20 +363,26 @@ export const MejiroEditor = defineComponent({
     return () =>
       h('div', { class: 'mejiro-editor' }, [
         h('main', { class: 'mejiro-editor-preview' }, [
-          previewBook.value
+          previewEpub.value
             ? h(MejiroReader, {
+                ...mergeDefined<ManuscriptPreviewProps>(
+                  {
+                    title: editor.value?.title,
+                    subtitle: messages.value.editorPreviewSubtitle,
+                    chapterNavMode: 'panel',
+                    enableSurfaceTap: false,
+                  },
+                  props.previewProps ?? {},
+                ),
+                // Editor-driven, always overrides any previewProps.
                 ref: (el: unknown) => {
                   readerEl.value = el as MejiroReaderHandle | null;
                 },
-                epub: previewBook.value,
-                chapter: chapterIndex.value,
-                onChapterChange: (index: number) => selectParagraph(index, 0),
+                epub: previewEpub.value,
+                chapterIndex: chapterIndex.value,
+                'onUpdate:chapterIndex': (index: number) => selectParagraph(index, 0),
                 onError: reportError,
                 fonts: props.fonts ?? undefined,
-                subtitle: messages.value.editorPreviewSubtitle,
-                chapterNavMode: 'panel',
-                enableImageOverlay: false,
-                enableSurfaceTap: false,
               })
             : h(MejiroDropZone, {
                 onFile: (file: File) => void loadFile(file),
@@ -411,7 +439,7 @@ export const MejiroEditor = defineComponent({
                       onClick: () => selectParagraph(ci, pi),
                     },
                     [
-                      h('span', ch.title ?? format(messages.value.chapterN, { n: ci + 1 })),
+                      h('span', ch.title ?? formatMessage(messages.value.chapterN, { n: ci + 1 })),
                       h('strong', block.text.slice(0, 42)),
                     ],
                   ),
@@ -443,7 +471,7 @@ export const MejiroEditor = defineComponent({
               h(
                 'p',
                 { class: 'mejiro-editor-range' },
-                format(messages.value.editorRubyRange, {
+                formatMessage(messages.value.editorRubyRange, {
                   start: rubyRange.value?.start ?? 0,
                   end: rubyRange.value?.end ?? 0,
                   count: rubyRange.value ? rubyRange.value.end - rubyRange.value.start : 0,
@@ -491,7 +519,7 @@ export const MejiroEditor = defineComponent({
               }),
             ])
           : null,
-        props.enableExport
+        props.showExportButton
           ? h(
               'button',
               { type: 'button', class: 'mejiro-editor-export', onClick: () => void exportEpub() },
@@ -507,31 +535,27 @@ export const MejiroEditor = defineComponent({
 export type MejiroEditorProps = InstanceType<typeof MejiroEditor>['$props'];
 
 /**
- * Declarative restrictions on the export pipeline. Mejiro applies the
- * transforms in this order: `watermark` (applied to an export-only copy of the
- * book, never to the edited document) → `encrypt` (replaces the buffer with the
- * result) → `allowDownload` (skips the browser download when `false`).
+ * What {@link MejiroEditor} does with an export. The steps run in this order:
+ * `watermark` (written into the exported file only, never into the edited
+ * document) → `transform` (replaces the bytes with its result) → `download`.
+ * The `export` event carries the bytes after `transform`.
  */
-export interface MejiroExportPolicy {
+export interface ExportPolicy {
   /**
-   * If `false`, the EPUB buffer is still produced (and the `export` event
-   * still fires) but no browser download is triggered. Use when shipping the
-   * buffer elsewhere (e.g. uploading to a backend).
+   * Offer the bytes as a browser download. `false` still produces them and
+   * fires `export`, for shipping them elsewhere (e.g. uploading to a backend).
    * @defaultValue true
    */
-  allowDownload?: boolean;
+  download?: boolean;
+  /** Replaces the EPUB bytes before they are emitted and downloaded, e.g. a DRM wrap. */
+  transform?: (
+    bytes: Uint8Array<ArrayBuffer>,
+  ) => Uint8Array<ArrayBuffer> | Promise<Uint8Array<ArrayBuffer>>;
   /**
-   * Transforms the EPUB buffer before it is offered for download. Typically
-   * a server round-trip that returns a DRM-wrapped EPUB.
+   * Text of a watermark paragraph placed at the top of every chapter of the
+   * exported file, prefixed with `[mejiro-watermark]` so a renderer can style it.
    */
-  encrypt?: (buffer: ArrayBuffer) => ArrayBuffer | Promise<ArrayBuffer>;
-  /**
-   * Embeds a visible watermark string into the exported EPUB. Implemented as a
-   * paragraph block prefixed with `[mejiro-watermark]` at the top of every
-   * chapter, so a downstream renderer can theme it by that prefix. The block
-   * only exists in the exported file — the edited document is unchanged.
-   */
-  watermark?: { text: string };
+  watermark?: string;
 }
 
 /** A ruby to add on commit, as a codepoint range into the proofread buffer. */
@@ -561,47 +585,45 @@ function clampRubyRange(
 function commitPendingEdit(
   editor: EditableEpub,
   chapterIndex: number,
-  paragraphIndex: number,
+  block: EditableParagraphBlock,
   text: string,
   ruby?: PendingRuby,
 ): boolean {
-  const paragraphs = editor.book.chapters[chapterIndex]?.paragraphs;
-  if (!paragraphs?.[paragraphIndex]) return false;
-  const textChanged = text !== paragraphs[paragraphIndex].text;
+  const textChanged = text !== block.text;
   const rubyText = ruby?.rubyText.trim();
   const range = ruby ? clampRubyRange(ruby.start, ruby.end, [...text].length) : null;
   if (!(rubyText && range)) {
-    if (textChanged) editor.updateParagraph(chapterIndex, paragraphIndex, { text });
+    if (textChanged) editor.updateParagraph(chapterIndex, block.id, { text });
     return textChanged;
   }
   editor.transaction(() => {
-    if (textChanged) editor.updateParagraph(chapterIndex, paragraphIndex, { text });
-    const committed = editor.book.chapters[chapterIndex].paragraphs[paragraphIndex];
+    if (textChanged) editor.updateParagraph(chapterIndex, block.id, { text });
+    const committed = paragraphBlockById(editor.epub, chapterIndex, block.id);
     const newRuby: InlineAnnotation = {
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: range.start,
       endIndex: range.end,
       rubyText,
-      type: range.end - range.start === 1 ? 'mono' : 'group',
+      rubyType: range.end - range.start === 1 ? 'mono' : 'group',
     };
     const inlineAnnotations = [
-      ...committed.inlineAnnotations.filter(
-        (ann) => ann.kind !== 'ruby' || ann.endIndex <= range.start || ann.startIndex >= range.end,
+      ...(committed?.inlineAnnotations ?? []).filter(
+        (ann) => ann.type !== 'ruby' || ann.endIndex <= range.start || ann.startIndex >= range.end,
       ),
       newRuby,
     ].sort((a, b) => a.startIndex - b.startIndex);
-    editor.updateParagraph(chapterIndex, paragraphIndex, { inlineAnnotations });
+    editor.setInlineAnnotations(chapterIndex, block.id, inlineAnnotations);
   });
   return true;
 }
 
 /**
- * Offers `buffer` as a browser download named `filename`. The object URL is
+ * Offers `bytes` as a browser download named `filename`. The object URL is
  * revoked on the next task, after the browser has started consuming it, and
  * exactly once even when `click()` throws.
  */
-export function downloadEpub(buffer: ArrayBuffer, filename: string): void {
-  const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
+export function downloadEpub(bytes: Uint8Array<ArrayBuffer>, filename: string): void {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/epub+zip' }));
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
@@ -630,62 +652,31 @@ function utf16ToCodepoint(text: string, utf16Offset: number): number {
 /** Marker prefix a renderer can key off to style the watermark paragraph. */
 const WATERMARK_PREFIX = '[mejiro-watermark]';
 
-/** Preferred block id of the watermark paragraph. */
-const WATERMARK_BLOCK_ID = 'mejiro-watermark';
-
-/**
- * Returns an export-only copy of `book` carrying a watermark paragraph at the
- * top of every chapter. The editor's own document is left untouched, so the
- * watermark cannot accumulate across repeated exports, and a chapter the user
- * did not edit stays verbatim apart from that paragraph.
- */
-function watermarkedBook(book: EditableEpubBook, watermark: { text: string }): EditableEpubBook {
-  const copy = cloneEditableEpubBook(book);
-  const text = `${WATERMARK_PREFIX} ${watermark.text}`;
-  for (const chapter of copy.chapters) {
-    // An untouched chapter is written back verbatim, so its XHTML gets the
-    // paragraph instead of being rebuilt (which rejects constructs the block model drops).
-    if (!chapter.isDirty && chapter.originalXhtml) {
-      const injected = injectWatermarkXhtml(chapter.originalXhtml, text);
-      if (injected) {
-        chapter.originalXhtml = injected;
-        continue;
-      }
-      chapter.isDirty = true;
-    }
-    chapter.blocks.unshift({
-      kind: 'paragraph',
-      id: watermarkBlockId(chapter),
-      text,
-      inlineAnnotations: [],
-    });
-    chapter.paragraphs.unshift({ text, inlineAnnotations: [] });
-  }
-  return copy;
+/** The paragraph block with id `blockId` in chapter `chapterIndex`, if it is one. */
+function paragraphBlockById(
+  epub: EditableEpubBook,
+  chapterIndex: number,
+  blockId: string,
+): EditableParagraphBlock | undefined {
+  const block = epub.chapters[chapterIndex]?.blocks.find((b) => b.id === blockId);
+  return block?.kind === 'paragraph' ? block : undefined;
 }
 
 /**
- * Inserts a paragraph right after the opening `<body>` tag of namespaced
- * XHTML. Returns `null` when the markup is not shaped that way.
+ * Index of the preview paragraph that block `blockId` becomes, as
+ * `editableEpubToEpubBook` projects the chapter: empty paragraphs and scene
+ * breaks contribute none, a captioned image its caption.
  */
-function injectWatermarkXhtml(xhtml: string, text: string): string | null {
-  if (!/<html\b[^>]*\sxmlns\s*=\s*["']http:\/\/www\.w3\.org\/1999\/xhtml["']/i.test(xhtml)) {
-    return null;
+function previewParagraphIndex(
+  chapter: EditableEpubBook['chapters'][number],
+  blockId: string,
+): number {
+  let index = 0;
+  for (const block of chapter.blocks) {
+    if (block.id === blockId) return index;
+    if (block.kind === 'image' ? block.caption : block.text !== '') index++;
   }
-  const body = /<body\b(?:[^>]*[^/>])?>/i.exec(xhtml);
-  if (!body) return null;
-  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const end = body.index + body[0].length;
-  return `${xhtml.slice(0, end)}<p>${escaped}</p>${xhtml.slice(end)}`;
-}
-
-/** Picks a block id for the watermark paragraph that the chapter does not use. */
-function watermarkBlockId(chapter: EditableEpubBook['chapters'][number]): string {
-  const used = new Set(chapter.blocks.map((block) => block.id));
-  let id = WATERMARK_BLOCK_ID;
-  let suffix = 2;
-  while (used.has(id)) id = `${WATERMARK_BLOCK_ID}-${suffix++}`;
-  return id;
+  return index;
 }
 
 function paragraphBlock(

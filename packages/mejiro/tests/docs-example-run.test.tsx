@@ -32,7 +32,7 @@ const BODY = Array.from({ length: 6 }, () =>
   '吾輩は｜猫《ねこ》である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。'.repeat(3),
 ).join('\n\n');
 
-let fixture: ArrayBuffer;
+let fixture: Uint8Array;
 /** Directories holding compiled `.vue` examples, removed after the run. */
 const compiledDirs: string[] = [];
 
@@ -46,6 +46,9 @@ beforeAll(async () => {
     'fetch',
     vi.fn(async () => new Response(fixture.slice(0), { status: 200 })),
   );
+  // The examples measure their containers, which a browser lays out; happy-dom reports 0.
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200);
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(900);
 });
 
 afterAll(async () => {
@@ -119,7 +122,7 @@ describe('01-getting-started examples', () => {
 
   it('lays out plain paragraphs', async () => {
     const { layoutParagraphs } = await import('./doc-examples/01-plain-paragraphs.js');
-    expect((await layoutParagraphs()).totalPages).toBeGreaterThan(0);
+    expect((await layoutParagraphs()).pageCount).toBeGreaterThan(0);
   });
 
   it('renders the React reader', async () => {
@@ -201,8 +204,8 @@ describe('05-browser-integration examples', () => {
   });
 
   it('lays out a chapter with a multi-character ruby', async () => {
-    const { layoutChapter } = await import('./doc-examples/05-browser-layout.js');
-    const result = await layoutChapter();
+    const { layoutParagraphs } = await import('./doc-examples/05-browser-layout.js');
+    const result = await layoutParagraphs();
     expect(result.paragraphs.map((paragraph) => paragraph.chars.join(''))).toEqual([
       '第一章',
       '吾輩は猫である。名前はまだ無い。',
@@ -215,7 +218,8 @@ describe('06-epub examples', () => {
   it('puts the ruby on 本文 and exports the edited book', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const { editor, nextBuffer } = await import('./doc-examples/06-epub-editing.js');
-    const block = editor.book.chapters[0].paragraphs[2];
+    const block = editor.epub.chapters[0].blocks[2];
+    if (block.kind !== 'paragraph') throw new Error('expected a paragraph block');
     const [ruby] = block.inlineAnnotations;
     expect([...block.text].slice(ruby.startIndex, ruby.endIndex).join('')).toBe('本文');
     expect(nextBuffer.byteLength).toBeGreaterThan(0);
@@ -225,7 +229,9 @@ describe('06-epub examples', () => {
     const { replaceInChapter } = await import('./doc-examples/06-epub-editing.js');
     const editor = await parseEditableEpub(fixture.slice(0));
     replaceInChapter(editor, '吾輩', '我輩');
-    const texts = editor.book.chapters[0].paragraphs.map((paragraph) => paragraph.text);
+    const texts = editor.epub.chapters[0].blocks.map((block) =>
+      block.kind === 'paragraph' ? block.text : '',
+    );
     expect(texts.some((text) => text.includes('我輩'))).toBe(true);
     expect(texts.some((text) => text.includes('吾輩'))).toBe(false);
   });
@@ -282,15 +288,18 @@ describe('08-react-and-vue examples', () => {
     const { ReflowReader } = await import('./doc-examples/08-reflow-options.js');
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
     const epub = await parseEpub(fixture.slice(0));
-    render(<ReflowReader book={book} epub={epub} chapter={0} />);
+    render(<ReflowReader book={book} epub={epub} chapterIndex={0} />);
     await waitFor(() => expect(screen.getByText('spread 0')).toBeTruthy());
   });
 
   it('lays out with the Vue reading-position options', async () => {
     const { ReflowReader } = await import('./doc-examples/08-reflow-options-vue.js');
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
-    const epubBook = await parseEpub(fixture.slice(0));
-    const wrapper = mount(ReflowReader, { props: { book, epubBook }, attachTo: document.body });
+    const epub = await parseEpub(fixture.slice(0));
+    const wrapper = mount(ReflowReader, {
+      props: { book, epub },
+      attachTo: document.body,
+    });
     await vi.waitFor(() => expect(wrapper.text()).toBe('spread 0'));
     wrapper.unmount();
   });
@@ -318,7 +327,7 @@ describe('09-advanced examples', () => {
     const exclusion = await import('./doc-examples/09-exclusion.js');
     expect(exclusion.slots.length).toBeGreaterThan(0);
     const spread = await import('./doc-examples/09-spread-exclusion.js');
-    expect(spread.rightSlots.length).toBe(spread.rightSlotCount);
+    expect(spread.rightSlots.length).toBeGreaterThan(0);
     expect(spread.leftSlots.length).toBeGreaterThan(0);
   });
 

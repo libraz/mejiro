@@ -7,6 +7,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, ref } from 'vue';
 import { MejiroReader, type MejiroReaderHandle } from '../src/MejiroReader.js';
 import { MejiroScrollView, type MejiroScrollViewProps } from '../src/MejiroScrollView.js';
+import { giveElementsAClientBox } from './helpers/fixtures.js';
+
+giveElementsAClientBox();
 
 /** Minimal stand-in for a real `IntersectionObserver`, driven manually by the tests. */
 interface ObserverStub {
@@ -80,7 +83,6 @@ function pageResult(text: string): PageResult {
       paragraphs: [
         {
           lines: [{ segments: [{ type: 'text', text }] }],
-          isHeading: false,
         },
       ],
     },
@@ -90,9 +92,11 @@ function pageResult(text: string): PageResult {
   };
 }
 
-function fakeScrollLayout(totalPages: number): ChapterLayout {
+function fakeScrollLayout(pageCount: number): ChapterLayout {
   return {
-    totalPages,
+    pageCount,
+    typography: { fontFamily: 'serif', fontSize: 16, lineSpacing: 1.8 },
+    geometry: { pageWidth: 320, pageHeight: 460, contentHeight: 360 },
     getPage: (index: number) => pageResult(`頁${index + 1}`),
   } as unknown as ChapterLayout;
 }
@@ -102,7 +106,7 @@ afterEach(() => {
 });
 
 describe('MejiroScrollView (Vue) — props type', () => {
-  it('accepts an onVisiblePageChange listener and forwards the emitted index to it', () => {
+  it('accepts an update:visiblePage listener and forwards the emitted index to it', () => {
     const observers = installIntersectionObserver();
     const onVisiblePageChange = vi.fn();
     const props: MejiroScrollViewProps = {
@@ -110,7 +114,7 @@ describe('MejiroScrollView (Vue) — props type', () => {
       pageWidth: 320,
       pageHeight: 460,
       contentHeight: 360,
-      onVisiblePageChange,
+      'onUpdate:visiblePage': onVisiblePageChange,
     };
 
     const { container } = render(MejiroScrollView, { props });
@@ -131,7 +135,7 @@ describe('MejiroScrollView (Vue) — page observation', () => {
         pageWidth: 320,
         pageHeight: 460,
         contentHeight: 360,
-        onVisiblePageChange,
+        'onUpdate:visiblePage': onVisiblePageChange,
       },
     });
     expect(observers).toHaveLength(1);
@@ -210,7 +214,7 @@ describe('MejiroScrollView (Vue) — scrollToPage', () => {
           pageHeight: 460,
           contentHeight: 360,
           scrollToPage: 0,
-          onVisiblePageChange,
+          'onUpdate:visiblePage': onVisiblePageChange,
         },
       });
       const pages = container.querySelectorAll('.mejiro-reader-page');
@@ -235,8 +239,8 @@ describe('MejiroScrollView (Vue) — image overlay routing', () => {
   it('routes each overlay to the page whose area contains its centre', () => {
     installIntersectionObserver();
     const images = [
-      { id: 'on-right', rect: { x: 80, y: 100, w: 120, h: 160 } },
-      { id: 'on-left', rect: { x: -200, y: 100, w: 120, h: 160 } },
+      { id: 'on-right', rect: { x: 80, y: 100, width: 120, height: 160 } },
+      { id: 'on-left', rect: { x: -200, y: 100, width: 120, height: 160 } },
     ];
     const { container } = render(MejiroScrollView, {
       props: {
@@ -244,7 +248,7 @@ describe('MejiroScrollView (Vue) — image overlay routing', () => {
         pageWidth: 320,
         pageHeight: 460,
         contentHeight: 360,
-        spreadIdx: 1,
+        spreadIndex: 1,
         images,
       },
     });
@@ -302,12 +306,13 @@ describe('MejiroReader (Vue) — scroll mode page wiring', () => {
       props: {
         epub: longEpub(),
         mode: 'scroll',
-        enableImageOverlay: true,
+        showImageOverlayButton: true,
+        title: 'T',
         annotations: [
           {
-            chapter: 0,
-            start: { paragraph: 0, charIndex: 0 },
-            end: { paragraph: 0, charIndex: 8 },
+            chapterIndex: 0,
+            start: { paragraphIndex: 0, charIndex: 0 },
+            end: { paragraphIndex: 0, charIndex: 8 },
             color: 'rgb(255, 235, 59)',
           },
         ],
@@ -344,7 +349,7 @@ describe('MejiroReader (Vue) — scroll mode page wiring', () => {
       scroller.scrollTop = 330;
       await settle(() => intersect(observers[observers.length - 1], page3, 0.9));
 
-      expect(reader.value?.getReadingPosition().spreadIdx).toBe(1);
+      expect(reader.value?.getSpreadPosition().spreadIndex).toBe(1);
       expect(scroller.scrollTop).toBe(330);
 
       // A programmatic turn still scrolls to its spread.

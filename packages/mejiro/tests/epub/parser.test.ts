@@ -3,7 +3,7 @@
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { EditableEpub } from '../../src/epub/editor.js';
+import { parseEditableEpub } from '../../src/epub/editor.js';
 import { parseEpub } from '../../src/epub/parser.js';
 
 async function makeEpub(files: Record<string, string>): Promise<ArrayBuffer> {
@@ -152,7 +152,7 @@ describe('parseEpub', () => {
         'OPS/Text/ch2.xhtml': chapter,
       });
       expect((await parseEpub(data)).chapters.map((c) => c.title)).toEqual(['第一話', '第二話']);
-      expect((await EditableEpub.load(data)).chapters.map((c) => c.title)).toEqual([
+      expect((await parseEditableEpub(data)).chapters.map((c) => c.title)).toEqual([
         '第一話',
         '第二話',
       ]);
@@ -210,7 +210,7 @@ describe('parseEpub', () => {
       });
       const book = await parseEpub(data);
       expect(book.chapters.map((c) => c.title)).toEqual(titles);
-      expect((await EditableEpub.load(data)).chapters.map((c) => c.title)).toEqual(titles);
+      expect((await parseEditableEpub(data)).chapters.map((c) => c.title)).toEqual(titles);
     }
   });
 
@@ -245,7 +245,7 @@ describe('parseEpub', () => {
     });
     const expected = ['第一漢字', '第二章', '第三漢字', '第四章'];
     expect((await parseEpub(data)).chapters.map((c) => c.title)).toEqual(expected);
-    expect((await EditableEpub.load(data)).chapters.map((c) => c.title)).toEqual(expected);
+    expect((await parseEditableEpub(data)).chapters.map((c) => c.title)).toEqual(expected);
   });
 
   it('keeps the outer toc title for a chapter whose nav entry has nested sections', async () => {

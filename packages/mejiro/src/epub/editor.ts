@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
-import type { InlineAnnotation } from '../browser/types.js';
+import { MejiroError } from '../errors.js';
+import type { BinaryInput, HeadingLevel, InlineAnnotation } from '../types.js';
 import {
   CHAPTER_TITLE_ID,
   chapterTitleCarrierMarkup,
@@ -8,13 +9,23 @@ import {
   sanitizeXmlText,
   XHTML_NS,
 } from './chapter-markup.js';
-import { cloneEditableBlock } from './clone.js';
 import {
-  assertEpubArchiveWithinLimits,
+  assetSourceOf,
+  attachAssetSource,
+  attachPackageData,
+  chapterStateOf,
+  cloneEditableBlock,
+  cloneEditableEpubBook,
+  packageDataOf,
+  writable,
+} from './clone.js';
+import {
+  assertBinaryInput,
   assertEpubInputSize,
   EpubExpansionBudget,
   type EpubParseOptions,
   resolveEpubParseLimits,
+  throwIfAborted,
 } from './limits.js';
 import {
   mediaTypeFromPath,
@@ -23,100 +34,166 @@ import {
   zipPathToHref,
 } from './package-paths.js';
 import {
-  assertEpubDomAvailable,
   collectTocTitles,
   extractChapterTitleOrUndefined,
   type OpfManifestItem,
+  openEpubArchive,
   packageDocumentLocation,
   parseOpfPackage,
   renderedText,
   resolveZipPath,
 } from './parser.js';
-import type { EpubProjectAsset } from './project.js';
 import { contentBody, extractRubyContent, isNonRenderedElement } from './ruby-extractor.js';
 import type {
-  AnnotatedParagraph,
   EditableBlock,
   EditableEpubBook,
   EditableEpubChapter,
-  EditableEpubImage,
   EditableImageAsset,
   EditableImageBlock,
   EditableParagraphBlock,
+  NewParagraph,
+  ParagraphPatch,
 } from './types.js';
-import { extractStylesheetLinks, stripStylesheetLinks } from './xml-utils.js';
+import {
+  assertEpubDomAvailable,
+  extractStylesheetLinks,
+  stripStylesheetLinks,
+} from './xml-utils.js';
 
-/** Reusable EPUB editing session with read/modify/write-back support. */
+/** Undo/redo state of an {@link EditableEpub}, read from {@link EditableEpub.history}. */
+export interface EditHistoryState {
+  /** Whether {@link EditableEpub.undo} has a change to revert. */
+  readonly canUndo: boolean;
+  /** Whether {@link EditableEpub.redo} has a reverted change to re-apply. */
+  readonly canRedo: boolean;
+  /** Number of changes that can be undone. */
+  readonly depth: number;
+  /** Number of reverted changes that can be re-applied. */
+  readonly redoDepth: number;
+}
+
+/** The two adjacent paragraphs {@link EditableEpub.mergeParagraphs} joins. */
+export interface MergeParagraphsInput {
+  /** Id of the first paragraph; it survives the merge. */
+  leftId: string;
+  /** Id of the paragraph immediately after it; it is removed. */
+  rightId: string;
+}
+
+/** Creates a session; the constructor stays private to the class. */
+let openSession: (epub: EditableEpubBook) => EditableEpub;
+
+/**
+ * Editing session over a parsed EPUB: block-level edits with undo/redo, and
+ * export back to an EPUB file. Created by {@link parseEditableEpub}.
+ *
+ * Existing blocks are addressed by `(chapterIndex, blockId)`; an index appears
+ * only where a block is to be put. An unknown chapter index or block id, or the
+ * id of a block of the wrong kind, throws `RangeError`. An edit that throws
+ * changes and records nothing.
+ */
 export class EditableEpub {
+  static {
+    openSession = (epub) => new EditableEpub(epub);
+  }
+
   /**
-   * The live document model, including the package metadata needed to write the
-   * EPUB back out. Exposed for reading and for handing to a renderer; mutating
-   * it directly bypasses the undo history, so route edits through the session's
-   * methods instead.
+   * The live document model. Exposed for reading and for handing to a renderer
+   * through {@link cloneEditableEpubBook}; changing it directly bypasses the
+   * undo history and the change notifications, so route edits through the
+   * session's methods.
    */
-  readonly book: EditableEpubBook;
+  readonly epub: EditableEpubBook;
 
   private undoStack: HistoryEntry[] = [];
   private redoStack: HistoryEntry[] = [];
   private historyLimit = 50;
   private txnDepth = 0;
   private pendingEntry: HistoryEntry | undefined;
+  private changePending = false;
+  private listeners = new Set<() => void>();
 
-  private constructor(book: EditableEpubBook) {
-    this.book = book;
+  private constructor(epub: EditableEpubBook) {
+    this.epub = epub;
   }
 
   /**
-   * Groups a sequence of edits into one history entry. Nested calls are
-   * folded into the outermost transaction. The callback is run synchronously.
-   * Throws inside the callback rewind the buffered changes.
+   * Groups a sequence of edits into one history entry and one change
+   * notification. Nested calls fold into the outermost transaction. If `fn`
+   * throws, the outermost transaction rewinds every edit made inside it and
+   * rethrows.
+   *
+   * `fn` runs synchronously, and a callback returning a promise is rejected by
+   * the type: edits made after its first `await` would land outside the
+   * transaction.
+   *
+   * @example
+   * ```ts
+   * editor.transaction(() => {
+   *   const right = editor.splitParagraph(0, blockId, 4);
+   *   editor.updateParagraph(0, right.id, { paragraphKind: 'blockquote' });
+   * });
+   * ```
+   *
+   * @param fn - The edits to group.
+   * @returns What `fn` returns.
    */
-  transaction<T>(fn: () => T): T {
+  transaction<T>(fn: () => T extends PromiseLike<unknown> ? never : T): T {
     if (this.txnDepth === 0) this.pendingEntry = new Map();
     this.txnDepth++;
     try {
-      const result = fn();
+      const result = fn() as T;
       this.txnDepth--;
-      if (this.txnDepth === 0 && this.pendingEntry && this.pendingEntry.size > 0) {
-        this.commitHistoryEntry(this.pendingEntry);
+      if (this.txnDepth === 0) {
+        const entry = this.pendingEntry;
         this.pendingEntry = undefined;
-      } else if (this.txnDepth === 0) {
-        this.pendingEntry = undefined;
+        if (entry && entry.size > 0) this.commitHistoryEntry(entry);
+        this.flushChange();
       }
       return result;
     } catch (err) {
       this.txnDepth--;
-      if (this.txnDepth === 0 && this.pendingEntry) {
-        // Roll back to the pre-transaction state.
-        this.restoreEntry(this.pendingEntry);
+      if (this.txnDepth === 0) {
+        if (this.pendingEntry) this.restoreEntry(this.pendingEntry);
         this.pendingEntry = undefined;
+        this.changePending = false;
       }
       throw err;
     }
   }
 
-  /** Reverts the last committed change (or transaction). */
+  /**
+   * Reverts the last committed change (or transaction).
+   *
+   * @returns Whether there was a change to revert.
+   */
   undo(): boolean {
     const entry = this.undoStack.pop();
     if (!entry) return false;
     const redoEntry = this.captureEntry(entry);
     this.restoreEntry(entry);
     this.redoStack.push(redoEntry);
+    this.changed();
     return true;
   }
 
-  /** Re-applies the change most recently reverted by `undo`. */
+  /**
+   * Re-applies the change most recently reverted by {@link EditableEpub.undo}.
+   *
+   * @returns Whether there was a reverted change to re-apply.
+   */
   redo(): boolean {
     const entry = this.redoStack.pop();
     if (!entry) return false;
     const undoEntry = this.captureEntry(entry);
     this.restoreEntry(entry);
     this.undoStack.push(undoEntry);
+    this.changed();
     return true;
   }
 
   /** Snapshot of the current undo/redo state. */
-  get history(): { canUndo: boolean; canRedo: boolean; depth: number; redoDepth: number } {
+  get history(): EditHistoryState {
     return {
       canUndo: this.undoStack.length > 0,
       canRedo: this.redoStack.length > 0,
@@ -126,157 +203,134 @@ export class EditableEpub {
   }
 
   /**
-   * Records the current state of `chapterIndex` into the active history
-   * entry. Called by every mutating method before it changes a chapter.
-   */
-  private recordChapterChange(chapterIndex: number): void {
-    const chapter = this.book.chapters[chapterIndex];
-    if (!chapter) return;
-    if (this.pendingEntry) {
-      // Already inside an explicit transaction.
-      if (!this.pendingEntry.has(chapterIndex)) {
-        this.pendingEntry.set(chapterIndex, snapshotChapter(chapter));
-      }
-      markChapterDirty(chapter);
-      return;
-    }
-    const entry: HistoryEntry = new Map();
-    entry.set(chapterIndex, snapshotChapter(chapter));
-    this.commitHistoryEntry(entry);
-    markChapterDirty(chapter);
-  }
-
-  private commitHistoryEntry(entry: HistoryEntry): void {
-    this.undoStack.push(entry);
-    if (this.undoStack.length > this.historyLimit) this.undoStack.shift();
-    this.redoStack.length = 0;
-  }
-
-  /** Builds an entry mirroring `template` but capturing the *current* state. */
-  private captureEntry(template: HistoryEntry): HistoryEntry {
-    const entry: HistoryEntry = new Map();
-    for (const chapterIndex of template.keys()) {
-      const chapter = this.book.chapters[chapterIndex];
-      if (chapter) entry.set(chapterIndex, snapshotChapter(chapter));
-    }
-    return entry;
-  }
-
-  /** Writes an entry's chapter state back onto the live book. */
-  private restoreEntry(entry: HistoryEntry): void {
-    for (const [chapterIndex, snapshot] of entry) {
-      const chapter = this.book.chapters[chapterIndex];
-      if (!chapter) continue;
-      chapter.blocks = snapshot.blocks.map(cloneEditableBlock);
-      chapter.imageAssets = new Map(snapshot.imageAssets);
-      chapter.isDirty = snapshot.isDirty;
-      syncParagraphsView(chapter);
-    }
-  }
-
-  /**
-   * Parses an EPUB and starts an editing session.
+   * Calls `listener` after every change to the document: each edit, each
+   * completed transaction (once), and each undo or redo. Read what changed from
+   * {@link EditableEpub.epub}.
    *
-   * Requires host DOM globals (`DOMParser`, `XMLSerializer`, `Node`). Node and
-   * SSR runtimes must register a DOM implementation (happy-dom, jsdom) first.
+   * A listener that throws does not stop the others; its error is rethrown on
+   * a microtask.
+   *
+   * @param listener - Called with no arguments after each change.
+   * @returns A function that removes the listener. Idempotent.
    */
-  static async load(data: ArrayBuffer, options: EpubParseOptions = {}): Promise<EditableEpub> {
-    return new EditableEpub(await parseEditableEpubBook(data, options));
+  subscribe(listener: () => void): () => void {
+    const entry = () => listener();
+    this.listeners.add(entry);
+    return () => {
+      this.listeners.delete(entry);
+    };
   }
 
   /** Book title read from the package metadata. */
   get title(): string {
-    return this.book.title;
+    return this.epub.title;
   }
 
   /** Primary creator from the package metadata, or undefined when absent. */
   get author(): string | undefined {
-    return this.book.author;
+    return this.epub.author;
   }
 
   /**
    * Chapters in spine order. The live array, not a copy — it reflects
-   * subsequent edits, and splicing it directly skips the undo history.
+   * subsequent edits.
    */
-  get chapters(): EditableEpubChapter[] {
-    return this.book.chapters;
+  get chapters(): readonly EditableEpubChapter[] {
+    return this.epub.chapters;
   }
 
   /**
-   * Updates one paragraph's text and optional inline annotations.
+   * Inserts a paragraph block at `index` in the chapter's `blocks`; pass
+   * `chapter.blocks.length` to append. An out-of-range index is clamped.
+   * Annotations outside the paragraph's text are dropped.
    *
-   * `paragraphIndex` is the position in the chapter's paragraph projection
-   * (excluding image blocks). Image blocks remain untouched.
+   * @param chapterIndex - Zero-based chapter index.
+   * @param index - Position in the chapter's `blocks` to insert at.
+   * @param paragraph - The paragraph to insert.
+   * @returns The stored block, carrying its generated `id`.
+   * @throws {RangeError} When the chapter does not exist, `headingLevel` is
+   *   not an integer from 1 to 6, or `paragraphKind` is unknown.
+   * @throws {TypeError} When `text` is not a string, a heading has no
+   *   `headingLevel`, a non-heading has one, or a scene break carries text.
+   */
+  insertParagraph(
+    chapterIndex: number,
+    index: number,
+    paragraph: NewParagraph,
+  ): EditableParagraphBlock {
+    const chapter = requireChapter(this.epub, chapterIndex);
+    const block = newParagraphBlock(nextBlockId(chapter), paragraph);
+    this.recordChapterChange(chapterIndex);
+    writable(chapter).blocks.splice(clamp(index, 0, chapter.blocks.length), 0, block);
+    this.changed();
+    return block;
+  }
+
+  /**
+   * Updates one paragraph's text, annotations, heading level or kind.
    *
    * When `text` changes without new `inlineAnnotations`, the existing
    * annotations are re-anchored onto the new text: each one either keeps
    * covering exactly the same base characters or is dropped. Annotations
    * passed in explicitly are indexed into the new text, and any that fall
-   * outside it are dropped. Either way the block is left with annotations
-   * that the layout engine can consume.
+   * outside it are dropped.
+   *
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the paragraph block.
+   * @param patch - The change; see {@link ParagraphPatch}.
+   * @throws {RangeError} When the chapter or paragraph does not exist, a
+   *   heading level is not an integer from 1 to 6, or `paragraphKind` is unknown.
+   * @throws {TypeError} When a scene break is given text without a new kind, a
+   *   non-heading is given a `headingLevel`, or a new heading has none.
    */
-  updateParagraph(
-    chapterIndex: number,
-    paragraphIndex: number,
-    next: Partial<AnnotatedParagraph>,
-  ): void {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const block = findParagraphBlock(chapter, paragraphIndex);
-    const updated = updatedParagraph(block, next);
+  updateParagraph(chapterIndex: number, blockId: string, patch: ParagraphPatch): void {
+    const chapter = requireChapter(this.epub, chapterIndex);
+    const block = requireParagraphBlock(chapter, blockId);
+    const updated = patchedParagraph(block, patch);
     this.recordChapterChange(chapterIndex);
-    storeParagraph(chapter, block, updated);
+    storeParagraph(block, updated);
+    this.changed();
   }
 
   /**
-   * Adds or replaces inline annotations for one paragraph. Annotations that
-   * do not fall inside the paragraph's current text are dropped.
+   * Replaces the inline annotations of one paragraph. Annotations that do not
+   * fall inside the paragraph's current text are dropped.
+   *
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the paragraph block.
+   * @param inlineAnnotations - The new annotations, indexed into the text.
+   * @throws {RangeError} When the chapter or paragraph does not exist.
    */
   setInlineAnnotations(
     chapterIndex: number,
-    paragraphIndex: number,
+    blockId: string,
     inlineAnnotations: readonly InlineAnnotation[],
   ): void {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const block = findParagraphBlock(chapter, paragraphIndex);
-    const updated = annotatedParagraph(block, inlineAnnotations);
+    const chapter = requireChapter(this.epub, chapterIndex);
+    const block = requireParagraphBlock(chapter, blockId);
+    const updated = paragraphBlock(
+      block.id,
+      block.text,
+      inlineAnnotations,
+      block.paragraphKind,
+      block.headingLevel,
+    );
     this.recordChapterChange(chapterIndex);
-    storeParagraph(chapter, block, updated);
+    storeParagraph(block, updated);
+    this.changed();
   }
 
   /**
-   * Inserts a new paragraph block. Returns the generated `blockId`.
+   * Removes a block, paragraph or image. Removing the last image block that
+   * references an asset removes the asset too.
    *
-   * `atIndex` is the position in the chapter's `blocks` array. Pass
-   * `chapter.blocks.length` to append. Annotations outside `text` are dropped.
-   *
-   * @throws If `headingLevel` is not an integer from 1 to 6, if
-   *   `paragraphKind: 'heading'` comes without one, or if a scene break carries
-   *   text. Nothing is recorded in that case.
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the block.
+   * @throws {RangeError} When the chapter or block does not exist.
    */
-  insertParagraph(
-    chapterIndex: number,
-    atIndex: number,
-    paragraph: Omit<EditableParagraphBlock, 'kind' | 'id'>,
-  ): string {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const block = paragraphBlock(
-      nextBlockId(chapter),
-      paragraph.text,
-      paragraph.inlineAnnotations ?? [],
-      paragraph.paragraphKind,
-      paragraph.headingLevel,
-    );
-    this.recordChapterChange(chapterIndex);
-    chapter.blocks.splice(clamp(atIndex, 0, chapter.blocks.length), 0, block);
-    syncParagraphsView(chapter);
-    return block.id;
-  }
-
-  /** Removes a block (paragraph or image) by id. */
   deleteBlock(chapterIndex: number, blockId: string): void {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const index = chapter.blocks.findIndex((b) => b.id === blockId);
-    if (index < 0) throw new Error(`Missing block: ${blockId}`);
+    const chapter = writable(requireChapter(this.epub, chapterIndex));
+    const index = requireBlockIndex(chapter, blockId);
     const removed = chapter.blocks[index];
     this.recordChapterChange(chapterIndex);
     chapter.blocks.splice(index, 1);
@@ -286,30 +340,33 @@ export class EditableEpub {
     ) {
       chapter.imageAssets.delete(removed.assetKey);
     }
-    syncParagraphsView(chapter);
+    this.changed();
   }
 
   /**
-   * Splits a paragraph block at `charIndex` (codepoint index in `text`).
-   * A fractional index is truncated and an out-of-range one clamped. Inline
-   * annotations that straddle the split are dropped.
+   * Splits a paragraph block at `charIndex` (code point index in `text`). The
+   * block keeps its id and the text before the split; a new block after it
+   * takes the rest. A fractional index is truncated and an out-of-range one
+   * clamped. Inline annotations that straddle the split are dropped.
    *
-   * @throws If `charIndex` is not a finite number. Nothing is recorded then.
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the paragraph block.
+   * @param charIndex - Code point index to split at.
+   * @returns The new block holding the text after the split.
+   * @throws {RangeError} When the chapter or paragraph does not exist, or
+   *   `charIndex` is not a finite number.
    */
-  splitParagraph(chapterIndex: number, blockId: string, charIndex: number): [string, string] {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const index = chapter.blocks.findIndex((b) => b.id === blockId);
-    if (index < 0) throw new Error(`Missing block: ${blockId}`);
+  splitParagraph(chapterIndex: number, blockId: string, charIndex: number): EditableParagraphBlock {
+    const chapter = writable(requireChapter(this.epub, chapterIndex));
+    const index = requireBlockIndex(chapter, blockId);
     const target = chapter.blocks[index];
-    if (target.kind !== 'paragraph')
-      throw new Error(`Cannot split non-paragraph block: ${blockId}`);
-    if (!Number.isFinite(charIndex)) throw new Error(`Invalid split index: ${charIndex}`);
+    if (target.kind !== 'paragraph') {
+      throw new RangeError(`Cannot split non-paragraph block: ${blockId}`);
+    }
+    if (!Number.isFinite(charIndex)) throw new RangeError(`Invalid split index: ${charIndex}`);
 
     const chars = [...target.text];
     const cut = clamp(Math.trunc(charIndex), 0, chars.length);
-    const leftText = chars.slice(0, cut).join('');
-    const rightText = chars.slice(cut).join('');
-
     const leftAnns: InlineAnnotation[] = [];
     const rightAnns: InlineAnnotation[] = [];
     for (const ann of target.inlineAnnotations) {
@@ -321,38 +378,46 @@ export class EditableEpub {
 
     const leftBlock = paragraphBlock(
       target.id,
-      leftText,
+      chars.slice(0, cut).join(''),
       leftAnns,
       target.paragraphKind,
       target.headingLevel,
     );
     const rightBlock = paragraphBlock(
       nextBlockId(chapter),
-      rightText,
+      chars.slice(cut).join(''),
       rightAnns,
       target.paragraphKind,
       target.headingLevel,
     );
     this.recordChapterChange(chapterIndex);
     chapter.blocks.splice(index, 1, leftBlock, rightBlock);
-    syncParagraphsView(chapter);
-    return [leftBlock.id, rightBlock.id];
+    this.changed();
+    return rightBlock;
   }
 
   /**
-   * Merges two adjacent paragraph blocks. `leftId` must immediately precede
-   * `rightId`. Returns the surviving (left) block's id.
+   * Merges two adjacent paragraph blocks into the left one, which keeps its
+   * id and kind.
+   *
+   * @param chapterIndex - Zero-based chapter index.
+   * @param pair - The paragraph and the one immediately after it.
+   * @returns The merged block.
+   * @throws {RangeError} When the chapter or either block does not exist, a
+   *   block is not a paragraph, or `rightId` does not immediately follow `leftId`.
+   * @throws {TypeError} When the left block is a scene break and the right
+   *   one carries text.
    */
-  mergeParagraphs(chapterIndex: number, leftId: string, rightId: string): string {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const leftIdx = chapter.blocks.findIndex((b) => b.id === leftId);
-    const rightIdx = chapter.blocks.findIndex((b) => b.id === rightId);
-    if (leftIdx < 0 || rightIdx < 0) throw new Error('Merge target missing');
-    if (rightIdx !== leftIdx + 1) throw new Error('Merge requires adjacent blocks');
-    const left = chapter.blocks[leftIdx];
-    const right = chapter.blocks[rightIdx];
-    if (left.kind !== 'paragraph' || right.kind !== 'paragraph')
-      throw new Error('Merge requires two paragraph blocks');
+  mergeParagraphs(chapterIndex: number, pair: MergeParagraphsInput): EditableParagraphBlock {
+    const chapter = writable(requireChapter(this.epub, chapterIndex));
+    const leftIndex = requireBlockIndex(chapter, pair.leftId);
+    const rightIndex = requireBlockIndex(chapter, pair.rightId);
+    if (rightIndex !== leftIndex + 1) throw new RangeError('Merge requires adjacent blocks');
+    const left = chapter.blocks[leftIndex];
+    const right = chapter.blocks[rightIndex];
+    if (left.kind !== 'paragraph' || right.kind !== 'paragraph') {
+      throw new RangeError('Merge requires two paragraph blocks');
+    }
 
     const offset = [...left.text].length;
     const merged = paragraphBlock(
@@ -370,75 +435,107 @@ export class EditableEpub {
       left.headingLevel,
     );
     this.recordChapterChange(chapterIndex);
-    chapter.blocks.splice(leftIdx, 2, merged);
-    syncParagraphsView(chapter);
-    return merged.id;
-  }
-
-  /** Moves a block to a new index. */
-  moveBlock(chapterIndex: number, blockId: string, toIndex: number): void {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const from = chapter.blocks.findIndex((b) => b.id === blockId);
-    if (from < 0) throw new Error(`Missing block: ${blockId}`);
-    this.recordChapterChange(chapterIndex);
-    const [block] = chapter.blocks.splice(from, 1);
-    chapter.blocks.splice(clamp(toIndex, 0, chapter.blocks.length), 0, block);
-    syncParagraphsView(chapter);
+    chapter.blocks.splice(leftIndex, 2, merged);
+    this.changed();
+    return merged;
   }
 
   /**
-   * Adds an image asset and inserts an image block referencing it. Accepts
-   * both the new v0.5 shape (`{ filename, data, ... }`) and the v0.4 shape
-   * (`{ href, mediaType, ... }`).
+   * Moves a block to `toIndex` in the chapter's `blocks`; an out-of-range
+   * index is clamped.
    *
-   * Returns the generated `assetKey`.
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the block.
+   * @param toIndex - Position the block ends up at.
+   * @throws {RangeError} When the chapter or block does not exist.
    */
-  addImage(chapterIndex: number, image: AddImageInput | EditableEpubImage): string {
-    assertImageInputFilename(image);
-    assertAddImagePayload(image);
-    const chapter = requireChapter(this.book, chapterIndex);
-    assertAddImageTarget(chapter, image);
+  moveBlock(chapterIndex: number, blockId: string, toIndex: number): void {
+    const chapter = writable(requireChapter(this.epub, chapterIndex));
+    const from = requireBlockIndex(chapter, blockId);
     this.recordChapterChange(chapterIndex);
-    return addEpubChapterImage(this.book, chapterIndex, image);
+    const [block] = chapter.blocks.splice(from, 1);
+    chapter.blocks.splice(clamp(toIndex, 0, chapter.blocks.length), 0, block);
+    this.changed();
   }
 
-  /** Removes an image block (and its asset, if no other block references it). */
-  removeImage(chapterIndex: number, blockIdOrAssetKey: string): void {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const matchingImage = chapter.blocks.find(
-      (block) =>
-        block.kind === 'image' &&
-        (block.id === blockIdOrAssetKey || block.assetKey === blockIdOrAssetKey),
-    ) as EditableImageBlock | undefined;
-    if (!matchingImage) throw new Error(`Missing image block or asset: ${blockIdOrAssetKey}`);
+  /**
+   * Adds an image asset and inserts an image block referencing it. The bytes
+   * of a `data` input are copied, so the input can be reused.
+   *
+   * @param chapterIndex - Zero-based chapter index.
+   * @param image - The image, carrying its bytes or the URL to fetch them from
+   *   at export time.
+   * @returns The stored image block; `block.assetKey` names the new asset,
+   *   uniqued against the files and assets the book already has.
+   * @throws {RangeError} When the chapter or `afterBlockId` does not exist, or
+   *   `filename` has no basename.
+   * @throws {TypeError} When the input carries neither `data` nor `url`.
+   */
+  addImage(chapterIndex: number, image: AddImageInput): EditableImageBlock {
+    const chapter = writable(requireChapter(this.epub, chapterIndex));
+    const requestedFilename = imageInputFilename(image);
+    const data = imageInputData(image);
+    const insertAt = addImageInsertIndex(chapter, image);
+    const assetKey = uniqueAssetKey(requestedFilename, collectImageAssetKeys(this.epub));
+    const mediaType = image.mediaType ?? mediaTypeFromPath(requestedFilename);
+    const asset: EditableImageAsset = data
+      ? { filename: assetKey, mediaType, data }
+      : { filename: assetKey, mediaType, url: image.url as string };
+    const block: EditableImageBlock = { kind: 'image', id: nextBlockId(chapter), assetKey };
+    if (image.alt !== undefined) block.alt = image.alt;
+    if (image.caption !== undefined) block.caption = image.caption;
+    if (image.placement !== undefined) block.placement = image.placement;
 
     this.recordChapterChange(chapterIndex);
-    const removedKey = matchingImage.assetKey;
-    chapter.blocks = chapter.blocks.filter((block) => {
-      if (block.kind !== 'image') return true;
-      return block.id !== blockIdOrAssetKey && block.assetKey !== blockIdOrAssetKey;
+    chapter.imageAssets.set(assetKey, asset);
+    chapter.blocks.splice(insertAt, 0, block);
+    this.changed();
+    return block;
+  }
+
+  /**
+   * Removes an image asset together with every image block that references
+   * it, in every chapter holding an asset under `assetKey`. Recorded as one
+   * history entry.
+   *
+   * @param assetKey - Key of the asset in the chapters' `imageAssets`.
+   * @throws {RangeError} When no chapter holds an asset under `assetKey`.
+   */
+  removeImageAsset(assetKey: string): void {
+    const holders = this.epub.chapters.flatMap((chapter, index) =>
+      chapter.imageAssets.has(assetKey) ? [index] : [],
+    );
+    if (holders.length === 0) throw new RangeError(`Missing image asset: ${assetKey}`);
+    this.transaction(() => {
+      for (const index of holders) {
+        this.recordChapterChange(index);
+        const chapter = writable(this.epub.chapters[index]);
+        chapter.blocks = chapter.blocks.filter(
+          (block) => !(block.kind === 'image' && block.assetKey === assetKey),
+        );
+        chapter.imageAssets.delete(assetKey);
+      }
+      this.changed();
     });
-    if (
-      removedKey &&
-      !chapter.blocks.some((b) => b.kind === 'image' && b.assetKey === removedKey)
-    ) {
-      chapter.imageAssets.delete(removedKey);
-    }
-    syncParagraphsView(chapter);
   }
 
   /**
    * Updates an image block's alt text, caption, or placement. A key present
    * with `undefined` removes that field; absent keys are left untouched.
+   *
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the image block.
+   * @param patch - Fields to change.
+   * @throws {RangeError} When the chapter or image block does not exist.
    */
   updateImage(
     chapterIndex: number,
     blockId: string,
     patch: Partial<Omit<EditableImageBlock, 'kind' | 'id' | 'assetKey'>>,
   ): void {
-    const chapter = requireChapter(this.book, chapterIndex);
-    const block = chapter.blocks.find((b) => b.id === blockId);
-    if (block?.kind !== 'image') throw new Error(`Missing image block: ${blockId}`);
+    const chapter = requireChapter(this.epub, chapterIndex);
+    const block = chapter.blocks[requireBlockIndex(chapter, blockId)];
+    if (block.kind !== 'image') throw new RangeError(`Not an image block: ${blockId}`);
     const changed = IMAGE_PATCH_FIELDS.filter(
       (field) => Object.hasOwn(patch, field) && patch[field] !== block[field],
     );
@@ -449,102 +546,181 @@ export class EditableEpub {
       if (patch[field] === undefined) delete block[field];
       else Object.assign(block, { [field]: patch[field] });
     }
+    this.changed();
   }
 
   /**
-   * Shortcut for {@link EditableEpub.updateImage} that only sets the caption.
-   * `undefined` removes the caption.
-   */
-  setImageCaption(chapterIndex: number, blockId: string, caption: string | undefined): void {
-    this.updateImage(chapterIndex, blockId, { caption });
-  }
-
-  /**
-   * Exports the current edited EPUB as an ArrayBuffer.
+   * Sets or clears the caption of an image block.
    *
-   * Book state is captured synchronously on entry, so an edit made while the
+   * @param chapterIndex - Zero-based chapter index.
+   * @param blockId - Id of the image block.
+   * @param caption - The new caption, or `null` to remove it.
+   * @throws {RangeError} When the chapter or image block does not exist.
+   */
+  setImageCaption(chapterIndex: number, blockId: string, caption: string | null): void {
+    this.updateImage(chapterIndex, blockId, { caption: caption ?? undefined });
+  }
+
+  /**
+   * Exports the edited EPUB. Unedited files are written back as they were;
+   * edited chapter XHTML, added image assets and their OPF manifest entries are
+   * written out.
+   *
+   * The document is captured synchronously on entry, so an edit made while the
    * export is still awaiting asset bytes lands in the next export, never
    * part-way through this one.
+   *
+   * @param options - Progress, cancellation, asset resolution and watermark.
+   * @returns The EPUB file.
+   * @throws {MejiroError} `epub-unsupported-content` when an edited chapter
+   *   holds content the block model cannot write back, `asset-fetch-failed`
+   *   when the default fetch of a URL-only asset fails.
+   * @throws {TypeError} When `options.signal` is not an `AbortSignal`.
+   * @throws The `signal.reason` when `options.signal` aborts, and whatever
+   *   `options.assetResolver` throws.
    */
-  export(options?: EpubExportOptions): Promise<ArrayBuffer> {
-    return exportEditableEpubBook(this.book, options);
+  export(options?: EditableEpubExportOptions): Promise<Uint8Array<ArrayBuffer>> {
+    return exportEditableEpubBook(this.epub, options);
+  }
+
+  private changed(): void {
+    if (this.txnDepth > 0) this.changePending = true;
+    else this.notify();
+  }
+
+  private flushChange(): void {
+    if (!this.changePending) return;
+    this.changePending = false;
+    this.notify();
+  }
+
+  private notify(): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
+    }
+  }
+
+  /**
+   * Records the current state of `chapterIndex` into the active history
+   * entry. Called by every mutating method before it changes a chapter.
+   */
+  private recordChapterChange(chapterIndex: number): void {
+    const chapter = this.epub.chapters[chapterIndex];
+    if (!chapter) return;
+    if (this.pendingEntry) {
+      // Already inside an explicit transaction.
+      if (!this.pendingEntry.has(chapterIndex)) {
+        this.pendingEntry.set(chapterIndex, snapshotChapter(chapter));
+      }
+      chapterStateOf(chapter).dirty = true;
+      return;
+    }
+    const entry: HistoryEntry = new Map();
+    entry.set(chapterIndex, snapshotChapter(chapter));
+    this.commitHistoryEntry(entry);
+    chapterStateOf(chapter).dirty = true;
+  }
+
+  private commitHistoryEntry(entry: HistoryEntry): void {
+    this.undoStack.push(entry);
+    if (this.undoStack.length > this.historyLimit) this.undoStack.shift();
+    this.redoStack.length = 0;
+  }
+
+  /** Builds an entry mirroring `template` but capturing the *current* state. */
+  private captureEntry(template: HistoryEntry): HistoryEntry {
+    const entry: HistoryEntry = new Map();
+    for (const chapterIndex of template.keys()) {
+      const chapter = this.epub.chapters[chapterIndex];
+      if (chapter) entry.set(chapterIndex, snapshotChapter(chapter));
+    }
+    return entry;
+  }
+
+  /** Writes an entry's chapter state back onto the live book. */
+  private restoreEntry(entry: HistoryEntry): void {
+    for (const [chapterIndex, snapshot] of entry) {
+      const chapter = this.epub.chapters[chapterIndex];
+      if (!chapter) continue;
+      writable(chapter).blocks = snapshot.blocks.map(cloneEditableBlock);
+      writable(chapter).imageAssets = new Map(snapshot.imageAssets);
+      chapterStateOf(chapter).dirty = snapshot.dirty;
+    }
   }
 }
 
 const IMAGE_PATCH_FIELDS = ['alt', 'caption', 'placement'] as const;
 
 /**
- * Asset handed to an {@link AssetResolver}.
- *
- * Both export paths route through the same resolver, so the value is either a
- * chapter image asset from `EditableEpub.export()` or a packaged project asset
- * from `EpubProject.export()`. The fields a resolver normally reads — `url`,
- * `mediaType` and `data` — are common to both and need no narrowing; the naming
- * fields differ, so narrow with `'filename' in asset` (an
- * {@link EditableImageAsset}) versus `'href' in asset` (an
- * {@link EpubProjectAsset}) when the source path matters.
- */
-export type AssetResolverAsset = EditableImageAsset | EpubProjectAsset;
-
-/**
- * Request passed to {@link EpubExportOptions.assetResolver}. The resolver
- * returns the bytes that should be embedded for `asset` inside the exported
- * EPUB ZIP.
+ * Request passed to {@link EpubExportOptions.assetResolver} for one asset that
+ * declares a URL and no inline bytes.
  */
 export interface AssetResolverRequest {
-  /**
-   * Identifier of the asset being resolved: the key inside the chapter's
-   * `imageAssets` map on the {@link EditableEpub} path, and the ZIP href on the
-   * `EpubProject` path.
-   */
-  assetKey: string;
-  /** The asset to resolve. */
-  asset: AssetResolverAsset;
-  /** External URL declared on the asset (mirrors `asset.url`). */
+  /** URL declared on the asset. */
   url: string;
-  /** Mirror of the export `AbortSignal`, when one was passed. */
+  /** ZIP path the resolved bytes are written to inside the exported EPUB. */
+  href: string;
+  /** Media type declared on the asset, when it has one. */
+  mediaType?: string;
+  /** The export's `AbortSignal`, when one was passed. */
   signal?: AbortSignal;
 }
 
 /**
- * Resolves an asset to its bytes at export time. Called once per
- * {@link AssetResolverAsset} that declares a `url` and has no inline `data`.
- * Throw to abort export; return a `Uint8Array` or `ArrayBuffer` containing
- * the asset bytes.
+ * Resolves an asset to its bytes at export time. Called once per asset that
+ * declares a `url` and has no inline `data`. Throw to abort the export.
  */
-export type AssetResolver = (
-  request: AssetResolverRequest,
-) => Promise<Uint8Array | ArrayBuffer> | Uint8Array | ArrayBuffer;
+export type AssetResolver = (request: AssetResolverRequest) => Promise<BinaryInput> | BinaryInput;
 
 /** Options shared by EPUB export entry points. */
 export interface EpubExportOptions {
   /**
-   * Notifies progress during export.
+   * Notifies progress during export. `ratio` runs from 0 to 1 within each
+   * phase and starts again from 0 when the next phase begins. Not called once
+   * the export has been aborted.
    *
    * - `phase: 'serialize'` — chapter XHTML rebuild and asset staging (including
-   *   any asset URL resolution).
-   * - `phase: 'zip'` — DEFLATE compression. `ratio` mirrors JSZip's
-   *   `metadata.percent / 100`.
+   *   any asset URL resolution), advancing per chapter.
+   * - `phase: 'zip'` — DEFLATE compression.
    */
   onProgress?: (phase: 'serialize' | 'zip', ratio: number) => void;
-  /** AbortSignal — when triggered, export rejects with `AbortError`. */
+  /**
+   * Cancels the export. The returned promise rejects with `signal.reason` (an
+   * `AbortError` `DOMException` unless the caller passed its own reason); a
+   * signal that is already aborted rejects without exporting.
+   */
   signal?: AbortSignal;
   /**
-   * Resolves URL-only image assets ({@link EditableImageAsset.url} set,
-   * `data` unset) into bytes at export time. When omitted, a default resolver
-   * uses the runtime `fetch` with the export `signal`. Override to inject
-   * auth headers, pull from non-HTTP sources (IndexedDB, S3 SDK), or short-
-   * circuit with a cached buffer.
+   * Resolves URL-only image assets into bytes at export time. When omitted, a
+   * default resolver uses the runtime `fetch` with the export `signal`.
+   * Override to inject auth headers, pull from non-HTTP sources (IndexedDB, S3
+   * SDK), or short-circuit with a cached buffer.
    */
   assetResolver?: AssetResolver;
+}
+
+/** Options of {@link EditableEpub.export}. */
+export interface EditableEpubExportOptions extends EpubExportOptions {
+  /**
+   * Text of a paragraph inserted at the top of every exported chapter. Only
+   * the exported copy carries it; the edited document is left as it is. An
+   * empty string inserts nothing.
+   */
+  watermark?: string;
 }
 
 /** Common fields of the {@link AddImageInput} variants. */
 export interface AddImageInputCommon {
   /**
    * Filename used inside the EPUB ZIP (e.g. `figure-01.png`). The returned
-   * `assetKey` starts from this basename and is uniqued when needed. The image
-   * is written to `OPS/Images/<assetKey>` by default.
+   * block's `assetKey` starts from this basename and is uniqued when needed.
+   * The image is written to `<OPF directory>/Images/<assetKey>`.
    */
   filename: string;
   /**
@@ -564,20 +740,20 @@ export interface AddImageInputCommon {
   placement?: 'inline' | 'fullspread';
   /**
    * Insert the block immediately after this block id. Defaults to the end of
-   * the chapter; an id no block carries throws.
+   * the chapter.
    */
   afterBlockId?: string;
 }
 
-/** v0.5 shape for {@link EditableEpub.addImage} — inline bytes variant. */
+/** {@link AddImageInput} variant carrying the image bytes. */
 export interface AddImageInputBytes extends AddImageInputCommon {
-  /** Binary image data. */
-  data: Uint8Array | ArrayBuffer;
+  /** Image bytes. A `Uint8Array` is read through its own view. */
+  data: BinaryInput;
   /** Never set on this variant — it is what makes the union discriminate. */
   url?: never;
 }
 
-/** v0.5 shape for {@link EditableEpub.addImage} — external URL variant. */
+/** {@link AddImageInput} variant naming a URL to fetch the bytes from. */
 export interface AddImageInputUrl extends AddImageInputCommon {
   /**
    * External URL. Bytes are fetched at export time via the
@@ -589,40 +765,44 @@ export interface AddImageInputUrl extends AddImageInputCommon {
 }
 
 /**
- * v0.5 input shape for {@link EditableEpub.addImage}. Pick the `data` variant
- * to embed bytes immediately, or the `url` variant to defer fetching until
- * export.
+ * Input of {@link EditableEpub.addImage}. Pick the `data` variant to embed
+ * bytes immediately, or the `url` variant to defer fetching until export.
  */
 export type AddImageInput = AddImageInputBytes | AddImageInputUrl;
 
 /**
- * Parses an EPUB while retaining enough package metadata to export edits back
- * into an EPUB file.
+ * Parses an EPUB and starts an editing session over it, retaining the package
+ * data needed to export the edits back into an EPUB file.
  *
  * Requires host DOM globals (`DOMParser`, `XMLSerializer`, `Node`). Node and
  * SSR runtimes must register a DOM implementation (happy-dom, jsdom) first.
+ *
+ * @param data - EPUB file contents. A `Uint8Array` (a Node `Buffer` included)
+ *   is read through its own view. The input is neither retained nor modified.
+ * @param options - Resource limits applied while reading the archive, and a
+ *   signal that cancels the parse.
+ * @returns An editing session over the parsed book.
+ * @throws {TypeError} When `data` is not an `ArrayBuffer` or `Uint8Array`, or
+ *   `options.signal` is not an `AbortSignal`.
+ * @throws {RangeError} When a limit in `options.limits` is not a positive integer.
+ * @throws {MejiroError} `epub-invalid-archive` when `data` is not a readable ZIP
+ *   archive, `epub-invalid-package` when the container, package document or a
+ *   chapter is malformed or no chapter is readable, `epub-limit-exceeded` when
+ *   the archive passes one of the limits, `dom-unavailable` when the host has
+ *   no DOM implementation.
+ * @throws The `signal.reason` when `options.signal` aborts.
  */
 export async function parseEditableEpub(
-  data: ArrayBuffer,
+  data: BinaryInput,
   options: EpubParseOptions = {},
 ): Promise<EditableEpub> {
-  return EditableEpub.load(data, options);
-}
-
-async function parseEditableEpubBook(
-  data: ArrayBuffer,
-  options: EpubParseOptions,
-): Promise<EditableEpubBook> {
   const limits = resolveEpubParseLimits(options);
+  assertBinaryInput(data);
+  const { signal } = options;
+  throwIfAborted(signal);
   assertEpubInputSize(data.byteLength, limits);
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(data);
-  } catch (err) {
-    throw new Error(`Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  assertEpubArchiveWithinLimits(data, zip, limits);
-  const budget = new EpubExpansionBudget(limits);
+  const zip = await openEpubArchive(data, limits, signal);
+  const budget = new EpubExpansionBudget(limits, signal);
   const files = new Map<string, Uint8Array>();
 
   // Entries are expanded one at a time so the running total is charged before
@@ -633,6 +813,7 @@ async function parseEditableEpubBook(
     if (!file) continue;
     files.set(path, await budget.readBytes(file));
   }
+  throwIfAborted(signal);
 
   const containerXml = readEntryText(files, 'META-INF/container.xml');
   const { rootfilePath, opfDir } = packageDocumentLocation(containerXml);
@@ -650,16 +831,14 @@ async function parseEditableEpubBook(
   for (const href of spineHrefs) {
     const xhtml = readEntryTextOrNull(files, href);
     if (xhtml == null) continue;
-    let extracted: {
-      blocks: EditableBlock[];
-      imageAssets: Map<string, EditableImageAsset>;
-      originalImageHrefs: string[];
-    };
+    let extracted: ExtractedChapter;
     try {
       extracted = extractEditableBlocks(xhtml, href, files, manifestItems);
     } catch (err) {
-      throw new Error(
+      throw new MejiroError(
+        'epub-invalid-package',
         `Failed to parse chapter XHTML: ${href} (${err instanceof Error ? err.message : String(err)})`,
+        { cause: err },
       );
     }
     const chapterTitle = extractChapterTitleOrUndefined(xhtml) ?? navTitles.get(href);
@@ -670,41 +849,114 @@ async function parseEditableEpubBook(
         title: chapterTitle,
         blocks: extracted.blocks,
         imageAssets: extracted.imageAssets,
-        originalImageHrefs: extracted.originalImageHrefs,
-        paragraphs: [],
-        paragraphRefs: undefined,
       };
-      syncParagraphsView(chapter);
+      chapterStateOf(chapter).originalImageHrefs = extracted.originalImageHrefs;
       chapters.push(chapter);
     }
   }
+  if (chapters.length === 0) {
+    throw new MejiroError('epub-invalid-package', 'EPUB has no readable chapters');
+  }
 
-  return {
+  const epub: EditableEpubBook = {
     title,
     author,
     chapters,
     ...(pageProgressionDirection ? { pageProgressionDirection } : {}),
-    packageData: { rootfilePath, opfDir, opfXml, files },
   };
+  attachPackageData(epub, { rootfilePath, opfDir, opfXml, files });
+  return openSession(epub);
+}
+
+/** Loosely typed view of a paragraph input, for the checks behind the static types. */
+interface ParagraphFields {
+  paragraphKind?: string;
+  text?: unknown;
+  inlineAnnotations?: readonly InlineAnnotation[];
+  headingLevel?: number;
+}
+
+/** Kinds a paragraph may take besides heading and scene break. */
+const PLAIN_PARAGRAPH_KINDS = new Set(['body', 'blockquote', 'pre']);
+
+/** Builds the block `insertParagraph` stores; throws before anything is recorded. */
+function newParagraphBlock(id: string, paragraph: NewParagraph): EditableParagraphBlock {
+  const { paragraphKind, text, inlineAnnotations, headingLevel } = paragraph as ParagraphFields;
+  if (paragraphKind === 'sceneBreak') {
+    if (text || inlineAnnotations?.length || headingLevel !== undefined) {
+      throw new TypeError('A sceneBreak paragraph takes no text, annotations or headingLevel');
+    }
+    return paragraphBlock(id, '', [], 'sceneBreak', undefined);
+  }
+  if (typeof text !== 'string') throw new TypeError('A new paragraph needs its text as a string');
+  return paragraphBlock(
+    id,
+    text,
+    inlineAnnotations ?? [],
+    requestedKind(paragraphKind, headingLevel),
+    headingLevel,
+  );
+}
+
+/** Builds the block an update leaves behind; throws before anything is recorded. */
+function patchedParagraph(
+  block: EditableParagraphBlock,
+  patch: ParagraphPatch,
+): EditableParagraphBlock {
+  const { paragraphKind, text, inlineAnnotations, headingLevel } = patch as ParagraphFields;
+  if (text !== undefined && typeof text !== 'string') {
+    throw new TypeError('A paragraph text must be a string');
+  }
+  if (paragraphKind === 'sceneBreak') {
+    if (text !== undefined || inlineAnnotations !== undefined || headingLevel !== undefined) {
+      throw new TypeError('A sceneBreak paragraph takes no text, annotations or headingLevel');
+    }
+    return paragraphBlock(block.id, '', [], 'sceneBreak', undefined);
+  }
+  let kind = block.paragraphKind;
+  let level: number | undefined = block.headingLevel;
+  if (paragraphKind === undefined) {
+    if (kind === 'sceneBreak' && (text !== undefined || inlineAnnotations !== undefined)) {
+      throw new TypeError(
+        'A sceneBreak paragraph takes no text; pass a paragraphKind to change it',
+      );
+    }
+    if (headingLevel !== undefined) {
+      if (kind !== 'heading') {
+        throw new TypeError("Only a heading takes a headingLevel; pass paragraphKind: 'heading'");
+      }
+      level = headingLevel;
+    }
+  } else {
+    kind = requestedKind(paragraphKind, headingLevel);
+    level = headingLevel;
+  }
+  const annotations =
+    inlineAnnotations ??
+    (text === undefined
+      ? block.inlineAnnotations
+      : reanchorInlineAnnotations(block.inlineAnnotations, block.text, text));
+  return paragraphBlock(block.id, text ?? block.text, annotations, kind, level);
 }
 
 /**
- * Updates one paragraph's text and optional inline annotations.
+ * Validates a requested non-scene-break kind against the level that comes with it.
  *
- * Mirrors {@link EditableEpub.updateParagraph}, including its re-anchoring of
- * existing annotations across a text-only update.
+ * @returns The kind to store; `undefined` for body text.
  */
-export function updateEpubParagraph(
-  book: EditableEpubBook,
-  chapterIndex: number,
-  paragraphIndex: number,
-  next: Partial<AnnotatedParagraph>,
-): void {
-  const chapter = requireChapter(book, chapterIndex);
-  const block = findParagraphBlock(chapter, paragraphIndex);
-  const updated = updatedParagraph(block, next);
-  markChapterDirty(chapter);
-  storeParagraph(chapter, block, updated);
+function requestedKind(
+  kind: string | undefined,
+  level: number | undefined,
+): EditableParagraphBlock['paragraphKind'] {
+  if (kind === 'heading') {
+    if (level === undefined) throw new TypeError('A heading paragraph needs a headingLevel');
+    return 'heading';
+  }
+  if (kind !== undefined && !PLAIN_PARAGRAPH_KINDS.has(kind)) {
+    throw new RangeError(`Unknown paragraphKind: ${kind}`);
+  }
+  if (level !== undefined) throw new TypeError('Only a heading paragraph takes a headingLevel');
+  return kind === 'body' ? undefined : (kind as 'blockquote' | 'pre' | undefined);
 }
 
 /**
@@ -726,7 +978,7 @@ function paragraphBlock(
   assertSceneBreakText(kind, text);
   const inlineAnnotations = validInlineAnnotations(annotations, text);
   const block: EditableParagraphBlock = { kind: 'paragraph', id, text, inlineAnnotations };
-  if (kind) block.paragraphKind = kind;
+  if (kind && kind !== 'body') block.paragraphKind = kind;
   if (level) block.headingLevel = level;
   return block;
 }
@@ -735,91 +987,35 @@ function paragraphBlock(
  * Validates a heading level against its paragraph kind.
  *
  * @returns The level for a heading, `undefined` otherwise.
- * @throws If the level is not an integer from 1 to 6, or a heading has none.
+ * @throws {RangeError} When the level is not an integer from 1 to 6.
+ * @throws {TypeError} When a heading has no level.
  */
 function normalizeHeadingLevel(
   kind: EditableParagraphBlock['paragraphKind'],
   level: number | undefined,
-): number | undefined {
+): HeadingLevel | undefined {
   if (level == null) {
-    if (kind === 'heading')
-      throw new Error('A heading block must carry a headingLevel from 1 to 6');
+    if (kind === 'heading') throw new TypeError('A heading block must carry a headingLevel');
     return undefined;
   }
   if (!Number.isInteger(level) || level < 1 || level > 6) {
-    throw new Error(`Invalid headingLevel ${level}: expected an integer from 1 to 6`);
+    throw new RangeError(`Invalid headingLevel ${level}: expected an integer from 1 to 6`);
   }
-  return level;
+  return level as HeadingLevel;
 }
 
 /** A scene break exports as a bare `<hr/>`, so it cannot carry text. */
 function assertSceneBreakText(kind: EditableParagraphBlock['paragraphKind'], text: string): void {
   if (kind === 'sceneBreak' && text !== '') {
-    throw new Error('A sceneBreak block cannot carry text');
+    throw new TypeError('A sceneBreak block cannot carry text');
   }
-}
-
-/** Builds the block an update leaves behind; throws before anything is recorded. */
-function updatedParagraph(
-  block: EditableParagraphBlock,
-  next: Partial<AnnotatedParagraph>,
-): EditableParagraphBlock {
-  const text = next.text ?? block.text;
-  const annotations =
-    next.inlineAnnotations ??
-    (next.text === undefined
-      ? block.inlineAnnotations
-      : reanchorInlineAnnotations(block.inlineAnnotations, block.text, next.text));
-  if (!Object.hasOwn(next, 'headingLevel')) {
-    return paragraphBlock(block.id, text, annotations, block.paragraphKind, block.headingLevel);
-  }
-  // Clearing the level turns a heading back into body text.
-  const kind =
-    next.headingLevel == null && block.paragraphKind === 'heading' ? 'body' : block.paragraphKind;
-  return paragraphBlock(block.id, text, annotations, kind, next.headingLevel ?? undefined);
-}
-
-/** Builds the block that replacing its annotations leaves behind. */
-function annotatedParagraph(
-  block: EditableParagraphBlock,
-  inlineAnnotations: readonly InlineAnnotation[],
-): EditableParagraphBlock {
-  return paragraphBlock(
-    block.id,
-    block.text,
-    inlineAnnotations,
-    block.paragraphKind,
-    block.headingLevel,
-  );
 }
 
 /** Writes `next` into `block` in place, keeping the object callers may hold. */
-function storeParagraph(
-  chapter: EditableEpubChapter,
-  block: EditableParagraphBlock,
-  next: EditableParagraphBlock,
-): void {
+function storeParagraph(block: EditableParagraphBlock, next: EditableParagraphBlock): void {
   delete block.paragraphKind;
   delete block.headingLevel;
   Object.assign(block, next);
-  syncParagraphsView(chapter);
-}
-
-/**
- * Adds or replaces inline annotations for one paragraph. Annotations that do
- * not fall inside the paragraph's current text are dropped.
- */
-export function setEpubInlineAnnotations(
-  book: EditableEpubBook,
-  chapterIndex: number,
-  paragraphIndex: number,
-  inlineAnnotations: readonly InlineAnnotation[],
-): void {
-  const chapter = requireChapter(book, chapterIndex);
-  const block = findParagraphBlock(chapter, paragraphIndex);
-  const updated = annotatedParagraph(block, inlineAnnotations);
-  markChapterDirty(chapter);
-  storeParagraph(chapter, block, updated);
 }
 
 /**
@@ -883,163 +1079,140 @@ function reanchorInlineAnnotations(
   return validInlineAnnotations(kept, newText);
 }
 
-/**
- * Queues an image asset and inserts a corresponding image block.
- *
- * Accepts both the v0.5 `{ filename, ... }` shape and the v0.4
- * `{ href, mediaType, afterParagraph }` shape (deprecated). Returns the
- * `assetKey` used to reference the asset.
- */
-export function addEpubChapterImage(
-  book: EditableEpubBook,
-  chapterIndex: number,
-  image: AddImageInput | EditableEpubImage,
-): string {
-  const chapter = requireChapter(book, chapterIndex);
-  const isV5 = isAddImageInput(image);
-  const requestedFilename = assertImageInputFilename(image);
-  const insertAt = resolveAddImageInsertIndex(chapter, image);
-  assertAddImagePayload(image);
-  const assetKey = uniqueAssetKey(requestedFilename, collectImageAssetKeys(book));
-  const filename = assetKey;
-  const mediaType = isV5
-    ? (image.mediaType ?? mediaTypeFromPath(requestedFilename))
-    : (image as EditableEpubImage).mediaType;
+/** Position `addImage` inserts at; throws when `afterBlockId` names no block. */
+function addImageInsertIndex(chapter: EditableEpubChapter, image: AddImageInput): number {
+  if (image.afterBlockId === undefined) return chapter.blocks.length;
+  return requireBlockIndex(chapter, image.afterBlockId) + 1;
+}
 
-  const asset: EditableImageAsset = { filename, mediaType };
-  if (image.data !== undefined) asset.data = image.data;
-  if (isV5 && (image as AddImageInputUrl).url !== undefined) {
-    asset.url = (image as AddImageInputUrl).url;
+/** Bytes of a `data` input, copied; `undefined` for a URL input. */
+function imageInputData(image: AddImageInput): Uint8Array | undefined {
+  if (image.data !== undefined) {
+    if (!isBinaryInput(image.data)) {
+      throw new TypeError('Image data must be an ArrayBuffer or a Uint8Array');
+    }
+    return toUint8Array(image.data).slice();
   }
-  markChapterDirty(chapter);
-  chapter.imageAssets.set(assetKey, asset);
-
-  const imageBlock: EditableImageBlock = {
-    kind: 'image',
-    id: nextBlockId(chapter),
-    assetKey,
-    alt: image.alt,
-    caption: isV5 ? image.caption : undefined,
-    placement: isV5 ? image.placement : undefined,
-  };
-
-  chapter.blocks.splice(insertAt, 0, imageBlock);
-  syncParagraphsView(chapter);
-  return assetKey;
-}
-
-function resolveAddImageInsertIndex(
-  chapter: EditableEpubChapter,
-  image: AddImageInput | EditableEpubImage,
-): number {
-  // Both input shapes reject a target naming no block; only an absent target appends.
-  if (isAddImageInput(image) && image.afterBlockId !== undefined) {
-    const targetIdx = chapter.blocks.findIndex((b) => b.id === image.afterBlockId);
-    if (targetIdx < 0) throw new Error(`Missing block: ${image.afterBlockId}`);
-    return targetIdx + 1;
+  if (typeof image.url !== 'string') {
+    throw new TypeError('Image input must include either `data` or `url`');
   }
-  if (!isAddImageInput(image) && image.afterParagraph !== undefined) {
-    const paraIdx = nthParagraphBlockIndex(chapter, image.afterParagraph);
-    if (paraIdx < 0) throw new Error(`Missing paragraph: ${image.afterParagraph}`);
-    return paraIdx + 1;
-  }
-  return chapter.blocks.length;
+  return undefined;
 }
 
-function assertAddImageTarget(
-  chapter: EditableEpubChapter,
-  image: AddImageInput | EditableEpubImage,
-): void {
-  resolveAddImageInsertIndex(chapter, image);
-}
-
-function assertAddImagePayload(image: AddImageInput | EditableEpubImage): void {
-  if (
-    image.data === undefined &&
-    (!isAddImageInput(image) || (image as AddImageInputUrl).url === undefined)
-  ) {
-    throw new Error('Image input must include either `data` or `url`');
-  }
-}
-
-function isAddImageInput(image: AddImageInput | EditableEpubImage): image is AddImageInput {
-  return 'filename' in image && image.filename !== undefined;
-}
-
-function assertImageInputFilename(image: AddImageInput | EditableEpubImage): string {
-  const path = 'filename' in image ? image.filename : image.href;
-  const filename = basename(path);
-  if (!filename) throw new Error('Image filename must not be empty');
+function imageInputFilename(image: AddImageInput): string {
+  if (typeof image.filename !== 'string') throw new TypeError('Image filename must be a string');
+  const filename = basename(image.filename);
+  if (!filename) throw new RangeError('Image filename must not be empty');
   return filename;
 }
 
+/** Block id the watermark paragraph takes, suffixed when the chapter already uses it. */
+const WATERMARK_BLOCK_ID = 'mejiro-watermark';
+
 /**
- * Exports an edited EPUB. Existing files are preserved; edited chapter XHTML,
- * added image assets, and OPF manifest entries are written back.
- *
- * Book state is captured synchronously on entry, so one call always
- * serializes one consistent snapshot of the book.
+ * Puts a watermark paragraph at the top of every chapter of an export copy. An
+ * unedited chapter keeps being written back verbatim, with the paragraph
+ * inserted right after its `<body>`; a chapter whose XHTML cannot take that is
+ * rebuilt from its blocks instead.
  */
-export async function exportEditableEpub(
-  book: EditableEpub | EditableEpubBook,
-  options?: EpubExportOptions,
-): Promise<ArrayBuffer> {
-  return exportEditableEpubBook(book instanceof EditableEpub ? book.book : book, options);
+function applyWatermark(epub: EditableEpubBook, text: string): void {
+  for (const chapter of epub.chapters) {
+    const state = chapterStateOf(chapter);
+    if (!state.dirty && chapter.originalXhtml) {
+      const injected = injectWatermarkXhtml(chapter.originalXhtml, text);
+      if (injected) {
+        writable(chapter).originalXhtml = injected;
+        continue;
+      }
+      state.dirty = true;
+    }
+    const used = new Set(chapter.blocks.map((block) => block.id));
+    let id = WATERMARK_BLOCK_ID;
+    for (let suffix = 2; used.has(id); suffix++) id = `${WATERMARK_BLOCK_ID}-${suffix}`;
+    writable(chapter).blocks.unshift(paragraphBlock(id, text, [], undefined, undefined));
+  }
+}
+
+/**
+ * Inserts a paragraph right after the opening `<body>` tag of namespaced
+ * XHTML.
+ *
+ * @returns The new XHTML, or `null` when the markup is not shaped that way.
+ */
+function injectWatermarkXhtml(xhtml: string, text: string): string | null {
+  if (!/<html\b[^>]*\sxmlns\s*=\s*["']http:\/\/www\.w3\.org\/1999\/xhtml["']/iu.test(xhtml)) {
+    return null;
+  }
+  const body = xhtml.match(/<body\b(?:[^>]*[^/>])?>/iu);
+  if (body?.index === undefined) return null;
+  const end = body.index + body[0].length;
+  return `${xhtml.slice(0, end)}<p>${inlineContentMarkup(text, [])}</p>${xhtml.slice(end)}`;
 }
 
 async function exportEditableEpubBook(
-  book: EditableEpubBook,
-  options: EpubExportOptions = {},
-): Promise<ArrayBuffer> {
-  const { onProgress, signal, assetResolver } = options;
+  epub: EditableEpubBook,
+  options: EditableEpubExportOptions = {},
+): Promise<Uint8Array<ArrayBuffer>> {
+  const { onProgress, signal, assetResolver, watermark } = options;
   throwIfAborted(signal);
+  if (watermark !== undefined && typeof watermark !== 'string') {
+    throw new TypeError('Export option watermark must be a string');
+  }
+  const progress: EpubExportOptions['onProgress'] = onProgress
+    ? (phase, ratio) => {
+        if (!signal?.aborted) onProgress(phase, ratio);
+      }
+    : undefined;
 
   // Asset resolution can await for seconds, and the live book stays editable
-  // meanwhile. Freeze the whole book synchronously so the export reflects one
+  // meanwhile. Copy the whole book synchronously so the export reflects one
   // point in time instead of a mix of pre- and mid-export states.
-  const snapshot = snapshotBookForExport(book);
+  const snapshot = cloneEditableEpubBook(epub);
+  if (watermark) applyWatermark(snapshot, watermark);
+  const packageData = packageDataOf(snapshot);
+  const files = packageData.files;
+  const rebuilt = (chapter: EditableEpubChapter): boolean =>
+    chapterStateOf(chapter).dirty || !chapter.originalXhtml;
   for (const chapter of snapshot.chapters) {
-    if (chapter.isDirty || !chapter.originalXhtml) {
-      assertEditableChapterStructure(chapter, snapshot.packageData.files);
-    }
+    if (rebuilt(chapter)) assertEditableChapterStructure(chapter, files);
   }
-  const files = snapshot.packageData.files;
-  let opfXml = snapshot.packageData.opfXml;
+  let opfXml = packageData.opfXml;
   const originalImageHrefs = new Set<string>();
   const retainedImageHrefs = new Set<string>();
 
+  progress?.('serialize', 0);
   const total = Math.max(1, snapshot.chapters.length);
   for (let i = 0; i < snapshot.chapters.length; i++) {
     throwIfAborted(signal);
     const chapter = snapshot.chapters[i];
-    for (const href of chapter.originalImageHrefs ?? []) originalImageHrefs.add(href);
+    for (const href of chapterStateOf(chapter).originalImageHrefs) originalImageHrefs.add(href);
     for (const assetKey of chapter.imageAssets.keys()) {
-      retainedImageHrefs.add(imageAssetHref(snapshot, chapter, assetKey));
+      retainedImageHrefs.add(imageAssetHref(chapter, assetKey, packageData.opfDir));
     }
 
-    if (chapter.isDirty || !chapter.originalXhtml) {
-      files.set(
-        chapter.href,
-        encodeText(serializeChapterXhtml(chapter, snapshot.packageData.opfDir)),
-      );
-    } else {
-      files.set(chapter.href, encodeText(chapter.originalXhtml));
-    }
+    files.set(
+      chapter.href,
+      encodeText(
+        rebuilt(chapter)
+          ? serializeChapterXhtml(chapter, packageData.opfDir)
+          : chapter.originalXhtml,
+      ),
+    );
 
     for (const [assetKey, asset] of chapter.imageAssets) {
       throwIfAborted(signal);
-      const assetHref = imageAssetHref(snapshot, chapter, assetKey);
-      const bytes = await resolveAssetBytes(assetKey, asset, assetResolver, signal);
+      const assetHref = imageAssetHref(chapter, assetKey, packageData.opfDir);
+      const bytes = await resolveAssetData(assetHref, asset, assetResolver, signal);
       files.set(assetHref, bytes);
+      const source = assetSourceOf(asset);
       opfXml = ensureManifestItem(
         opfXml,
-        asset.manifestId ?? manifestIdFromAssetKey(assetKey),
-        asset.manifestHref ??
-          zipPathToHref(relativeZipPath(snapshot.packageData.opfDir, assetHref)),
+        source.manifestId ?? manifestIdFromAssetKey(assetKey),
+        source.manifestHref ?? zipPathToHref(relativeZipPath(packageData.opfDir, assetHref)),
         asset.mediaType ?? mediaTypeFromPath(asset.filename),
       );
     }
-    onProgress?.('serialize', (i + 1) / total);
+    progress?.('serialize', (i + 1) / total);
   }
 
   for (const href of originalImageHrefs) {
@@ -1047,13 +1220,13 @@ async function exportEditableEpubBook(
     files.delete(href);
     opfXml = removeManifestItemByHref(
       opfXml,
-      zipPathToHref(relativeZipPath(snapshot.packageData.opfDir, href)),
+      zipPathToHref(relativeZipPath(packageData.opfDir, href)),
       href,
-      snapshot.packageData.opfDir,
+      packageData.opfDir,
     );
   }
 
-  files.set(snapshot.packageData.rootfilePath, encodeText(opfXml));
+  files.set(packageData.rootfilePath, encodeText(opfXml));
 
   const zip = new JSZip();
   zip.file('mimetype', 'application/epub+zip', {
@@ -1065,29 +1238,43 @@ async function exportEditableEpubBook(
     if (path === 'mimetype') continue;
     zip.file(path, bytes);
   }
-  return generateZip(zip, onProgress, signal);
+  return generateZip(zip, progress, signal);
 }
 
 /**
+ * @internal
  * Generates the ZIP, forwarding JSZip's progress callback as a `'zip'`-phase
- * progress event and aborting promptly when `signal` triggers.
+ * progress event and rejecting with `signal.reason` as soon as `signal` aborts.
+ * No progress is reported once `signal` has aborted.
  */
 export function generateZip(
   zip: JSZip,
   onProgress?: EpubExportOptions['onProgress'],
   signal?: AbortSignal,
-): Promise<ArrayBuffer> {
-  const generation = zip.generateAsync(
-    {
-      type: 'arraybuffer',
-      mimeType: 'application/epub+zip',
-      compression: 'DEFLATE',
-    },
-    onProgress ? (metadata) => onProgress('zip', metadata.percent / 100) : undefined,
-  );
+): Promise<Uint8Array<ArrayBuffer>> {
+  const generation = zip
+    .generateAsync(
+      {
+        type: 'uint8array',
+        mimeType: 'application/epub+zip',
+        compression: 'DEFLATE',
+      },
+      onProgress
+        ? (metadata) => {
+            if (!signal?.aborted) onProgress('zip', metadata.percent / 100);
+          }
+        : undefined,
+    )
+    .then((bytes) =>
+      bytes.buffer instanceof ArrayBuffer &&
+      bytes.byteOffset === 0 &&
+      bytes.byteLength === bytes.buffer.byteLength
+        ? new Uint8Array(bytes.buffer)
+        : new Uint8Array(bytes),
+    );
   if (!signal) return generation;
   return new Promise((resolve, reject) => {
-    const onAbort = (): void => reject(makeAbortError(signal));
+    const onAbort = (): void => reject(signal.reason);
     if (signal.aborted) {
       onAbort();
       return;
@@ -1106,71 +1293,79 @@ export function generateZip(
   });
 }
 
-/** Throws if the signal has already been aborted. */
-export function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw makeAbortError(signal);
-}
-
-function makeAbortError(signal: AbortSignal): Error {
-  if (signal.reason instanceof Error) return signal.reason;
-  const err = new Error('Export aborted');
-  err.name = 'AbortError';
-  return err;
+/** @internal The fields of an asset that its bytes are resolved from. */
+export interface AssetBytesSource {
+  data?: BinaryInput;
+  url?: string;
+  mediaType?: string;
 }
 
 /**
- * Resolves the bytes for one {@link AssetResolverAsset}. When `asset.data` is
- * already present it is returned directly. Otherwise the asset must declare a
- * `url`, which is passed through `assetResolver` (or fetched via the global
- * `fetch` when no resolver is supplied).
+ * @internal
+ * Resolves the bytes of one asset for both export paths. Inline `data` is used
+ * as it is; otherwise the asset's `url` goes through `resolver`, or the
+ * runtime `fetch` when there is none.
+ *
+ * @param href - ZIP path the bytes are written to.
+ * @throws {MejiroError} `asset-fetch-failed` when the default fetch fails.
+ * @throws {TypeError} When the asset has neither `data` nor `url`, or the
+ *   resolver returns something other than bytes.
  */
-async function resolveAssetBytes(
-  assetKey: string,
-  asset: AssetResolverAsset,
+export async function resolveAssetData(
+  href: string,
+  asset: AssetBytesSource,
   resolver: AssetResolver | undefined,
   signal: AbortSignal | undefined,
 ): Promise<Uint8Array> {
   if (asset.data !== undefined) return toUint8Array(asset.data);
-  if (!asset.url) {
-    throw new Error(`Image asset "${assetKey}" has neither \`data\` nor \`url\``);
-  }
+  const { url } = asset;
+  if (!url) throw new TypeError(`Image asset ${href} has neither \`data\` nor \`url\``);
   throwIfAborted(signal);
-  let resolved: Uint8Array | ArrayBuffer;
+  let resolved: BinaryInput;
   try {
     resolved = resolver
-      ? await resolver({ assetKey, asset, url: asset.url, signal })
-      : await defaultAssetFetch(asset.url, signal);
+      ? await resolver({
+          url,
+          href,
+          ...(asset.mediaType !== undefined ? { mediaType: asset.mediaType } : {}),
+          ...(signal ? { signal } : {}),
+        })
+      : await defaultAssetFetch(url, signal);
   } catch (err) {
     // Once aborted, the abort is the outcome whatever the resolver threw.
     throwIfAborted(signal);
     throw err;
   }
   throwIfAborted(signal);
+  if (!isBinaryInput(resolved)) {
+    throw new TypeError(`assetResolver must return an ArrayBuffer or a Uint8Array for ${href}`);
+  }
   return toUint8Array(resolved);
 }
 
-/**
- * Generic asset-bytes resolver used by both {@link EditableEpub.export} and
- * `EpubProject.export`. Picks `data` when present, otherwise routes through
- * `resolver` / `fetch` using `url`.
- *
- * Exposed for shared use across the EPUB module.
- */
-export async function resolveAssetData(
-  assetKey: string,
-  asset: AssetResolverAsset,
-  resolver: AssetResolver | undefined,
-  signal: AbortSignal | undefined,
-): Promise<Uint8Array> {
-  return resolveAssetBytes(assetKey, asset, resolver, signal);
+async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<Uint8Array> {
+  let response: Response;
+  try {
+    response = await fetch(url, signal ? { signal } : undefined);
+  } catch (err) {
+    throwIfAborted(signal);
+    throw new MejiroError('asset-fetch-failed', `Failed to fetch image asset: ${url}`, {
+      cause: err,
+    });
+  }
+  if (!response.ok) {
+    throw new MejiroError(
+      'asset-fetch-failed',
+      `Failed to fetch image asset: ${url} (HTTP ${response.status})`,
+    );
+  }
+  return new Uint8Array(await response.arrayBuffer());
 }
 
-async function defaultAssetFetch(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
-  const response = await fetch(url, signal ? { signal } : undefined);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch image asset: ${url} (HTTP ${response.status})`);
-  }
-  return response.arrayBuffer();
+/** Checked by tag so bytes from another realm are accepted too. */
+function isBinaryInput(value: unknown): value is BinaryInput {
+  const tag = Object.prototype.toString.call(value);
+  return tag === '[object ArrayBuffer]' || tag === '[object Uint8Array]';
 }
 
 /**
@@ -1281,10 +1476,7 @@ function blockMarkup(chapter: EditableEpubChapter, block: EditableBlock, opfDir:
   if (block.kind === 'image') {
     return figureMarkup({
       src: zipPathToHref(
-        relativeZipPath(
-          dirname(chapter.href),
-          imageAssetHrefForBlock(chapter, block.assetKey, opfDir),
-        ),
+        relativeZipPath(dirname(chapter.href), imageAssetHref(chapter, block.assetKey, opfDir)),
       ),
       alt: block.alt ?? '',
       caption: block.caption,
@@ -1318,7 +1510,12 @@ function assertEditableChapterStructure(
   const check = (el: Element): void => {
     for (const child of Array.from(el.children)) {
       const { role, loss } = classifyEditableElement(child, resolveImage);
-      if (loss) throw new Error(`Cannot export edited chapter with ${loss}: ${chapter.href}`);
+      if (loss) {
+        throw new MejiroError(
+          'epub-unsupported-content',
+          `Cannot export edited chapter with ${loss}: ${chapter.href}`,
+        );
+      }
       if (role !== 'skip') check(child);
     }
   };
@@ -1473,26 +1670,11 @@ function contentRoot(body: Element): Element {
   }
 }
 
-function imageAssetHref(
-  book: EditableEpubBook,
-  chapter: EditableEpubChapter,
-  assetKey: string,
-): string {
+function imageAssetHref(chapter: EditableEpubChapter, assetKey: string, opfDir: string): string {
   const asset = chapter.imageAssets.get(assetKey);
   if (!asset) throw new Error(`Missing image asset: ${assetKey}`);
   if (asset.href) return asset.href;
   // Place new assets under the OPF directory so manifest hrefs are stable.
-  return `${book.packageData.opfDir}Images/${asset.filename}`;
-}
-
-function imageAssetHrefForBlock(
-  chapter: EditableEpubChapter,
-  assetKey: string,
-  opfDir: string,
-): string {
-  const asset = chapter.imageAssets.get(assetKey);
-  if (!asset) throw new Error(`Missing image asset: ${assetKey}`);
-  if (asset.href) return asset.href;
   return `${opfDir}Images/${asset.filename}`;
 }
 
@@ -1532,16 +1714,19 @@ const UNSUPPORTED_EDITABLE_ELEMENTS = new Set([
   'canvas',
 ]);
 
+/** Blocks and assets read from one source chapter. */
+interface ExtractedChapter {
+  blocks: EditableBlock[];
+  imageAssets: Map<string, EditableImageAsset>;
+  originalImageHrefs: string[];
+}
+
 function extractEditableBlocks(
   xhtml: string,
   chapterHref: string,
   files: Map<string, Uint8Array>,
   manifestItems: Map<string, OpfManifestItem>,
-): {
-  blocks: EditableBlock[];
-  imageAssets: Map<string, EditableImageAsset>;
-  originalImageHrefs: string[];
-} {
+): ExtractedChapter {
   const doc = parseXml(stripStylesheetLinks(xhtml));
   const root = contentBody(doc);
   const resolveImage = archiveImageResolver(chapterHref, files);
@@ -1575,14 +1760,18 @@ function extractEditableBlocks(
     const filename = basename(href);
     const manifestItem = manifestItems.get(href);
     const assetKey = uniqueAssetKey(filename, imageAssets);
-    imageAssets.set(assetKey, {
+    // The resolver only accepts images whose file the archive holds.
+    const asset: EditableImageAsset = {
       filename,
       href,
+      data: files.get(href) as Uint8Array,
+      mediaType: manifestItem?.mediaType ?? mediaTypeFromPath(filename),
+    };
+    attachAssetSource(asset, {
       manifestId: manifestItem?.id,
       manifestHref: manifestItem?.packageHref,
-      data: files.get(href),
-      mediaType: manifestItem?.mediaType ?? mediaTypeFromPath(filename),
     });
+    imageAssets.set(assetKey, asset);
     const figcaption = figure ? firstChildElementByName(figure, 'figcaption') : undefined;
     blocks.push({
       kind: 'image',
@@ -1668,7 +1857,7 @@ function nextGeneratedBlockId(blocks: readonly EditableBlock[]): string {
 
 function collectImageAssetKeys(book: EditableEpubBook): Set<string> {
   const keys = new Set<string>();
-  for (const path of book.packageData.files.keys()) {
+  for (const path of packageDataOf(book).files.keys()) {
     const name = basename(path);
     if (name) keys.add(name);
   }
@@ -1712,41 +1901,24 @@ function nextBlockId(chapter: EditableEpubChapter): string {
 }
 
 function requireChapter(book: EditableEpubBook, chapterIndex: number): EditableEpubChapter {
-  const chapter = book.chapters[chapterIndex];
-  if (!chapter) throw new Error(`Missing chapter: ${chapterIndex}`);
+  const chapter = Number.isInteger(chapterIndex) ? book.chapters[chapterIndex] : undefined;
+  if (!chapter) throw new RangeError(`Missing chapter: ${chapterIndex}`);
   return chapter;
 }
 
-function findParagraphBlock(
+function requireBlockIndex(chapter: EditableEpubChapter, blockId: string): number {
+  const index = chapter.blocks.findIndex((block) => block.id === blockId);
+  if (index < 0) throw new RangeError(`Missing block: ${blockId}`);
+  return index;
+}
+
+function requireParagraphBlock(
   chapter: EditableEpubChapter,
-  paragraphIndex: number,
+  blockId: string,
 ): EditableParagraphBlock {
-  let counter = 0;
-  for (const block of chapter.blocks) {
-    if (block.kind !== 'paragraph') continue;
-    if (counter === paragraphIndex) return block;
-    counter++;
-  }
-  throw new Error(`Missing paragraph: ${paragraphIndex}`);
-}
-
-function nthParagraphBlockIndex(chapter: EditableEpubChapter, paragraphIndex: number): number {
-  let counter = 0;
-  for (let i = 0; i < chapter.blocks.length; i++) {
-    if (chapter.blocks[i].kind !== 'paragraph') continue;
-    if (counter === paragraphIndex) return i;
-    counter++;
-  }
-  return -1;
-}
-
-/** Regenerates the read-only `paragraphs` projection. */
-function syncParagraphsView(chapter: EditableEpubChapter): void {
-  chapter.paragraphs = chapter.blocks
-    .filter((b): b is EditableParagraphBlock => b.kind === 'paragraph')
-    .map(({ text, inlineAnnotations, headingLevel }) =>
-      headingLevel ? { text, inlineAnnotations, headingLevel } : { text, inlineAnnotations },
-    );
+  const block = chapter.blocks[requireBlockIndex(chapter, blockId)];
+  if (block.kind !== 'paragraph') throw new RangeError(`Not a paragraph block: ${blockId}`);
+  return block;
 }
 
 function parseXml(xml: string): Document {
@@ -1754,14 +1926,14 @@ function parseXml(xml: string): Document {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length > 0) {
-    throw new Error('Failed to parse XML document');
+    throw new MejiroError('epub-invalid-package', 'Failed to parse XML document');
   }
   return doc;
 }
 
 function readEntryText(files: Map<string, Uint8Array>, path: string): string {
   const text = readEntryTextOrNull(files, path);
-  if (text == null) throw new Error(`Missing file in EPUB: ${path}`);
+  if (text == null) throw new MejiroError('epub-invalid-package', `Missing file in EPUB: ${path}`);
   return text;
 }
 
@@ -1775,7 +1947,7 @@ function readEntryTextOrNull(files: Map<string, Uint8Array>, path: string): stri
 function ensureManifestItem(opfXml: string, id: string, href: string, mediaType: string): string {
   const doc = parseXml(opfXml);
   const manifest = firstElementByName(doc, 'manifest');
-  if (!manifest) throw new Error('Cannot find OPF manifest');
+  if (!manifest) throw new MejiroError('epub-invalid-package', 'Cannot find OPF manifest');
   const items = childElementsByName(manifest, 'item');
   const existing = items.find((item) => item.getAttribute('href') === href);
   if (existing) {
@@ -1847,7 +2019,7 @@ function encodeText(text: string): Uint8Array {
   return new TextEncoder().encode(text);
 }
 
-function toUint8Array(data: Uint8Array | ArrayBuffer): Uint8Array {
+function toUint8Array(data: BinaryInput): Uint8Array {
   return data instanceof Uint8Array ? data : new Uint8Array(data);
 }
 
@@ -1858,41 +2030,15 @@ function clamp(value: number, min: number, max: number): number {
 interface ChapterSnapshot {
   blocks: EditableBlock[];
   imageAssets: Map<string, EditableImageAsset>;
-  isDirty?: boolean;
+  dirty: boolean;
 }
 
 type HistoryEntry = Map<number, ChapterSnapshot>;
-
-/**
- * Copies every piece of book state that export reads, so later mutations of
- * the live book cannot be observed part-way through a single export.
- */
-function snapshotBookForExport(book: EditableEpubBook): EditableEpubBook {
-  return {
-    ...book,
-    chapters: book.chapters.map((chapter) => ({
-      ...chapter,
-      blocks: chapter.blocks.map(cloneEditableBlock),
-      imageAssets: new Map(
-        Array.from(chapter.imageAssets, ([key, asset]) => [key, { ...asset }] as const),
-      ),
-      ...(chapter.originalImageHrefs
-        ? { originalImageHrefs: [...chapter.originalImageHrefs] }
-        : {}),
-      paragraphs: [...chapter.paragraphs],
-    })),
-    packageData: { ...book.packageData, files: new Map(book.packageData.files) },
-  };
-}
 
 function snapshotChapter(chapter: EditableEpubChapter): ChapterSnapshot {
   return {
     blocks: chapter.blocks.map(cloneEditableBlock),
     imageAssets: new Map(chapter.imageAssets),
-    isDirty: chapter.isDirty,
+    dirty: chapterStateOf(chapter).dirty,
   };
-}
-
-function markChapterDirty(chapter: EditableEpubChapter): void {
-  chapter.isDirty = true;
 }

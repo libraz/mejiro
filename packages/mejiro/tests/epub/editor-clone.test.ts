@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { clampEditableEpubSelection, cloneEditableEpubBook } from '../../src/epub/clone.js';
-import type { EditableEpubBook, EditableEpubChapter } from '../../src/epub/types.js';
+import type { EditableBlock, EditableEpubBook, EditableEpubChapter } from '../../src/epub/types.js';
 
 const PACKAGES_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -50,22 +50,13 @@ function makeChapter(): EditableEpubChapter {
         kind: 'paragraph',
         id: 'p1',
         text: '吾輩は猫である',
-        inlineAnnotations: [{ kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'わがはい' }],
+        inlineAnnotations: [{ type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'わがはい' }],
       },
       { kind: 'image', id: 'i1', assetKey: 'figure-01.png', alt: 'figure' },
     ],
-    imageAssets: new Map([['figure-01.png', { filename: 'figure-01.png' }]]),
-    originalImageHrefs: ['OPS/Images/figure-01.png'],
-    paragraphs: [
-      {
-        text: '吾輩は猫である',
-        inlineAnnotations: [{ kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'わがはい' }],
-      },
-    ],
-    paragraphRefs: [{ index: 0, tagName: 'p' }],
-    images: [
-      { href: 'OPS/Images/figure-01.png', mediaType: 'image/png', data: new Uint8Array([1, 2]) },
-    ],
+    imageAssets: new Map([
+      ['figure-01.png', { filename: 'figure-01.png', data: new Uint8Array([1, 2]) }],
+    ]),
   };
 }
 
@@ -74,13 +65,12 @@ function makeBook(): EditableEpubBook {
     title: 'Book',
     author: 'Author',
     chapters: [makeChapter()],
-    packageData: {
-      rootfilePath: 'OPS/package.opf',
-      opfDir: 'OPS',
-      opfXml: '<package/>',
-      files: new Map([['OPS/package.opf', new Uint8Array([0])]]),
-    },
   };
+}
+
+/** Write access to a fixture chapter's blocks, which the public type exposes read-only. */
+function blocksOf(chapter: EditableEpubChapter): EditableBlock[] {
+  return chapter.blocks as EditableBlock[];
 }
 
 describe('cloneEditableEpubBook', () => {
@@ -94,19 +84,23 @@ describe('cloneEditableEpubBook', () => {
     expect(copy.chapters[0].blocks).not.toBe(book.chapters[0].blocks);
     expect(copy.chapters[0].blocks[0]).not.toBe(book.chapters[0].blocks[0]);
     expect(copy.chapters[0].imageAssets).not.toBe(book.chapters[0].imageAssets);
-    expect(copy.chapters[0].paragraphs).not.toBe(book.chapters[0].paragraphs);
-    expect(copy.packageData.files).not.toBe(book.packageData.files);
 
-    copy.chapters[0].blocks.push({ kind: 'paragraph', id: 'p2', text: 'x', inlineAnnotations: [] });
-    copy.chapters[0].imageAssets.set('extra.png', { filename: 'extra.png' });
-    copy.packageData.files.set('OPS/extra', new Uint8Array([9]));
+    blocksOf(copy.chapters[0]).push({
+      kind: 'paragraph',
+      id: 'p2',
+      text: 'x',
+      inlineAnnotations: [],
+    });
+    (copy.chapters[0].imageAssets as Map<string, unknown>).set('extra.png', {
+      filename: 'extra.png',
+      url: 'u',
+    });
 
     expect(book.chapters[0].blocks).toHaveLength(2);
     expect(book.chapters[0].imageAssets.has('extra.png')).toBe(false);
-    expect(book.packageData.files.has('OPS/extra')).toBe(false);
   });
 
-  it('copies inline annotations object by object, on blocks and on the mirror', () => {
+  it('copies inline annotations object by object', () => {
     const book = makeBook();
     const copy = cloneEditableEpubBook(book);
     const sourceBlock = book.chapters[0].blocks[0];
@@ -116,9 +110,6 @@ describe('cloneEditableEpubBook', () => {
     }
 
     expect(copiedBlock.inlineAnnotations[0]).not.toBe(sourceBlock.inlineAnnotations[0]);
-    expect(copy.chapters[0].paragraphs[0].inlineAnnotations[0]).not.toBe(
-      book.chapters[0].paragraphs[0].inlineAnnotations[0],
-    );
 
     // A UI editing the preview copy must not reach the editor's annotations.
     (copiedBlock.inlineAnnotations[0] as { rubyText: string }).rubyText = 'changed';
@@ -128,22 +119,17 @@ describe('cloneEditableEpubBook', () => {
   it('copies jukugo split points and asset entries, sharing only binary payloads', () => {
     const book = makeBook();
     const jukugo = {
-      kind: 'ruby' as const,
+      type: 'ruby' as const,
       startIndex: 0,
       endIndex: 2,
       rubyText: 'わがはい',
-      type: 'jukugo' as const,
+      rubyType: 'jukugo' as const,
       jukugoSplitPoints: [1],
     };
-    book.chapters[0].blocks[0] = { ...book.chapters[0].blocks[0], inlineAnnotations: [jukugo] };
-    book.chapters[0].paragraphs[0] = {
-      ...book.chapters[0].paragraphs[0],
-      inlineAnnotations: [jukugo],
-    };
+    blocksOf(book.chapters[0])[0] = { ...book.chapters[0].blocks[0], inlineAnnotations: [jukugo] };
     const data = new Uint8Array([1]);
-    book.chapters[0].imageAssets.set('figure-01.png', {
+    (book.chapters[0].imageAssets as Map<string, unknown>).set('figure-01.png', {
       filename: 'figure-01.png',
-      url: 'a',
       data,
     });
 
@@ -153,12 +139,11 @@ describe('cloneEditableEpubBook', () => {
     const splitPointsOf = (annotation: unknown) =>
       (annotation as { jukugoSplitPoints: number[] }).jukugoSplitPoints;
     splitPointsOf(copiedBlock.inlineAnnotations[0])[0] = 9;
-    splitPointsOf(copy.chapters[0].paragraphs[0].inlineAnnotations[0]).push(5);
     const copiedAsset = copy.chapters[0].imageAssets.get('figure-01.png');
-    if (copiedAsset) copiedAsset.url = 'changed';
+    if (copiedAsset) copiedAsset.filename = 'changed.png';
 
     expect(jukugo.jukugoSplitPoints).toEqual([1]);
-    expect(book.chapters[0].imageAssets.get('figure-01.png')?.url).toBe('a');
+    expect(book.chapters[0].imageAssets.get('figure-01.png')?.filename).toBe('figure-01.png');
     expect(copiedAsset?.data).toBe(data);
   });
 
@@ -180,38 +165,48 @@ describe('cloneEditableEpubBook', () => {
 });
 
 describe('clampEditableEpubSelection', () => {
-  it('confines a selection to the paragraphs the book has', () => {
+  it('confines a selection to the chapters and blocks the book has', () => {
     const book = makeBook();
 
-    expect(clampEditableEpubSelection(book, { chapter: 5, paragraph: 9 })).toEqual({
-      chapter: 0,
-      paragraph: 0,
+    expect(clampEditableEpubSelection(book, { chapterIndex: 5, blockId: 'i1' })).toEqual({
+      chapterIndex: 0,
+      blockId: 'i1',
     });
-    expect(clampEditableEpubSelection(book, { chapter: -2, paragraph: -3 })).toEqual({
-      chapter: 0,
-      paragraph: 0,
+    expect(clampEditableEpubSelection(book, { chapterIndex: -2, blockId: 'gone' })).toEqual({
+      chapterIndex: 0,
+      blockId: 'p1',
     });
   });
 
   it('truncates fractional indices and falls back on non-finite ones', () => {
     const book = makeBook();
-    book.chapters.push({ ...makeChapter(), href: 'OPS/Text/chapter-002.xhtml' });
+    const twoChapters: EditableEpubBook = {
+      ...book,
+      chapters: [...book.chapters, { ...makeChapter(), href: 'OPS/Text/chapter-002.xhtml' }],
+    };
 
-    expect(clampEditableEpubSelection(book, { chapter: 1.9, paragraph: 0 }).chapter).toBe(1);
-    expect(clampEditableEpubSelection(book, { chapter: Number.NaN, paragraph: 0 }).chapter).toBe(0);
+    expect(
+      clampEditableEpubSelection(twoChapters, { chapterIndex: 1.9, blockId: null }).chapterIndex,
+    ).toBe(1);
+    expect(
+      clampEditableEpubSelection(twoChapters, { chapterIndex: Number.NaN, blockId: null })
+        .chapterIndex,
+    ).toBe(0);
   });
 
-  it('resolves to the origin when there is no book or no paragraph', () => {
+  it('resolves to no block when there is no book or no block', () => {
     const empty: EditableEpubBook = { ...makeBook(), chapters: [] };
+    const blockless: EditableEpubBook = {
+      ...makeBook(),
+      chapters: [{ ...makeChapter(), blocks: [] }],
+    };
 
-    expect(clampEditableEpubSelection(null, { chapter: 3, paragraph: 4 })).toEqual({
-      chapter: 0,
-      paragraph: 0,
-    });
-    expect(clampEditableEpubSelection(empty, { chapter: 3, paragraph: 4 })).toEqual({
-      chapter: 0,
-      paragraph: 0,
-    });
+    for (const book of [null, empty, blockless]) {
+      expect(clampEditableEpubSelection(book, { chapterIndex: 3, blockId: 'p1' })).toEqual({
+        chapterIndex: 0,
+        blockId: null,
+      });
+    }
   });
 });
 

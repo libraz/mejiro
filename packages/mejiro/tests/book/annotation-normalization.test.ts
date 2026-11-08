@@ -26,9 +26,9 @@ describe('MejiroBook annotation normalization', () => {
           inlineAnnotations: [
             // [2, 4) of the decomposed text is KI + dakuten, the second
             // character once composed.
-            { kind: 'ruby', startIndex: 2, endIndex: 4, rubyText: 'ぎ', type: 'mono' },
+            { type: 'ruby', startIndex: 2, endIndex: 4, rubyText: 'ぎ', rubyType: 'mono' },
             // [4, 5) is KU, the third character.
-            { kind: 'emphasis', startIndex: 4, endIndex: 5 },
+            { type: 'emphasis', startIndex: 4, endIndex: 5 },
           ],
         },
       ],
@@ -37,8 +37,8 @@ describe('MejiroBook annotation normalization', () => {
     const paragraph = layout.snapshot().paragraphs[0];
     expect([...paragraph.text]).toEqual(['が', 'ぎ', 'く']);
     expect(paragraph.inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'ぎ', type: 'mono' },
-      { kind: 'emphasis', startIndex: 2, endIndex: 3 },
+      { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'ぎ', rubyType: 'mono' },
+      { type: 'emphasis', startIndex: 2, endIndex: 3 },
     ]);
     expect(paragraph.layoutRubyAnnotations?.[0]).toMatchObject({ startIndex: 1, endIndex: 2 });
   });
@@ -49,7 +49,7 @@ describe('MejiroBook annotation normalization', () => {
         {
           text: DECOMPOSED,
           inlineAnnotations: [
-            { kind: 'ruby', startIndex: 2, endIndex: 4, rubyText: 'ぎ', type: 'mono' },
+            { type: 'ruby', startIndex: 2, endIndex: 4, rubyText: 'ぎ', rubyType: 'mono' },
           ],
         },
       ],
@@ -67,7 +67,7 @@ describe('MejiroBook annotation normalization', () => {
         {
           text: DECOMPOSED,
           // [0, 4) covers both dakuten pairs: the first two composed characters.
-          inlineAnnotations: [{ kind: 'tcy', startIndex: 0, endIndex: 4 }],
+          inlineAnnotations: [{ type: 'tcy', startIndex: 0, endIndex: 4 }],
         },
       ],
     });

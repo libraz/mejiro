@@ -1,6 +1,15 @@
-import type { BookOptions, MejiroBookOptions } from '@libraz/mejiro/book';
+import type { BookOptions, BookOptionsPatch } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
-import { isRef, onScopeDispose, type Ref, readonly, ref, watch } from 'vue';
+import {
+  type MaybeRefOrGetter,
+  markRaw,
+  onScopeDispose,
+  type Ref,
+  shallowReadonly,
+  shallowRef,
+  toValue,
+  watch,
+} from 'vue';
 import { toError } from './errors.js';
 import { mergeDefined } from './persistence.js';
 
@@ -18,75 +27,84 @@ export interface UseMejiroBookOptions {
   /**
    * Called when applying options to the book fails. When supplied, failures are
    * reported here and the promise returned by
-   * {@link UseMejiroBookReturn.setOptions} resolves instead of rejecting, so
+   * {@link UseMejiroBookReturn.updateOptions} resolves instead of rejecting, so
    * fire-and-forget callers cannot leave an unhandled rejection behind.
-   * Applications triggered by `source` are only observable through this
-   * callback.
+   * Applications triggered by a reactive `options` source are only observable
+   * through this callback. A `MejiroError` arrives as thrown.
    */
   onError?: (error: Error) => void;
 }
 
 /** Return value of {@link useMejiroBook}. */
 export interface UseMejiroBookReturn {
-  /** The managed {@link MejiroBook} instance. */
+  /** The managed {@link MejiroBook} instance, marked raw so reactive state holds it unwrapped. */
   book: MejiroBook;
   /**
    * Read-only reactive snapshot of the current options. Once the latest
    * application settles it holds what the book applied, so a rejected change
    * rolls back.
    */
-  options: Ref<Readonly<BookOptions>>;
+  options: Readonly<Ref<Readonly<BookOptions>>>;
   /**
-   * Update options on the underlying book and the reactive snapshot. The
-   * snapshot is updated synchronously; the returned promise resolves once
-   * {@link MejiroBook.setOptions} has propagated font / size changes (which
-   * complete only after the font has loaded).
+   * Merges `patch` into the underlying book's options and the reactive
+   * snapshot. The snapshot is updated synchronously; the returned promise
+   * resolves once {@link MejiroBook.updateOptions} has propagated font / size
+   * changes (which complete only after the font has loaded).
    */
-  setOptions: (next: Partial<BookOptions>) => Promise<void>;
+  updateOptions: (patch: BookOptionsPatch) => Promise<void>;
 }
 
 /** A coalesced option change waiting for its debounce window to elapse. */
 interface PendingApply {
-  patch: Partial<BookOptions>;
+  patch: BookOptionsPatch;
   timer: ReturnType<typeof setTimeout> | null;
   waiters: Array<{ resolve: () => void; reject: (error: Error) => void }>;
 }
 
+/** The keys {@link MejiroBook.updateOptions} accepts; every other key is construction-time only. */
+const RUNTIME_KEYS = [
+  'fontFamily',
+  'fontSize',
+  'lineSpacing',
+  'kinsoku',
+  'enableHanging',
+  'headingStyles',
+  'headingScale',
+] as const satisfies readonly (keyof BookOptionsPatch)[];
+
+/** The runtime-changeable keys of `next` whose value differs from `current`. */
+function runtimeChanges(
+  current: Readonly<BookOptions>,
+  next: Readonly<BookOptions>,
+): BookOptionsPatch {
+  const patch: Record<string, unknown> = {};
+  for (const key of RUNTIME_KEYS) {
+    if (next[key] !== undefined && !Object.is(next[key], current[key])) patch[key] = next[key];
+  }
+  return patch as BookOptionsPatch;
+}
+
 /**
  * Vue composable that owns a {@link MejiroBook} instance and exposes its
- * options as a reactive ref. The book is created once; subsequent
- * `setOptions` calls update both the instance and the ref.
+ * options as a reactive ref. The book is created once, from the value
+ * `options` has during setup.
  *
- * Accepts the React hook's `(initial, options)` form, or
- * `(initial, source, options)` to follow a reactive options source.
+ * Pass a ref or getter as `options` to follow it: whenever it changes, the
+ * keys {@link MejiroBook.updateOptions} accepts that changed are applied, like
+ * an {@link UseMejiroBookReturn.updateOptions} call. Construction-time keys
+ * (`strictFontCheck`, `analyzer`, `pageSize`, …) are read once and later
+ * changes to them are ignored; remount with a `:key` to rebuild the book.
  *
- * @param initial - Initial book options (passed to the {@link MejiroBook} constructor).
- * @param options - Behavior overrides (debouncing, error reporting).
+ * @param options - Book options, or a ref / getter that yields them.
+ * @param hookOptions - Behavior overrides (debouncing, error reporting).
  */
 export function useMejiroBook(
-  initial: MejiroBookOptions,
-  options?: UseMejiroBookOptions,
-): UseMejiroBookReturn;
-/**
- * @param initial - Initial book options (passed to the {@link MejiroBook} constructor).
- * @param source - Reactive options source; the book is re-configured whenever it changes.
- * @param options - Behavior overrides (debouncing, error reporting).
- */
-export function useMejiroBook(
-  initial: MejiroBookOptions,
-  source: Ref<Partial<BookOptions>> | undefined,
-  options?: UseMejiroBookOptions,
-): UseMejiroBookReturn;
-export function useMejiroBook(
-  initial: MejiroBookOptions,
-  sourceOrOptions?: Ref<Partial<BookOptions>> | UseMejiroBookOptions,
-  maybeOptions?: UseMejiroBookOptions,
+  options: MaybeRefOrGetter<BookOptions>,
+  hookOptions: UseMejiroBookOptions = {},
 ): UseMejiroBookReturn {
-  const source = isRef(sourceOrOptions) ? sourceOrOptions : undefined;
-  const options: UseMejiroBookOptions =
-    (isRef(sourceOrOptions) ? undefined : sourceOrOptions) ?? maybeOptions ?? {};
-  const book = new MejiroBook(initial);
-  const opts = ref<BookOptions>({ ...initial });
+  const initial = toValue(options);
+  const book = markRaw(new MejiroBook(initial));
+  const opts = shallowRef<Readonly<BookOptions>>({ ...initial });
 
   let pending: PendingApply | null = null;
   let flushGeneration = 0;
@@ -104,7 +122,7 @@ export function useMejiroBook(
       if (generation !== flushGeneration) return;
       opts.value = { ...opts.value, ...book.getOptions(), ...pending?.patch };
     };
-    void book.setOptions(current.patch).then(
+    void book.updateOptions(current.patch).then(
       () => {
         syncSnapshot();
         for (const waiter of waiters) waiter.resolve();
@@ -112,8 +130,8 @@ export function useMejiroBook(
       (err: unknown) => {
         syncSnapshot();
         const error = toError(err);
-        if (options.onError) {
-          options.onError(error);
+        if (hookOptions.onError) {
+          hookOptions.onError(error);
           for (const waiter of waiters) waiter.resolve();
         } else {
           for (const waiter of waiters) waiter.reject(error);
@@ -122,16 +140,16 @@ export function useMejiroBook(
     );
   }
 
-  function setOptions(next: Partial<BookOptions>): Promise<void> {
-    opts.value = mergeDefined(opts.value, next);
+  function updateOptions(patch: BookOptionsPatch): Promise<void> {
+    opts.value = mergeDefined<BookOptions>(opts.value, patch);
     const current: PendingApply = pending ?? { patch: {}, timer: null, waiters: [] };
     pending = current;
-    current.patch = mergeDefined(current.patch, next);
+    current.patch = mergeDefined(current.patch, patch);
     const settled = new Promise<void>((resolve, reject) => {
       current.waiters.push({ resolve, reject });
     });
     if (current.timer) clearTimeout(current.timer);
-    const debounceMs = options.debounceMs ?? 0;
+    const debounceMs = hookOptions.debounceMs ?? 0;
     if (debounceMs > 0) {
       current.timer = setTimeout(() => {
         current.timer = null;
@@ -144,17 +162,17 @@ export function useMejiroBook(
     return settled;
   }
 
-  if (source) {
-    watch(
-      source,
-      (v) => {
-        // Triggered by the caller's reactive source, so there is nobody to hand
-        // a rejection to — `onError` is the observation point.
-        if (v) void setOptions(v).catch(() => {});
-      },
-      { deep: true },
-    );
-  }
+  watch(
+    () => toValue(options),
+    (next) => {
+      const patch = runtimeChanges(opts.value, next);
+      if (Object.keys(patch).length === 0) return;
+      // Triggered by the caller's reactive source, so there is nobody to hand
+      // a rejection to — `onError` is the observation point.
+      void updateOptions(patch).catch(() => {});
+    },
+    { deep: true },
+  );
 
   // A change still inside its debounce window is dropped when the scope is
   // disposed — nothing is left to render it — but its awaiters must not hang.
@@ -170,7 +188,7 @@ export function useMejiroBook(
 
   return {
     book,
-    options: readonly(opts) as Ref<Readonly<BookOptions>>,
-    setOptions,
+    options: shallowReadonly(opts),
+    updateOptions,
   };
 }

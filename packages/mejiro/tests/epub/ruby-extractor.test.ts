@@ -37,7 +37,7 @@ describe('extractRubyContent', () => {
       wrapXhtml('<pre>line 1\nline 2\n  <em>line</em> 3</pre><p> 漢字\n  かな </p>'),
     );
     expect(paragraphs.map((p) => p.text)).toEqual(['line 1\nline 2\n  line 3', '漢字かな']);
-    expect(paragraphs[0].inlineAnnotations).toEqual([{ kind: 'em', startIndex: 16, endIndex: 20 }]);
+    expect(paragraphs[0].inlineAnnotations).toEqual([{ type: 'em', startIndex: 16, endIndex: 20 }]);
   });
 
   it('keeps every run of loose text whatever element owns it', () => {
@@ -77,7 +77,7 @@ describe('extractRubyContent', () => {
     expect(ann.startIndex).toBe(0);
     expect(ann.endIndex).toBe(1);
     expect(ann.rubyText).toBe('かん');
-    expect(ann.type).toBe('mono');
+    expect(ann.rubyType).toBe('mono');
   });
 
   it('extracts group ruby (multiple base chars, single rt)', () => {
@@ -91,7 +91,7 @@ describe('extractRubyContent', () => {
     expect(ann.startIndex).toBe(0);
     expect(ann.endIndex).toBe(2);
     expect(ann.rubyText).toBe('あした');
-    expect(ann.type).toBe('group');
+    expect(ann.rubyType).toBe('group');
   });
 
   it('extracts jukugo ruby (multiple rt segments)', () => {
@@ -108,20 +108,20 @@ describe('extractRubyContent', () => {
     expect(annotations.length).toBeGreaterThanOrEqual(3);
 
     // Check individual annotations
-    const mono0 = annotations.find((a) => a.startIndex === 0 && a.type === 'mono');
+    const mono0 = annotations.find((a) => a.startIndex === 0 && a.rubyType === 'mono');
     expect(mono0).toBeDefined();
     expect(mono0?.rubyText).toBe('とう');
 
-    const mono1 = annotations.find((a) => a.startIndex === 1 && a.type === 'mono');
+    const mono1 = annotations.find((a) => a.startIndex === 1 && a.rubyType === 'mono');
     expect(mono1).toBeDefined();
     expect(mono1?.rubyText).toBe('きょう');
 
-    const mono2 = annotations.find((a) => a.startIndex === 2 && a.type === 'mono');
+    const mono2 = annotations.find((a) => a.startIndex === 2 && a.rubyType === 'mono');
     expect(mono2).toBeDefined();
     expect(mono2?.rubyText).toBe('と');
 
     // Check jukugo annotation
-    const jukugo = annotations.find((a) => a.type === 'jukugo');
+    const jukugo = annotations.find((a) => a.rubyType === 'jukugo');
     expect(jukugo).toBeDefined();
     expect(jukugo?.startIndex).toBe(0);
     expect(jukugo?.endIndex).toBe(3);
@@ -151,7 +151,7 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('漢字です');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
     ]);
   });
 
@@ -163,14 +163,14 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('東京');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', type: 'mono' },
-      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'きょう', type: 'mono' },
+      { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', rubyType: 'mono' },
+      { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'きょう', rubyType: 'mono' },
       {
-        kind: 'ruby',
+        type: 'ruby',
         startIndex: 0,
         endIndex: 2,
         rubyText: 'とうきょう',
-        type: 'jukugo',
+        rubyType: 'jukugo',
         jukugoSplitPoints: [1],
       },
     ]);
@@ -240,8 +240,8 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('🙂漢字');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', type: 'mono' },
-      { kind: 'link', startIndex: 2, endIndex: 3, href: 'https://example.test' },
+      { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', rubyType: 'mono' },
+      { type: 'link', startIndex: 2, endIndex: 3, href: 'https://example.test' },
     ]);
   });
 
@@ -253,10 +253,10 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('漢字');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'em', startIndex: 0, endIndex: 1 },
-      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', type: 'mono' },
-      { kind: 'link', startIndex: 1, endIndex: 2, href: 'https://example.test' },
-      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'じ', type: 'mono' },
+      { type: 'em', startIndex: 0, endIndex: 1 },
+      { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', rubyType: 'mono' },
+      { type: 'link', startIndex: 1, endIndex: 2, href: 'https://example.test' },
+      { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'じ', rubyType: 'mono' },
     ]);
   });
 
@@ -268,18 +268,18 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('A12BCDEF');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'emphasis', startIndex: 0, endIndex: 1, style: 'dot' },
-      { kind: 'tcy', startIndex: 1, endIndex: 3 },
-      { kind: 'em', startIndex: 3, endIndex: 4 },
-      { kind: 'strong', startIndex: 4, endIndex: 5 },
+      { type: 'emphasis', startIndex: 0, endIndex: 1, style: 'dot' },
+      { type: 'tcy', startIndex: 1, endIndex: 3 },
+      { type: 'em', startIndex: 3, endIndex: 4 },
+      { type: 'strong', startIndex: 4, endIndex: 5 },
       {
-        kind: 'link',
+        type: 'link',
         startIndex: 5,
         endIndex: 6,
         href: 'https://example.test',
         title: '例',
       },
-      { kind: 'footnote', startIndex: 6, endIndex: 7, noteId: 'fn1' },
+      { type: 'footnote-ref', startIndex: 6, endIndex: 7, noteId: 'fn1' },
     ]);
   });
 
@@ -292,7 +292,7 @@ describe('extractRubyContent', () => {
     expect(result[0].text).toBe('危険安全');
     expect(result[0].inlineAnnotations).toEqual([
       {
-        kind: 'link',
+        type: 'link',
         startIndex: 2,
         endIndex: 4,
         href: 'mailto:test@example.com',
@@ -335,7 +335,7 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('本文');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+      { type: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
     ]);
   });
 
@@ -359,9 +359,9 @@ describe('extractRubyContent', () => {
     expect(folded.inlineAnnotations).toEqual(flat.inlineAnnotations);
 
     const chars = [...folded.text];
-    const covered = (kind: string): string[] =>
+    const covered = (type: string): string[] =>
       folded.inlineAnnotations
-        .filter((ann) => ann.kind === kind)
+        .filter((ann) => ann.type === type)
         .map((ann) => chars.slice(ann.startIndex, ann.endIndex).join(''));
     expect(covered('ruby')).toEqual(['漢字']);
     expect(covered('emphasis')).toEqual(['傍点']);
@@ -393,14 +393,14 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('東京都に行く');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', type: 'mono' },
-      { kind: 'ruby', startIndex: 1, endIndex: 3, rubyText: 'きょうと', type: 'group' },
+      { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', rubyType: 'mono' },
+      { type: 'ruby', startIndex: 1, endIndex: 3, rubyText: 'きょうと', rubyType: 'group' },
       {
-        kind: 'ruby',
+        type: 'ruby',
         startIndex: 0,
         endIndex: 3,
         rubyText: 'とうきょうと',
-        type: 'jukugo',
+        rubyType: 'jukugo',
         jukugoSplitPoints: [1],
       },
     ]);
@@ -430,9 +430,9 @@ describe('extractRubyContent', () => {
       expect(ann.endIndex).toBeLessThanOrEqual(chars.length);
       expect(ann.endIndex).toBeGreaterThan(ann.startIndex);
     }
-    const covered = (kind: string): string[] =>
+    const covered = (type: string): string[] =>
       inlineAnnotations
-        .filter((ann) => ann.kind === kind)
+        .filter((ann) => ann.type === type)
         .map((ann) => chars.slice(ann.startIndex, ann.endIndex).join(''));
     expect(covered('ruby')).toEqual(['漢']);
     expect(covered('em')).toEqual(['字']);
@@ -445,7 +445,7 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('が行');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'が', type: 'mono' },
+      { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'が', rubyType: 'mono' },
     ]);
   });
 
@@ -490,7 +490,7 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('漢字');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', type: 'mono' },
+      { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'かん', rubyType: 'mono' },
     ]);
   });
 
@@ -511,14 +511,14 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('東京');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', type: 'mono' },
-      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'きょう', type: 'mono' },
+      { type: 'ruby', startIndex: 0, endIndex: 1, rubyText: 'とう', rubyType: 'mono' },
+      { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'きょう', rubyType: 'mono' },
       {
-        kind: 'ruby',
+        type: 'ruby',
         startIndex: 0,
         endIndex: 2,
         rubyText: 'とうきょう',
-        type: 'jukugo',
+        rubyType: 'jukugo',
         jukugoSplitPoints: [1],
       },
     ]);
@@ -530,7 +530,7 @@ describe('extractRubyContent', () => {
 
     expect(result[0].text).toBe('東京に行く');
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'とうきょう', type: 'group' },
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'とうきょう', rubyType: 'group' },
     ]);
   });
 
@@ -547,10 +547,10 @@ describe('extractRubyContent', () => {
 
     expect(result.map((p) => p.text)).toEqual(['序漢', '本文', '末尾']);
     expect(result[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', type: 'mono' },
+      { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', rubyType: 'mono' },
     ]);
     expect(result[1].inlineAnnotations).toEqual([]);
-    expect(result[2].inlineAnnotations).toEqual([{ kind: 'em', startIndex: 1, endIndex: 2 }]);
+    expect(result[2].inlineAnnotations).toEqual([{ type: 'em', startIndex: 1, endIndex: 2 }]);
   });
 
   it('reads pretty-printed ruby exactly like the minified form', () => {
@@ -571,14 +571,14 @@ describe('extractRubyContent', () => {
     expect(extractRubyContent(wrapXhtml(pretty[0]))[0]).toEqual({
       text: '前漢字後',
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', type: 'mono' },
-        { kind: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'じ', type: 'mono' },
+        { type: 'ruby', startIndex: 1, endIndex: 2, rubyText: 'かん', rubyType: 'mono' },
+        { type: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'じ', rubyType: 'mono' },
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 1,
           endIndex: 3,
           rubyText: 'かんじ',
-          type: 'jukugo',
+          rubyType: 'jukugo',
           jukugoSplitPoints: [1],
         },
       ],
@@ -620,7 +620,7 @@ describe('extractRubyContent', () => {
     expect(result.text).toBe('本文漢強字'.repeat(8_000));
     expect(result.inlineAnnotations).toHaveLength(16_000);
     expect(result.inlineAnnotations.at(-1)).toEqual({
-      kind: 'em',
+      type: 'em',
       startIndex: 39_998,
       endIndex: 39_999,
     });

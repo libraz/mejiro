@@ -1,7 +1,7 @@
 import type { ReadingAnchor } from '@libraz/mejiro/book';
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { computed, defineComponent, h, type PropType, ref } from 'vue';
-import { format, type MejiroMessages, useI18n } from './i18n.js';
+import { formatMessage, type MejiroMessages, useI18n } from './i18n.js';
 
 interface ChapterEntry {
   index: number;
@@ -12,7 +12,7 @@ interface ChapterEntry {
 
 function buildEntries(epub: EpubBook, messages: MejiroMessages): ChapterEntry[] {
   return epub.chapters.map((ch, i) => {
-    const title = ch.title ?? format(messages.chapterN, { n: i + 1 });
+    const title = ch.title ?? formatMessage(messages.chapterN, { n: i + 1 });
     const headings = ch.paragraphs.flatMap((p, paragraph) => {
       const text = p.text.trim();
       return p.headingLevel && text && text !== title ? [{ paragraph, text }] : [];
@@ -28,17 +28,23 @@ function buildEntries(epub: EpubBook, messages: MejiroMessages): ChapterEntry[] 
 export const MejiroToc = defineComponent({
   name: 'MejiroToc',
   props: {
+    /** The EPUB whose chapters and sub-headings are listed. */
     epub: { type: Object as PropType<EpubBook>, required: true },
+    /** Reading position; its chapter is marked current. */
     currentAnchor: {
       type: Object as PropType<ReadingAnchor | null>,
       default: null,
     },
-    searchable: { type: Boolean, default: false },
+    /** Show a search field that filters chapters by title and sub-heading. @defaultValue false */
+    showSearch: { type: Boolean, default: false },
+    /** Heading of the list. @defaultValue `messages.tocTitle` */
     title: { type: String, default: undefined },
+    /** Placeholder of the search field. @defaultValue `messages.tocSearchPlaceholder` */
     searchPlaceholder: { type: String, default: undefined },
   },
   emits: {
-    select: (_chapter: number) => true,
+    /** The user picked a chapter; carries its zero-based index. */
+    'chapter-select': (_chapterIndex: number) => true,
   },
   setup(props, { emit }) {
     const messages = useI18n();
@@ -53,7 +59,7 @@ export const MejiroToc = defineComponent({
           e.headings.some((heading) => heading.text.toLowerCase().includes(needle)),
       );
     });
-    const activeIndex = computed(() => props.currentAnchor?.chapter ?? -1);
+    const activeIndex = computed(() => props.currentAnchor?.chapterIndex ?? -1);
     const resolvedTitle = computed(() => props.title ?? messages.value.tocTitle);
     const resolvedSearchPlaceholder = computed(
       () => props.searchPlaceholder ?? messages.value.tocSearchPlaceholder,
@@ -65,7 +71,7 @@ export const MejiroToc = defineComponent({
           h('span', { class: 'mejiro-toc-title' }, resolvedTitle.value),
           props.epub.author ? h('span', { class: 'mejiro-toc-subtitle' }, props.epub.author) : null,
         ]),
-        props.searchable
+        props.showSearch
           ? h('div', { class: 'mejiro-toc-search' }, [
               h('input', {
                 type: 'search',
@@ -89,7 +95,7 @@ export const MejiroToc = defineComponent({
                   type: 'button',
                   class: ['mejiro-toc-link', { 'is-active': entry.index === activeIndex.value }],
                   'aria-current': entry.index === activeIndex.value ? 'true' : undefined,
-                  onClick: () => emit('select', entry.index),
+                  onClick: () => emit('chapter-select', entry.index),
                 },
                 [
                   h('span', { class: 'mejiro-toc-num' }, String(entry.index + 1).padStart(2, '0')),
@@ -118,7 +124,7 @@ export const MejiroToc = defineComponent({
           ? h(
               'div',
               { class: 'mejiro-toc-empty', role: 'status' },
-              format(messages.value.tocEmpty, { query: query.value }),
+              formatMessage(messages.value.tocEmpty, { query: query.value }),
             )
           : null,
       ]);

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render } from '@testing-library/vue';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, ref } from 'vue';
 import { MejiroNotationHighlighter } from '../src/MejiroNotationHighlighter.js';
 
@@ -11,8 +11,8 @@ function makeHarness(initial = '', normalize: (next: string) => string = (next) 
       const value = ref(initial);
       return () =>
         h(MejiroNotationHighlighter, {
-          modelValue: value.value,
-          'onUpdate:modelValue': (next: string) => {
+          value: value.value,
+          'onUpdate:value': (next: string) => {
             value.value = normalize(next);
           },
         });
@@ -63,5 +63,41 @@ describe('MejiroNotationHighlighter (Vue)', () => {
 
     await fireEvent.compositionEnd(ta);
     expect(ta.value).toBe('圏');
+  });
+});
+
+describe('MejiroNotationHighlighter (Vue)', () => {
+  it('passes attrs and listeners through to the textarea and wrapper props to the wrapper', () => {
+    const onFocus = vi.fn();
+    const onInput = vi.fn();
+    const { container } = render(MejiroNotationHighlighter, {
+      props: { value: '本文', wrapperClass: 'outer', wrapperStyle: { width: '240px' } },
+      attrs: {
+        class: 'from-attrs',
+        placeholder: 'write here',
+        rows: 7,
+        maxlength: 12,
+        'aria-label': 'draft body',
+        onFocus,
+        onInput,
+      },
+    });
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement;
+
+    const wrapper = container.querySelector('.mejiro-notation-highlighter') as HTMLElement;
+    expect(wrapper.classList.contains('outer')).toBe(true);
+    expect(wrapper.style.width).toBe('240px');
+    expect(wrapper.classList.contains('from-attrs')).toBe(false);
+    expect(textarea.classList.contains('mejiro-notation-textarea')).toBe(true);
+    expect(textarea.classList.contains('from-attrs')).toBe(true);
+    expect(textarea.getAttribute('placeholder')).toBe('write here');
+    expect(textarea.getAttribute('rows')).toBe('7');
+    expect(textarea.maxLength).toBe(12);
+    expect(textarea.getAttribute('aria-label')).toBe('draft body');
+
+    textarea.dispatchEvent(new Event('focus', { bubbles: true }));
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(onFocus).toHaveBeenCalledTimes(1);
+    expect(onInput).toHaveBeenCalledTimes(1);
   });
 });

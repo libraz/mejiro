@@ -11,7 +11,7 @@ const COLUMNS = 8;
 const LINE_WIDTH = 400;
 
 /** Engine slots for eight columns of 400px inline size around one image. */
-function slotsAround(image: { x: number; y: number; w: number; h: number }): ColumnSlot[] {
+function slotsAround(image: { x: number; y: number; width: number; height: number }): ColumnSlot[] {
   const { slots } = computeExclusionSlots({
     lineWidth: LINE_WIDTH,
     lineCount: COLUMNS,
@@ -28,7 +28,7 @@ function slotsAround(image: { x: number; y: number; w: number; h: number }): Col
  * the lower one.
  */
 function tierOrderedSlots(): ColumnSlot[] {
-  return slotsAround({ x: 0, y: 150, w: PITCH * COLUMNS, h: 100 });
+  return slotsAround({ x: 0, y: 150, width: PITCH * COLUMNS, height: 100 });
 }
 
 /**
@@ -36,7 +36,7 @@ function tierOrderedSlots(): ColumnSlot[] {
  * columns is read above and then below the image before the next column.
  */
 function columnOrderedSlots(): ColumnSlot[] {
-  return slotsAround({ x: 60, y: 150, w: 120, h: 100 });
+  return slotsAround({ x: 60, y: 150, width: 120, height: 100 });
 }
 
 /** Uniform body-pitch metrics with a paragraph gap on the given line indices. */
@@ -72,7 +72,7 @@ describe('adjustExclusionSlots with tier-ordered slots', () => {
     // lower-tier slot of a column that is already positioned and must not move it.
     const metrics = metricsWithGaps({ 3: 10, 7: 10, 10: 10 }, slots.length);
 
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH);
+    const adjusted = adjustExclusionSlots({ slots, metrics, startIndex: 0, basePitch: PITCH });
 
     const row = [0, 30, 60, 100, 130, 160, 190, 230];
     expect(adjusted.map((s) => s.xPos)).toEqual([...row, ...row]);
@@ -82,7 +82,7 @@ describe('adjustExclusionSlots with tier-ordered slots', () => {
     const slots = tierOrderedSlots();
     const metrics = metricsWithGaps({ 3: 10, 7: 10, 10: 10 }, slots.length);
 
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH);
+    const adjusted = adjustExclusionSlots({ slots, metrics, startIndex: 0, basePitch: PITCH });
 
     const xByColumn = new Map<number, number>();
     for (const slot of adjusted) {
@@ -102,7 +102,7 @@ describe('adjustExclusionSlots with tier-ordered slots', () => {
     const slots = tierOrderedSlots().map(({ xPos, yStart, height }) => ({ xPos, yStart, height }));
     const metrics = metricsWithGaps({ 3: 10, 7: 10, 10: 10 }, slots.length);
 
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH);
+    const adjusted = adjustExclusionSlots({ slots, metrics, startIndex: 0, basePitch: PITCH });
 
     const row = [0, 30, 60, 100, 130, 160, 190, 230];
     expect(adjusted.map((s) => s.xPos)).toEqual([...row, ...row]);
@@ -113,7 +113,13 @@ describe('adjustExclusionSlots with tier-ordered slots', () => {
     const metrics = metricsWithGaps({ 3: 10, 7: 10, 10: 10 }, slots.length);
 
     // Column 4 ends at x=160; column 5 would end at x=190, past the box.
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH, 165);
+    const adjusted = adjustExclusionSlots({
+      slots,
+      metrics,
+      startIndex: 0,
+      basePitch: PITCH,
+      contentWidth: 165,
+    });
 
     expect(adjusted.map((s) => s.columnIndex)).toEqual([0, 1, 2, 3, 4, 0, 1, 2, 3, 4]);
     expect(adjusted.map((s) => s.yStart)).toEqual([0, 0, 0, 0, 0, 250, 250, 250, 250, 250]);
@@ -127,7 +133,13 @@ describe('adjustExclusionSlots with tier-ordered slots', () => {
     // slot past the box, which must not punch a hole into an admitted column.
     metrics[8].pitch = 130;
 
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH, 245);
+    const adjusted = adjustExclusionSlots({
+      slots,
+      metrics,
+      startIndex: 0,
+      basePitch: PITCH,
+      contentWidth: 245,
+    });
 
     expect(adjusted.map((s) => s.columnIndex)).toEqual([
       0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7,
@@ -144,7 +156,13 @@ describe('adjustExclusionSlots with tier-ordered slots', () => {
 
       for (const metrics of [gapped, tallLowerGap]) {
         for (const contentWidth of [65, 105, 135, 165, 195, 245]) {
-          const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH, contentWidth);
+          const adjusted = adjustExclusionSlots({
+            slots,
+            metrics,
+            startIndex: 0,
+            basePitch: PITCH,
+            contentWidth,
+          });
 
           for (const [col, count] of slotsPerColumn(adjusted)) {
             expect(count).toBe(inputCounts.get(col));
@@ -169,7 +187,7 @@ describe('adjustExclusionSlots with column-ordered slots', () => {
     // lower gap, already positioned, so its gap must not shift anything.
     const metrics = metricsWithGaps({ 3: 10, 4: 10, 10: 10 }, slots.length);
 
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH);
+    const adjusted = adjustExclusionSlots({ slots, metrics, startIndex: 0, basePitch: PITCH });
 
     expect(adjusted.map((s) => s.xPos)).toEqual([
       0, 30, 60, 60, 100, 100, 130, 130, 160, 160, 200, 230,
@@ -181,7 +199,13 @@ describe('adjustExclusionSlots with column-ordered slots', () => {
     const metrics = metricsWithGaps({ 4: 10 }, slots.length);
 
     // Column 4 ends at x=160; column 5 would end at x=190, past the box.
-    const adjusted = adjustExclusionSlots(slots, metrics, 0, PITCH, 165);
+    const adjusted = adjustExclusionSlots({
+      slots,
+      metrics,
+      startIndex: 0,
+      basePitch: PITCH,
+      contentWidth: 165,
+    });
 
     expect(adjusted.map((s) => s.columnIndex)).toEqual([0, 1, 2, 2, 3, 3, 4, 4]);
   });

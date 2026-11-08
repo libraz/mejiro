@@ -3,7 +3,7 @@ export { measures, pages, renderPage };
 import type { BookParagraph } from '@libraz/mejiro/book';
 import { MejiroBrowser } from '@libraz/mejiro/browser';
 
-// `chapter` and `result` stand for a chapter and its layoutChapter() output.
+// `chapter` and `result` stand for a chapter and its layoutParagraphs() output.
 const chapter: { paragraphs: BookParagraph[] } = {
   paragraphs: [
     { text: '第一章', kind: 'heading', headingLevel: 1 },
@@ -11,9 +11,12 @@ const chapter: { paragraphs: BookParagraph[] } = {
   ],
 };
 const result = await new MejiroBrowser({
-  fixedFontFamily: 'serif',
-  fixedFontSize: 16,
-}).layoutChapter({ paragraphs: chapter.paragraphs.map((p) => ({ text: p.text })), lineWidth: 400 });
+  fontFamily: 'serif',
+  fontSize: 16,
+}).layoutParagraphs({
+  paragraphs: chapter.paragraphs.map((p) => ({ text: p.text })),
+  lineWidth: 400,
+});
 
 // #region doc:entries
 import type { RenderEntry } from '@libraz/mejiro/render';

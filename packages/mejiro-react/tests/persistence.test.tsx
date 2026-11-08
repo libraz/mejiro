@@ -22,11 +22,11 @@ function memoryStorage(): MejiroStorage & { data: Map<string, string> } {
   };
 }
 
-const ANCHOR = { chapter: 1, paragraph: 2, charIndex: 3 };
+const ANCHOR = { chapterIndex: 1, paragraphIndex: 2, charIndex: 3 };
 const NOTE = {
-  chapter: 0,
-  start: { paragraph: 2, charIndex: 3 },
-  end: { paragraph: 2, charIndex: 9 },
+  chapterIndex: 0,
+  start: { paragraphIndex: 2, charIndex: 3 },
+  end: { paragraphIndex: 2, charIndex: 9 },
   color: 'yellow',
 };
 
@@ -111,7 +111,7 @@ describe('useAnnotations (React) — update()', () => {
     });
     act(() =>
       result.current.update(id, {
-        chapter: undefined,
+        chapterIndex: undefined,
         start: undefined,
         end: undefined,
         color: undefined,

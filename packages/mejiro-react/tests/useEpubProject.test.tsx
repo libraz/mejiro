@@ -27,65 +27,78 @@ const chapters = [
 describe('useEpubProject (React)', () => {
   it('defaults metadata fields passed as undefined like omitted ones', () => {
     const { result } = renderHook(() =>
-      useEpubProject({ metadata: { title: undefined, language: undefined }, debounceMs: 10_000 }),
+      useEpubProject({
+        initialMetadata: { title: undefined, language: undefined },
+        debounceMs: 10_000,
+      }),
     );
-    expect(result.current.metadata).toMatchObject({ title: '新しい作品', language: 'ja' });
+    expect(result.current.metadata).toMatchObject({ title: '', language: 'ja' });
   });
 
   it('keeps selection on the same chapter when removing earlier chapters', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = renderHook(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
-    act(() => result.current.setSelectedChapter(2));
+    act(() => result.current.setSelectedChapterIndex(2));
     act(() => result.current.removeChapter(0));
 
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['b', 'c']);
-    expect(result.current.selectedChapter).toBe(1);
+    expect(result.current.selectedChapterIndex).toBe(1);
     expect(result.current.currentChapter?.id).toBe('c');
   });
 
   it('clamps direct chapter replacement and preserves a draft chapter for empty input', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = renderHook(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
-    act(() => result.current.setSelectedChapter(99));
-    expect(result.current.selectedChapter).toBe(2);
+    act(() => result.current.setSelectedChapterIndex(99));
+    expect(result.current.selectedChapterIndex).toBe(2);
 
     act(() => result.current.setChapters([result.current.chapters[2], result.current.chapters[0]]));
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'a']);
-    expect(result.current.selectedChapter).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
 
     act(() => result.current.setChapters([]));
     expect(result.current.chapters).toHaveLength(1);
-    expect(result.current.selectedChapter).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
     expect(result.current.currentChapter).not.toBeNull();
   });
 
   it('reorders chapters and keeps the selected chapter identity', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = renderHook(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
-    act(() => result.current.setSelectedChapter(2));
+    act(() => result.current.setSelectedChapterIndex(2));
     act(() => result.current.reorderChapters(0, 2));
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['b', 'c', 'a']);
-    expect(result.current.selectedChapter).toBe(1);
+    expect(result.current.selectedChapterIndex).toBe(1);
     expect(result.current.currentChapter?.id).toBe('c');
 
     act(() => result.current.reorderChapters(1, 0));
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['c', 'b', 'a']);
-    expect(result.current.selectedChapter).toBe(0);
+    expect(result.current.selectedChapterIndex).toBe(0);
   });
 
   it('leaves the chapter list untouched when reorderChapters gets an out-of-range from', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = renderHook(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
-    act(() => result.current.setSelectedChapter(1));
+    act(() => result.current.setSelectedChapterIndex(1));
     act(() => result.current.reorderChapters(5, 0));
     act(() => result.current.reorderChapters(-1, 2));
 
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c']);
-    expect(result.current.selectedChapter).toBe(1);
+    expect(result.current.selectedChapterIndex).toBe(1);
   });
 
   it('clamps an out-of-range to in reorderChapters', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = renderHook(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
     act(() => result.current.reorderChapters(0, 99));
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['b', 'c', 'a']);
@@ -101,7 +114,7 @@ describe('useEpubProject (React)', () => {
 
     const second = result.current.chapters[1];
     expect(second.id).toMatch(/^chapter-/);
-    expect(second.title).toBe('第2話');
+    expect(second.title).toBe('');
     expect(second.body).toBe('');
   });
 
@@ -127,7 +140,7 @@ describe('useEpubProject (React)', () => {
     const { result } = renderHook(() =>
       useEpubProject({
         debounceMs: 10_000,
-        chapters: [{ id: 'blank', title: '', body: 'Body' }],
+        initialChapters: [{ id: 'blank', title: '', body: 'Body' }],
       }),
     );
 
@@ -145,23 +158,32 @@ describe('useEpubProject (React) — StrictMode', () => {
   const strict = { wrapper: StrictMode };
 
   it('shifts the selection by exactly one when an earlier chapter is removed', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }), strict);
-    act(() => result.current.setSelectedChapter(2));
+    const { result } = renderHook(
+      () => useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+      strict,
+    );
+    act(() => result.current.setSelectedChapterIndex(2));
     act(() => result.current.removeChapter(0));
-    expect(result.current.selectedChapter).toBe(1);
+    expect(result.current.selectedChapterIndex).toBe(1);
     expect(result.current.currentChapter?.id).toBe('c');
   });
 
   it('selects the appended chapter once', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }), strict);
+    const { result } = renderHook(
+      () => useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+      strict,
+    );
     act(() => result.current.addChapter({ id: 'd' }));
     expect(result.current.chapters.map((chapter) => chapter.id)).toEqual(['a', 'b', 'c', 'd']);
-    expect(result.current.selectedChapter).toBe(3);
+    expect(result.current.selectedChapterIndex).toBe(3);
   });
 
   it('keeps the selected chapter identity through reorders', () => {
-    const { result } = renderHook(() => useEpubProject({ chapters, debounceMs: 10_000 }), strict);
-    act(() => result.current.setSelectedChapter(1));
+    const { result } = renderHook(
+      () => useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+      strict,
+    );
+    act(() => result.current.setSelectedChapterIndex(1));
     act(() => result.current.reorderChapters(0, 2));
     expect(result.current.currentChapter?.id).toBe('b');
     act(() => result.current.reorderChapters(2, 0));
@@ -172,12 +194,12 @@ describe('useEpubProject (React) — StrictMode', () => {
     const { result } = renderHook(
       () =>
         useEpubProject({
-          chapters: [...chapters, { id: 'd', title: 'D', body: '' }],
+          initialChapters: [...chapters, { id: 'd', title: 'D', body: '' }],
           debounceMs: 10_000,
         }),
       strict,
     );
-    act(() => result.current.setSelectedChapter(3));
+    act(() => result.current.setSelectedChapterIndex(3));
     act(() => {
       result.current.removeChapter(0);
       result.current.removeChapter(0);

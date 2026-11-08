@@ -8,8 +8,8 @@ where the reader is one widget among others.
 
 - Reader fills its container — give the wrapper a `height` (and width) and
   the layout adapts.
-- `enableDropZone`, `enableStats`, `enableSettings` are switched off so the
-  embed shows just the spread chrome.
+- `enableDropZone` and `showSettings` are switched off and the stats line is
+  hidden (its default) so the embed shows just the spread chrome.
 - Same `MejiroReader` API; no special "embed" mode needed.
 
 ## Run it

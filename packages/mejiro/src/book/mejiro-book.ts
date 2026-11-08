@@ -1,8 +1,10 @@
-import { MejiroBrowser, verticalLineWidth } from '../browser/integration.js';
+import { MejiroBrowser, measurerOf, verticalLineWidth } from '../browser/integration.js';
 import type { CharMeasurer } from '../browser/measure.js';
 import { deriveRubyFont } from '../browser/measure.js';
-import type { FontFamily, InlineAnnotation, InlineRubyAnnotation } from '../browser/types.js';
+import type { FontFamily } from '../browser/types.js';
 import { toFontSpec } from '../browser/types.js';
+import type { WidthCacheStats } from '../browser/width-cache.js';
+import { MejiroError } from '../errors.js';
 import { type ManuscriptDialect, parseManuscript } from '../manuscript.js';
 import { manuscriptParagraphs, parseInlineImageMarker } from '../manuscript-paragraphs.js';
 import { normalizeAnnotatedText } from '../normalize.js';
@@ -12,50 +14,42 @@ import type { RubyAnnotation } from '../ruby.js';
 import type { TcyAnnotation } from '../tcy.js';
 import { buildTcyAnnotations } from '../tcy.js';
 import { toCodepoints } from '../text.js';
-import type {
-  AnalyzerIdentity,
-  BreakCostOptions,
-  TextAnalysis,
-  TextAnalyzer,
-  TypographyHints,
+import {
+  type AnalyzerIdentity,
+  type BreakCostOptions,
+  type ChapterSource,
+  DEFAULT_LINE_SPACING,
+  type InlineAnnotation,
+  type InlineRubyAnnotation,
+  type KinsokuMode,
+  type ManuscriptChapter,
+  type TextAnalysis,
+  type TextAnalyzer,
+  type TypographyHints,
 } from '../types.js';
 import { deriveTypographyHints } from '../typography-hints.js';
-import type { CachedParagraph, LayoutConfig } from './chapter-layout.js';
-import { ChapterLayout, paragraphFontSize } from './chapter-layout.js';
+import type { CachedParagraph, ChapterLayout, LayoutConfig } from './chapter-layout.js';
+import {
+  assertPageSize,
+  chapterLayoutChannel,
+  createChapterLayout,
+  paragraphFontSize,
+} from './chapter-layout.js';
 import { DEFAULT_PAGE_GEOMETRY, DEFAULT_PAGE_PADDING } from './constants.js';
-import { assertChapterLayoutSnapshot, type ChapterLayoutSnapshot } from './snapshot.js';
-import type { BookOptions, BookParagraph, ComputePageSizeOptions, PageSize } from './types.js';
-
-/**
- * Constructor options for {@link MejiroBook} — {@link BookOptions} plus the
- * browser-integration switches a book owns on the caller's behalf.
- */
-export interface MejiroBookOptions extends BookOptions {
-  /**
-   * When true, layout and font changes through `setOptions` reject if the
-   * requested font family measures exactly like the host's default font, which
-   * is how a silent fallback presents itself. @defaultValue false
-   */
-  strictFontCheck?: boolean;
-}
-
-/** Manuscript chapter input accepted by {@link MejiroBook.layoutManuscript}. */
-export interface ManuscriptChapter {
-  /** Optional id used as the key in the returned map. */
-  id?: string;
-  /** Chapter title — emitted as an `h1` paragraph at the top of the layout. */
-  title: string;
-  /** Raw manuscript body. Blank lines separate paragraphs. */
-  body: string;
-}
+import { type ChapterLayoutSnapshot, readChapterLayoutSnapshot } from './snapshot.js';
+import type {
+  BookOptions,
+  BookOptionsPatch,
+  BookParagraph,
+  FitPageSizeOptions,
+  PageGeometry,
+  PageSize,
+  ResolvedBookOptions,
+} from './types.js';
 
 /** Options for {@link MejiroBook.layoutManuscript}. */
 export interface LayoutManuscriptOptions {
-  /**
-   * Chapters to lay out. Laid out sequentially, and keyed in the returned map
-   * by `id` — or by `chapter-<position>` when a chapter carries no id, so
-   * duplicate or missing ids collapse entries.
-   */
+  /** Chapters to lay out, sequentially; the returned layouts follow the same order. */
   chapters: readonly ManuscriptChapter[];
   /** Manuscript notation dialect. @defaultValue `'mejiro'` */
   dialect?: ManuscriptDialect;
@@ -88,11 +82,15 @@ interface InternalOptions {
   fontFamily: FontFamily;
   fontSize: number;
   lineSpacing: number;
-  mode: 'strict' | 'loose';
+  kinsoku: KinsokuMode;
   enableHanging: boolean;
   headingStyles?: Record<number, HeadingStyle>;
   headingScale: number;
 }
+
+/** The geometry a book lays out for: a page size, and its heights when a fit measured them. */
+type BookPageSize = Required<PageSize> &
+  Partial<Pick<PageGeometry, 'pageHeight' | 'contentHeight'>>;
 
 function buildLayoutRubyAnnotations(
   annotations: readonly InlineAnnotation[] | undefined,
@@ -100,7 +98,7 @@ function buildLayoutRubyAnnotations(
   measurer: CharMeasurer,
 ): RubyAnnotation[] | undefined {
   if (!annotations?.length) return undefined;
-  const rubies = annotations.filter((a): a is InlineRubyAnnotation => a.kind === 'ruby');
+  const rubies = annotations.filter((a): a is InlineRubyAnnotation => a.type === 'ruby');
   if (!rubies.length) return undefined;
   return rubies.map((ann) => {
     const rubyText = toCodepoints(ann.rubyText);
@@ -109,7 +107,7 @@ function buildLayoutRubyAnnotations(
       endIndex: ann.endIndex,
       rubyText,
       rubyAdvances: measurer.measureAll(rubyFontSpec, rubyText),
-      type: ann.type,
+      rubyType: ann.rubyType,
       jukugoSplitPoints: ann.jukugoSplitPoints,
     };
   });
@@ -122,23 +120,17 @@ function sameAnalyzer(a: AnalyzerIdentity | undefined, b: AnalyzerIdentity | und
 }
 
 /**
- * Reports an analyzer that failed, without making the failure fatal.
+ * Writes a recovered failure to the console, for a book given no `onError`.
  *
- * A failing analyzer costs break quality, never availability: the paragraph is
- * laid out on the character-class rules alone, which is a correct layout. The
- * notice still has to reach the developer, so it is written to the console the
- * way {@link parseReadingPosition} writes its migration notice — guarded,
- * because the layout path also runs on hosts without a console.
+ * A failing analyzer costs break quality, never availability, but the notice
+ * still has to reach the developer. Guarded, because the layout path also runs
+ * on hosts without a console.
  */
-function warnAnalyzerFailed(error: unknown): void {
-  // biome-ignore lint/suspicious/noConsole: a degraded analyzer must not be silent
+function warnRecovered(error: MejiroError): void {
+  // biome-ignore lint/suspicious/noConsole: the documented default of BookOptions.onError
   if (typeof console === 'undefined' || typeof console.warn !== 'function') return;
-  // biome-ignore lint/suspicious/noConsole: a degraded analyzer must not be silent
-  console.warn(
-    '[mejiro] MejiroBook: the configured TextAnalyzer threw; laying out without ' +
-      'typography hints. Further failures from this book are not reported.',
-    error,
-  );
+  // biome-ignore lint/suspicious/noConsole: the documented default of BookOptions.onError
+  console.warn(`[mejiro] MejiroBook: ${error.message}`, error.cause);
 }
 
 /**
@@ -154,9 +146,8 @@ function warnAnalyzerFailed(error: unknown): void {
  *   fontSize: 16,
  *   lineSpacing: 1.8,
  *   headingStyles: { 1: { scale: 1.6, gapAfterEm: 1.4 } },
+ *   pageSize: { pageWidth: 400, lineWidth: 600 },
  * });
- *
- * book.setPageSize({ pageWidth: 400, lineWidth: 600 });
  *
  * const layout = await book.layoutChapter(chapter);
  * const spread = layout.getSpread(0);
@@ -165,35 +156,37 @@ function warnAnalyzerFailed(error: unknown): void {
  */
 export class MejiroBook {
   private opts: InternalOptions;
-  private size: Required<PageSize> | null = null;
+  private size: BookPageSize | null = null;
   private browser: MejiroBrowser;
   // Share the browser's measurer so MejiroBook's caching and propagation
   // touch the same WidthCache instance the browser populates during initial
-  // layout. Splitting these into two CharMeasurers used to silently double
-  // up the cache.
+  // layout.
   private get measurer(): CharMeasurer {
-    return this.browser.getMeasurer();
+    return measurerOf(this.browser);
   }
   // WeakRef tracking lets the caller drop a layout without us holding it
-  // alive. `setOptions` walks the set on each call and prunes refs whose
+  // alive. `updateOptions` walks the set on each call and prunes refs whose
   // referent has been collected.
   private layouts = new Set<WeakRef<ChapterLayout>>();
+  private listeners = new Set<() => void>();
   // Desired options of the in-flight measurement, staged until the font has
   // loaded so a failed load never becomes observable through `getOptions`.
   private pendingOpts: InternalOptions | null = null;
-  // Monotonic counter used to abandon a `setOptions` call that a later one
+  // Monotonic counter used to abandon an `updateOptions` call that a later one
   // superseded while its font was still loading.
   private optionsGeneration = 0;
 
-  // Typography-hint configuration. Held apart from `opts` because `setOptions`
-  // cannot change any of it: re-staging the analysis of every live layout is
-  // not something a font-size patch should do behind the caller's back.
+  // Typography-hint configuration. Held apart from `opts` because
+  // `updateOptions` cannot change any of it: re-staging the analysis of every
+  // live layout is not something a font-size patch should do behind the
+  // caller's back.
   private analyzer?: TextAnalyzer;
   private wordAwareBreaking: 'off' | 'clusters' | 'full';
   private keepWholePos?: readonly string[];
   private keepWholePenalty?: number;
   private breakCost?: BreakCostOptions;
-  // One notice per book: a broken analyzer would otherwise log once per paragraph.
+  private onError?: (error: MejiroError) => void;
+  // One notice per book: a broken analyzer would otherwise report once per paragraph.
   private analyzerWarned = false;
   // Hints already derived for a source paragraph, so laying the same chapter
   // out again (resize, option change) replays them instead of re-analysing.
@@ -211,26 +204,38 @@ export class MejiroBook {
   /**
    * Records the typographic options and creates the browser-side measurer.
    * Nothing is measured or loaded yet: fonts are loaded lazily on the first
-   * layout, and page geometry is still unset, so call
-   * {@link MejiroBook.setPageSize} (or {@link MejiroBook.computePageSize})
-   * before laying out a chapter — otherwise `layoutChapter` throws.
+   * layout. Give the page geometry as {@link BookOptions.pageSize}, or later
+   * through {@link MejiroBook.setPageSize} or {@link MejiroBook.fitPageSize};
+   * until one of them has run, `layoutChapter` rejects.
    *
    * Live layouts are re-measured whenever the host reports newly loaded
    * fonts, so widths taken against a fallback face do not outlive it.
    *
-   * @param options - Typography plus the optional `strictFontCheck` guard,
-   *   which is forwarded to the measurer and cannot be changed afterwards.
+   * @param options - Typography plus the construction-time keys listed on
+   *   {@link BookOptions}.
+   * @throws TypeError when `fontFamily` is absent or empty, or `fontSize` is absent.
+   * @throws RangeError when `fontSize` is not a positive finite number, or
+   *   `pageSize` fails the checks of {@link MejiroBook.setPageSize}.
    */
-  constructor(options: MejiroBookOptions) {
+  constructor(options: BookOptions) {
+    if (options.fontFamily === undefined || options.fontSize === undefined) {
+      throw new TypeError('MejiroBook: fontFamily and fontSize are required');
+    }
+    // The browser checks both values, so a book never holds an unusable font.
     this.browser = new MejiroBrowser({
+      fontFamily: options.fontFamily,
+      fontSize: options.fontSize,
       strictFontCheck: options.strictFontCheck,
-      onFontsLoaded: () => this.remeasureLayouts(),
+      onFontsLoaded: () => {
+        this.remeasureLayouts();
+        this.notify();
+      },
     });
     this.opts = {
       fontFamily: options.fontFamily,
       fontSize: options.fontSize,
-      lineSpacing: options.lineSpacing ?? 1.8,
-      mode: options.mode ?? 'strict',
+      lineSpacing: options.lineSpacing ?? DEFAULT_LINE_SPACING,
+      kinsoku: options.kinsoku ?? 'strict',
       enableHanging: options.enableHanging ?? true,
       headingStyles: options.headingStyles,
       headingScale: options.headingScale ?? 1.4,
@@ -240,13 +245,46 @@ export class MejiroBook {
     this.keepWholePos = options.keepWholePos;
     this.keepWholePenalty = options.keepWholePenalty;
     this.breakCost = options.breakCost;
+    this.onError = options.onError;
+    if (options.pageSize) this.setPageSize(options.pageSize);
   }
 
   /**
-   * Releases the book's `document.fonts` subscription so the book, its width
-   * cache and its layouts can be collected once the host drops them. Call it
-   * when the owning view unmounts. The book stays usable: the next layout or
-   * font change subscribes again. Idempotent.
+   * Calls `listener` whenever the book changes its live layouts: after an
+   * {@link MejiroBook.updateOptions} takes effect, and after newly loaded
+   * fonts re-measure them. Read what changed from the layouts themselves.
+   *
+   * A listener that throws does not stop the others; its error is rethrown on
+   * a microtask.
+   *
+   * @returns A function that removes the listener. Idempotent.
+   */
+  subscribe(listener: () => void): () => void {
+    const entry = () => listener();
+    this.listeners.add(entry);
+    return () => {
+      this.listeners.delete(entry);
+    };
+  }
+
+  private notify(): void {
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
+    }
+  }
+
+  /**
+   * Releases the book's `document.fonts` subscription; the book stays usable,
+   * and its next layout or font change subscribes again.
+   *
+   * Lets the book, its width cache and its layouts be collected once the host
+   * drops them. Call it when the owning view unmounts. Idempotent.
    */
   dispose(): void {
     this.browser.dispose();
@@ -257,24 +295,7 @@ export class MejiroBook {
    * ones (`analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty`,
    * `breakCost`) included.
    */
-  getOptions(): Readonly<
-    Required<
-      Pick<
-        BookOptions,
-        | 'fontFamily'
-        | 'fontSize'
-        | 'lineSpacing'
-        | 'mode'
-        | 'enableHanging'
-        | 'headingScale'
-        | 'wordAwareBreaking'
-      >
-    > &
-      Pick<
-        BookOptions,
-        'headingStyles' | 'analyzer' | 'keepWholePos' | 'keepWholePenalty' | 'breakCost'
-      >
-  > {
+  getOptions(): ResolvedBookOptions {
     return {
       ...this.opts,
       analyzer: this.analyzer,
@@ -286,39 +307,38 @@ export class MejiroBook {
   }
 
   /**
-   * Updates book options and propagates the change to every live
-   * {@link ChapterLayout} produced by this book.
+   * Merges `patch` into the book's options and propagates the change to every
+   * live {@link ChapterLayout} produced by this book. Keys left out of the
+   * patch keep their current values.
    *
-   * Changes that need no re-measurement (`lineSpacing` / `mode` /
+   * Changes that need no re-measurement (`lineSpacing` / `kinsoku` /
    * `enableHanging`) are applied synchronously and the returned promise is
    * already resolved. Font family / size / heading scale changes require
    * re-measurement: the new values are staged and only become visible to
    * {@link getOptions} once the font has loaded, so every live layout always
    * holds advances measured with the font recorded in its own config.
-   *
-   * `analyzer`, `wordAwareBreaking`, `keepWholePos`, `keepWholePenalty` and
-   * `breakCost` are fixed at construction: they are ignored here, and
-   * {@link getOptions} keeps reporting the values the book was built with.
+   * Subscribers are notified once the change has reached the layouts.
    *
    * Overlapping calls converge on the last one — an earlier call whose font is
    * still loading resolves without overwriting the newer options.
    *
-   * @throws If `strictFontCheck` is enabled and the font of a staged change
-   *   measures as a fallback. The rejection leaves the previously applied
-   *   options in place. Without `strictFontCheck`, a font that fails to load is
+   * @throws MejiroError `font-unavailable` if `strictFontCheck` is enabled and
+   *   the font of a staged change measures as a fallback, or `font-load-failed`
+   *   if it fails to load. The rejection leaves the previously applied options
+   *   in place. Without `strictFontCheck`, a font that fails to load is
    *   committed and measured as the host resolves it.
    */
-  setOptions(options: Partial<BookOptions>): Promise<void> {
+  updateOptions(patch: BookOptionsPatch): Promise<void> {
     // Stack the patch on the in-flight request when there is one, so a change
     // that is still loading is not silently dropped by the next call.
     const next: InternalOptions = { ...(this.pendingOpts ?? this.opts) };
-    if (options.fontFamily != null) next.fontFamily = options.fontFamily;
-    if (options.fontSize != null) next.fontSize = options.fontSize;
-    if (options.lineSpacing != null) next.lineSpacing = options.lineSpacing;
-    if (options.mode != null) next.mode = options.mode;
-    if (options.enableHanging != null) next.enableHanging = options.enableHanging;
-    if (options.headingStyles !== undefined) next.headingStyles = options.headingStyles;
-    if (options.headingScale != null) next.headingScale = options.headingScale;
+    if (patch.fontFamily != null) next.fontFamily = patch.fontFamily;
+    if (patch.fontSize != null) next.fontSize = patch.fontSize;
+    if (patch.lineSpacing != null) next.lineSpacing = patch.lineSpacing;
+    if (patch.kinsoku != null) next.kinsoku = patch.kinsoku;
+    if (patch.enableHanging != null) next.enableHanging = patch.enableHanging;
+    if (patch.headingStyles !== undefined) next.headingStyles = patch.headingStyles;
+    if (patch.headingScale != null) next.headingScale = patch.headingScale;
 
     // A layout restored from a snapshot may hold advances measured at another
     // size; it is re-measured on the first option change, not relabelled.
@@ -327,13 +347,14 @@ export class MejiroBook {
       next.fontSize !== this.opts.fontSize ||
       next.headingStyles !== this.opts.headingStyles ||
       next.headingScale !== this.opts.headingScale ||
-      [...this.liveLayouts()].some((layout) => !layout.measuredAt(next));
+      [...this.liveLayouts()].some((layout) => !chapterLayoutChannel(layout).measuredAt(next));
 
     const generation = ++this.optionsGeneration;
     if (!needsMeasurement) {
       this.pendingOpts = null;
       this.opts = next;
       this.applyConfigToLayouts();
+      this.notify();
       return Promise.resolve();
     }
     this.pendingOpts = next;
@@ -352,12 +373,13 @@ export class MejiroBook {
       if (this.optionsGeneration === generation) this.pendingOpts = null;
       throw err;
     }
-    // A later setOptions has taken over; committing here would pair its config
-    // with advances measured for this (now stale) font spec.
+    // A later updateOptions has taken over; committing here would pair its
+    // config with advances measured for this (now stale) font spec.
     if (this.optionsGeneration !== generation) return;
     this.pendingOpts = null;
     this.opts = next;
     this.remeasureLayouts(this.layoutConfigSnapshot());
+    this.notify();
   }
 
   /** Walks tracked layouts, pruning collected ones and yielding the rest. */
@@ -371,7 +393,7 @@ export class MejiroBook {
 
   private applyConfigToLayouts(): void {
     const cfg = this.layoutConfigSnapshot();
-    for (const layout of this.liveLayouts()) layout.applyConfig(cfg);
+    for (const layout of this.liveLayouts()) chapterLayoutChannel(layout).applyConfig(cfg);
   }
 
   /**
@@ -384,16 +406,16 @@ export class MejiroBook {
    */
   private remeasureLayouts(cfg?: LayoutConfig): void {
     for (const layout of this.liveLayouts()) {
-      this.remeasureLayout(layout, cfg ?? layout.getConfig());
+      this.remeasureLayout(layout, cfg ?? chapterLayoutChannel(layout).getConfig());
     }
   }
 
-  /** Re-measures one layout in the book's font family at `cfg` and adopts `cfg`. */
+  /** Re-measures one layout at `cfg` and adopts `cfg`. */
   private remeasureLayout(layout: ChapterLayout, cfg: LayoutConfig): void {
-    const { fontFamily } = this.opts;
-    const { fontSize } = cfg;
+    const channel = chapterLayoutChannel(layout);
+    const { fontFamily, fontSize } = cfg;
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
-    for (const para of layout.getCachedParagraphs()) {
+    for (const para of channel.cachedParagraphs()) {
       const pFontSize = paragraphFontSize(para, cfg);
       const spec = pFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, pFontSize);
       // Ruby is measured at half the *paragraph's* scaled size, matching the
@@ -409,40 +431,42 @@ export class MejiroBook {
       // be rebuilt whenever that size changes.
       para.layoutTcyAnnotations = buildTcyAnnotations(para.inlineAnnotations, pFontSize);
     }
-    layout.recomputeAfterMeasurement(cfg);
+    channel.recomputeAfterMeasurement(cfg);
   }
 
   /**
    * The one path by which a layout becomes live, so every later option change
    * and font load reaches it.
    *
-   * @param measuredFamily - Family the layout's advances were measured with.
-   *   When it or the layout's measured sizes no longer match the committed
-   *   options — a commit landed while the layout was being measured — the
-   *   layout is re-measured before it is returned; otherwise it takes up the
-   *   committed options that need no measuring. `null` for advances carried in
-   *   by a snapshot, which keep their own config until the next
-   *   {@link MejiroBook.setOptions}, which re-measures them if their sizes differ.
+   * @param measured - Whether the layout's advances were measured by this
+   *   book. When their family or sizes no longer match the committed options —
+   *   a commit landed while the layout was being measured — the layout is
+   *   re-measured before it is returned; otherwise it takes up the committed
+   *   options that need no measuring. `false` for advances carried in by a
+   *   snapshot, which keep their own config until the next
+   *   {@link MejiroBook.updateOptions}, which re-measures them if their sizes differ.
    */
-  private registerLayout(layout: ChapterLayout, measuredFamily: FontFamily | null): ChapterLayout {
+  private registerLayout(layout: ChapterLayout, measured: boolean): ChapterLayout {
     this.layouts.add(new WeakRef(layout));
-    if (measuredFamily === null) return layout;
+    if (!measured) return layout;
     const cfg = this.layoutConfigSnapshot();
-    if (measuredFamily !== this.opts.fontFamily || !layout.measuredAt(cfg)) {
+    const channel = chapterLayoutChannel(layout);
+    if (!channel.measuredAt(cfg)) {
       this.remeasureLayout(layout, cfg);
     } else {
-      layout.applyConfig(cfg);
+      channel.applyConfig(cfg);
     }
     return layout;
   }
 
   private layoutConfigSnapshot(): LayoutConfig {
     return {
+      fontFamily: this.opts.fontFamily,
       fontSize: this.opts.fontSize,
       lineSpacing: this.opts.lineSpacing,
       headingStyles: this.opts.headingStyles,
       headingScale: this.opts.headingScale,
-      mode: this.opts.mode,
+      kinsoku: this.opts.kinsoku,
       enableHanging: this.opts.enableHanging,
       breakCost: this.breakCost,
       analyzer: this.analyzer?.identity,
@@ -459,27 +483,41 @@ export class MejiroBook {
    * its text does not.
    *
    * @param text - The paragraph in the same NFC form the layout is given. The
-   *   offsets an analysis carries address exactly this string; handing the
-   *   pre-normalization text to either side yields no hints at all, because
-   *   {@link deriveTypographyHints} refuses an analysis of different text.
+   *   offsets an analysis carries address exactly this string, so an analysis
+   *   of any other text yields no hints at all.
    */
   private deriveHints(text: string): TypographyHints | undefined {
     if (this.wordAwareBreaking === 'off' || !this.analyzer) return undefined;
     let analysis: TextAnalysis;
     try {
       analysis = this.analyzer.analyze(text);
-    } catch (error) {
-      if (!this.analyzerWarned) {
-        this.analyzerWarned = true;
-        warnAnalyzerFailed(error);
-      }
+    } catch (cause) {
+      this.reportAnalyzerFailure(cause);
       return undefined;
     }
-    return deriveTypographyHints(text, analysis, {
+    if (analysis.text !== text) return undefined;
+    return deriveTypographyHints(analysis, {
       penalties: this.wordAwareBreaking === 'full',
       ...(this.keepWholePos === undefined ? {} : { keepWholePos: this.keepWholePos }),
       ...(this.keepWholePenalty === undefined ? {} : { keepWholePenalty: this.keepWholePenalty }),
     });
+  }
+
+  /**
+   * Hands the first analyzer failure of this book to `onError`, or to the
+   * console when none was given. The paragraph is laid out without hints.
+   */
+  private reportAnalyzerFailure(cause: unknown): void {
+    if (this.analyzerWarned) return;
+    this.analyzerWarned = true;
+    const error = new MejiroError(
+      'analyzer-failed',
+      'the configured TextAnalyzer threw; laying out without typography hints. ' +
+        'Further failures from this book are not reported.',
+      { cause },
+    );
+    if (this.onError) this.onError(error);
+    else warnRecovered(error);
   }
 
   /** Hints for a source paragraph, derived once per paragraph text. */
@@ -516,26 +554,36 @@ export class MejiroBook {
   }
 
   /**
-   * Sets the page geometry used by subsequent {@link layoutChapter} calls.
-   * Must be called before `layoutChapter`.
+   * Sets the page geometry used by subsequent {@link layoutChapter} calls,
+   * without measuring anything; {@link MejiroBook.fitPageSize} measures a
+   * container instead. A {@link PageGeometry} keeps its heights.
+   *
+   * @throws RangeError when `pageWidth` or `lineWidth` is absent or not a
+   *   positive finite number, a padding is not a non-negative finite number,
+   *   or `paddingX` is not below half of `pageWidth`. The previous size is kept.
    */
   setPageSize(size: PageSize): void {
+    assertPageSize(size, 'MejiroBook.setPageSize');
+    const heights = size as Partial<PageGeometry>;
     this.size = {
       pageWidth: size.pageWidth,
       lineWidth: size.lineWidth,
-      pagePaddingX: size.pagePaddingX ?? 0,
-      pagePaddingY: size.pagePaddingY ?? 0,
+      paddingX: size.paddingX ?? 0,
+      paddingY: size.paddingY ?? 0,
+      ...(heights.pageHeight !== undefined && heights.contentHeight !== undefined
+        ? { pageHeight: heights.pageHeight, contentHeight: heights.contentHeight }
+        : {}),
     };
   }
 
   /**
-   * Computes page dimensions from a container element and applies them
-   * via {@link setPageSize}.
+   * Measures `container`, saves the result as this book's page size, and
+   * returns it.
    *
    * Defaults to a 1.45 aspect ratio, page width minimums of 280×400 px,
    * a 780 px height ceiling, a 56 px header reservation, and a 48 px
    * gutter reservation. All of these are overridable via the second
-   * argument; see {@link ComputePageSizeOptions}.
+   * argument; see {@link FitPageSizeOptions}.
    *
    * Padding not given in `options` follows the `--mejiro-page-pad-x`,
    * `--mejiro-page-pad-y` and `--mejiro-page-pad-bottom` custom properties the
@@ -546,18 +594,24 @@ export class MejiroBook {
    * @param container - DOM element representing the reading surface.
    * @param options - Page geometry and padding overrides. Defaults to
    *   {@link DEFAULT_PAGE_GEOMETRY} + the drawn page padding.
-   * @returns Computed page width, page height, and content height.
+   * @returns The saved geometry, ready to pass to {@link ChapterLayout.resize}.
+   * @throws RangeError when the container measures zero wide or high — it is
+   *   not attached or not displayed — or the fitted size fails the checks of
+   *   {@link MejiroBook.setPageSize}. Nothing is saved.
    */
-  computePageSize(
-    container: HTMLElement,
-    options?: ComputePageSizeOptions,
-  ): { pageWidth: number; pageHeight: number; contentHeight: number } {
+  fitPageSize(container: HTMLElement, options?: FitPageSizeOptions): PageGeometry {
+    if (!(container.clientWidth > 0 && container.clientHeight > 0)) {
+      throw new RangeError(
+        'MejiroBook.fitPageSize: the container measures zero; it must be attached and displayed',
+      );
+    }
     // The reader stylesheet draws the page inset; laying out for another one
     // would place text and image exclusion off the drawn page.
     const drawn = stylesheetPagePadding(container);
-    const padX = options?.padding?.x ?? drawn.x ?? DEFAULT_PAGE_PADDING.x;
-    const padY = options?.padding?.y ?? drawn.y ?? DEFAULT_PAGE_PADDING.y;
-    const padBottom = options?.padding?.bottom ?? drawn.bottom ?? DEFAULT_PAGE_PADDING.bottom;
+    const paddingX = options?.paddingX ?? drawn.x ?? DEFAULT_PAGE_PADDING.paddingX;
+    const paddingY = options?.paddingY ?? drawn.y ?? DEFAULT_PAGE_PADDING.paddingY;
+    const paddingBottom =
+      options?.paddingBottom ?? drawn.bottom ?? DEFAULT_PAGE_PADDING.paddingBottom;
     const aspect = options?.aspect ?? DEFAULT_PAGE_GEOMETRY.aspect;
     const minWidth = options?.minWidth ?? DEFAULT_PAGE_GEOMETRY.minWidth;
     const minHeight = options?.minHeight ?? DEFAULT_PAGE_GEOMETRY.minHeight;
@@ -580,17 +634,17 @@ export class MejiroBook {
     w = Math.max(w, minWidth);
     h = Math.max(h, minHeight);
 
-    const contentHeight = h - padY - padBottom;
-    const lineWidth = verticalLineWidth(contentHeight, this.opts.fontSize);
-
-    this.setPageSize({
+    const contentHeight = h - paddingY - paddingBottom;
+    const geometry: PageGeometry = {
       pageWidth: w,
-      lineWidth,
-      pagePaddingX: padX,
-      pagePaddingY: padY,
-    });
-
-    return { pageWidth: w, pageHeight: h, contentHeight };
+      lineWidth: verticalLineWidth(contentHeight, this.opts.fontSize),
+      paddingX,
+      paddingY,
+      pageHeight: h,
+      contentHeight,
+    };
+    this.setPageSize(geometry);
+    return geometry;
   }
 
   /**
@@ -600,20 +654,28 @@ export class MejiroBook {
    * Font loading and character measurement are handled automatically.
    *
    * The page geometry and options in effect when the call starts are captured
-   * up front, so a concurrent {@link setPageSize} / {@link setOptions} cannot
-   * leave the returned layout holding geometry its break points were not
-   * computed for.
+   * up front, so a concurrent {@link setPageSize} / {@link updateOptions}
+   * cannot leave the returned layout holding geometry its break points were
+   * not computed for.
    *
    * @param chapter - Chapter with paragraphs to lay out.
    * @returns A layout object for retrieving pages and managing image exclusions.
-   * @throws If {@link setPageSize} has not been called.
+   * @throws MejiroError `page-size-unset` if no page size has been given, by
+   *   {@link BookOptions.pageSize}, {@link setPageSize} or {@link fitPageSize}.
+   * @throws MejiroError `font-unavailable` / `font-load-failed` as
+   *   {@link MejiroBook.updateOptions} describes.
    */
-  async layoutChapter(chapter: { paragraphs: readonly BookParagraph[] }): Promise<ChapterLayout> {
-    if (!this.size) throw new Error('Page size not set. Call setPageSize() first.');
+  async layoutChapter(chapter: ChapterSource): Promise<ChapterLayout> {
+    if (!this.size) {
+      throw new MejiroError(
+        'page-size-unset',
+        'Page size not set. Pass pageSize, or call setPageSize() or fitPageSize() first.',
+      );
+    }
 
     const opts: InternalOptions = { ...this.opts };
-    const size: Required<PageSize> = { ...this.size };
-    const { fontFamily, fontSize, lineSpacing, mode, enableHanging } = opts;
+    const size: BookPageSize = { ...this.size };
+    const { fontFamily, fontSize, lineSpacing, kinsoku, enableHanging } = opts;
     const { lineWidth } = size;
 
     // Normalize once, up front: text and its annotations have to move to NFC
@@ -635,7 +697,7 @@ export class MejiroBook {
     });
 
     // Initial layout via MejiroBrowser (handles font loading + ruby)
-    const result = await this.browser.layoutChapter({
+    const result = await this.browser.layoutParagraphs({
       paragraphs: normalized.map((p) => ({
         text: p.text,
         inlineAnnotations: p.inlineAnnotations.length ? p.inlineAnnotations : undefined,
@@ -645,7 +707,7 @@ export class MejiroBook {
       fontFamily,
       fontSize,
       lineWidth,
-      mode,
+      kinsoku,
       enableHanging,
       breakCost: this.breakCost,
     });
@@ -655,7 +717,6 @@ export class MejiroBook {
       chars: result.paragraphs[i].chars,
       breakPoints: result.paragraphs[i].breakResult.breakPoints,
       inlineAnnotations: normalized[i].inlineAnnotations,
-      isHeading: normalized[i].isHeading,
       headingLevel: p.headingLevel,
       kind: p.kind,
     }));
@@ -663,7 +724,7 @@ export class MejiroBook {
     // Cache paragraph data for re-layout on resize/exclusion
     const baseFontSpec = toFontSpec(fontFamily, fontSize);
     const cached: CachedParagraph[] = chapter.paragraphs.map((p, i) => {
-      const { text, inlineAnnotations, isHeading, paragraphFontSize, hints } = normalized[i];
+      const { text, inlineAnnotations, paragraphFontSize, hints } = normalized[i];
       const spec =
         paragraphFontSize === fontSize ? baseFontSpec : toFontSpec(fontFamily, paragraphFontSize);
       const rubySpec = deriveRubyFont(fontFamily, paragraphFontSize);
@@ -680,7 +741,6 @@ export class MejiroBook {
           this.measurer,
         ),
         layoutTcyAnnotations: buildTcyAnnotations(inlineAnnotations, paragraphFontSize),
-        isHeading,
         headingLevel: p.headingLevel,
         // Cached so every re-break replays this analysis instead of redoing it.
         hintClusterIds: hints?.clusterIds,
@@ -691,17 +751,18 @@ export class MejiroBook {
     // The analyzer identity travels with the config so that a snapshot taken of
     // this layout records which analyzer the hints above came from.
     const config: LayoutConfig = {
+      fontFamily,
       fontSize,
       lineSpacing,
       headingStyles: opts.headingStyles,
       headingScale: opts.headingScale,
-      mode,
+      kinsoku,
       enableHanging,
       breakCost: this.breakCost,
       analyzer: this.analyzer?.identity,
     };
 
-    return this.registerLayout(new ChapterLayout(cached, renderEntries, config, size), fontFamily);
+    return this.registerLayout(createChapterLayout(cached, renderEntries, config, size), true);
   }
 
   /**
@@ -715,18 +776,15 @@ export class MejiroBook {
    * same paragraphs and `InlineAnnotation`s an exported EPUB would carry.
    * Inline-image markers are skipped, as the exported figures are.
    *
-   * @returns A map keyed by `chapter.id` (or `chapter-<1-based position>` when
-   *   missing).
+   * @returns One layout per chapter, at the chapter's index in `options.chapters`.
+   * @throws The same errors as {@link MejiroBook.layoutChapter}.
    */
-  async layoutManuscript(options: LayoutManuscriptOptions): Promise<Map<string, ChapterLayout>> {
+  async layoutManuscript(options: LayoutManuscriptOptions): Promise<ChapterLayout[]> {
     const dialect = options.dialect ?? 'mejiro';
-    const result = new Map<string, ChapterLayout>();
-    let i = 0;
+    const result: ChapterLayout[] = [];
     for (const chapter of options.chapters) {
       const paragraphs = this.manuscriptParagraphsOf(chapter, dialect);
-      const layout = await this.layoutChapter({ paragraphs });
-      result.set(chapter.id ?? `chapter-${i + 1}`, layout);
-      i++;
+      result.push(await this.layoutChapter({ paragraphs }));
     }
     return result;
   }
@@ -743,7 +801,7 @@ export class MejiroBook {
    * The returned layout uses the **snapshot's** config and page geometry,
    * not this book's current options. Its advances are taken to be measured in
    * this book's font family, which the snapshot does not record. The next
-   * {@link MejiroBook.setOptions} re-measures it against the book's options
+   * {@link MejiroBook.updateOptions} re-measures it against the book's options
    * whenever the snapshot's font size or heading scales differ from them, so
    * a restored layout never carries the book's sizes over advances measured
    * at others.
@@ -753,15 +811,18 @@ export class MejiroBook {
    * and future re-breaks fall back to the character-class rules. Nothing is
    * re-analysed here — see {@link ChapterLayoutSnapshotConfig.analyzer}.
    *
-   * @param snapshot - Value previously returned by `layout.snapshot()`.
+   * @param snapshot - Value previously returned by `layout.snapshot()`, as an
+   *   object or parsed back from JSON. A snapshot in the previous (version 2)
+   *   format is read too.
    * @returns A {@link ChapterLayout} positioned exactly as it was at snapshot time.
-   * @throws If the snapshot is of an unsupported format version, or malformed:
-   *   an advance array whose length is not the paragraph's codepoint count,
-   *   break points that are not strictly increasing inside the paragraph, an
-   *   annotation span outside it, or a missing or non-finite field.
+   * @throws MejiroError `snapshot-invalid` if the value is not an object, is of
+   *   an unsupported format version, or is malformed: an advance array whose
+   *   length is not the paragraph's codepoint count, break points that are not
+   *   strictly increasing inside the paragraph, an annotation span outside it,
+   *   or a missing or non-finite field.
    */
   layoutFromSnapshot(snapshot: ChapterLayoutSnapshot): ChapterLayout {
-    assertChapterLayoutSnapshot(snapshot);
+    snapshot = readChapterLayoutSnapshot(snapshot);
     // A snapshot carrying no hints has nothing to weigh an identity against, so
     // the comparison is only worth making once one is found.
     const hasHints = snapshot.paragraphs.some(
@@ -778,7 +839,7 @@ export class MejiroBook {
           endIndex: r.endIndex,
           rubyText: new Uint32Array(r.rubyText),
           rubyAdvances: new Float32Array(r.rubyAdvances),
-          ...(r.type ? { type: r.type } : {}),
+          ...(r.rubyType ? { rubyType: r.rubyType } : {}),
           ...(r.jukugoSplitPoints ? { jukugoSplitPoints: [...r.jukugoSplitPoints] } : {}),
         }),
       );
@@ -799,7 +860,6 @@ export class MejiroBook {
           ? { hintBreakPenalties: new Uint8Array(p.hintBreakPenalties) }
           : {}),
         ...(p.kind != null ? { kind: p.kind } : {}),
-        ...(p.isHeading === true ? { isHeading: true } : {}),
         ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
       };
     });
@@ -808,13 +868,13 @@ export class MejiroBook {
       breakPoints: new Uint32Array(p.breakPoints),
       inlineAnnotations: p.inlineAnnotations,
       ...(p.kind != null ? { kind: p.kind } : {}),
-      ...(p.isHeading === true ? { isHeading: true } : {}),
       ...(p.headingLevel != null ? { headingLevel: p.headingLevel } : {}),
     }));
     const config: LayoutConfig = {
+      fontFamily: this.opts.fontFamily,
       fontSize: snapshot.config.fontSize,
       lineSpacing: snapshot.config.lineSpacing,
-      mode: snapshot.config.mode,
+      kinsoku: snapshot.config.kinsoku,
       enableHanging: snapshot.config.enableHanging,
       headingScale: snapshot.config.headingScale,
       ...(snapshot.config.headingStyles ? { headingStyles: snapshot.config.headingStyles } : {}),
@@ -823,16 +883,20 @@ export class MejiroBook {
       // taken of the restored layout records what its breaks really depend on.
       ...(keepHints && snapshot.config.analyzer ? { analyzer: snapshot.config.analyzer } : {}),
     };
-    const layout = new ChapterLayout(cached, entries, config, { ...snapshot.size });
-    for (const spread of snapshot.images ?? []) {
-      layout.setImages(spread.spreadIndex, spread.images);
-    }
-    return this.registerLayout(layout, null);
+    const layout = createChapterLayout(cached, entries, config, { ...snapshot.size });
+    // Restoring adopts the images without reflowing once per spread.
+    chapterLayoutChannel(layout).restoreImages(snapshot.images ?? []);
+    return this.registerLayout(layout, false);
   }
 
-  /** Clears the character width measurement cache. */
-  clearCache(fontKey?: string): void {
-    this.browser.clearCache(fontKey);
+  /**
+   * Clears the character width measurement cache.
+   *
+   * @param fontSpec - A CSS font shorthand such as `'16px serif'` whose widths
+   *   to drop; every font's when omitted.
+   */
+  clearCache(fontSpec?: string): void {
+    this.browser.clearCache(fontSpec);
   }
 
   /**
@@ -842,7 +906,7 @@ export class MejiroBook {
    * @returns Number of font specs cached and the total number of codepoints
    *   measured across all fonts.
    */
-  cacheStats(): { fonts: number; codepoints: number } {
+  cacheStats(): WidthCacheStats {
     return this.browser.cacheStats();
   }
 }

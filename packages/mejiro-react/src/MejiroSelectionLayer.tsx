@@ -1,8 +1,13 @@
-import type { AnchorRect } from '@libraz/mejiro/book';
-import type { CSSProperties, ReactNode } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type CSSProperties,
+  forwardRef,
+  type ReactNode,
+} from 'react';
+import type { SelectionRect } from './MejiroSpread.js';
 
-/** Props for {@link MejiroSelectionLayer}. */
-export interface MejiroSelectionLayerProps {
+/** Props for {@link MejiroSelectionLayer}; other `div` attributes go to the root element. */
+export interface MejiroSelectionLayerProps extends ComponentPropsWithoutRef<'div'> {
   /**
    * Spread-local rectangles to highlight. Compute these via
    * {@link ChapterLayout.selectionRects} and pass the full array; the layer
@@ -12,7 +17,7 @@ export interface MejiroSelectionLayerProps {
    * fill. Entries without one take the fill from the shipped stylesheet
    * (`.mejiro-selection-rect`, themeable via `--mejiro-selection-bg`).
    */
-  rects: readonly (AnchorRect & { color?: string })[];
+  rects: readonly SelectionRect[];
   /** Which page-side this layer is rendered into. */
   side: 'right' | 'left';
   /** Optional class added to the outer wrapper. */
@@ -32,46 +37,48 @@ export interface MejiroSelectionLayerProps {
  * page's content coordinate frame). The layer is pointer-transparent so it
  * does not interfere with selection drag on the page below.
  */
-export function MejiroSelectionLayer({
-  rects,
-  side,
-  className,
-  style,
-  rectClassName,
-  rectStyle,
-}: MejiroSelectionLayerProps): ReactNode {
-  const wrapperClass = className ? `mejiro-selection-layer ${className}` : 'mejiro-selection-layer';
-  const rectClass = rectClassName ?? 'mejiro-selection-rect';
-  return (
-    <div
-      className={wrapperClass}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        pointerEvents: 'none',
-        ...style,
-      }}
-    >
-      {rects.map((r, i) => {
-        if (r.side !== side) return null;
-        const posStyle: CSSProperties =
-          side === 'right' ? { left: r.x, top: r.y } : { right: -(r.x + r.width), top: r.y };
-        return (
-          <div
-            // biome-ignore lint/suspicious/noArrayIndexKey: selection rects have no stable identity
-            key={i}
-            className={rectClass}
-            style={{
-              position: 'absolute',
-              width: r.width,
-              height: r.height,
-              ...posStyle,
-              ...(r.color != null ? { backgroundColor: r.color } : null),
-              ...rectStyle,
-            }}
-          />
-        );
-      })}
-    </div>
-  );
-}
+export const MejiroSelectionLayer = forwardRef<HTMLDivElement, MejiroSelectionLayerProps>(
+  function MejiroSelectionLayer(
+    { rects, side, className, style, rectClassName, rectStyle, ...rest },
+    ref,
+  ): ReactNode {
+    const wrapperClass = className
+      ? `mejiro-selection-layer ${className}`
+      : 'mejiro-selection-layer';
+    const rectClass = rectClassName ?? 'mejiro-selection-rect';
+    return (
+      <div
+        {...rest}
+        ref={ref}
+        className={wrapperClass}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          pointerEvents: 'none',
+          ...style,
+        }}
+      >
+        {rects.map((r, i) => {
+          if (r.side !== side) return null;
+          const posStyle: CSSProperties =
+            side === 'right' ? { left: r.x, top: r.y } : { right: -(r.x + r.width), top: r.y };
+          return (
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: selection rects have no stable identity
+              key={i}
+              className={rectClass}
+              style={{
+                position: 'absolute',
+                width: r.width,
+                height: r.height,
+                ...posStyle,
+                ...(r.color != null ? { backgroundColor: r.color } : null),
+                ...rectStyle,
+              }}
+            />
+          );
+        })}
+      </div>
+    );
+  },
+);

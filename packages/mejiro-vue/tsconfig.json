@@ -4,6 +4,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "lib": ["ES2022", "DOM"],
+    "stripInternal": true,
     "jsx": "preserve"
   },
   "include": ["src"]

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { type CachedParagraph, ChapterLayout } from '../../src/book/chapter-layout.js';
+import {
+  type CachedParagraph,
+  type ChapterLayout,
+  createChapterLayout,
+} from '../../src/book/chapter-layout.js';
 import { ColumnFlow } from '../../src/book/column-flow.js';
 import { computeBreaks } from '../../src/layout.js';
 import type { RenderEntry } from '../../src/render/types.js';
@@ -51,11 +55,18 @@ function makeLayout(paragraphCount: number, charsPerParagraph: number): ChapterL
     entries.push({ chars, breakPoints, inlineAnnotations: [] });
   }
 
-  return new ChapterLayout(
+  return createChapterLayout(
     cached,
     entries,
-    { fontSize: 10, lineSpacing: 1, headingScale: 1.4, mode: 'strict', enableHanging: true },
-    { pageWidth: 100, lineWidth: 100, pagePaddingX: 0, pagePaddingY: 0 },
+    {
+      fontSize: 10,
+      lineSpacing: 1,
+      headingScale: 1.4,
+      fontFamily: 'serif',
+      kinsoku: 'strict',
+      enableHanging: true,
+    },
+    { pageWidth: 100, lineWidth: 100, paddingX: 0, paddingY: 0 },
   );
 }
 
@@ -78,20 +89,27 @@ function makeBookLayout(totalChars: number): ChapterLayout {
     entries.push({ chars, breakPoints, inlineAnnotations: [] });
   }
 
-  return new ChapterLayout(
+  return createChapterLayout(
     cached,
     entries,
-    { fontSize: 16, lineSpacing: 1.9, headingScale: 1.4, mode: 'strict', enableHanging: true },
-    { pageWidth: 400, lineWidth: 600, pagePaddingX: 40, pagePaddingY: 40 },
+    {
+      fontSize: 16,
+      lineSpacing: 1.9,
+      headingScale: 1.4,
+      fontFamily: 'serif',
+      kinsoku: 'strict',
+      enableHanging: true,
+    },
+    { pageWidth: 400, lineWidth: 600, paddingX: 40, paddingY: 40 },
   );
 }
 
 /** Median elapsed milliseconds of five image moves, as during a drag. */
 function medianDragMs(layout: ChapterLayout): number {
-  layout.syncImages(0, [{ x: 100, y: 40, w: 120, h: 160 }]);
+  layout.setImages(0, [{ x: 100, y: 40, width: 120, height: 160 }]);
   const samples = [60, 80, 100, 120, 140].map((y) => {
     const started = performance.now();
-    layout.syncImages(0, [{ x: 100, y, w: 120, h: 160 }]);
+    layout.setImages(0, [{ x: 100, y, width: 120, height: 160 }]);
     return performance.now() - started;
   });
   return samples.sort((a, b) => a - b)[2];
@@ -99,10 +117,10 @@ function medianDragMs(layout: ChapterLayout): number {
 
 /** Characters fed to `computeBreaks` by five image moves, as during a drag. */
 function dragBreakChars(layout: ChapterLayout): number {
-  layout.syncImages(0, [{ x: 100, y: 40, w: 120, h: 160 }]);
+  layout.setImages(0, [{ x: 100, y: 40, width: 120, height: 160 }]);
   counters.breakChars = 0;
   for (const y of [60, 80, 100, 120, 140]) {
-    layout.syncImages(0, [{ x: 100, y, w: 120, h: 160 }]);
+    layout.setImages(0, [{ x: 100, y, width: 120, height: 160 }]);
   }
   return counters.breakChars;
 }
@@ -131,22 +149,24 @@ describe('reflow passes', () => {
     return () => spy.mock.calls.length;
   }
 
-  it('reflows once for images set on several spreads before any is read', () => {
+  it('reflows once per spread whose images are set, and not again to read them', () => {
     const layout = makeLayout(200, 100);
     const passes = countExclusionPasses(layout);
-    for (const si of [0, 1, 2]) layout.setImages(si, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    for (const si of [0, 1, 2]) {
+      layout.setImages(si, [{ x: 20, y: 10, width: 30, height: 30, margin: 0 }]);
+    }
     for (const si of [0, 1, 2]) layout.getSpread(si);
-    expect(passes()).toBe(1);
+    expect(passes()).toBe(3);
   });
 
   it('reflows once per image move and never re-breaks on a pure read', () => {
     const layout = makeLayout(200, 100);
     const passes = countExclusionPasses(layout);
-    layout.syncImages(0, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 10, width: 30, height: 30, margin: 0 }]);
     layout.getSpread(1);
     layout.getPage(3);
     expect(passes()).toBe(1);
-    layout.syncImages(0, [{ x: 20, y: 20, w: 30, h: 30, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 20, width: 30, height: 30, margin: 0 }]);
     expect(passes()).toBe(2);
   });
 });
@@ -154,7 +174,7 @@ describe('reflow passes', () => {
 describe('getPage cost', () => {
   it('builds only the requested page', () => {
     const layout = makeLayout(50, 100);
-    expect(layout.totalPages).toBeGreaterThan(10);
+    expect(layout.pageCount).toBeGreaterThan(10);
 
     counters.buildRenderPage = 0;
     const page = layout.getPage(3);
@@ -167,15 +187,15 @@ describe('selectionRects cost', () => {
   it('builds each page it crosses exactly once', () => {
     const layout = makeLayout(50, 100);
     // Warm the pagination cache so only the rect pass is measured.
-    expect(layout.totalPages).toBeGreaterThan(10);
+    expect(layout.pageCount).toBeGreaterThan(10);
 
     counters.buildRenderPage = 0;
     const rects = layout.selectionRects({
-      start: { paragraph: 0, charIndex: 0 },
-      end: { paragraph: 9, charIndex: 100 },
+      start: { paragraphIndex: 0, charIndex: 0 },
+      end: { paragraphIndex: 9, charIndex: 100 },
     });
 
-    const pagesSpanned = new Set(rects.map((r) => r.pageIdx)).size;
+    const pagesSpanned = new Set(rects.map((r) => r.pageIndex)).size;
     expect(pagesSpanned).toBeGreaterThan(1);
     expect(counters.buildRenderPage).toBe(pagesSpanned);
     // One rectangle per line, never one per character.
@@ -184,17 +204,17 @@ describe('selectionRects cost', () => {
 
   it('does not grow with the page depth of the range', () => {
     const layout = makeLayout(200, 100);
-    expect(layout.totalPages).toBeGreaterThan(100);
+    expect(layout.pageCount).toBeGreaterThan(100);
 
     counters.buildRenderPage = 0;
     const started = performance.now();
     const deep = layout.selectionRects({
-      start: { paragraph: 180, charIndex: 0 },
-      end: { paragraph: 189, charIndex: 100 },
+      start: { paragraphIndex: 180, charIndex: 0 },
+      end: { paragraphIndex: 189, charIndex: 100 },
     });
     const elapsed = performance.now() - started;
 
-    const pagesSpanned = new Set(deep.map((r) => r.pageIdx)).size;
+    const pagesSpanned = new Set(deep.map((r) => r.pageIndex)).size;
     expect(counters.buildRenderPage).toBe(pagesSpanned);
     expect(deep).toHaveLength(100);
     expectElapsedUnder(elapsed, 50);
@@ -205,9 +225,9 @@ describe('image reflow flow probing', () => {
   it('probes a few line widths per line rather than one per character', () => {
     // 200 paragraphs of 100 characters: 10 lines each, 2000 lines in all.
     const layout = makeLayout(200, 100);
-    layout.syncImages(0, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 10, width: 30, height: 30, margin: 0 }]);
     // Images on the last spread keep the whole chapter inside the probed region.
-    layout.setImages(150, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    layout.setImages(150, [{ x: 20, y: 10, width: 30, height: 30, margin: 0 }]);
 
     const place = vi.spyOn(ColumnFlow.prototype, 'place');
     layout.getSpread(0);
@@ -239,24 +259,29 @@ describe('findText cost', () => {
 
   it('locates each match without scanning the pages before it', () => {
     const layout = makeLayout(200, 100);
-    expect(layout.totalPages).toBeGreaterThan(100);
+    expect(layout.pageCount).toBeGreaterThan(100);
     const walks = countPageWalks(layout);
 
     const matches = layout.findText('あ'.repeat(10));
     expect(matches).toHaveLength(2000);
-    expect(matches.at(-1)?.pageIdx).toBeGreaterThan(100);
-    // One page is read per match; a scan from the first page would walk ~pageIdx pages each.
+    expect(matches.at(-1)?.pageIndex).toBeGreaterThan(100);
+    // One page is read per match; a scan from the first page would walk ~pageIndex pages each.
     expect(walks()).toBeLessThanOrEqual(matches.length * 2);
   });
 
   it('locates matches the same in exclusion mode', () => {
     const layout = makeLayout(200, 100);
-    layout.setImages(0, [{ x: 20, y: 10, w: 30, h: 30, margin: 0 }]);
+    layout.setImages(0, [{ x: 20, y: 10, width: 30, height: 30, margin: 0 }]);
     const matches = layout.findText('あ'.repeat(10), { maxResults: 5 });
     for (const m of matches) {
-      expect(layout.locateAnchor({ paragraph: m.paragraph, charIndex: m.charStart })).toMatchObject(
-        { spreadIdx: m.spreadIdx, pageIdx: m.pageIdx, lineIdx: m.lineIdx, side: m.side },
-      );
+      expect(
+        layout.locateAnchor({ paragraphIndex: m.paragraphIndex, charIndex: m.startIndex }),
+      ).toMatchObject({
+        spreadIndex: m.spreadIndex,
+        pageIndex: m.pageIndex,
+        lineIndex: m.lineIndex,
+        side: m.side,
+      });
     }
     expect(matches).toHaveLength(5);
   });

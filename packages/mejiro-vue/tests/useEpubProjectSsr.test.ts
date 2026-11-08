@@ -20,7 +20,7 @@ describe('useEpubProject during server-side rendering (Vue)', () => {
         setup() {
           useEpubProject({
             debounceMs: 4321,
-            cover: { href: 'OPS/Images/cover.jpg', url: 'https://cdn.example.test/cover.jpg' },
+            initialCover: { url: 'https://cdn.example.test/cover.jpg', mediaType: 'image/jpeg' },
             assetResolver,
             onPreview,
           });

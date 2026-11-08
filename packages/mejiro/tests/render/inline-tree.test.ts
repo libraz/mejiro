@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { InlineAnnotation } from '../../src/browser/types.js';
 import { buildInlineNodes, type InlineNode } from '../../src/render/inline-tree.js';
 import { segmentToInlineNode } from '../../src/render/segment-descriptor.js';
+import type { InlineAnnotation } from '../../src/types.js';
 
 const chars = [...'abcdefghijklmnop'];
 
@@ -15,8 +15,8 @@ function elementKinds(nodes: readonly InlineNode[]): string[] {
 describe('buildInlineNodes', () => {
   it('drops a partially overlapping pair however the paragraph is sliced', () => {
     const annotations: InlineAnnotation[] = [
-      { kind: 'em', startIndex: 2, endIndex: 8 },
-      { kind: 'strong', startIndex: 5, endIndex: 12 },
+      { type: 'em', startIndex: 2, endIndex: 8 },
+      { type: 'strong', startIndex: 5, endIndex: 12 },
     ];
 
     expect(elementKinds(buildInlineNodes(chars, annotations))).toEqual([]);
@@ -26,10 +26,10 @@ describe('buildInlineNodes', () => {
 
   it('keeps the survivors of an overlap check nested identically on every slice', () => {
     const annotations: InlineAnnotation[] = [
-      { kind: 'link', startIndex: 1, endIndex: 12, href: 'https://example.test' },
-      { kind: 'em', startIndex: 2, endIndex: 8 },
-      { kind: 'strong', startIndex: 5, endIndex: 12 },
-      { kind: 'tcy', startIndex: 9, endIndex: 11 },
+      { type: 'link', startIndex: 1, endIndex: 12, href: 'https://example.test' },
+      { type: 'em', startIndex: 2, endIndex: 8 },
+      { type: 'strong', startIndex: 5, endIndex: 12 },
+      { type: 'tcy', startIndex: 9, endIndex: 11 },
     ];
     const whole = buildInlineNodes(chars, annotations);
     const lines = [0, 4, 7, 10, 16].slice(1).map((end, i, ends) => {
@@ -43,12 +43,12 @@ describe('buildInlineNodes', () => {
 
   it('keeps whole-paragraph ancestry on every slice, even when clamping ties ranges', () => {
     const annotations: InlineAnnotation[] = [
-      { kind: 'link', startIndex: 0, endIndex: 10, href: 'https://example.test' },
-      { kind: 'tcy', startIndex: 1, endIndex: 5 },
-      { kind: 'em', startIndex: 3, endIndex: 5 },
-      { kind: 'strong', startIndex: 6, endIndex: 10 },
-      { kind: 'emphasis', startIndex: 6, endIndex: 8 },
-      { kind: 'ruby', startIndex: 8, endIndex: 10, rubyText: 'る' },
+      { type: 'link', startIndex: 0, endIndex: 10, href: 'https://example.test' },
+      { type: 'tcy', startIndex: 1, endIndex: 5 },
+      { type: 'em', startIndex: 3, endIndex: 5 },
+      { type: 'strong', startIndex: 6, endIndex: 10 },
+      { type: 'emphasis', startIndex: 6, endIndex: 8 },
+      { type: 'ruby', startIndex: 8, endIndex: 10, rubyText: 'る' },
     ];
     /** `outer>inner` for every element and each of its descendants. */
     const ancestry = (nodes: readonly InlineNode[], outer: string[] = []): string[] =>
@@ -102,13 +102,13 @@ describe('buildInlineNodes', () => {
         counted(
           i % 3 === 0
             ? {
-                kind: 'ruby',
+                type: 'ruby',
                 startIndex: 2 * i,
                 endIndex: 2 * i + 2,
                 rubyText: 'じ',
-                type: 'jukugo',
+                rubyType: 'jukugo',
               }
-            : { kind: 'ruby', startIndex: 2 * i, endIndex: 2 * i + 1, rubyText: 'じ' },
+            : { type: 'ruby', startIndex: 2 * i, endIndex: 2 * i + 1, rubyText: 'じ' },
         ),
       );
       // The per-paragraph pass runs once; later lines of the same paragraph reuse it.
@@ -133,7 +133,7 @@ describe('segmentToInlineNode', () => {
       type: 'link',
       text: '漢字',
       href: 'javascript:alert(1)',
-      children: [{ type: 'ruby', base: '漢字', rubyText: 'かんじ' }],
+      children: [{ type: 'ruby', text: '漢字', rubyText: 'かんじ' }],
     });
 
     expect(node).toEqual({
@@ -162,7 +162,7 @@ describe('segmentToInlineNode', () => {
       text: '漢字です',
       href: 'javascript:alert(1)',
       children: [
-        { type: 'ruby', base: '漢字', rubyText: 'かんじ' },
+        { type: 'ruby', text: '漢字', rubyText: 'かんじ' },
         { type: 'text', text: 'です' },
       ],
     });

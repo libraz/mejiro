@@ -36,9 +36,9 @@ class StubResizeObserver {
 
 function stubBook(): MejiroBook {
   return {
-    computePageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
-    layoutChapter: vi.fn(async () => ({ totalPages: 1 }) as unknown as ChapterLayout),
-    layoutManuscript: vi.fn(async () => new Map()),
+    fitPageSize: vi.fn(() => ({ pageWidth: 320, pageHeight: 480, contentHeight: 400 })),
+    layoutChapter: vi.fn(async () => ({ pageCount: 1 }) as unknown as ChapterLayout),
+    layoutManuscript: vi.fn(async () => []),
     getOptions: vi.fn(() => ({ fontSize: 16 })),
   } as unknown as MejiroBook;
 }
@@ -51,10 +51,10 @@ function oneChapterEpub(): EpubBook {
   };
 }
 
-function mockLayout(totalPages = 8): ChapterLayout {
+function mockLayout(pageCount = 8): ChapterLayout {
   return {
-    totalPages,
-    getSpread: vi.fn((i: number) => ({ spreadIdx: i, totalPages }) as unknown as SpreadResult),
+    pageCount,
+    getSpread: vi.fn(() => ({ pageCount }) as unknown as SpreadResult),
   } as unknown as ChapterLayout;
 }
 
@@ -88,7 +88,12 @@ describe('useChapterLayout (React) — surface mounted after the source', () => 
 
     function Host({ show }: { show: boolean }): ReactNode {
       const ref = useRef<HTMLDivElement | null>(null);
-      layout = useChapterLayout(book, epub, 0, ref, { resizeDebounce: 10 }).layout;
+      layout = useChapterLayout(book, {
+        epub,
+        chapterIndex: 0,
+        surface: ref,
+        resizeDebounceMs: 10,
+      }).layout;
       return show ? (
         <div
           ref={(node) => {
@@ -129,7 +134,9 @@ describe('React layout hooks — unmount cleanup', () => {
   it('useChapterLayout disconnects its ResizeObserver on unmount', async () => {
     vi.stubGlobal('ResizeObserver', StubResizeObserver);
     const surface = { current: document.createElement('div') };
-    const { unmount } = renderHook(() => useChapterLayout(stubBook(), null, 0, surface));
+    const { unmount } = renderHook(() =>
+      useChapterLayout(stubBook(), { epub: null, chapterIndex: 0, surface }),
+    );
     expect(observers.filter((o) => o.connected)).toHaveLength(1);
     unmount();
     expect(observers.filter((o) => o.connected)).toHaveLength(0);
@@ -138,7 +145,9 @@ describe('React layout hooks — unmount cleanup', () => {
   it('useManuscriptLayout disconnects its ResizeObserver on unmount', async () => {
     vi.stubGlobal('ResizeObserver', StubResizeObserver);
     const surface = { current: document.createElement('div') };
-    const { unmount } = renderHook(() => useManuscriptLayout(stubBook(), null, surface));
+    const { unmount } = renderHook(() =>
+      useManuscriptLayout(stubBook(), { chapter: null, surface }),
+    );
     expect(observers.filter((o) => o.connected)).toHaveLength(1);
     unmount();
     expect(observers.filter((o) => o.connected)).toHaveLength(0);
@@ -148,7 +157,9 @@ describe('React layout hooks — unmount cleanup', () => {
     vi.stubGlobal('ResizeObserver', undefined);
     const remove = vi.spyOn(window, 'removeEventListener');
     const surface = { current: document.createElement('div') };
-    const { unmount } = renderHook(() => useChapterLayout(stubBook(), null, 0, surface));
+    const { unmount } = renderHook(() =>
+      useChapterLayout(stubBook(), { epub: null, chapterIndex: 0, surface }),
+    );
     unmount();
     expect(remove).toHaveBeenCalledWith('resize', expect.any(Function));
     remove.mockRestore();
@@ -162,7 +173,7 @@ describe('React layout hooks — unmount cleanup', () => {
     const surface = { current: el };
     const epub = oneChapterEpub();
     const { unmount } = renderHook(() =>
-      useChapterLayout(book, epub, 0, surface, { resizeDebounce: 100 }),
+      useChapterLayout(book, { epub, chapterIndex: 0, surface, resizeDebounceMs: 100 }),
     );
     await flush();
     const callsBefore = vi.mocked(book.layoutChapter).mock.calls.length;
@@ -183,7 +194,7 @@ describe('React layout hooks — unmount cleanup', () => {
   it('useSpread cancels a pending page turn on unmount', () => {
     vi.useFakeTimers();
     const layout = mockLayout();
-    const { result, unmount } = renderHook(() => useSpread(layout, { turnDuration: 100 }));
+    const { result, unmount } = renderHook(() => useSpread(layout, { turnDurationMs: 100 }));
     act(() => result.current.goTo(1));
     unmount();
     expect(vi.getTimerCount()).toBe(0);

@@ -35,11 +35,11 @@ function withSetup<T>(setup: () => T): { result: T; unmount: () => void } {
   return { result, unmount: () => app.unmount() };
 }
 
-const ANCHOR = { chapter: 1, paragraph: 2, charIndex: 3 };
+const ANCHOR = { chapterIndex: 1, paragraphIndex: 2, charIndex: 3 };
 const NOTE = {
-  chapter: 0,
-  start: { paragraph: 2, charIndex: 3 },
-  end: { paragraph: 2, charIndex: 9 },
+  chapterIndex: 0,
+  start: { paragraphIndex: 2, charIndex: 3 },
+  end: { paragraphIndex: 2, charIndex: 9 },
   color: 'yellow',
 };
 
@@ -140,7 +140,7 @@ describe('useAnnotations (Vue) — update()', () => {
     const { result } = withSetup(() => useAnnotations({ key: 'k', storage }));
     const { id } = result.add({ ...NOTE, note: 'n' });
     result.update(id, {
-      chapter: undefined,
+      chapterIndex: undefined,
       start: undefined,
       end: undefined,
       color: undefined,
@@ -148,7 +148,7 @@ describe('useAnnotations (Vue) — update()', () => {
     });
     expect(result.annotations.value[0]).toMatchObject({ ...NOTE, id, note: 'changed' });
     vi.advanceTimersByTime(500);
-    expect(parseAnnotations(storage.data.get('k') ?? null)[0]).toMatchObject({
+    expect(parseAnnotations(storage.data.get('k') ?? null)?.[0]).toMatchObject({
       ...NOTE,
       note: 'changed',
     });

@@ -1,4 +1,5 @@
-import type { MorphemeLike } from '../types.js';
+import type { MejiroWarning } from '../errors.js';
+import type { MorphemeLike, TextAnalysis } from '../types.js';
 
 /**
  * Format controls a morphological analyzer's normalizer drops outright.
@@ -66,13 +67,13 @@ const SOUND_MARKS = new Set([
  * @returns The morphemes indexed against `text`, together with any diagnostics,
  *   or `null` when the two strings cannot be reconciled. Morphemes whose mapped
  *   span falls outside `text` or fails to describe its own surface are dropped
- *   and reported in `warnings`.
+ *   and reported in `warnings` as one `morphemes-dropped` entry.
  */
 export function alignMorphemeOffsets(
   text: string,
   normalizedText: string,
   morphemes: readonly MorphemeLike[],
-): { morphemes: MorphemeLike[]; warnings: string[] } | null {
+): Pick<TextAnalysis, 'morphemes' | 'warnings'> | null {
   const textLength = codePointLength(text);
 
   // Equal lengths mean the mapping is the identity, and that is a proof rather
@@ -135,17 +136,18 @@ export function alignMorphemeOffsets(
   const aligned: MorphemeLike[] = [];
   let dropped = 0;
   for (const morpheme of morphemes) {
-    if (!isSpan(morpheme.start, morpheme.end, target.length)) {
+    if (!isSpan(morpheme.startIndex, morpheme.endIndex, target.length)) {
       dropped++;
       continue;
     }
-    const start = morpheme.start < target.length ? spanStart[morpheme.start] : source.length;
-    const end = morpheme.end > 0 ? spanEnd[morpheme.end - 1] : 0;
-    if (!describesSurface(source, removed, start, end, morpheme.surface)) {
+    const startIndex =
+      morpheme.startIndex < target.length ? spanStart[morpheme.startIndex] : source.length;
+    const endIndex = morpheme.endIndex > 0 ? spanEnd[morpheme.endIndex - 1] : 0;
+    if (!describesSurface(source, removed, startIndex, endIndex, morpheme.surface)) {
       dropped++;
       continue;
     }
-    aligned.push({ ...morpheme, start, end });
+    aligned.push({ ...morpheme, startIndex, endIndex });
   }
   return collect(aligned, textLength, dropped);
 }
@@ -159,18 +161,25 @@ export function alignMorphemeOffsets(
  * here whose offsets a caller could slice out of range.
  */
 function collect(
-  morphemes: MorphemeLike[],
+  morphemes: readonly MorphemeLike[],
   textLength: number,
   dropped: number,
-): { morphemes: MorphemeLike[]; warnings: string[] } {
+): Pick<TextAnalysis, 'morphemes' | 'warnings'> {
   const kept: MorphemeLike[] = [];
   let outside = dropped;
   for (const morpheme of morphemes) {
-    if (isSpan(morpheme.start, morpheme.end, textLength)) kept.push(morpheme);
+    if (isSpan(morpheme.startIndex, morpheme.endIndex, textLength)) kept.push(morpheme);
     else outside++;
   }
-  const warnings =
-    outside > 0 ? [`dropped ${outside} morpheme(s) whose offsets fall outside the text`] : [];
+  const warnings: MejiroWarning[] =
+    outside > 0
+      ? [
+          {
+            code: 'morphemes-dropped',
+            message: `dropped ${outside} morpheme(s) whose offsets fall outside the text`,
+          },
+        ]
+      : [];
   return { morphemes: kept, warnings };
 }
 

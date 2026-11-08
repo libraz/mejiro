@@ -1,9 +1,10 @@
-import type { InlineAnnotation } from '../browser/types.js';
+import { MejiroError } from '../errors.js';
 import type { IndexMapping } from '../normalize.js';
 import { normalizeAnnotatedText, remapInlineAnnotations } from '../normalize.js';
+import type { HeadingLevel, InlineAnnotation } from '../types.js';
 import { sanitizeUrl } from '../url.js';
 import type { AnnotatedParagraph } from './types.js';
-import { stripStylesheetLinks } from './xml-utils.js';
+import { assertEpubDomAvailable, stripStylesheetLinks } from './xml-utils.js';
 
 /**
  * Block-level element names that act as paragraph boundaries.
@@ -44,16 +45,22 @@ export const BLOCK_ELEMENTS: ReadonlySet<string> = new Set([
  * Paragraph text is returned in NFC, and every annotation index is a code
  * point offset into that NFC text.
  *
+ * Requires host DOM globals (`DOMParser`, `XMLSerializer`, `Node`). Node and
+ * SSR runtimes must register a DOM implementation (happy-dom, jsdom) first.
+ *
  * @param xhtml - XHTML content string.
  * @returns Array of annotated paragraphs.
+ * @throws {MejiroError} `dom-unavailable` when the host has no DOM
+ *   implementation, `epub-invalid-package` when `xhtml` is not well-formed.
  */
 export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
+  assertEpubDomAvailable();
   const parser = new DOMParser();
   const doc = parser.parseFromString(stripStylesheetLinks(xhtml), 'application/xhtml+xml');
   if (doc.getElementsByTagName('parsererror').length > 0) {
     // application/xhtml+xml parsing inserts a <parsererror> on malformed
     // input instead of throwing; promote it so the caller can react.
-    throw new Error('Failed to parse XHTML document');
+    throw new MejiroError('epub-invalid-package', 'Failed to parse XHTML document');
   }
   const body = contentBody(doc);
 
@@ -67,7 +74,7 @@ export function extractRubyContent(xhtml: string): AnnotatedParagraph[] {
       const tag = element.localName?.toLowerCase() ?? '';
       const headingMatch = /^h([1-6])$/.exec(tag);
       if (headingMatch) {
-        result.headingLevel = Number(headingMatch[1]);
+        result.headingLevel = Number(headingMatch[1]) as HeadingLevel;
       }
       paragraphs.push(result);
     }
@@ -215,7 +222,7 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
 
     if (tagName === 'em' && el.classList.contains('mejiro-emphasis')) {
       recordInline(el, (startIndex, endIndex) => ({
-        kind: 'emphasis',
+        type: 'emphasis',
         startIndex,
         endIndex,
         style: emphasisStyle(el.getAttribute('data-style')),
@@ -224,17 +231,17 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
     }
 
     if (tagName === 'span' && el.classList.contains('mejiro-tcy')) {
-      recordInline(el, (startIndex, endIndex) => ({ kind: 'tcy', startIndex, endIndex }));
+      recordInline(el, (startIndex, endIndex) => ({ type: 'tcy', startIndex, endIndex }));
       return;
     }
 
     if (tagName === 'em') {
-      recordInline(el, (startIndex, endIndex) => ({ kind: 'em', startIndex, endIndex }));
+      recordInline(el, (startIndex, endIndex) => ({ type: 'em', startIndex, endIndex }));
       return;
     }
 
     if (tagName === 'strong') {
-      recordInline(el, (startIndex, endIndex) => ({ kind: 'strong', startIndex, endIndex }));
+      recordInline(el, (startIndex, endIndex) => ({ type: 'strong', startIndex, endIndex }));
       return;
     }
 
@@ -248,14 +255,14 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
       }
       if (el.classList.contains('mejiro-footnote-ref') && href.startsWith('#')) {
         recordInline(el, (startIndex, endIndex) => ({
-          kind: 'footnote',
+          type: 'footnote-ref',
           startIndex,
           endIndex,
           noteId: href.slice(1),
         }));
       } else {
         recordInline(el, (startIndex, endIndex) => ({
-          kind: 'link',
+          type: 'link',
           startIndex,
           endIndex,
           href,
@@ -378,11 +385,11 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
 
       if (seg.rt.length > 0) {
         inlineAnnotations.push({
-          kind: 'ruby',
+          type: 'ruby',
           startIndex,
           endIndex,
           rubyText: seg.rt,
-          type: baseLen === 1 ? 'mono' : 'group',
+          rubyType: baseLen === 1 ? 'mono' : 'group',
         });
       }
     } else {
@@ -401,11 +408,11 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
 
         if (seg.rt.length > 0) {
           inlineAnnotations.push({
-            kind: 'ruby',
+            type: 'ruby',
             startIndex: segStart,
             endIndex: segEnd,
             rubyText: seg.rt,
-            type: segLen === 1 ? 'mono' : 'group',
+            rubyType: segLen === 1 ? 'mono' : 'group',
           });
         }
 
@@ -421,11 +428,11 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
         const combinedRubyText = rubySegments.map((s) => s.rt).join('');
         if (combinedRubyText.length > 0 && rubySegments.length === usable.length) {
           inlineAnnotations.push({
-            kind: 'ruby',
+            type: 'ruby',
             startIndex: overallStart,
             endIndex: overallEnd,
             rubyText: combinedRubyText,
-            type: 'jukugo',
+            rubyType: 'jukugo',
             jukugoSplitPoints: splitPoints,
           });
         }
@@ -463,7 +470,7 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
 
     if (tagName === 'em' && el.classList.contains('mejiro-emphasis')) {
       recordRubyBaseInline(el, (startIndex, endIndex) => ({
-        kind: 'emphasis',
+        type: 'emphasis',
         startIndex,
         endIndex,
         style: emphasisStyle(el.getAttribute('data-style')),
@@ -472,18 +479,18 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
     }
 
     if (tagName === 'span' && el.classList.contains('mejiro-tcy')) {
-      recordRubyBaseInline(el, (startIndex, endIndex) => ({ kind: 'tcy', startIndex, endIndex }));
+      recordRubyBaseInline(el, (startIndex, endIndex) => ({ type: 'tcy', startIndex, endIndex }));
       return;
     }
 
     if (tagName === 'em') {
-      recordRubyBaseInline(el, (startIndex, endIndex) => ({ kind: 'em', startIndex, endIndex }));
+      recordRubyBaseInline(el, (startIndex, endIndex) => ({ type: 'em', startIndex, endIndex }));
       return;
     }
 
     if (tagName === 'strong') {
       recordRubyBaseInline(el, (startIndex, endIndex) => ({
-        kind: 'strong',
+        type: 'strong',
         startIndex,
         endIndex,
       }));
@@ -500,14 +507,14 @@ function extractFromNodes(nodes: readonly Node[], preformatted: boolean): Annota
       }
       if (el.classList.contains('mejiro-footnote-ref') && href.startsWith('#')) {
         recordRubyBaseInline(el, (startIndex, endIndex) => ({
-          kind: 'footnote',
+          type: 'footnote-ref',
           startIndex,
           endIndex,
           noteId: href.slice(1),
         }));
       } else {
         recordRubyBaseInline(el, (startIndex, endIndex) => ({
-          kind: 'link',
+          type: 'link',
           startIndex,
           endIndex,
           href,

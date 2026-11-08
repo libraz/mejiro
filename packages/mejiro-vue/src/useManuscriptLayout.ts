@@ -1,18 +1,37 @@
-import type {
-  ChapterLayout,
-  InChapterAnchor,
-  ManuscriptChapter,
-  MejiroBook,
-} from '@libraz/mejiro/book';
+import type { ManuscriptChapter } from '@libraz/mejiro';
+import type { ChapterLayout, InChapterAnchor, MejiroBook } from '@libraz/mejiro/book';
 import type { ManuscriptDialect } from '@libraz/mejiro/epub';
-import { onScopeDispose, type Ref, shallowRef, unref, watch } from 'vue';
+import {
+  type MaybeRefOrGetter,
+  markRaw,
+  onScopeDispose,
+  type Ref,
+  shallowReadonly,
+  shallowRef,
+  toRaw,
+  toValue,
+  watch,
+} from 'vue';
 import { toError } from './errors.js';
+import { type ChapterLayoutRecomputeOptions, hasMeasurableBox } from './useChapterLayout.js';
 import { createRequestToken } from './useRequestToken.js';
 
 /** Options for {@link useManuscriptLayout}. */
 export interface UseManuscriptLayoutOptions {
-  /** Manuscript notation dialect. @defaultValue `'mejiro'` */
-  dialect?: Ref<ManuscriptDialect> | ManuscriptDialect;
+  /**
+   * The manuscript chapter to lay out, or `null` for none. A ref or getter is
+   * followed, including in-place changes to its id, title or body.
+   */
+  chapter: MaybeRefOrGetter<ManuscriptChapter | null>;
+  /**
+   * The reading surface the page size is fitted to — usually a template ref.
+   * Nothing is laid out while it is absent or measures zero (not attached, or
+   * `display: none`); the first positive size its `ResizeObserver` reports
+   * starts the layout.
+   */
+  surface: MaybeRefOrGetter<HTMLElement | null>;
+  /** Manuscript notation dialect. A ref or getter is followed. @defaultValue `'mejiro'` */
+  dialect?: MaybeRefOrGetter<ManuscriptDialect>;
   /**
    * Whether to observe the surface element for size changes and re-flow.
    * Read once during setup — later changes are not picked up.
@@ -23,7 +42,7 @@ export interface UseManuscriptLayoutOptions {
    * Debounce window (ms) applied to size-triggered re-flows. Read once during
    * setup — later changes are not picked up. @defaultValue 120
    */
-  resizeDebounce?: number;
+  resizeDebounceMs?: number;
   /**
    * Capture the reading position from the outgoing layout, just before a
    * **reflow** (non-blank) re-layout replaces it. The anchor is held in
@@ -42,62 +61,42 @@ export interface UseManuscriptLayoutOptions {
   /**
    * Called once when a layout of the current source fails, whichever path
    * started it (source change, resize or `recompute`); a superseded layout
-   * reports nothing. When supplied, `recompute` resolves instead of rejecting.
+   * reports nothing. The failure also lands in `error`. When supplied,
+   * `recompute` resolves instead of rejecting. A `MejiroError` arrives as
+   * thrown.
    */
   onError?: (error: Error) => void;
-}
-
-/** Options for {@link UseManuscriptLayoutReturn.recompute}. */
-export interface ManuscriptRecomputeOptions {
-  /**
-   * Blank the current layout while the new one is computed. Use for content
-   * changes (chapter swaps); skip for size changes so the previous spread stays
-   * visible until the re-flow completes (no flicker).
-   * @defaultValue true
-   */
-  blank?: boolean;
-}
-
-/** Page dimensions returned by {@link MejiroBook.computePageSize}. */
-export interface ManuscriptPageDimensions {
-  /** Width of one page, in CSS pixels. */
-  pageWidth: number;
-  /** Height of one page, in CSS pixels. */
-  pageHeight: number;
-  /** Height of the text area inside a page, in CSS pixels. */
-  contentHeight: number;
 }
 
 /** Return value of {@link useManuscriptLayout}. */
 export interface UseManuscriptLayoutReturn {
   /** Current {@link ChapterLayout}, or `null` before the first computation. */
-  layout: Ref<ChapterLayout | null>;
-  /** Current page width in pixels. */
-  pageWidth: Ref<number>;
-  /** Current page height in pixels. */
-  pageHeight: Ref<number>;
-  /** Current content area height in pixels. */
-  contentHeight: Ref<number>;
+  layout: Readonly<Ref<ChapterLayout | null>>;
+  /** Page width in pixels, as {@link MejiroBook.fitPageSize} measured it; `0` before the first fit. */
+  pageWidth: Readonly<Ref<number>>;
+  /** Page height in pixels; `0` before the first fit. */
+  pageHeight: Readonly<Ref<number>>;
+  /** Height of the text area inside a page, in pixels; `0` before the first fit. */
+  contentHeight: Readonly<Ref<number>>;
   /** Elapsed layout time in milliseconds for the most recent computation. */
-  elapsedMs: Ref<number>;
+  elapsedMs: Readonly<Ref<number>>;
+  /**
+   * Failure of the most recent layout of the current source, or `null`. Set
+   * whichever path started the layout; cleared when the next one starts.
+   */
+  error: Readonly<Ref<Error | null>>;
   /**
    * Force a fresh layout computation. A failure goes to `onError` when one is
    * supplied; otherwise the returned promise rejects.
    */
-  recompute: (opts?: ManuscriptRecomputeOptions) => Promise<void>;
+  recompute: (options?: ChapterLayoutRecomputeOptions) => Promise<void>;
   /**
    * Anchor captured by `capturePosition` before the most recent reflow,
    * awaiting restoration into the new layout. `restorePosition`, when given,
    * consumes it; otherwise read it once the new layout is in place and set it
    * back to `null`.
    */
-  pendingRestore: { current: InChapterAnchor | null };
-}
-
-function unwrap<T>(value: Ref<T> | T): T {
-  return value && typeof value === 'object' && 'value' in (value as object)
-    ? (value as Ref<T>).value
-    : (value as T);
+  pendingRestore: Ref<InChapterAnchor | null>;
 }
 
 /** Content key of a chapter: changes exactly when its id, title or body does. */
@@ -118,7 +117,8 @@ function chapterSignature(chapter: ManuscriptChapter | null): string | null {
  * element is observed with a {@link ResizeObserver}: the first observation runs
  * immediately (so a preview mounted before its container had a final box is
  * still sized correctly on first paint), and later size changes trigger a
- * debounced **full re-layout**.
+ * debounced **full re-layout**. While the surface measures zero,
+ * {@link MejiroBook.fitPageSize} is not called and nothing is laid out.
  *
  * Size changes lay the chapter out again rather than calling
  * `ChapterLayout.resize()`, so page geometry is re-derived from the surface.
@@ -131,38 +131,37 @@ function chapterSignature(chapter: ManuscriptChapter | null): string | null {
  * {@link UseManuscriptLayoutReturn.pendingRestore}, identically in the React
  * hook.
  *
- * @param book - The book instance to lay out with. Pass a `Ref` to swap the
- *   book (e.g. a different typography profile) at runtime — the chapter is
+ * @param book - The book instance to lay out with. Pass a ref or getter to swap
+ *   the book (e.g. a different typography profile) at runtime — the chapter is
  *   laid out again with the new instance.
- * @param chapter - Reactive reference to the manuscript chapter to lay out.
- * @param surface - DOM ref for the reading surface used for page sizing.
- * @param options - Behavior overrides.
+ * @param options - The chapter, the surface and behavior overrides.
  */
 export function useManuscriptLayout(
-  book: MejiroBook | Ref<MejiroBook>,
-  chapter: Ref<ManuscriptChapter | null>,
-  surface: Ref<HTMLElement | null>,
-  options: UseManuscriptLayoutOptions = {},
+  book: MaybeRefOrGetter<MejiroBook>,
+  options: UseManuscriptLayoutOptions,
 ): UseManuscriptLayoutReturn {
   const enableResize = options.enableResize ?? true;
-  const resizeDebounce = options.resizeDebounce ?? 120;
+  const resizeDebounceMs = options.resizeDebounceMs ?? 120;
 
   const layout = shallowRef<ChapterLayout | null>(null);
   const pageWidth = shallowRef(0);
   const pageHeight = shallowRef(0);
   const contentHeight = shallowRef(0);
   const elapsedMs = shallowRef(0);
+  const error = shallowRef<Error | null>(null);
+  const pendingRestore = shallowRef<InChapterAnchor | null>(null);
   const request = createRequestToken();
   // Client box the page size was last computed from; an observation reporting
   // the same box needs no re-layout.
   let measuredBox: { width: number; height: number } | null = null;
-  const pendingRestore: { current: InChapterAnchor | null } = { current: null };
 
-  async function recompute(opts: ManuscriptRecomputeOptions = {}): Promise<void> {
+  async function recompute(opts: ChapterLayoutRecomputeOptions = {}): Promise<void> {
     const blank = opts.blank ?? true;
     const token = request.begin();
-    const current = chapter.value;
-    if (!(current && surface.value)) {
+    const current = toValue(options.chapter);
+    const el = toValue(options.surface);
+    error.value = null;
+    if (!(current && el)) {
       measuredBox = null;
       layout.value = null;
       pageWidth.value = 0;
@@ -171,17 +170,24 @@ export function useManuscriptLayout(
       elapsedMs.value = 0;
       return;
     }
+    if (!hasMeasurableBox(el)) {
+      // Wait for the observer to report a real box.
+      measuredBox = null;
+      if (blank) layout.value = null;
+      return;
+    }
     try {
-      await layOut(token, blank, current, surface.value);
+      await layOut(token, blank, current, el);
     } catch (err) {
       if (!request.isCurrent(token)) return;
+      error.value = toError(err);
       if (!options.onError) throw err;
-      options.onError(toError(err));
+      options.onError(error.value);
     }
   }
 
-  /** Starts a re-layout nobody awaits; a failure is `onError`'s alone. */
-  function trigger(opts?: ManuscriptRecomputeOptions): void {
+  /** Starts a re-layout nobody awaits; a failure is `error`'s and `onError`'s alone. */
+  function trigger(opts?: ChapterLayoutRecomputeOptions): void {
     recompute(opts).catch(() => {});
   }
 
@@ -195,37 +201,43 @@ export function useManuscriptLayout(
     // can restore it afterwards (a new layout object resets the spread index).
     const captured =
       !blank && layout.value ? (options.capturePosition?.(layout.value) ?? null) : null;
-    pendingRestore.current = captured;
+    pendingRestore.value = captured;
 
     if (blank) layout.value = null;
 
-    const currentBook = unref(book);
+    const currentBook = toRaw(toValue(book));
     measuredBox = { width: el.clientWidth, height: el.clientHeight };
-    const dims = currentBook.computePageSize(el);
-    pageWidth.value = dims.pageWidth;
-    pageHeight.value = dims.pageHeight;
-    contentHeight.value = dims.contentHeight;
+    const geometry = currentBook.fitPageSize(el);
+    pageWidth.value = geometry.pageWidth;
+    pageHeight.value = geometry.pageHeight;
+    contentHeight.value = geometry.contentHeight;
 
-    const dialect = unwrap(options.dialect) ?? 'mejiro';
+    const dialect = toValue(options.dialect) ?? 'mejiro';
     const t0 = performance.now();
-    const layouts = await currentBook.layoutManuscript({ chapters: [current], dialect });
+    const [laidOut = null] = await currentBook.layoutManuscript({
+      chapters: [toRaw(current)],
+      dialect,
+    });
+    const nextLayout = laidOut && markRaw(laidOut);
     if (!request.isCurrent(token)) return;
-    const nextLayout = layouts.values().next().value ?? null;
     layout.value = nextLayout;
     elapsedMs.value = performance.now() - t0;
     if (nextLayout && captured && options.restorePosition) {
-      pendingRestore.current = null;
+      pendingRestore.value = null;
       options.restorePosition(nextLayout, captured);
     }
   }
 
-  watch([() => unref(book), () => chapterSignature(chapter.value), surface], () => trigger(), {
-    immediate: true,
-    flush: 'sync',
-  });
-  if (options.dialect && typeof options.dialect === 'object' && 'value' in options.dialect) {
-    watch(options.dialect, () => trigger());
-  }
+  watch(
+    [
+      () => toValue(book),
+      () => chapterSignature(toValue(options.chapter)),
+      () => toValue(options.surface),
+      () => toValue(options.dialect),
+    ],
+    () => trigger(),
+    { immediate: true, flush: 'sync' },
+  );
 
   // --- Size-driven re-flow ---------------------------------------------------
   let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -246,7 +258,7 @@ export function useManuscriptLayout(
     resizeTimer = setTimeout(() => {
       resizeTimer = null;
       trigger({ blank: false });
-    }, resizeDebounce);
+    }, resizeDebounceMs);
   }
 
   let observer: ResizeObserver | null = null;
@@ -275,13 +287,16 @@ export function useManuscriptLayout(
         clearTimer();
         return;
       }
-      scheduleReflow(immediate);
+      // A box that still measures zero has nothing to fit; wait for the next report.
+      if (!hasMeasurableBox(el)) return;
+      // The first real box after a zero one lays out at once.
+      scheduleReflow(immediate || measuredBox === null);
     });
     observer.observe(el);
   }
 
   if (enableResize) {
-    watch(surface, (el) => observeSurface(el), { immediate: true });
+    watch(() => toValue(options.surface), observeSurface, { immediate: true });
 
     // Fallback for environments without ResizeObserver (e.g. very old browsers).
     if (typeof ResizeObserver === 'undefined' && typeof window !== 'undefined') {
@@ -297,11 +312,12 @@ export function useManuscriptLayout(
   });
 
   return {
-    layout,
-    pageWidth,
-    pageHeight,
-    contentHeight,
-    elapsedMs,
+    layout: shallowReadonly(layout),
+    pageWidth: shallowReadonly(pageWidth),
+    pageHeight: shallowReadonly(pageHeight),
+    contentHeight: shallowReadonly(contentHeight),
+    elapsedMs: shallowReadonly(elapsedMs),
+    error: shallowReadonly(error),
     recompute,
     pendingRestore,
   };

@@ -3,8 +3,15 @@
 
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { act, render } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MejiroReader } from '../src/MejiroReader.js';
+import { measurableReaderSurface } from './helpers/fixtures.js';
+
+let restoreSurface: () => void = () => {};
+beforeEach(() => {
+  restoreSurface = measurableReaderSurface();
+});
+afterEach(() => restoreSurface());
 
 function longEpub(): EpubBook {
   return {
@@ -71,18 +78,16 @@ describe('MejiroReader (React) — scroll mode chrome', () => {
     expect(printedNumbers(container).slice(0, 4)).toEqual(['1', '', '3', '']);
   });
 
-  it('renders the n / total indicator when enabled and omits it when disabled', async () => {
+  it('renders the n / total indicator by default and omits it when hidden', async () => {
     vi.useFakeTimers();
-    const on = render(<MejiroReader epub={longEpub()} mode="scroll" enablePageIndicator />);
+    const on = render(<MejiroReader epub={longEpub()} mode="scroll" />);
     await settle();
     expect(on.container.querySelector('.mejiro-reader-page-indicator')?.textContent).toMatch(
       /^1 \/ \d+$/,
     );
     on.unmount();
 
-    const off = render(
-      <MejiroReader epub={longEpub()} mode="scroll" enablePageIndicator={false} />,
-    );
+    const off = render(<MejiroReader epub={longEpub()} mode="scroll" showPageIndicator={false} />);
     await settle();
     expect(off.container.querySelector('.mejiro-reader-page-indicator')).toBeNull();
   });

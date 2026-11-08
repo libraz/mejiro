@@ -7,6 +7,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, shallowRef } from 'vue';
 import { markBookIdentity } from '../src/bookIdentity.js';
 import { MejiroReader } from '../src/MejiroReader.js';
+import { giveElementsAClientBox } from './helpers/fixtures.js';
+
+giveElementsAClientBox();
 
 function book(text: (chapter: number) => string): EpubBook {
   return {

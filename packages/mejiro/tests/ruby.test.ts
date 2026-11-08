@@ -33,7 +33,7 @@ function makeAnnotation(
   endIndex: number,
   rubyText: string,
   rubyAdvanceWidth: number,
-  type?: RubyAnnotation['type'],
+  rubyType?: RubyAnnotation['rubyType'],
   jukugoSplitPoints?: number[],
 ): RubyAnnotation {
   const cps = toCodepoints(rubyText);
@@ -42,7 +42,7 @@ function makeAnnotation(
     endIndex,
     rubyText: cps,
     rubyAdvances: uniformAdvances(cps.length, rubyAdvanceWidth),
-    type,
+    rubyType,
     jukugoSplitPoints,
   };
 }
@@ -307,7 +307,7 @@ describe('preprocessRuby', () => {
           endIndex: 1,
           rubyText: toCodepoints('かん'),
           rubyAdvances: uniformAdvances(1, 10),
-          type: 'mono',
+          rubyType: 'mono',
         },
       ]),
     ).toThrow(/rubyAdvances length/);
@@ -364,7 +364,7 @@ describe('jukugo aggregate classification', () => {
       return { ...ann, rubyAdvances: uniformAdvances(ann.rubyText.length, 100) };
     });
   const jukugoReadings = fixture()
-    .filter((ann) => ann.type === 'jukugo')
+    .filter((ann) => ann.rubyType === 'jukugo')
     .map((ann) => String.fromCodePoint(...ann.rubyText));
 
   it('treats the same jukugo annotations as aggregates in line breaking and rendering', () => {
@@ -379,11 +379,11 @@ describe('jukugo aggregate classification', () => {
 
     // buildInlineNodes: an aggregate's reading is not rendered.
     const inline: InlineAnnotation[] = fixture().map((ann) => ({
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: ann.startIndex,
       endIndex: ann.endIndex,
       rubyText: String.fromCodePoint(...ann.rubyText),
-      type: ann.type,
+      rubyType: ann.rubyType,
     }));
     const rendered = new Set<string>();
     const collect = (nodes: readonly InlineNode[]): void => {
@@ -423,11 +423,11 @@ describe('jukugo aggregate classification', () => {
       const inline = annotations.map(
         (ann): InlineAnnotation =>
           counted({
-            kind: 'ruby',
+            type: 'ruby',
             startIndex: ann.startIndex,
             endIndex: ann.endIndex,
             rubyText: 'じ',
-            type: ann.type,
+            rubyType: ann.rubyType,
           }),
       );
       reads = 0;

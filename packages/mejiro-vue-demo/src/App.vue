@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { formatDialogueLineBreaks, normalizeText } from '@libraz/mejiro';
+import { formatDialogueLineBreaks, type ManuscriptChapter, normalizeText } from '@libraz/mejiro';
 import { DEFAULT_HEADING_STYLES } from '@libraz/mejiro/book';
 import type { InlineAnnotation } from '@libraz/mejiro/browser';
-import type {
-  EpubProjectChapterDraft,
-  MejiroChapterNavMode,
-  PageNumberDisplay,
-} from '@libraz/mejiro-vue';
+import type { EditableEpubChapter, EditableParagraphBlock } from '@libraz/mejiro/epub';
+import type { MejiroChapterNavMode, PageNumberDisplay } from '@libraz/mejiro-vue';
 import {
   MejiroNotationHighlighter,
   MejiroReader,
@@ -49,7 +46,7 @@ const customDraft = useManuscriptDraft({
   ],
 });
 const customChapters = customDraft.chapters;
-const customSelected = customDraft.selected;
+const customSelected = customDraft.selectedChapterIndex;
 const customManuscript = computed(() =>
   customChapters.value.map((chapter) => ({
     id: chapter.id,
@@ -60,44 +57,42 @@ const customManuscript = computed(() =>
 const customCurrentBody = computed(() => customChapters.value[customSelected.value]?.body ?? '');
 const customCurrentTitle = computed(() => customChapters.value[customSelected.value]?.title ?? '');
 
-const enableChapterNav = ref(true);
-const enableHeader = ref(true);
-const enableSettings = ref(true);
-const enableImageOverlay = ref(true);
-const enableStats = ref(true);
+// The header is drawn only when the reader gets a `title`; `title` here toggles passing one.
+const READER_TITLE = 'mejiro';
+const showTitle = ref(true);
+const showSettings = ref(true);
+const showImageOverlayButton = ref(true);
+const showStats = ref(true);
 const enableKeyboard = ref(true);
-const enablePageIndicator = ref(true);
+const showPageIndicator = ref(true);
 const pageNumbers = ref<PageNumberDisplay>('both');
 const pageNumberModes: PageNumberDisplay[] = ['both', 'right', 'left', 'none'];
 const chapterNavMode = ref<MejiroChapterNavMode>('panel');
 const chapterNavModes: MejiroChapterNavMode[] = ['select', 'panel', 'both', 'none'];
 
 const chromeOptions = [
-  { key: 'enableHeader', model: enableHeader },
-  { key: 'enableChapterNav', model: enableChapterNav },
-  { key: 'enableSettings', model: enableSettings },
-  { key: 'enableImageOverlay', model: enableImageOverlay },
-  { key: 'enableStats', model: enableStats },
+  { key: 'title', model: showTitle },
+  { key: 'showSettings', model: showSettings },
+  { key: 'showImageOverlayButton', model: showImageOverlayButton },
+  { key: 'showStats', model: showStats },
   { key: 'enableKeyboard', model: enableKeyboard },
-  { key: 'enablePageIndicator', model: enablePageIndicator },
+  { key: 'showPageIndicator', model: showPageIndicator },
 ];
 
-const headerDependentOptions = ['enableSettings', 'enableImageOverlay', 'enableStats'];
+const headerDependentOptions = ['showSettings', 'showImageOverlayButton', 'showStats'];
 const effectiveChapterNavMode = computed<MejiroChapterNavMode>(() => {
-  if (!enableChapterNav.value) return 'none';
-  if (!enableHeader.value && chapterNavMode.value === 'select') return 'none';
-  if (!enableHeader.value && chapterNavMode.value === 'both') return 'panel';
+  if (!showTitle.value && chapterNavMode.value === 'select') return 'none';
+  if (!showTitle.value && chapterNavMode.value === 'both') return 'panel';
   return chapterNavMode.value;
 });
 const modeDisabled = (nextMode: MejiroChapterNavMode) =>
-  !enableChapterNav.value ||
-  (!enableHeader.value && (nextMode === 'select' || nextMode === 'both'));
+  !showTitle.value && (nextMode === 'select' || nextMode === 'both');
 
 const defaultBody = `これは｜漢字《かんじ》のルビ例です。
 
 小説投稿サイトから貼り付けた原稿を章に分け、EPUBとして整理します。`;
 
-function defaultChapter(index = 0): EpubProjectChapterDraft {
+function defaultChapter(index = 0): ManuscriptChapter {
   return {
     id: `chapter-${Date.now()}-${index}`,
     title: index === 0 ? '第一話' : `第${index + 1}話`,
@@ -106,12 +101,12 @@ function defaultChapter(index = 0): EpubProjectChapterDraft {
 }
 
 const project = useEpubProject({
-  metadata: { title: '新しい作品', author: '作者名' },
-  chapters: [defaultChapter()],
+  initialMetadata: { title: '新しい作品', creators: [{ name: '作者名' }] },
+  initialChapters: [defaultChapter()],
 });
 const projectMetadata = project.metadata;
 const projectChapters = project.chapters;
-const projectSelectedChapter = project.selectedChapter;
+const projectSelectedChapter = project.selectedChapterIndex;
 const projectCurrentChapter = project.currentChapter;
 const projectPreviewError = project.previewError;
 const projectPreviewing = project.previewing;
@@ -119,7 +114,7 @@ const projectPreviewing = project.previewing;
 // Parse the sample EPUB once so switching back to the viewer tab does not
 // re-trigger fetch+parse — passing `:epub="..."` skips the work that
 // `epub-url` would re-run on every remount.
-const sample = useEpub({ defaultUrl: '/neko.epub' });
+const sample = useEpub({ url: '/neko.epub' });
 const sampleEpub = sample.epub;
 const editable = useEditableEpub();
 const editableEditor = editable.editor;
@@ -133,16 +128,16 @@ const rubyText = ref('');
 const imageInput = ref<HTMLInputElement | null>(null);
 const editTextarea = ref<HTMLTextAreaElement | null>(null);
 const paragraphFilter = ref('');
-const editBook = editable.book;
+const editBook = editable.epub;
 const editChapter = computed(
-  () => editBook.value?.chapters[editableSelection.value.chapter] ?? null,
+  () => editBook.value?.chapters[editableSelection.value.chapterIndex] ?? null,
 );
 const editParagraph = editable.selectedParagraph;
-const selectedEditChapter = computed(() => editableSelection.value.chapter);
+const selectedEditChapter = computed(() => editableSelection.value.chapterIndex);
+const editParagraphs = computed(() => paragraphBlocks(editChapter.value));
 const filteredParagraphs = computed(() => {
   const query = normalizeText(paragraphFilter.value.trim()).toLowerCase();
-  if (!editChapter.value) return [];
-  return editChapter.value.paragraphs
+  return editParagraphs.value
     .map((paragraph, paragraphIndex) => ({ paragraph, paragraphIndex }))
     .filter(
       ({ paragraph }) => !query || normalizeText(paragraph.text).toLowerCase().includes(query),
@@ -150,9 +145,9 @@ const filteredParagraphs = computed(() => {
 });
 const previewBook = computed(() =>
   mode.value === 'create'
-    ? project.previewBook.value
+    ? project.previewEpub.value
     : mode.value === 'edit'
-      ? editable.previewBook.value
+      ? editable.previewEpub.value
       : null,
 );
 const previewChapter = computed(() =>
@@ -179,7 +174,10 @@ onMounted(() => {
 
 const exportError = ref<string | null>(null);
 
-function exportAndDownload(run: () => Promise<ArrayBuffer | null>, title: string): void {
+function exportAndDownload(
+  run: () => Promise<Uint8Array<ArrayBuffer> | null>,
+  title: string,
+): void {
   exportError.value = null;
   run()
     .then((buffer) => buffer && downloadEpub(buffer, title))
@@ -188,7 +186,7 @@ function exportAndDownload(run: () => Promise<ArrayBuffer | null>, title: string
     });
 }
 
-function downloadEpub(buffer: ArrayBuffer, title: string): void {
+function downloadEpub(buffer: Uint8Array<ArrayBuffer>, title: string): void {
   const url = URL.createObjectURL(new Blob([buffer], { type: 'application/epub+zip' }));
   const a = document.createElement('a');
   a.href = url;
@@ -206,7 +204,7 @@ function downloadEpub(buffer: ArrayBuffer, title: string): void {
 
 function updateEditText(nextText: string): void {
   editText.value = nextText;
-  editable.updateParagraph(nextText);
+  editable.updateParagraph({ text: nextText });
 }
 
 function codePointIndexAtOffset(text: string, offset: number): number {
@@ -228,17 +226,17 @@ function applyRuby(): void {
   if (end <= start) return;
   const nextInline: InlineAnnotation[] = [
     ...editParagraph.value.inlineAnnotations.filter(
-      (ann) => ann.kind !== 'ruby' || ann.endIndex <= start || ann.startIndex >= end,
+      (ann) => ann.type !== 'ruby' || ann.endIndex <= start || ann.startIndex >= end,
     ),
     {
-      kind: 'ruby',
+      type: 'ruby' as const,
       startIndex: start,
       endIndex: end,
       rubyText: rubyText.value.trim(),
-      type: end - start === 1 ? ('mono' as const) : ('group' as const),
+      rubyType: end - start === 1 ? ('mono' as const) : ('group' as const),
     },
   ].sort((a, b) => a.startIndex - b.startIndex);
-  editable.updateParagraph(editText.value, nextInline);
+  editable.updateParagraph({ text: editText.value, inlineAnnotations: nextInline });
   rubyText.value = '';
 }
 
@@ -246,8 +244,13 @@ function adjustDialogueLineBreaks(): void {
   updateEditText(formatDialogueLineBreaks(editText.value));
 }
 
-function setEditSelection(chapter: number, paragraph: number): void {
-  editable.setSelection({ chapter, paragraph });
+function setEditSelection(chapterIndex: number, blockId: string | null): void {
+  editable.setSelection({ chapterIndex, blockId });
+}
+
+function selectEditChapter(chapterIndex: number): void {
+  const firstParagraph = paragraphBlocks(editBook.value?.chapters[chapterIndex] ?? null)[0];
+  setEditSelection(chapterIndex, firstParagraph?.id ?? null);
 }
 
 function onImagePick(event: Event): void {
@@ -263,32 +266,26 @@ async function addImage(file: File): Promise<void> {
   editable.addImage({
     filename: file.name,
     mediaType: file.type || 'application/octet-stream',
-    data: await file.arrayBuffer(),
+    data: new Uint8Array(await file.arrayBuffer()),
     alt: file.name,
-    afterBlockId: paragraphBlockId(editChapter.value, editableSelection.value.paragraph),
+    afterBlockId: editableSelection.value.blockId ?? undefined,
   });
 }
 
-function paragraphBlockId(
-  chapter: NonNullable<typeof editBook.value>['chapters'][number],
-  paragraphIndex: number,
-): string | undefined {
-  let current = 0;
-  for (const block of chapter.blocks) {
-    if (block.kind !== 'paragraph') continue;
-    if (current === paragraphIndex) return block.id;
-    current++;
-  }
-  return undefined;
+function paragraphBlocks(chapter: EditableEpubChapter | null): EditableParagraphBlock[] {
+  if (!chapter) return [];
+  return chapter.blocks.filter(
+    (block): block is EditableParagraphBlock => block.kind === 'paragraph',
+  );
 }
 
 function setPreviewChapter(nextChapter: number): void {
   if (mode.value === 'create') {
-    project.setSelectedChapter(nextChapter);
+    project.setSelectedChapterIndex(nextChapter);
     return;
   }
   if (mode.value === 'edit') {
-    setEditSelection(nextChapter, 0);
+    selectEditChapter(nextChapter);
   }
 }
 </script>
@@ -302,15 +299,14 @@ function setPreviewChapter(nextChapter: number): void {
         :options="options"
         :fonts="FONTS"
         :epub="sampleEpub"
+        :title="showTitle ? READER_TITLE : undefined"
         subtitle="Vue Viewer"
-        :enable-header="enableHeader"
-        :enable-chapter-nav="enableChapterNav"
         :chapter-nav-mode="effectiveChapterNavMode"
-        :enable-settings="enableHeader && enableSettings"
-        :enable-image-overlay="enableHeader && enableImageOverlay"
-        :enable-stats="enableHeader && enableStats"
+        :show-settings="showTitle && showSettings"
+        :show-image-overlay-button="showTitle && showImageOverlayButton"
+        :show-stats="showTitle && showStats"
         :enable-keyboard="enableKeyboard"
-        :enable-page-indicator="enablePageIndicator"
+        :show-page-indicator="showPageIndicator"
         :page-numbers="pageNumbers"
       />
       <MejiroReader
@@ -318,13 +314,13 @@ function setPreviewChapter(nextChapter: number): void {
         key="custom"
         :options="options"
         :fonts="FONTS"
+        :title="READER_TITLE"
         subtitle="Custom Editor Preview"
         chapter-nav-mode="panel"
         :manuscript="customManuscript"
-        :chapter="customSelected"
-        :enable-image-overlay="false"
+        :chapter-index="customSelected"
         :enable-surface-tap="false"
-        @chapter-change="customDraft.setSelected"
+        @update:chapter-index="customDraft.setSelectedChapterIndex"
       />
       <MejiroReader
         v-else-if="previewBook"
@@ -332,12 +328,12 @@ function setPreviewChapter(nextChapter: number): void {
         :options="options"
         :fonts="FONTS"
         :epub="previewBook"
-        :chapter="previewChapter"
+        :chapter-index="previewChapter"
+        :title="READER_TITLE"
         :subtitle="mode === 'create' ? 'Create Preview' : 'Edit Preview'"
         chapter-nav-mode="panel"
-        :enable-image-overlay="false"
         :enable-surface-tap="false"
-        @chapter-change="setPreviewChapter"
+        @update:chapter-index="setPreviewChapter"
       />
       <div v-else class="demo-empty">Loading preview...</div>
     </main>
@@ -372,12 +368,12 @@ function setPreviewChapter(nextChapter: number): void {
             v-for="option in chromeOptions"
             :key="option.key"
             class="demo-toggle"
-            :class="{ 'is-disabled': headerDependentOptions.includes(option.key) && !enableHeader }"
+            :class="{ 'is-disabled': headerDependentOptions.includes(option.key) && !showTitle }"
           >
             <input
               v-model="option.model.value"
               type="checkbox"
-              :disabled="headerDependentOptions.includes(option.key) && !enableHeader"
+              :disabled="headerDependentOptions.includes(option.key) && !showTitle"
             />
             <span>{{ option.key }}</span>
           </label>
@@ -412,14 +408,13 @@ function setPreviewChapter(nextChapter: number): void {
           </div>
         </div>
         <pre>&lt;MejiroReader
-  :enable-header="{{ enableHeader }}"
-  :enable-chapter-nav="{{ enableChapterNav }}"
+  :title="{{ showTitle ? `'${READER_TITLE}'` : 'undefined' }}"
   chapter-nav-mode="{{ effectiveChapterNavMode }}"
-  :enable-settings="{{ enableHeader && enableSettings }}"
-  :enable-image-overlay="{{ enableHeader && enableImageOverlay }}"
-  :enable-stats="{{ enableHeader && enableStats }}"
+  :show-settings="{{ showTitle && showSettings }}"
+  :show-image-overlay-button="{{ showTitle && showImageOverlayButton }}"
+  :show-stats="{{ showTitle && showStats }}"
   :enable-keyboard="{{ enableKeyboard }}"
-  :enable-page-indicator="{{ enablePageIndicator }}"
+  :show-page-indicator="{{ showPageIndicator }}"
   page-numbers="{{ pageNumbers }}"
 /&gt;</pre>
       </template>
@@ -434,14 +429,14 @@ function setPreviewChapter(nextChapter: number): void {
             <span>Title</span>
             <input
               :value="projectMetadata.title"
-              @input="project.setMetadata({ title: ($event.target as HTMLInputElement).value })"
+              @input="project.updateMetadata({ title: ($event.target as HTMLInputElement).value })"
             />
           </label>
           <label>
             <span>Author</span>
             <input
-              :value="projectMetadata.author ?? ''"
-              @input="project.setMetadata({ author: ($event.target as HTMLInputElement).value })"
+              :value="projectMetadata.creators?.[0]?.name ?? ''"
+              @input="project.updateMetadata({ creators: [{ name: ($event.target as HTMLInputElement).value }] })"
             />
           </label>
         </div>
@@ -453,10 +448,10 @@ function setPreviewChapter(nextChapter: number): void {
           <div class="mejiro-editor-paragraphs demo-list">
             <button
               v-for="(chapter, index) in projectChapters"
-              :key="chapter.id"
+              :key="chapter.id ?? index"
               type="button"
               :class="{ 'is-active': projectSelectedChapter === index }"
-              @click="project.setSelectedChapter(index)"
+              @click="project.setSelectedChapterIndex(index)"
             >
               <span>Chapter {{ index + 1 }}</span>
               <strong>{{ chapter.title || 'Untitled' }}</strong>
@@ -464,7 +459,7 @@ function setPreviewChapter(nextChapter: number): void {
           </div>
           <div class="demo-action-row">
             <button type="button" @click="project.addChapter()">Add chapter</button>
-            <button type="button" @click="project.removeChapter()">Remove</button>
+            <button type="button" @click="project.removeChapter(projectSelectedChapter)">Remove</button>
           </div>
         </div>
         <div v-if="projectCurrentChapter" class="demo-form">
@@ -473,7 +468,7 @@ function setPreviewChapter(nextChapter: number): void {
             <input
               :value="projectCurrentChapter.title"
               @input="
-                project.patchChapter(projectSelectedChapter, {
+                project.updateChapter(projectSelectedChapter, {
                   title: ($event.target as HTMLInputElement).value,
                 })
               "
@@ -485,7 +480,7 @@ function setPreviewChapter(nextChapter: number): void {
               class="demo-manuscript"
               :value="projectCurrentChapter.body"
               @input="
-                project.patchChapter(projectSelectedChapter, {
+                project.updateChapter(projectSelectedChapter, {
                   body: ($event.target as HTMLTextAreaElement).value,
                 })
               "
@@ -514,14 +509,12 @@ function setPreviewChapter(nextChapter: number): void {
           <div class="mejiro-editor-section">
             <div class="demo-section-title">
               <span class="demo-option-label">Chapter</span>
-              <small>{{ editBook.chapters[selectedEditChapter]?.paragraphs.length ?? 0 }} paragraphs</small>
+              <small>{{ editParagraphs.length }} paragraphs</small>
             </div>
             <select
               class="demo-select"
               :value="selectedEditChapter"
-              @change="
-                setEditSelection(Number(($event.target as HTMLSelectElement).value), 0)
-              "
+              @change="selectEditChapter(Number(($event.target as HTMLSelectElement).value))"
             >
               <option
                 v-for="(chapter, chapterIndex) in editBook.chapters"
@@ -535,12 +528,10 @@ function setPreviewChapter(nextChapter: number): void {
             <div class="mejiro-editor-paragraphs demo-list demo-list-compact">
               <button
                 v-for="{ paragraph, paragraphIndex } in filteredParagraphs"
-                :key="`${editChapter?.href}-${paragraphIndex}`"
+                :key="paragraph.id"
                 type="button"
-                :class="{ 'is-active': editableSelection.paragraph === paragraphIndex }"
-                @click="
-                  setEditSelection(selectedEditChapter, paragraphIndex)
-                "
+                :class="{ 'is-active': editableSelection.blockId === paragraph.id }"
+                @click="setEditSelection(selectedEditChapter, paragraph.id)"
               >
                 <span>Paragraph {{ paragraphIndex + 1 }}</span>
                 <strong>{{ paragraph.text.slice(0, 56) }}</strong>
@@ -617,10 +608,10 @@ function setPreviewChapter(nextChapter: number): void {
           <div class="mejiro-editor-paragraphs demo-list demo-list-compact">
             <button
               v-for="(chapter, index) in customChapters"
-              :key="chapter.id"
+              :key="chapter.id ?? index"
               type="button"
               :class="{ 'is-active': customSelected === index }"
-              @click="customDraft.setSelected(index)"
+              @click="customDraft.setSelectedChapterIndex(index)"
             >
               <span>{{ `#${index + 1}` }}</span>
               <strong>{{ chapter.title || 'Untitled' }}</strong>
@@ -644,16 +635,16 @@ function setPreviewChapter(nextChapter: number): void {
             class="demo-search"
             :value="customCurrentTitle"
             @input="
-              customDraft.patchChapter(customSelected, {
+              customDraft.updateChapter(customSelected, {
                 title: ($event.target as HTMLInputElement).value,
               })
             "
           />
           <span class="demo-option-label">Body (with notation highlight)</span>
           <MejiroNotationHighlighter
-            :model-value="customCurrentBody"
+            :value="customCurrentBody"
             dialect="mejiro"
-            @update:model-value="(next: string) => customDraft.patchChapter(customSelected, { body: next })"
+            @update:value="(next: string) => customDraft.updateChapter(customSelected, { body: next })"
           />
         </div>
       </template>

@@ -9,15 +9,19 @@ import type { VolumeInfo } from './useLibrary.js';
 export const MejiroShelf = defineComponent({
   name: 'MejiroShelf',
   props: {
+    /** Volumes to show, in shelf order. */
     volumes: {
       type: Array as PropType<readonly VolumeInfo[]>,
       required: true,
     },
+    /** ID of the volume marked current. */
     currentId: { type: String, default: undefined },
+    /** Heading of the shelf. @defaultValue `messages.shelfTitle` */
     title: { type: String, default: undefined },
   },
   emits: {
-    select: (_volume: VolumeInfo) => true,
+    /** The user picked a volume card; carries that volume. */
+    'volume-select': (_volume: VolumeInfo) => true,
   },
   setup(props, { emit }) {
     const messages = useI18n();
@@ -39,7 +43,7 @@ export const MejiroShelf = defineComponent({
                   {
                     type: 'button',
                     class: ['mejiro-shelf-card', { 'is-active': v.id === props.currentId }],
-                    onClick: () => emit('select', v),
+                    onClick: () => emit('volume-select', v),
                   },
                   [
                     v.cover

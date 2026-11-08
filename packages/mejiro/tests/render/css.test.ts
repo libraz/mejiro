@@ -184,8 +184,8 @@ describe('render CSS', () => {
 
   it('puts the overlay resize handle on the corner the resize arithmetic moves', () => {
     // Growing by (+dx, +dy) keeps x and y: the top-left is fixed, so the grabbed corner is bottom-right.
-    const grown = resizeImageOverlayRect({ x: 10, y: 20, w: 100, h: 80 }, 30, 15);
-    expect(grown).toEqual({ x: 10, y: 20, w: 130, h: 95 });
+    const grown = resizeImageOverlayRect({ x: 10, y: 20, width: 100, height: 80 }, 30, 15);
+    expect(grown).toEqual({ x: 10, y: 20, width: 130, height: 95 });
 
     const rules = cssRules(readCss('mejiro-reader.css'), '.mejiro-reader-image-overlay-resize');
     for (const name of ['', '::before']) {

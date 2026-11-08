@@ -16,14 +16,14 @@ import '@libraz/mejiro/render/mejiro.css';
 // 1. Create a MejiroBrowser instance
 const fontSize = 16;
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: fontSize,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: fontSize,
 });
 
 // 2. Lay out a chapter. The level-1 heading is broken at the size
 // buildParagraphMeasures() measures it at: its scale, rounded to whole pixels.
 const headingSize = Math.round(fontSize * (DEFAULT_HEADING_STYLES[1].scale ?? 1));
-const result = await mejiro.layoutChapter({
+const result = await mejiro.layoutParagraphs({
   paragraphs: [
     { text: '第一章', fontSize: headingSize },
     { text: '吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。' },

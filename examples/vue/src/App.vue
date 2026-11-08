@@ -9,7 +9,7 @@ import { MejiroReader } from '@libraz/mejiro-vue';
  *
  *   <MejiroReader epub-url="/book.epub" />        // open a URL (this example)
  *   <MejiroReader :epub="parsedBook" />           // pre-parsed EPUB
- *   <MejiroReader epub-url="/book.epub" bare />   // bare spread (no chrome)
+ *   <MejiroReader epub-url="/book.epub" />        // no title: no header (bare spread)
  *   <MejiroReader :enable-drop-zone="true" />     // let users drop their own EPUB
  *
  * Swap just the logo with a slot:
@@ -19,7 +19,7 @@ import { MejiroReader } from '@libraz/mejiro-vue';
  *
  * SaaS-style defaults: drop zone + image overlay are off; the host decides
  * which EPUB to deliver. Flip them with `:enable-drop-zone="true"` /
- * `:enable-image-overlay="true"` when you want a free-form viewer.
+ * `:show-image-overlay-button="true"` when you want a free-form viewer.
  *
  * v0.5 additions worth trying:
  *   theme="dark"                                         'light' | 'dark' | 'sepia' | 'high-contrast' | 'auto'
@@ -32,5 +32,5 @@ import { MejiroReader } from '@libraz/mejiro-vue';
 </script>
 
 <template>
-  <MejiroReader epub-url="/neko.epub" subtitle="Vue Example" />
+  <MejiroReader epub-url="/neko.epub" title="mejiro" subtitle="Vue Example" />
 </template>

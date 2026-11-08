@@ -1,9 +1,14 @@
 import { paragraphClassName, type RenderLine, type RenderPage } from '@libraz/mejiro/render';
-import type { CSSProperties, ReactNode } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type CSSProperties,
+  forwardRef,
+  type ReactNode,
+} from 'react';
 import { renderSegment } from './renderInlineNode.js';
 
-/** Props for the MejiroPage component. */
-export interface MejiroPageProps {
+/** Props for the MejiroPage component; other `div` attributes go to the root element. */
+export interface MejiroPageProps extends ComponentPropsWithoutRef<'div'> {
   /** Render page data from `buildRenderPage()`. */
   page: RenderPage;
   /** Additional CSS class name for the root element. */
@@ -34,11 +39,14 @@ function paragraphScaleStyle(scale: number | undefined): CSSProperties | undefin
  * Converts a `RenderPage` data structure into DOM elements using
  * `mejiro-` prefixed CSS classes for layout.
  */
-export function MejiroPage({ page, className, style }: MejiroPageProps): ReactNode {
+export const MejiroPage = forwardRef<HTMLDivElement, MejiroPageProps>(function MejiroPage(
+  { page, className, style, ...rest },
+  ref,
+): ReactNode {
   const rootClass = className ? `mejiro-page ${className}` : 'mejiro-page';
 
   return (
-    <div className={rootClass} style={style}>
+    <div {...rest} ref={ref} className={rootClass} style={style}>
       {page.paragraphs.map((paragraph, pi) => {
         const paraClass = paragraphClassName(paragraph.kind, paragraph.headingLevel);
 
@@ -51,4 +59,4 @@ export function MejiroPage({ page, className, style }: MejiroPageProps): ReactNo
       })}
     </div>
   );
-}
+});

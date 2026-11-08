@@ -1,6 +1,11 @@
-import type { BookParagraph, ParagraphKind } from '../book/types.js';
-import type { InlineAnnotation } from '../browser/types.js';
 import { normalizeAnnotatedText } from '../normalize.js';
+import type {
+  BookParagraph,
+  ChapterSource,
+  HeadingLevel,
+  InlineAnnotation,
+  ParagraphKind,
+} from '../types.js';
 import { sanitizeUrl } from '../url.js';
 import { buildInlineNodes, type InlineNode, inlineNodeContent } from './inline-tree.js';
 
@@ -21,18 +26,6 @@ const SAFE_WRAPPER_TAGS = new Set<NonNullable<RenderEpubStaticOptions['tag']>>([
 ]);
 
 /**
- * Minimal chapter shape {@link renderEpubStatic} needs.
- *
- * Structural on purpose, so an `EpubChapter` or a plain object literal can be
- * rendered without constructing a book first — the static path performs no
- * measurement and therefore needs nothing beyond the paragraphs.
- */
-export interface StaticChapter {
-  /** Paragraphs rendered in order, each as one block element. */
-  paragraphs: readonly BookParagraph[];
-}
-
-/**
  * Render a chapter as a static, framework-agnostic HTML string suitable for
  * SSR / RSC output. No font measurement, no pagination — the browser's
  * native `writing-mode: vertical-rl` flow drives the layout, with the
@@ -51,7 +44,7 @@ export interface StaticChapter {
  * ```
  */
 export function renderEpubStatic(
-  chapter: StaticChapter,
+  chapter: ChapterSource,
   options: RenderEpubStaticOptions = {},
 ): string {
   const tag = SAFE_WRAPPER_TAGS.has(options.tag ?? 'div') ? (options.tag ?? 'div') : 'div';
@@ -81,7 +74,10 @@ function renderParagraph(p: BookParagraph): string {
  * @param headingLevel - Heading level (1–6), if any.
  * @returns Space-separated class names, always starting with `mejiro-paragraph`.
  */
-export function paragraphClassName(kind: ParagraphKind | undefined, headingLevel?: number): string {
+export function paragraphClassName(
+  kind: ParagraphKind | undefined,
+  headingLevel?: HeadingLevel,
+): string {
   const parts = ['mejiro-paragraph'];
   if (headingLevel != null) {
     parts.push(`mejiro-paragraph--h${headingLevel}`);

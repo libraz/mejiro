@@ -1,4 +1,4 @@
-import type { ChapterLayout, InChapterAnchor, MejiroBook } from '@libraz/mejiro/book';
+import type { ChapterLayout, InChapterAnchor, PageGeometry } from '@libraz/mejiro/book';
 import {
   type MutableRefObject,
   type RefObject,
@@ -9,18 +9,19 @@ import {
   useState,
 } from 'react';
 import { toError } from './errors.js';
+import type { ChapterLayoutRecomputeOptions } from './useChapterLayout.js';
 import { useRequestToken } from './useRequestToken.js';
-
-/** Page dimensions as returned by {@link MejiroBook.computePageSize}. */
-type SurfacePageSize = ReturnType<MejiroBook['computePageSize']>;
 
 /**
  * The content a {@link useSurfaceLayout} lays out. Its identity is the source
  * key: a new object starts a fresh (blank) layout, an equal one does not.
  */
 export interface SurfaceLayoutSource {
-  /** Sizes the pages against the surface; runs before {@link layout}. */
-  measure: (surface: HTMLElement) => SurfacePageSize;
+  /**
+   * Sizes the pages against the surface; runs before {@link layout}, and only
+   * once the surface measures a positive width and height.
+   */
+  measure: (surface: HTMLElement) => PageGeometry;
   /** Lays the content out with the page size {@link measure} applied. */
   layout: () => Promise<ChapterLayout | null>;
 }
@@ -30,7 +31,7 @@ export interface SurfaceLayoutOptions {
   /** Observe the surface element for size changes and re-flow. */
   enableResize: boolean;
   /** Debounce window (ms) applied to size-triggered re-flows. */
-  resizeDebounce: number;
+  resizeDebounceMs: number;
   /** Captures the reading position before a reflow (non-blank) re-layout. */
   capturePosition?: (layout: ChapterLayout) => InChapterAnchor | null;
   /** Applies a captured anchor once the new layout is in place. */
@@ -51,8 +52,10 @@ export interface SurfaceLayoutState {
   contentHeight: number;
   /** Most recent layout time (ms). */
   elapsedMs: number;
-  /** Lays the source out again; see `RecomputeOptions` for `blank`. */
-  recompute: (opts?: { blank?: boolean }) => Promise<void>;
+  /** Failure of the most recent layout of the current source, or `null`. */
+  error: Error | null;
+  /** Lays the source out again. */
+  recompute: (opts?: ChapterLayoutRecomputeOptions) => Promise<void>;
   /** Anchor captured before the most recent reflow, awaiting restoration. */
   pendingRestore: MutableRefObject<InChapterAnchor | null>;
 }
@@ -71,22 +74,26 @@ interface SurfaceBox {
  * The observer is keyed on the surface element and the resize options only, so a
  * source change never re-creates it. An observation reporting the box the
  * current layout was measured with is skipped, so mounting or switching the
- * source lays out exactly once. A failed layout of a current request goes to
- * `onError` once and `recompute` resolves; without `onError` an awaited
- * `recompute` rejects, while the hook's own triggers drop the failure.
+ * source lays out exactly once. A surface that measures zero wide or high (not
+ * attached, `display: none`) is not measured: the hook waits for the observer
+ * to report a positive box. A failed layout of a current request is stored in
+ * `error` and goes to `onError` once, and `recompute` resolves; without
+ * `onError` an awaited `recompute` rejects, while the hook's own triggers leave
+ * the failure to `error`.
  */
 export function useSurfaceLayout(
   source: SurfaceLayoutSource | null,
   surface: RefObject<HTMLElement | null>,
   options: SurfaceLayoutOptions,
 ): SurfaceLayoutState {
-  const { enableResize, resizeDebounce } = options;
+  const { enableResize, resizeDebounceMs } = options;
 
   const [layout, setLayout] = useState<ChapterLayout | null>(null);
   const [pageWidth, setPageWidth] = useState(0);
   const [pageHeight, setPageHeight] = useState(0);
   const [contentHeight, setContentHeight] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
+  const [error, setError] = useState<Error | null>(null);
 
   // The attached element, as state: a surface that mounts or is replaced after
   // the first effect re-keys the layout and the observer.
@@ -106,7 +113,7 @@ export function useSurfaceLayout(
   optionsRef.current = options;
 
   const recompute = useCallback(
-    async (opts: { blank?: boolean } = {}) => {
+    async (opts: ChapterLayoutRecomputeOptions = {}) => {
       const blank = opts.blank ?? true;
       const o = optionsRef.current;
       const requestId = requests.begin();
@@ -118,6 +125,13 @@ export function useSurfaceLayout(
         setPageHeight(0);
         setContentHeight(0);
         setElapsedMs(0);
+        setError(null);
+        return;
+      }
+      // A surface with no box cannot be measured; the observer reports the
+      // first positive one and lays out then.
+      if (!(el.clientWidth > 0 && el.clientHeight > 0)) {
+        measuredBoxRef.current = null;
         return;
       }
       try {
@@ -139,11 +153,14 @@ export function useSurfaceLayout(
         layoutRef.current = next;
         setLayout(next);
         setElapsedMs(performance.now() - t0);
+        setError(null);
       } catch (err) {
         if (!requests.isCurrent(requestId)) return;
+        const nextError = toError(err);
+        setError(nextError);
         const handler = optionsRef.current.onError;
         if (!handler) throw err;
-        handler(toError(err));
+        handler(nextError);
       }
     },
     [source, element, requests],
@@ -152,7 +169,7 @@ export function useSurfaceLayout(
   const recomputeRef = useRef(recompute);
   recomputeRef.current = recompute;
   /** Starts a re-layout nobody awaits; a failure is `onError`'s alone. */
-  const trigger = useCallback((opts?: { blank?: boolean }) => {
+  const trigger = useCallback((opts?: ChapterLayoutRecomputeOptions) => {
     recomputeRef.current(opts).catch(() => {});
   }, []);
 
@@ -167,6 +184,7 @@ export function useSurfaceLayout(
     setPageHeight(0);
     setContentHeight(0);
     setElapsedMs(0);
+    setError(null);
   }, [recompute]);
 
   useEffect(() => {
@@ -207,14 +225,19 @@ export function useSurfaceLayout(
       timer = setTimeout(() => {
         timer = null;
         trigger({ blank: false });
-      }, resizeDebounce);
+      }, resizeDebounceMs);
     };
 
     if (typeof ResizeObserver !== 'undefined') {
       const observer = new ResizeObserver(() => {
         // The first callback reports the element's real, laid-out size — run it
         // immediately so a surface that mounted before its final box is sized
-        // correctly on first paint. Debounce later changes.
+        // correctly on first paint. Debounce later changes. A box with no area
+        // is skipped and does not count as the first observation.
+        if (!(el.clientWidth > 0 && el.clientHeight > 0)) {
+          clear();
+          return;
+        }
         const immediate = !observed;
         observed = true;
         const box = measuredBoxRef.current;
@@ -238,7 +261,16 @@ export function useSurfaceLayout(
       window.removeEventListener('resize', onWindowResize);
       clear();
     };
-  }, [element, enableResize, resizeDebounce, trigger]);
+  }, [element, enableResize, resizeDebounceMs, trigger]);
 
-  return { layout, pageWidth, pageHeight, contentHeight, elapsedMs, recompute, pendingRestore };
+  return {
+    layout,
+    pageWidth,
+    pageHeight,
+    contentHeight,
+    elapsedMs,
+    error,
+    recompute,
+    pendingRestore,
+  };
 }

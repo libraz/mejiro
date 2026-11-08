@@ -1,12 +1,12 @@
-import type { InlineAnnotation } from '../browser/types.js';
 import { resolveJukugoAggregates } from '../ruby.js';
+import type { InlineAnnotation } from '../types.js';
 
 /**
  * Node of the nested inline tree {@link buildInlineNodes} produces — one variant
  * per {@link InlineAnnotation} kind, plus the `text` leaf.
  *
- * Every element variant carries both its own flattened content (`text`, or
- * `base` for ruby) and its `children`. `children` is empty when nothing is
+ * Every element variant carries both its own flattened content (`text`, the
+ * base text for ruby) and its `children`. `children` is empty when nothing is
  * nested inside the span, in which case consumers render the flattened string;
  * when it is non-empty it covers exactly the same character range, so rendering
  * both would duplicate the text.
@@ -15,9 +15,9 @@ export type InlineNode =
   | { type: 'text'; text: string }
   | {
       type: 'ruby';
+      text: string;
       rubyText: string;
-      base: string;
-      children: InlineNode[];
+      children: readonly InlineNode[];
       /**
        * Set on every segment of a jukugo word after the first: the segment
        * shares one `<ruby>` element with the ruby sibling before it, which is
@@ -25,12 +25,17 @@ export type InlineNode =
        */
       continuesJukugo?: true;
     }
-  | { type: 'emphasis'; style: 'sesame' | 'dot' | 'circle'; text: string; children: InlineNode[] }
-  | { type: 'tcy'; text: string; children: InlineNode[] }
-  | { type: 'em'; text: string; children: InlineNode[] }
-  | { type: 'strong'; text: string; children: InlineNode[] }
-  | { type: 'link'; text: string; href: string; title?: string; children: InlineNode[] }
-  | { type: 'footnote-ref'; text: string; noteId: string; children: InlineNode[] };
+  | {
+      type: 'emphasis';
+      style: 'sesame' | 'dot' | 'circle';
+      text: string;
+      children: readonly InlineNode[];
+    }
+  | { type: 'tcy'; text: string; children: readonly InlineNode[] }
+  | { type: 'em'; text: string; children: readonly InlineNode[] }
+  | { type: 'strong'; text: string; children: readonly InlineNode[] }
+  | { type: 'link'; text: string; href: string; title?: string; children: readonly InlineNode[] }
+  | { type: 'footnote-ref'; text: string; noteId: string; children: readonly InlineNode[] };
 
 /**
  * Builds the inline node tree for the `[start, end)` slice of a paragraph.
@@ -43,7 +48,7 @@ export type InlineNode =
  * halves of its base, so a ruby annotation whose base starts before `start`
  * contributes plain text and the reading stays on the slice that owns its start.
  *
- * Which annotations survive (see {@link partiallyOverlaps}) is decided on the
+ * Which annotations survive (both members of an interleaving pair are dropped) is decided on the
  * whole paragraph before any clamping, so the result never depends on where a
  * caller slices it. That per-paragraph pass is cached per `annotations` array,
  * which is therefore treated as immutable; a slice then only visits the
@@ -79,7 +84,7 @@ export function inlineNodeContent(
   node: Exclude<InlineNode, { type: 'text' }>,
 ): readonly InlineNode[] {
   if (node.children.length > 0) return node.children;
-  return [{ type: 'text', text: node.type === 'ruby' ? node.base : node.text }];
+  return [{ type: 'text', text: node.text }];
 }
 
 /**
@@ -92,10 +97,10 @@ export function inlineNodeContent(
  *
  * @returns Rank from 0 (outermost) to 3 (innermost).
  */
-export function annotationNestingRank(ann: InlineAnnotation): number {
-  switch (ann.kind) {
+function annotationNestingRank(ann: InlineAnnotation): number {
+  switch (ann.type) {
     case 'link':
-    case 'footnote':
+    case 'footnote-ref':
       return 0;
     case 'emphasis':
     case 'em':
@@ -117,7 +122,7 @@ export function annotationNestingRank(ann: InlineAnnotation): number {
  * members of such a pair, since no well-formed markup can express them, and
  * comparing an annotation with itself is therefore not an overlap.
  */
-export function partiallyOverlaps(a: InlineAnnotation, b: InlineAnnotation): boolean {
+function partiallyOverlaps(a: InlineAnnotation, b: InlineAnnotation): boolean {
   if (a === b) return false;
   const overlaps = a.startIndex < b.endIndex && b.startIndex < a.endIndex;
   const aContainsB = a.startIndex <= b.startIndex && a.endIndex >= b.endIndex;
@@ -153,7 +158,7 @@ function prepareAnnotations(
   const cached = preparedCache.get(annotations);
   if (cached && cached.charCount === charCount) return cached;
 
-  const resolved = resolveJukugoAggregates(annotations.filter((ann) => ann.kind === 'ruby'));
+  const resolved = resolveJukugoAggregates(annotations.filter((ann) => ann.type === 'ruby'));
   const covered: ReadonlySet<InlineAnnotation> = resolved.aggregates;
   const continuations: ReadonlySet<InlineAnnotation> = resolved.continuations;
   const valid = annotations
@@ -253,7 +258,7 @@ function clampAnnotation(
   const endIndex = Math.min(ann.endIndex, end);
   if (endIndex <= startIndex) return undefined;
   if (startIndex === ann.startIndex && endIndex === ann.endIndex) return ann;
-  if (ann.kind === 'ruby' && ann.startIndex < start) return undefined;
+  if (ann.type === 'ruby' && ann.startIndex < start) return undefined;
   return { ...ann, startIndex, endIndex };
 }
 
@@ -305,10 +310,10 @@ function pushText(nodes: InlineNode[], text: string): void {
   if (text) nodes.push({ type: 'text', text });
 }
 
-function toNode(ann: InlineAnnotation, text: string, children: InlineNode[]): InlineNode {
-  switch (ann.kind) {
+function toNode(ann: InlineAnnotation, text: string, children: readonly InlineNode[]): InlineNode {
+  switch (ann.type) {
     case 'ruby':
-      return { type: 'ruby', base: text, rubyText: ann.rubyText, children };
+      return { type: 'ruby', text, rubyText: ann.rubyText, children };
     case 'emphasis':
       return { type: 'emphasis', text, style: ann.style ?? 'sesame', children };
     case 'tcy':
@@ -321,7 +326,7 @@ function toNode(ann: InlineAnnotation, text: string, children: InlineNode[]): In
       return ann.title != null
         ? { type: 'link', text, href: ann.href, title: ann.title, children }
         : { type: 'link', text, href: ann.href, children };
-    case 'footnote':
+    case 'footnote-ref':
       return { type: 'footnote-ref', text, noteId: ann.noteId, children };
   }
 }

@@ -165,42 +165,153 @@ const UNBREAKABLE_PAIRS: Array<readonly [number, number]> = [
 const pairKey = (left: number, right: number): string => `${left}:${right}`;
 
 /**
- * Returns whether the given codepoint is prohibited at the start of a line.
- * @param codepoint - Unicode codepoint to check.
- * @param mode - Kinsoku mode. Defaults to 'strict'.
- * @param rules - Optional custom kinsoku rules. When provided, mode is ignored.
+ * Raw kinsoku lists that {@link buildKinsokuRules} turns into
+ * {@link KinsokuRules}.
  */
-export function isLineStartProhibited(
-  codepoint: number,
-  mode: KinsokuMode = 'strict',
-  rules?: KinsokuRules,
-): boolean {
-  if (rules) return rules.lineStartProhibitedSet.has(codepoint);
+export interface KinsokuRuleSource {
+  /** Codepoints prohibited at the start of a line. */
+  readonly lineStartProhibited: readonly number[];
+  /** Codepoints prohibited at the end of a line. */
+  readonly lineEndProhibited: readonly number[];
+  /**
+   * Adjacent codepoint pairs that must not be split across lines.
+   * @defaultValue []
+   */
+  readonly unbreakablePairs?: readonly (readonly [number, number])[];
+}
+
+/** Options shared by the kinsoku predicates. */
+export interface KinsokuCheckOptions {
+  /**
+   * Kinsoku rules to apply: a built-in mode, or custom rules, which replace the
+   * built-in ones entirely.
+   * @defaultValue 'strict'
+   */
+  kinsoku?: KinsokuMode | KinsokuRules;
+}
+
+/** Lookup sets of one rule set, built once per {@link KinsokuRules} object. */
+interface RuleSets {
+  lineStart: ReadonlySet<number>;
+  lineEnd: ReadonlySet<number>;
+  pairs: ReadonlySet<string>;
+}
+
+/** Lookup sets keyed by the rules object they were built from; the rules stay free of them. */
+const ruleSets = new WeakMap<KinsokuRules, RuleSets>();
+
+/** A kinsoku argument resolved to what the predicates read. @internal */
+export interface ResolvedKinsoku {
+  mode: KinsokuMode;
+  sets: RuleSets | undefined;
+}
+
+const DEFAULT_RESOLVED: ResolvedKinsoku = { mode: 'strict', sets: undefined };
+const LOOSE_RESOLVED: ResolvedKinsoku = { mode: 'loose', sets: undefined };
+
+/**
+ * Resolves a `kinsoku` option once, so a hot loop does not repeat the checks.
+ *
+ * @param kinsoku - Mode or custom rules; `undefined` means `'strict'`.
+ * @throws RangeError when a string is not a known mode.
+ * @throws TypeError when the value is neither a mode string nor a rules object.
+ * @internal
+ */
+export function resolveKinsoku(kinsoku: KinsokuMode | KinsokuRules | undefined): ResolvedKinsoku {
+  if (kinsoku === undefined || kinsoku === 'strict') return DEFAULT_RESOLVED;
+  if (kinsoku === 'loose') return LOOSE_RESOLVED;
+  if (typeof kinsoku === 'string') {
+    throw new RangeError(
+      `kinsoku: unknown mode "${kinsoku}"; use 'strict', 'loose' or custom rules`,
+    );
+  }
+  if (typeof kinsoku !== 'object' || kinsoku === null) {
+    throw new TypeError('kinsoku must be a mode string or rules from buildKinsokuRules()');
+  }
+  let sets = ruleSets.get(kinsoku);
+  if (!sets) {
+    if (
+      !(
+        Array.isArray(kinsoku.lineStartProhibited) &&
+        Array.isArray(kinsoku.lineEndProhibited) &&
+        Array.isArray(kinsoku.unbreakablePairs)
+      )
+    ) {
+      throw new TypeError('kinsoku must be a mode string or rules from buildKinsokuRules()');
+    }
+    sets = setsOf(kinsoku);
+    ruleSets.set(kinsoku, sets);
+  }
+  return { mode: 'strict', sets };
+}
+
+function setsOf(rules: KinsokuRuleSource): RuleSets {
+  return {
+    lineStart: new Set(rules.lineStartProhibited),
+    lineEnd: new Set(rules.lineEndProhibited),
+    pairs: new Set((rules.unbreakablePairs ?? []).map(([left, right]) => pairKey(left, right))),
+  };
+}
+
+/** {@link isLineStartProhibited} on an already resolved argument. @internal */
+export function startProhibited(codepoint: number, resolved: ResolvedKinsoku): boolean {
+  if (resolved.sets) return resolved.sets.lineStart.has(codepoint);
   if (!STRICT_LINE_START_PROHIBITED.has(codepoint)) return false;
-  if (mode === 'loose' && LOOSE_LINE_START_EXCLUSIONS.has(codepoint)) return false;
-  return true;
+  return !(resolved.mode === 'loose' && LOOSE_LINE_START_EXCLUSIONS.has(codepoint));
+}
+
+/** {@link isLineEndProhibited} on an already resolved argument. @internal */
+export function endProhibited(codepoint: number, resolved: ResolvedKinsoku): boolean {
+  return resolved.sets ? resolved.sets.lineEnd.has(codepoint) : LINE_END_PROHIBITED.has(codepoint);
+}
+
+/** {@link isUnbreakablePair} on an already resolved argument. @internal */
+export function pairUnbreakable(left: number, right: number, resolved: ResolvedKinsoku): boolean {
+  const key = pairKey(left, right);
+  return resolved.sets ? resolved.sets.pairs.has(key) : DEFAULT_UNBREAKABLE_PAIR_SET.has(key);
+}
+
+/**
+ * Returns whether the given codepoint is prohibited at the start of a line.
+ *
+ * @param codepoint - Unicode codepoint to check.
+ * @param options - Kinsoku rules to apply. @defaultValue strict mode
+ * @throws RangeError when `options.kinsoku` is a string that is not a known mode.
+ * @throws TypeError when `options.kinsoku` is neither a mode string nor rules.
+ */
+export function isLineStartProhibited(codepoint: number, options?: KinsokuCheckOptions): boolean {
+  return startProhibited(codepoint, resolveKinsoku(options?.kinsoku));
 }
 
 /**
  * Returns whether the given codepoint is prohibited at the end of a line.
+ *
+ * Strict and loose mode prohibit the same line-end characters.
+ *
  * @param codepoint - Unicode codepoint to check.
- * @param rules - Optional custom kinsoku rules. When provided, uses rules instead of defaults.
+ * @param options - Kinsoku rules to apply. @defaultValue strict mode
+ * @throws RangeError when `options.kinsoku` is a string that is not a known mode.
+ * @throws TypeError when `options.kinsoku` is neither a mode string nor rules.
  */
-export function isLineEndProhibited(codepoint: number, rules?: KinsokuRules): boolean {
-  if (rules) return rules.lineEndProhibitedSet.has(codepoint);
-  return LINE_END_PROHIBITED.has(codepoint);
+export function isLineEndProhibited(codepoint: number, options?: KinsokuCheckOptions): boolean {
+  return endProhibited(codepoint, resolveKinsoku(options?.kinsoku));
 }
 
 /**
  * Returns whether a break between adjacent codepoints is prohibited by pair rules.
+ *
  * @param left - Codepoint before the proposed line break.
  * @param right - Codepoint after the proposed line break.
- * @param rules - Optional custom kinsoku rules. When provided, uses rules instead of defaults.
+ * @param options - Kinsoku rules to apply. @defaultValue strict mode
+ * @throws RangeError when `options.kinsoku` is a string that is not a known mode.
+ * @throws TypeError when `options.kinsoku` is neither a mode string nor rules.
  */
-export function isUnbreakablePair(left: number, right: number, rules?: KinsokuRules): boolean {
-  const key = pairKey(left, right);
-  if (rules) return rules.unbreakablePairSet.has(key);
-  return DEFAULT_UNBREAKABLE_PAIR_SET.has(key);
+export function isUnbreakablePair(
+  left: number,
+  right: number,
+  options?: KinsokuCheckOptions,
+): boolean {
+  return pairUnbreakable(left, right, resolveKinsoku(options?.kinsoku));
 }
 
 const DEFAULT_UNBREAKABLE_PAIR_SET = new Set(
@@ -209,31 +320,58 @@ const DEFAULT_UNBREAKABLE_PAIR_SET = new Set(
 
 /**
  * Returns a copy of the default strict kinsoku rules.
+ *
+ * Pass it to {@link extendKinsokuRules} to add to the defaults.
  */
 export function getDefaultKinsokuRules(): KinsokuRules {
   return buildKinsokuRules({
     lineStartProhibited: [...STRICT_LINE_START_PROHIBITED],
     lineEndProhibited: [...LINE_END_PROHIBITED],
-    unbreakablePairs: [...UNBREAKABLE_PAIRS],
+    unbreakablePairs: UNBREAKABLE_PAIRS,
   });
 }
 
 /**
- * Builds a KinsokuRules object with pre-computed lookup sets from raw codepoint arrays.
- * @param raw - Object with lineStartProhibited and lineEndProhibited codepoint arrays.
- * @returns KinsokuRules with both the raw arrays and pre-computed sets.
+ * Builds custom kinsoku rules from raw codepoint lists.
+ *
+ * The lists are copied and frozen, so changing the arrays passed in afterwards
+ * does not change the rules.
+ *
+ * @param source - The codepoints and pairs to prohibit.
+ * @returns Rules to pass as the `kinsoku` option.
  */
-export function buildKinsokuRules(raw: {
-  lineStartProhibited: number[];
-  lineEndProhibited: number[];
-  unbreakablePairs?: Array<readonly [number, number]>;
-}): KinsokuRules {
-  const unbreakablePairs = raw.unbreakablePairs ?? [];
-  return {
-    ...raw,
-    unbreakablePairs,
-    lineStartProhibitedSet: new Set(raw.lineStartProhibited),
-    lineEndProhibitedSet: new Set(raw.lineEndProhibited),
-    unbreakablePairSet: new Set(unbreakablePairs.map(([left, right]) => pairKey(left, right))),
-  };
+export function buildKinsokuRules(source: KinsokuRuleSource): KinsokuRules {
+  const rules: KinsokuRules = Object.freeze({
+    lineStartProhibited: Object.freeze([...source.lineStartProhibited]),
+    lineEndProhibited: Object.freeze([...source.lineEndProhibited]),
+    unbreakablePairs: Object.freeze(
+      (source.unbreakablePairs ?? []).map(([left, right]) => Object.freeze([left, right] as const)),
+    ),
+  });
+  ruleSets.set(rules, setsOf(rules));
+  return rules;
+}
+
+/**
+ * Returns rules that prohibit everything `base` does plus `additions`.
+ *
+ * @example
+ * ```ts
+ * // The default rules, with ％ also kept off the start of a line.
+ * const rules = extendKinsokuRules(getDefaultKinsokuRules(), { lineStartProhibited: [0xff05] });
+ * ```
+ *
+ * @param base - Rules to start from.
+ * @param additions - Lists to append to the matching lists of `base`; omitted lists add nothing.
+ * @returns New rules; `base` is unchanged.
+ */
+export function extendKinsokuRules(
+  base: KinsokuRules,
+  additions: Partial<KinsokuRuleSource>,
+): KinsokuRules {
+  return buildKinsokuRules({
+    lineStartProhibited: [...base.lineStartProhibited, ...(additions.lineStartProhibited ?? [])],
+    lineEndProhibited: [...base.lineEndProhibited, ...(additions.lineEndProhibited ?? [])],
+    unbreakablePairs: [...base.unbreakablePairs, ...(additions.unbreakablePairs ?? [])],
+  });
 }

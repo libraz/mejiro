@@ -1,4 +1,4 @@
-import type { BookOptions, MejiroBookOptions } from '@libraz/mejiro/book';
+import type { BookOptions, BookOptionsPatch } from '@libraz/mejiro/book';
 import { MejiroBook } from '@libraz/mejiro/book';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toError } from './errors.js';
@@ -18,7 +18,7 @@ export interface UseMejiroBookOptions {
   /**
    * Called when applying options to the book fails. When supplied, failures are
    * reported here and the promise returned by
-   * {@link UseMejiroBookReturn.setOptions} resolves instead of rejecting, so
+   * {@link UseMejiroBookReturn.updateOptions} resolves instead of rejecting, so
    * fire-and-forget callers cannot leave an unhandled rejection behind.
    */
   onError?: (error: Error) => void;
@@ -34,40 +34,67 @@ export interface UseMejiroBookReturn {
    */
   options: Readonly<BookOptions>;
   /**
-   * Update options on the underlying book and the snapshot. The snapshot is
-   * updated synchronously; the returned promise resolves once
-   * {@link MejiroBook.setOptions} has propagated font / size changes (which
+   * Merges `patch` into the options of the underlying book and the snapshot.
+   * The snapshot is updated synchronously; the returned promise resolves once
+   * {@link MejiroBook.updateOptions} has propagated font / size changes (which
    * complete only after the font has loaded).
    */
-  setOptions: (next: Partial<BookOptions>) => Promise<void>;
+  updateOptions: (patch: BookOptionsPatch) => Promise<void>;
+}
+
+/** The {@link BookOptions} keys a live book accepts, i.e. those of {@link BookOptionsPatch}. */
+const RUNTIME_KEYS = [
+  'fontFamily',
+  'fontSize',
+  'lineSpacing',
+  'kinsoku',
+  'enableHanging',
+  'headingStyles',
+  'headingScale',
+] as const satisfies readonly (keyof BookOptionsPatch)[];
+
+/** The runtime keys of `next` whose content differs from `prev`. */
+function changedRuntimeKeys(prev: BookOptions, next: BookOptions): BookOptionsPatch {
+  const patch: Record<string, unknown> = {};
+  for (const key of RUNTIME_KEYS) {
+    if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) patch[key] = next[key];
+  }
+  return patch as BookOptionsPatch;
 }
 
 /** A coalesced option change waiting for its debounce window to elapse. */
 interface PendingApply {
-  patch: Partial<BookOptions>;
+  patch: BookOptionsPatch;
   timer: ReturnType<typeof setTimeout> | null;
   waiters: Array<{ resolve: () => void; reject: (error: Error) => void }>;
 }
 
 /**
  * React hook that owns a {@link MejiroBook} instance and exposes its
- * options as React state. The book is created once on mount; subsequent
- * option changes must go through {@link UseMejiroBookReturn.setOptions}
- * (e.g. via the `MejiroReader` imperative handle).
+ * options as React state.
  *
- * @param initial - Initial book options (passed to the {@link MejiroBook} constructor).
- * @param options - Behavior overrides (debouncing, error reporting).
+ * The book is created once on mount from `options`. Afterwards, a change to
+ * the content of a key {@link MejiroBook.updateOptions} accepts — compared by
+ * value, so an object literal recreated every render is fine — is applied like
+ * an {@link UseMejiroBookReturn.updateOptions} call; without `onError`, a
+ * failure of such an application goes to `console.warn`. A change to a
+ * construction-time key (`strictFontCheck`, `analyzer`, `pageSize`, …) is
+ * ignored and the book is not recreated; give the component a new React `key`
+ * to start over with a new book.
+ *
+ * @param options - Book options; read in full on mount, and for their runtime keys on every render.
+ * @param hookOptions - Behavior overrides (debouncing, error reporting).
  */
 export function useMejiroBook(
-  initial: MejiroBookOptions,
-  options: UseMejiroBookOptions = {},
+  options: BookOptions,
+  hookOptions: UseMejiroBookOptions = {},
 ): UseMejiroBookReturn {
   const bookRef = useRef<MejiroBook | null>(null);
-  if (!bookRef.current) bookRef.current = new MejiroBook(initial);
-  const [snapshot, setLocal] = useState<BookOptions>(initial);
+  if (!bookRef.current) bookRef.current = new MejiroBook(options);
+  const [snapshot, setLocal] = useState<BookOptions>(options);
 
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
+  const hookOptionsRef = useRef(hookOptions);
+  hookOptionsRef.current = hookOptions;
   const pendingRef = useRef<PendingApply | null>(null);
   const flushGenerationRef = useRef(0);
 
@@ -78,7 +105,7 @@ export function useMejiroBook(
     if (pending.timer) clearTimeout(pending.timer);
     const { waiters } = pending;
     const generation = ++flushGenerationRef.current;
-    const applied = bookRef.current?.setOptions(pending.patch) ?? Promise.resolve();
+    const applied = bookRef.current?.updateOptions(pending.patch) ?? Promise.resolve();
     // Only the latest application syncs: an earlier one settles before the book
     // has the newer change. A change still waiting to flush stays on top.
     const syncSnapshot = () => {
@@ -94,7 +121,7 @@ export function useMejiroBook(
       (err: unknown) => {
         syncSnapshot();
         const error = toError(err);
-        const handler = optionsRef.current.onError;
+        const handler = hookOptionsRef.current.onError;
         if (handler) {
           handler(error);
           for (const waiter of waiters) waiter.resolve();
@@ -105,17 +132,17 @@ export function useMejiroBook(
     );
   }, []);
 
-  const setOptions = useCallback(
-    (next: Partial<BookOptions>): Promise<void> => {
-      setLocal((prev) => mergeDefined(prev, next));
+  const updateOptions = useCallback(
+    (patch: BookOptionsPatch): Promise<void> => {
+      setLocal((prev) => mergeDefined(prev, patch));
       const pending: PendingApply = pendingRef.current ?? { patch: {}, timer: null, waiters: [] };
       pendingRef.current = pending;
-      pending.patch = mergeDefined(pending.patch, next);
+      pending.patch = mergeDefined(pending.patch, patch);
       const settled = new Promise<void>((resolve, reject) => {
         pending.waiters.push({ resolve, reject });
       });
       if (pending.timer) clearTimeout(pending.timer);
-      const debounceMs = optionsRef.current.debounceMs ?? 0;
+      const debounceMs = hookOptionsRef.current.debounceMs ?? 0;
       if (debounceMs > 0) {
         pending.timer = setTimeout(() => {
           pending.timer = null;
@@ -129,6 +156,19 @@ export function useMejiroBook(
     },
     [flush],
   );
+
+  // Follows the runtime keys of `options` by content. The comparison is against
+  // the options last seen, not the snapshot, so a value the host keeps passing
+  // never undoes an `updateOptions` call.
+  const seenOptionsRef = useRef(options);
+  useEffect(() => {
+    const patch = changedRuntimeKeys(seenOptionsRef.current, options);
+    seenOptionsRef.current = options;
+    if (Object.keys(patch).length === 0) return;
+    // Nobody awaits this application; without `onError` its failure is only logged.
+    // biome-ignore lint/suspicious/noConsole: the documented default for a failed application of `options`
+    updateOptions(patch).catch((error: unknown) => console.warn(error));
+  });
 
   // A change still inside its debounce window is dropped on unmount — nothing
   // is left to render it — but its awaiters must not hang. The book releases
@@ -145,5 +185,5 @@ export function useMejiroBook(
     [],
   );
 
-  return { book: bookRef.current, options: snapshot, setOptions };
+  return { book: bookRef.current, options: snapshot, updateOptions };
 }

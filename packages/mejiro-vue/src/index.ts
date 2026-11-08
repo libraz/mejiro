@@ -7,10 +7,24 @@ function loadMejiroStyles(): void {
 
 loadMejiroStyles();
 
-export type { MejiroLocale, MejiroMessages, UseI18nOptions } from './i18n.js';
+export type {
+  ManuscriptChapter,
+  MejiroErrorCode,
+  MejiroStorage,
+  MejiroWarning,
+  MejiroWarningCode,
+  ReadingAnchor,
+} from '@libraz/mejiro';
+export { MejiroError } from '@libraz/mejiro';
+export type {
+  MejiroI18nProviderProps,
+  MejiroLocale,
+  MejiroMessages,
+  UseI18nOptions,
+} from './i18n.js';
 export {
   enMessages,
-  format,
+  formatMessage,
   jaMessages,
   MejiroI18nProvider,
   resolveMessages,
@@ -23,15 +37,13 @@ export {
   type MejiroChapterNavVariant,
 } from './MejiroChapterNav.js';
 export { MejiroDropZone, type MejiroDropZoneProps } from './MejiroDropZone.js';
+export { type ExportPolicy, MejiroEditor, type MejiroEditorProps } from './MejiroEditor.js';
 export {
-  MejiroEditor,
-  type MejiroEditorProps,
-  type MejiroExportPolicy,
-} from './MejiroEditor.js';
-export { MejiroImageOverlay, type MejiroImageOverlayProps } from './MejiroImageOverlay.js';
+  MejiroImagePlaceholder,
+  type MejiroImagePlaceholderProps,
+} from './MejiroImagePlaceholder.js';
 export {
   type ManuscriptAutosaveDraft,
-  type ManuscriptEditorChapter,
   type ManuscriptPreviewProps,
   MejiroManuscriptEditor,
   type MejiroManuscriptEditorProps,
@@ -46,17 +58,27 @@ export { MejiroPageView, type MejiroPageViewProps } from './MejiroPageView.js';
 export {
   type MejiroChapterNavMode,
   MejiroReader,
+  type MejiroReaderChapterFinishedEvent,
+  type MejiroReaderCommonProps,
   type MejiroReaderEventMap,
   type MejiroReaderFit,
   type MejiroReaderHandle,
+  type MejiroReaderManuscriptProps,
   type MejiroReaderMode,
+  type MejiroReaderParsedProps,
+  type MejiroReaderPickerProps,
   type MejiroReaderProps,
   type MejiroReaderSettingsSlot,
+  type MejiroReaderSpreadIndexChangeEvent,
+  type MejiroReaderTurnEndEvent,
+  type MejiroReaderTurnStartEvent,
+  type MejiroReaderUrlProps,
   type MejiroSpreadMode,
   type MejiroTheme,
   type MejiroThemeName,
   type PageNumberDisplay,
-  type ReadingPosition,
+  type ReadingAnchorRange,
+  type SpreadPosition,
 } from './MejiroReader.js';
 export { MejiroScrollView, type MejiroScrollViewProps } from './MejiroScrollView.js';
 export {
@@ -70,19 +92,23 @@ export type {
 } from './MejiroSettingsPanel.js';
 export { MejiroSettingsPanel } from './MejiroSettingsPanel.js';
 export { MejiroShelf, type MejiroShelfProps } from './MejiroShelf.js';
-export { MejiroSpread, type MejiroSpreadProps, type PageHeaderData } from './MejiroSpread.js';
+export {
+  MejiroSpread,
+  type MejiroSpreadProps,
+  type PageHeaderData,
+  type ReaderAnnotation,
+  type SelectionRect,
+} from './MejiroSpread.js';
 export { MejiroStats, type MejiroStatsProps } from './MejiroStats.js';
 export { MejiroToc, type MejiroTocProps } from './MejiroToc.js';
 export type {
   Annotation,
-  AnnotationsStorage,
   UseAnnotationsOptions,
   UseAnnotationsReturn,
 } from './useAnnotations.js';
 export { useAnnotations } from './useAnnotations.js';
 export type {
-  PageDimensions,
-  RecomputeOptions,
+  ChapterLayoutRecomputeOptions,
   UseChapterLayoutOptions,
   UseChapterLayoutReturn,
 } from './useChapterLayout.js';
@@ -93,17 +119,13 @@ export type {
   UseEditableEpubReturn,
 } from './useEditableEpub.js';
 export { useEditableEpub } from './useEditableEpub.js';
-export type { UseEpubOptions, UseEpubReturn } from './useEpub.js';
+export type { FetchEpubOptions, UseEpubOptions, UseEpubReturn } from './useEpub.js';
 export { useEpub } from './useEpub.js';
-export type {
-  EpubProjectChapterDraft,
-  UseEpubProjectOptions,
-  UseEpubProjectReturn,
-} from './useEpubProject.js';
+export type { UseEpubProjectOptions, UseEpubProjectReturn } from './useEpubProject.js';
 export { useEpubProject } from './useEpubProject.js';
 export type {
   ImageOverlayRect,
-  ImageRect,
+  MultiImageItem,
   UseImageOverlayOptions,
   UseImageOverlayReturn,
 } from './useImageOverlay.js';
@@ -120,8 +142,6 @@ export type {
 } from './useManuscriptDraft.js';
 export { useManuscriptDraft } from './useManuscriptDraft.js';
 export type {
-  ManuscriptPageDimensions,
-  ManuscriptRecomputeOptions,
   UseManuscriptLayoutOptions,
   UseManuscriptLayoutReturn,
 } from './useManuscriptLayout.js';
@@ -129,17 +149,14 @@ export { useManuscriptLayout } from './useManuscriptLayout.js';
 export type { UseMejiroBookOptions, UseMejiroBookReturn } from './useMejiroBook.js';
 export { useMejiroBook } from './useMejiroBook.js';
 export type {
-  MultiImageItem,
-  UseMultiImageOverlayOptions,
-  UseMultiImageOverlayReturn,
-} from './useMultiImageOverlay.js';
-export { useMultiImageOverlay } from './useMultiImageOverlay.js';
-export type {
-  ReadingPositionStorage,
-  ReadingPositionValue,
   UseReadingPositionOptions,
   UseReadingPositionReturn,
 } from './useReadingPosition.js';
 export { useReadingPosition } from './useReadingPosition.js';
-export type { UseSpreadOptions, UseSpreadReturn } from './useSpread.js';
+export type {
+  GoToOptions,
+  ResolvedSpreadMode,
+  UseSpreadOptions,
+  UseSpreadReturn,
+} from './useSpread.js';
 export { useSpread } from './useSpread.js';

@@ -100,7 +100,7 @@ export function insertManuscriptParagraph(body: string, index: number, block: st
 
 const INLINE_IMAGE_MARKER = /^\[\[mejiro-image:([^:|\]]+)(?:\|([^\]]*))?\]\]$/u;
 
-/** Parsed internal inline-image marker embedded by `EpubProject.addInlineImage()`. */
+/** Parsed internal inline-image marker embedded by `EpubProject.addImage()`. */
 export interface ManuscriptImageMarker {
   src: string;
   alt: string;

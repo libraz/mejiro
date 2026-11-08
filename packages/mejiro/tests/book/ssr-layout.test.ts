@@ -1,20 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import type { ChapterLayoutSnapshot } from '../../src/book/snapshot.js';
+import { MejiroError } from '../../src/errors.js';
 
 // No `@vitest-environment` docblock: this file runs on bare Node, so any DOM
 // access on the construction or replay path fails it.
 
 const SNAPSHOT: ChapterLayoutSnapshot = {
-  version: 2,
+  version: 3,
   config: {
     fontSize: 16,
     lineSpacing: 1.8,
     headingScale: 1.4,
-    mode: 'strict',
+    kinsoku: 'strict',
     enableHanging: true,
   },
-  size: { pageWidth: 400, lineWidth: 80, pagePaddingX: 0, pagePaddingY: 0 },
+  size: { pageWidth: 400, lineWidth: 80, paddingX: 0, paddingY: 0 },
   paragraphs: [
     {
       text: 'あいうえおかきくけこ',
@@ -32,7 +33,7 @@ describe('server-side layout replay', () => {
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
     const layout = book.layoutFromSnapshot(SNAPSHOT);
 
-    expect(layout.totalPages).toBeGreaterThan(0);
+    expect(layout.pageCount).toBeGreaterThan(0);
     expect(layout.getPage(0).slots.length).toBeGreaterThan(0);
     expect(layout.snapshot().size.lineWidth).toBe(80);
   });
@@ -54,12 +55,12 @@ describe('snapshot boundary validation', () => {
   }
 
   /** The error `layoutFromSnapshot` throws for `snapshot`, which must be one. */
-  function restoreError(snapshot: unknown): Error {
+  function restoreError(snapshot: unknown): unknown {
     const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
     try {
       book.layoutFromSnapshot(snapshot as ChapterLayoutSnapshot);
     } catch (error) {
-      return error as Error;
+      return error;
     }
     throw new Error('layoutFromSnapshot accepted the snapshot');
   }
@@ -77,7 +78,7 @@ describe('snapshot boundary validation', () => {
       withParagraph({ breakPoints: [6, 3] }),
       withParagraph({ breakPoints: [10] }),
       withParagraph({ breakPoints: [1.5] }),
-      withParagraph({ inlineAnnotations: [{ kind: 'em', startIndex: 8, endIndex: 12 }] }),
+      withParagraph({ inlineAnnotations: [{ type: 'em', startIndex: 8, endIndex: 12 }] }),
       withParagraph({
         layoutRubyAnnotations: [
           { startIndex: 9, endIndex: 11, rubyText: [12354], rubyAdvances: [8] },
@@ -89,7 +90,10 @@ describe('snapshot boundary validation', () => {
         ],
       }),
       withParagraph({ hintClusterIds: [0, 1] }),
-      { ...SNAPSHOT, images: [{ spreadIndex: 0, images: [{ x: 0, y: 0, w: Number.NaN, h: 1 }] }] },
+      {
+        ...SNAPSHOT,
+        images: [{ spreadIndex: 0, images: [{ x: 0, y: 0, width: Number.NaN, height: 1 }] }],
+      },
       // Decomposed kana: restore would build 2 codepoints beside 3 characters.
       withParagraph({ text: 'か\u3099あ', advances: [16, 16, 16], breakPoints: [] }),
       withParagraph({ headingLevel: 7 }),
@@ -104,8 +108,8 @@ describe('snapshot boundary validation', () => {
     ];
     for (const snapshot of cases) {
       const error = restoreError(snapshot);
-      expect(error.constructor).toBe(Error);
-      expect(error.message).toMatch(/^Malformed ChapterLayoutSnapshot: /);
+      expect(error).toBeInstanceOf(MejiroError);
+      expect(error).toMatchObject({ code: 'snapshot-invalid' });
     }
   });
 
@@ -123,9 +127,9 @@ describe('snapshot boundary validation', () => {
   });
 
   it('rejects an unsupported version', () => {
-    expect(restoreError({ ...SNAPSHOT, version: 3 }).message).toBe(
-      'Unsupported ChapterLayoutSnapshot version: 3',
-    );
+    const error = restoreError({ ...SNAPSHOT, version: 4 });
+    expect(error).toBeInstanceOf(MejiroError);
+    expect(error).toMatchObject({ code: 'snapshot-invalid' });
   });
 
   it('accepts a well-formed snapshot that went through JSON', () => {

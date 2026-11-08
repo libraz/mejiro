@@ -1,5 +1,7 @@
 import type JSZip from 'jszip';
+import { MejiroError } from '../errors.js';
 import { mergeDefined } from '../merge.js';
+import type { BinaryInput } from '../types.js';
 
 /** Resource limits applied while opening an untrusted EPUB archive. */
 export interface EpubParseLimits {
@@ -28,6 +30,12 @@ export const DEFAULT_EPUB_PARSE_LIMITS: Readonly<EpubParseLimits> = {
 export interface EpubParseOptions {
   /** Override one or more archive resource limits for a trusted environment. */
   limits?: Partial<EpubParseLimits>;
+  /**
+   * Cancels the import. The returned promise rejects with `signal.reason`, at
+   * the latest once the current step finishes; a signal that is already aborted
+   * rejects without reading the archive.
+   */
+  signal?: AbortSignal;
 }
 
 interface ZipObjectWithSizes extends JSZip.JSZipObject {
@@ -53,9 +61,47 @@ export function resolveEpubParseLimits(options: EpubParseOptions = {}): EpubPars
 }
 
 /**
+ * Throws `signal.reason` when `signal` has been aborted.
+ *
+ * @param signal - Signal of the running import, if any.
+ * @throws {TypeError} When `signal` is not an `AbortSignal`.
+ */
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal === undefined) return;
+  // Checked by shape: a signal made by another realm's AbortController is not an instance of this one's.
+  if (
+    typeof signal !== 'object' ||
+    signal === null ||
+    typeof signal.aborted !== 'boolean' ||
+    typeof signal.addEventListener !== 'function'
+  ) {
+    throw new TypeError('EPUB parse option signal must be an AbortSignal');
+  }
+  if (signal.aborted) throw signal.reason;
+}
+
+/**
+ * Checks that `data` is an `ArrayBuffer` or `Uint8Array`.
+ *
+ * @param data - Value handed to an EPUB import entry point.
+ * @throws {TypeError} When `data` is neither.
+ */
+export function assertBinaryInput(data: unknown): asserts data is BinaryInput {
+  // Checked by shape for the same cross-realm reason as the signal.
+  const tag = Object.prototype.toString.call(data);
+  if (tag === '[object ArrayBuffer]' || tag === '[object Uint8Array]') return;
+  throw new TypeError('EPUB data must be an ArrayBuffer or a Uint8Array');
+}
+
+/**
  * Throws when an EPUB of `byteLength` compressed bytes exceeds the resolved
  * `maxInputBytes`. Lets a caller holding a `File` reject it by `file.size`
  * before reading any of its bytes into memory.
+ *
+ * @param byteLength - Compressed size of the EPUB, in bytes.
+ * @param limits - Limits overriding {@link DEFAULT_EPUB_PARSE_LIMITS}.
+ * @throws {MejiroError} `epub-limit-exceeded` when `byteLength` is over the limit.
+ * @throws {RangeError} When a limit is not a positive integer.
  */
 export function assertEpubInputSize(
   byteLength: number,
@@ -63,7 +109,10 @@ export function assertEpubInputSize(
 ): void {
   const { maxInputBytes } = resolveEpubParseLimits({ limits });
   if (byteLength > maxInputBytes) {
-    throw new Error(`EPUB exceeds the compressed input limit (${maxInputBytes} bytes)`);
+    throw new MejiroError(
+      'epub-limit-exceeded',
+      `EPUB exceeds the compressed input limit (${maxInputBytes} bytes)`,
+    );
   }
 }
 
@@ -76,7 +125,7 @@ export function assertEpubInputSize(
  * produces.
  */
 export function assertEpubArchiveWithinLimits(
-  input: ArrayBuffer,
+  input: BinaryInput,
   zip: JSZip,
   limits: EpubParseLimits,
 ): void {
@@ -84,27 +133,42 @@ export function assertEpubArchiveWithinLimits(
 
   const entries = Object.values(zip.files).filter((entry) => !entry.dir) as ZipObjectWithSizes[];
   if (entries.length > limits.maxEntries) {
-    throw new Error(`EPUB exceeds the entry limit (${limits.maxEntries})`);
+    throw new MejiroError(
+      'epub-limit-exceeded',
+      `EPUB exceeds the entry limit (${limits.maxEntries})`,
+    );
   }
 
   let totalUncompressed = 0;
   for (const entry of entries) {
     const { compressedSize, uncompressedSize } = entry._data ?? {};
     if (!(isByteCount(compressedSize) && isByteCount(uncompressedSize))) {
-      throw new Error(`EPUB entry has unavailable size metadata: ${entry.name}`);
+      throw new MejiroError(
+        'epub-invalid-archive',
+        `EPUB entry has unavailable size metadata: ${entry.name}`,
+      );
     }
     if (uncompressedSize > limits.maxEntryBytes) {
-      throw new Error(`EPUB entry exceeds the expanded size limit: ${entry.name}`);
+      throw new MejiroError(
+        'epub-limit-exceeded',
+        `EPUB entry exceeds the expanded size limit: ${entry.name}`,
+      );
     }
     totalUncompressed += uncompressedSize;
     if (totalUncompressed > limits.maxTotalBytes) {
-      throw new Error(`EPUB exceeds the total expanded size limit (${limits.maxTotalBytes} bytes)`);
+      throw new MejiroError(
+        'epub-limit-exceeded',
+        `EPUB exceeds the total expanded size limit (${limits.maxTotalBytes} bytes)`,
+      );
     }
     if (
       uncompressedSize > 0 &&
       uncompressedSize / Math.max(compressedSize, 1) > limits.maxCompressionRatio
     ) {
-      throw new Error(`EPUB entry exceeds the compression ratio limit: ${entry.name}`);
+      throw new MejiroError(
+        'epub-limit-exceeded',
+        `EPUB entry exceeds the compression ratio limit: ${entry.name}`,
+      );
     }
   }
 }
@@ -122,10 +186,16 @@ export function assertEpubArchiveWithinLimits(
  */
 export class EpubExpansionBudget {
   private readonly limits: EpubParseLimits;
+  private readonly signal: AbortSignal | undefined;
   private used = 0;
 
-  constructor(limits: EpubParseLimits) {
+  /**
+   * @param limits - Resolved limits the reads are charged against.
+   * @param signal - Stops a read in progress, at the next decompressed block, once aborted.
+   */
+  constructor(limits: EpubParseLimits, signal?: AbortSignal) {
     this.limits = limits;
+    this.signal = signal;
   }
 
   /** Expanded bytes read through this budget so far. */
@@ -145,13 +215,14 @@ export class EpubExpansionBudget {
 
   private read(file: JSZip.JSZipObject): Promise<Uint8Array> {
     return new Promise<Uint8Array>((resolve, reject) => {
+      throwIfAborted(this.signal);
       const stream = (file as ZipObjectWithStream).internalStream('uint8array');
       const expansionCap = this.entryExpansionCap(file);
       let chunks: Uint8Array[] = [];
       let entryBytes = 0;
       let settled = false;
 
-      const abort = (error: Error): void => {
+      const abort = (error: unknown): void => {
         settled = true;
         chunks = [];
         stream.pause();
@@ -160,19 +231,34 @@ export class EpubExpansionBudget {
 
       stream.on('data', (chunk) => {
         if (settled) return;
+        if (this.signal?.aborted) {
+          abort(this.signal.reason);
+          return;
+        }
         entryBytes += chunk.length;
         this.used += chunk.length;
         if (entryBytes > this.limits.maxEntryBytes) {
-          abort(new Error(`EPUB entry exceeds the expanded size limit: ${file.name}`));
+          abort(
+            new MejiroError(
+              'epub-limit-exceeded',
+              `EPUB entry exceeds the expanded size limit: ${file.name}`,
+            ),
+          );
           return;
         }
         if (entryBytes > expansionCap) {
-          abort(new Error(`EPUB entry exceeds the compression ratio limit: ${file.name}`));
+          abort(
+            new MejiroError(
+              'epub-limit-exceeded',
+              `EPUB entry exceeds the compression ratio limit: ${file.name}`,
+            ),
+          );
           return;
         }
         if (this.used > this.limits.maxTotalBytes) {
           abort(
-            new Error(
+            new MejiroError(
+              'epub-limit-exceeded',
               `EPUB exceeds the total expanded size limit (${this.limits.maxTotalBytes} bytes)`,
             ),
           );
@@ -182,7 +268,11 @@ export class EpubExpansionBudget {
       });
       stream.on('error', (error: unknown) => {
         if (settled) return;
-        abort(error instanceof Error ? error : new Error(String(error)));
+        abort(
+          new MejiroError('epub-invalid-archive', `EPUB entry cannot be read: ${file.name}`, {
+            cause: error,
+          }),
+        );
       });
       stream.on('end', () => {
         if (settled) return;

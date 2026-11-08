@@ -1,15 +1,24 @@
-import type { ReactNode } from 'react';
+import {
+  type ComponentPropsWithoutRef,
+  type ForwardedRef,
+  forwardRef,
+  type ReactNode,
+  type RefAttributes,
+} from 'react';
 import { useI18n } from './i18n.js';
 import type { VolumeInfo } from './useLibrary.js';
 
-/** Props for {@link MejiroShelf}. */
-export interface MejiroShelfProps<T = unknown> {
+/**
+ * Props for {@link MejiroShelf}; other `section` attributes go to the root
+ * element, except `title`, which here is the heading text.
+ */
+export interface MejiroShelfProps<T = unknown> extends ComponentPropsWithoutRef<'section'> {
   /** Volumes to display. */
   volumes: readonly VolumeInfo<T>[];
   /** ID of the currently active volume (highlighted in the grid). */
   currentId?: string;
-  /** Called when the user picks a volume. */
-  onSelect?: (volume: VolumeInfo<T>) => void;
+  /** Called with the volume the user picks. */
+  onVolumeSelect?: (volume: VolumeInfo<T>) => void;
   /** Heading shown above the grid. Defaults to the active message catalog's `shelfTitle`. */
   title?: string;
 }
@@ -18,16 +27,19 @@ export interface MejiroShelfProps<T = unknown> {
  * Visual bookshelf picker. Renders each volume as a card with cover, label,
  * and author. Pair with {@link useLibrary} to drive selection.
  */
-export function MejiroShelf<T = unknown>({
-  volumes,
-  currentId,
-  onSelect,
-  title,
-}: MejiroShelfProps<T>): ReactNode {
+export const MejiroShelf = forwardRef(function MejiroShelf<T = unknown>(
+  { volumes, currentId, onVolumeSelect, title, className, ...rest }: MejiroShelfProps<T>,
+  ref: ForwardedRef<HTMLElement>,
+): ReactNode {
   const messages = useI18n();
   const resolvedTitle = title ?? messages.shelfTitle;
   return (
-    <section className="mejiro-shelf" aria-label={resolvedTitle}>
+    <section
+      aria-label={resolvedTitle}
+      {...rest}
+      ref={ref}
+      className={className ? `mejiro-shelf ${className}` : 'mejiro-shelf'}
+    >
       <header className="mejiro-shelf-header">
         <span className="mejiro-shelf-title">{resolvedTitle}</span>
       </header>
@@ -37,7 +49,7 @@ export function MejiroShelf<T = unknown>({
             <button
               type="button"
               className={`mejiro-shelf-card${v.id === currentId ? ' is-active' : ''}`}
-              onClick={() => onSelect?.(v)}
+              onClick={() => onVolumeSelect?.(v)}
             >
               {v.cover ? (
                 <span
@@ -58,4 +70,4 @@ export function MejiroShelf<T = unknown>({
       </ul>
     </section>
   );
-}
+}) as <T = unknown>(props: MejiroShelfProps<T> & RefAttributes<HTMLElement>) => ReactNode;

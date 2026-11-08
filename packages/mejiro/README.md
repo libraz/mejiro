@@ -16,16 +16,15 @@ npm install @libraz/mejiro
 ## Quick start
 
 ```ts
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
-book.computePageSize(document.querySelector('.reader')!);
+book.fitPageSize(document.querySelector('.reader')!);
 
 const epub = await parseEpub(epubBuffer);
 const layout = await book.layoutChapter(epub.chapters[0]);
@@ -71,11 +70,12 @@ a build step over your own files, say — raise individual caps through
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
 
-const book = await parseEpub(buffer, { limits: { maxTotalBytes: 1024 * 1024 * 1024 } });
+const epub = await parseEpub(buffer, { limits: { maxTotalBytes: 1024 * 1024 * 1024 } });
 ```
 
 ## Documentation
 
+- [Migrating to 0.11](https://github.com/libraz/mejiro/tree/main/docs/en/11-migrating-to-0.11.md) — every breaking change from 0.10, before → after
 - [Project README](https://github.com/libraz/mejiro)
 - [Getting started](https://github.com/libraz/mejiro/tree/main/docs/en/01-getting-started.md)
 - [API reference](https://github.com/libraz/mejiro/tree/main/docs/en/10-api-reference.md)

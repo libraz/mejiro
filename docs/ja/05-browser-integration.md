@@ -16,8 +16,8 @@ const mejiro = new MejiroBrowser();
 
 ```ts
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
   strictFontCheck: false,
 });
 ```
@@ -26,22 +26,22 @@ const mejiro = new MejiroBrowser({
 
 | オプション | 型 | 説明 |
 |--------|------|-------------|
-| `fixedFontFamily` | `string` | すべてのレイアウトに適用されるデフォルトのフォントファミリー。 |
-| `fixedFontSize` | `number` | すべてのレイアウトに適用されるデフォルトのフォントサイズ（px単位）。 |
-| `strictFontCheck` | `boolean` | `true` の場合、指定したファミリーがホストの既定フォントと同じ幅で計測される（フォールバックしている）と、`layout()`・`layoutChapter()`・`preloadFont()` がエラーで reject します。`false`（既定）では、フォントの読み込みに失敗してもエラーにはならず、ホストが実際に選んだフォントでレイアウトを続けます。 |
+| `fontFamily` | `FontFamily` | すべてのレイアウトに適用されるデフォルトのフォントファミリー。 |
+| `fontSize` | `number` | すべてのレイアウトに適用されるデフォルトのフォントサイズ（px単位）。 |
+| `strictFontCheck` | `boolean` | `true` の場合、指定したファミリーがホストの既定フォントと同じ幅で計測される（フォールバックしている）と、`layout()`・`layoutParagraphs()`・`preloadFont()` がエラーで reject します。`false`（既定）では、フォントの読み込みに失敗してもエラーにはならず、ホストが実際に選んだフォントでレイアウトを続けます。 |
 | `onFontsLoaded` | `() => void` | ホストが新しいフォントの読み込み完了を通知し、幅キャッシュを消去した後に呼ばれます。それ以前に計測した結果はフォールバックの幅を含んでいる可能性があるため、ここでレイアウトし直してください。 |
 
-`fixedFontFamily` と `fixedFontSize` を設定しておくと、個別の `layout()` や `layoutChapter()` ではそれらを省略できます。
+`fontFamily` と `fontSize` を設定しておくと、個別の `layout()` や `layoutParagraphs()` ではそれらを省略できます。空の `fontFamily` にはコンストラクタが `TypeError` を、正の有限数でない `fontSize` には `RangeError` を投げます。
 
 ## 2. フォント読み込み
 
-正確に文字幅を測るには、対象フォントが読み込まれている必要があります。`MejiroBrowser` は `layout()` / `layoutChapter()` の中でフォントを自動読み込みしますが、初回レイアウトの待ち時間を減らしたい場合は、事前にプリロードできます。
+正確に文字幅を測るには、対象フォントが読み込まれている必要があります。`MejiroBrowser` は `layout()` / `layoutParagraphs()` の中でフォントを自動読み込みしますが、初回レイアウトの待ち時間を減らしたい場合は、事前にプリロードできます。
 
 ```ts
 await mejiro.preloadFont('"Noto Serif JP"', 16);
 ```
 
-インスタンスに固定フォント値がすでに設定されている場合は、引数なしで`preloadFont()`を呼び出せます:
+インスタンスにフォントの値がすでに設定されている場合は、引数なしで`preloadFont()`を呼び出せます:
 
 ```ts
 await mejiro.preloadFont();
@@ -58,12 +58,12 @@ await mejiro.preloadFont();
 `CharMeasurer`は`Canvas.measureText()`を使用して文字幅を計測します。計測された幅は2階層のマップ構造を持つ`WidthCache`に保存されます:
 
 ```
-Map<fontKey, Map<codepoint, width>>
+Map<fontSpec, Map<codepoint, width>>
 ```
 
 - 指定フォントでの文字の初回計測時に`Canvas.measureText()`が呼び出されます。
 - 同じ文字とフォントの後続の参照では、キャッシュされた値が即座に返されます。
-- `fontKey`は`'16px "Noto Serif JP"'`のようなCSSフォント指定文字列です。
+- `fontSpec`は`'16px "Noto Serif JP"'`のようなCSSフォント指定文字列です。
 
 フォントの変更時やメモリ解放のためにキャッシュをクリアできます:
 
@@ -80,15 +80,15 @@ mejiro.clearCache('16px "Noto Serif JP"');    // 特定のフォントのみク�
 ```ts
 const result = await mejiro.layout({
   text: '吾輩は猫である。名前はまだ無い。',
-  fontFamily: '"Noto Serif JP"', // fixedFontFamilyが設定済みなら省略可
-  fontSize: 16, // fixedFontSizeが設定済みなら省略可
+  fontFamily: '"Noto Serif JP"', // MejiroBrowser に fontFamily を指定していれば省略可
+  fontSize: 16, // MejiroBrowser に fontSize を指定していれば省略可
   lineWidth: verticalLineWidth(600, 16),
-  mode: 'strict',
+  kinsoku: 'strict',
   enableHanging: true,
   inlineAnnotations: [],
   tokenBoundaries: undefined,
 });
-// result: BreakResult { breakPoints, hangingAdjustments?, effectiveAdvances? }
+// result: BreakResult { breakPoints, hangingAdjustments, effectiveAdvances? }
 ```
 
 ### LayoutOptions
@@ -96,23 +96,23 @@ const result = await mejiro.layout({
 | フィールド | 型 | デフォルト | 説明 |
 |-------|------|---------|-------------|
 | `text` | `string` | (必須) | レイアウトするテキスト。 |
-| `fontFamily` | `string` | `fixedFontFamily` | CSSフォントファミリー。インスタンスのデフォルトを上書きします。 |
-| `fontSize` | `number` | `fixedFontSize` | フォントサイズ（px単位）。インスタンスのデフォルトを上書きします。 |
+| `fontFamily` | `FontFamily` | インスタンスの `fontFamily` | CSSフォントファミリー。インスタンスのデフォルトを上書きします。 |
+| `fontSize` | `number` | インスタンスの `fontSize` | フォントサイズ（px単位）。インスタンスのデフォルトを上書きします。 |
 | `lineWidth` | `number` | (必須) | 利用可能な行幅（px単位）。 |
-| `mode` | `'strict' \| 'loose'` | `'strict'` | 禁則処理モード。 |
+| `kinsoku` | `'strict' \| 'loose'` | `'strict'` | 禁則処理モード。 |
 | `enableHanging` | `boolean` | `true` | ぶら下げ組みを有効にする。 |
-| `inlineAnnotations` | `InlineAnnotation[]` | `[]` | 文字列ベースのインデックスを使用したルビ・圏点・縦中横・リンク等の注釈。 |
+| `inlineAnnotations` | `readonly InlineAnnotation[]` | `[]` | 文字列ベースのインデックスを使用したルビ・圏点・縦中横・リンク等の注釈。 |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | 改行改善のためのトークン境界インデックス。 |
 | `hints` | `TypographyHints` | `undefined` | `deriveTypographyHints()` で作った改行ヒント。オフセットは NFC 正規化後のテキストを指す。 |
 | `breakCost` | `BreakCostOptions` | `undefined` | ペナルティ探索の重み。`hints` に改行ペナルティが含まれていなければ効果はない。 |
 
-## 5. layoutChapter() -- 複数段落
+## 5. layoutParagraphs() -- 複数段落
 
-`layoutChapter()`は章全体を段落の列としてレイアウトします。各段落はベースのフォントファミリーとフォントサイズを上書きでき、見出しやその他のスタイルバリエーションに便利です。
+`layoutParagraphs()`は章全体を段落の列としてレイアウトします。各段落はベースのフォントファミリーとフォントサイズを上書きでき、見出しやその他のスタイルバリエーションに便利です。
 
 <!-- doc-example: 05-browser-layout.ts#layout-chapter -->
 ```ts
-const result = await mejiro.layoutChapter({
+const result = await mejiro.layoutParagraphs({
   paragraphs: [
     { text: '第一章', fontSize: 22 },
     { text: '吾輩は猫である。名前はまだ無い。' },
@@ -120,14 +120,14 @@ const result = await mejiro.layoutChapter({
       text: '漢字を読む',
       // 複数の親文字にかかるルビは type を指定する
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
       ],
     },
   ],
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineWidth: verticalLineWidth(600, 16),
-  mode: 'strict',
+  kinsoku: 'strict',
   enableHanging: true,
 });
 
@@ -139,11 +139,11 @@ const result = await mejiro.layoutChapter({
 
 | フィールド | 型 | デフォルト | 説明 |
 |-------|------|---------|-------------|
-| `paragraphs` | `ParagraphInput[]` | (必須) | レイアウトする段落の配列。 |
-| `fontFamily` | `string` | `fixedFontFamily` | すべての段落に適用されるベースのフォントファミリー。 |
-| `fontSize` | `number` | `fixedFontSize` | すべての段落に適用されるベースのフォントサイズ。 |
+| `paragraphs` | `readonly ParagraphInput[]` | (必須) | レイアウトする段落の配列。 |
+| `fontFamily` | `FontFamily` | インスタンスの `fontFamily` | すべての段落に適用されるベースのフォントファミリー。 |
+| `fontSize` | `number` | インスタンスの `fontSize` | すべての段落に適用されるベースのフォントサイズ。 |
 | `lineWidth` | `number` | (必須) | 行幅（px単位）。 |
-| `mode` | `'strict' \| 'loose'` | `'strict'` | 禁則処理モード。 |
+| `kinsoku` | `'strict' \| 'loose'` | `'strict'` | 禁則処理モード。 |
 | `enableHanging` | `boolean` | `true` | ぶら下げ組みを有効にする。 |
 | `breakCost` | `BreakCostOptions` | `undefined` | ペナルティ探索の重み。全段落に適用される。段落の `hints` に改行ペナルティが含まれていなければ効果はない。 |
 
@@ -152,7 +152,7 @@ const result = await mejiro.layoutChapter({
 | フィールド | 型 | デフォルト | 説明 |
 |-------|------|---------|-------------|
 | `text` | `string` | (必須) | 段落テキスト。 |
-| `inlineAnnotations` | `InlineAnnotation[]` | `[]` | この段落のインライン注釈。 |
+| `inlineAnnotations` | `readonly InlineAnnotation[]` | `[]` | この段落のインライン注釈。 |
 | `fontFamily` | `string` | (継承) | この段落のベースフォントファミリーを上書きする。 |
 | `fontSize` | `number` | (継承) | この段落のベースフォントサイズを上書きする。 |
 | `tokenBoundaries` | `Uint32Array \| readonly number[]` | `undefined` | トークン境界インデックス。 |
@@ -171,7 +171,7 @@ const lineWidth = verticalLineWidth(600, 16);
 
 **計算式:** `containerHeight - fontSize * 0.5`
 
-`MejiroBrowser`インスタンスは、`fixedFontSize`が設定されている場合にそれを使用するメソッドとしてもこれを公開しています:
+`MejiroBrowser`インスタンスは、`fontSize`が設定されている場合にそれを使用するメソッドとしてもこれを公開しています:
 
 ```ts
 const lineWidth = mejiro.verticalLineWidth(600);
@@ -192,7 +192,7 @@ const result = await layoutText({
 });
 ```
 
-一度だけレイアウトしたい場合に便利です。何度もレイアウトする場合は `MejiroBrowser` を使ってください。幅キャッシュを再利用でき、フォント読み込みや計測の重複を避けられます。
+`layoutText()` は `fontFamily` と `fontSize` を必須にした `LayoutOptions` である `LayoutTextOptions` を受け取ります。一度だけレイアウトしたい場合に便利です。何度もレイアウトする場合は `MejiroBrowser` を使ってください。幅キャッシュを再利用でき、フォント読み込みや計測の重複を避けられます。
 
 ## 8. その他のエクスポート
 
@@ -202,7 +202,8 @@ const result = await layoutText({
 |--------|-------------|
 | `FontLoader` | FontFace API（`document.fonts.load`）を使用した低レベルのフォント読み込み。 |
 | `CharMeasurer` | `Canvas.measureText()`を使用した低レベルの文字幅計測。 |
-| `WidthCache` | `Map<fontKey, Map<codepoint, width>>`構造の幅キャッシュ。 |
+| `MejiroError` | 引数の誤り以外の失敗を表すエラークラス。`strictFontCheck` のもとでの `font-unavailable`、`FontLoader` の `font-load-failed`、canvas が使えないときの `environment-unsupported`。 |
+| `WidthCache` | `Map<fontSpec, Map<codepoint, width>>`構造の幅キャッシュ。 |
 | `deriveRubyFont(fontFamily, fontSize)` | ルビ用フォント指定を導出する（通常はベースフォントサイズの半分）。 |
 | `toFontSpec(fontFamily, fontSize)` | CSSフォント指定文字列を生成する（例: `'16px "Noto Serif JP"'`）。 |
 

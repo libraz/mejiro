@@ -7,63 +7,54 @@ import { forwardRef, useImperativeHandle } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const readerState = vi.hoisted(() => ({
-  props: [] as Array<{ chapter?: number }>,
+  props: [] as Array<{ chapterIndex?: number }>,
   goToAnchor: vi.fn(async (_anchor: unknown) => {}),
 }));
 
 vi.mock('../src/MejiroReader.js', () => ({
   // biome-ignore lint/style/useNamingConvention: mocked export name matches the public component.
-  MejiroReader: forwardRef<unknown, { chapter?: number }>(function FakeReader(props, ref) {
+  MejiroReader: forwardRef<unknown, { chapterIndex?: number }>(function FakeReader(props, ref) {
     readerState.props.push(props);
     useImperativeHandle(ref, () => ({ goToAnchor: readerState.goToAnchor }), []);
     return <div className="fake-reader" />;
   }),
 }));
 
-/** Two chapters with two paragraphs each; every command regenerates the paragraph mirror. */
+const exportMock = vi.hoisted(() => vi.fn(async () => new Uint8Array(8)));
+const loadMock = vi.hoisted(() => vi.fn());
+
+/** Two chapters with two paragraph blocks each; every command replaces the blocks it touches. */
 function twoChapterEditor(): EditableEpub {
   const chapter = (n: number) => ({
     title: `Ch${n}`,
     href: `OPS/Text/ch${n}.xhtml`,
-    paragraphs: [
-      { text: `c${n}p1`, inlineAnnotations: [] },
-      { text: `c${n}p2`, inlineAnnotations: [] },
-    ],
     blocks: [
       { kind: 'paragraph', id: `c${n}-1`, text: `c${n}p1`, inlineAnnotations: [] },
       { kind: 'paragraph', id: `c${n}-2`, text: `c${n}p2`, inlineAnnotations: [] },
     ],
     imageAssets: new Map(),
   });
-  const book = {
-    title: 'Two',
-    author: 'A',
-    chapters: [chapter(1), chapter(2)],
-    packageData: { rootfilePath: 'OPS/package.opf', opfDir: 'OPS/', opfXml: '', files: new Map() },
-  };
-  const remirror = (ci: number) => {
-    book.chapters[ci].paragraphs = book.chapters[ci].paragraphs.map((p) => ({ ...p }));
+  const epub = { title: 'Two', author: 'A', chapters: [chapter(1), chapter(2)] };
+  const rebuild = (ci: number) => {
+    epub.chapters[ci].blocks = epub.chapters[ci].blocks.map((block) => ({ ...block }));
   };
   return {
-    book,
-    title: book.title,
-    author: book.author,
-    updateParagraph: vi.fn((ci: number, pi: number, patch: { text: string }) => {
-      book.chapters[ci].paragraphs[pi] = { ...book.chapters[ci].paragraphs[pi], text: patch.text };
-      remirror(ci);
+    epub,
+    title: epub.title,
+    author: epub.author,
+    updateParagraph: vi.fn((ci: number, blockId: string, patch: { text: string }) => {
+      epub.chapters[ci].blocks = epub.chapters[ci].blocks.map((block) =>
+        block.id === blockId ? { ...block, text: patch.text } : block,
+      );
     }),
-    addImage: vi.fn((ci: number) => remirror(ci)),
+    addImage: vi.fn((ci: number) => rebuild(ci)),
+    export: exportMock,
   } as unknown as EditableEpub;
 }
 
-const exportMock = vi.hoisted(() => vi.fn(async () => new ArrayBuffer(8)));
-const loadMock = vi.hoisted(() => vi.fn());
-
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@libraz/mejiro/epub')>()),
-  // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
-  EditableEpub: { load: loadMock },
-  exportEditableEpub: exportMock,
+  parseEditableEpub: loadMock,
 }));
 
 import { MejiroEditor } from '../src/MejiroEditor.js';
@@ -97,7 +88,7 @@ afterEach(() => {
   readerState.props.length = 0;
   readerState.goToAnchor.mockClear();
   exportMock.mockReset();
-  exportMock.mockImplementation(async () => new ArrayBuffer(8));
+  exportMock.mockImplementation(async () => new Uint8Array(8));
 });
 
 describe('MejiroEditor (React) — preview follows the selection', () => {
@@ -111,11 +102,11 @@ describe('MejiroEditor (React) — preview follows the selection', () => {
     insertImage(imageInput(), new File([new Uint8Array([1])], 'a.png', { type: 'image/png' }));
     await waitFor(() => expect(readerState.goToAnchor.mock.calls.length).toBeGreaterThan(2));
 
-    expect(readerState.props.at(-1)?.chapter).toBe(1);
-    expect(readerState.props.slice(-3).every((p) => p.chapter === 1)).toBe(true);
+    expect(readerState.props.at(-1)?.chapterIndex).toBe(1);
+    expect(readerState.props.slice(-3).every((p) => p.chapterIndex === 1)).toBe(true);
     expect(readerState.goToAnchor).toHaveBeenLastCalledWith({
-      chapter: 1,
-      paragraph: 1,
+      chapterIndex: 1,
+      paragraphIndex: 1,
       charIndex: 0,
     });
   });
@@ -145,11 +136,11 @@ describe('MejiroEditor (React) — export and image-insert failures', () => {
     expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('packaging failed');
   });
 
-  it('reports a failing encrypt step', async () => {
+  it('reports a failing transform step', async () => {
     const onError = vi.fn();
     const { button } = await renderEditor({
       onError,
-      exportPolicy: { encrypt: () => Promise.reject(new Error('drm down')) },
+      exportPolicy: { transform: () => Promise.reject(new Error('drm down')) },
     });
     fireEvent.click(button('Export EPUB'));
     await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
@@ -168,13 +159,12 @@ describe('MejiroEditor (React) — export and image-insert failures', () => {
     expect(container.querySelector('.mejiro-editor-error')?.textContent).toBe('unreadable');
   });
 
-  it('lets exportPolicy.allowDownload alone decide the download', async () => {
+  it('offers the download when exportPolicy.download is true', async () => {
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     const onExport = vi.fn();
     const { button } = await renderEditor({
       onExport,
-      onBeforeExport: () => false,
-      exportPolicy: { allowDownload: true },
+      exportPolicy: { download: true },
     });
     fireEvent.click(button('Export EPUB'));
     await waitFor(() => expect(onExport).toHaveBeenCalled());

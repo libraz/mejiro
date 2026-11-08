@@ -146,13 +146,21 @@ export interface MejiroMessages {
    * Template: `{title}` — the chapter title, or {@link untitled} when blank.
    */
   readonly manuscriptReorderHandle: string;
+  /** Reading time of an hour or more. Template: `{hours}` — whole hours, `{minutes}` — remaining whole minutes. */
+  readonly readingTimeHoursMinutes: string;
+  /** Reading time of a minute or more, under an hour. Template: `{minutes}` — whole minutes, `{seconds}` — remaining seconds. */
+  readonly readingTimeMinutesSeconds: string;
+  /** Reading time of whole minutes with no remaining seconds, under an hour. Template: `{minutes}` — whole minutes. */
+  readonly readingTimeMinutes: string;
+  /** Reading time under a minute. Template: `{seconds}` — whole seconds. */
+  readonly readingTimeSeconds: string;
 }
 
 /** Built-in locale identifiers. */
 export type MejiroLocale = 'en' | 'ja';
 
 /** Built-in English catalog (the default). */
-export const enMessages: MejiroMessages = {
+export const enMessages: MejiroMessages = Object.freeze({
   logoSubtitle: 'Vertical Reader',
   openButton: 'Open',
   settingsButton: 'Settings',
@@ -213,10 +221,14 @@ export const enMessages: MejiroMessages = {
   manuscriptEm: 'Em',
   manuscriptStrong: 'Strong',
   manuscriptReorderHandle: 'Reorder {title}',
-};
+  readingTimeHoursMinutes: '{hours}h {minutes}m',
+  readingTimeMinutesSeconds: '{minutes}m {seconds}s',
+  readingTimeMinutes: '{minutes}m 0s',
+  readingTimeSeconds: '{seconds}s',
+});
 
 /** Built-in Japanese catalog. */
-export const jaMessages: MejiroMessages = {
+export const jaMessages: MejiroMessages = Object.freeze({
   logoSubtitle: '縦書きリーダー',
   openButton: '開く',
   settingsButton: '設定',
@@ -277,20 +289,24 @@ export const jaMessages: MejiroMessages = {
   manuscriptEm: '強調',
   manuscriptStrong: '太字',
   manuscriptReorderHandle: '{title} の順番を変更',
-};
+  readingTimeHoursMinutes: '{hours}時間{minutes}分',
+  readingTimeMinutesSeconds: '{minutes}分{seconds}秒',
+  readingTimeMinutes: '{minutes}分',
+  readingTimeSeconds: '{seconds}秒',
+});
 
 /**
  * The built-in catalogs keyed by {@link MejiroLocale}.
  *
  * Exhaustive over `MejiroLocale`, so indexing it with any valid locale always
  * yields a catalog — {@link resolveMessages} relies on that to skip a fallback
- * check. The catalogs are shared, not copied: treat the returned object as
- * read-only, since mutating it changes what every reader on the page renders.
+ * check. The catalogs are shared and frozen, so a write fails instead of
+ * changing what every reader on the page renders.
  */
-export const messageCatalogs: Record<MejiroLocale, MejiroMessages> = {
+export const messageCatalogs: Readonly<Record<MejiroLocale, MejiroMessages>> = Object.freeze({
   en: enMessages,
   ja: jaMessages,
-};
+});
 
 /**
  * Builds a catalog without invoking a framework runtime.
@@ -301,8 +317,8 @@ export const messageCatalogs: Record<MejiroLocale, MejiroMessages> = {
  * @param overrides - Partial catalog merged over the base. Absent keys keep the
  *   base string, so a host only needs to list what it wants to change.
  * @param fallback - Base used when `locale` is omitted. @defaultValue {@link enMessages}
- * @returns The merged catalog. When `overrides` is absent the base object is
- *   returned as-is rather than copied, so callers must not mutate the result.
+ * @returns The merged catalog, frozen. When `overrides` is absent the base
+ *   object is returned as-is rather than copied.
  */
 export function resolveMessages(
   locale: MejiroLocale | undefined,
@@ -310,7 +326,7 @@ export function resolveMessages(
   fallback: MejiroMessages = enMessages,
 ): MejiroMessages {
   const base = locale != null ? messageCatalogs[locale] : fallback;
-  return overrides ? mergeDefined(base, overrides) : base;
+  return overrides ? Object.freeze(mergeDefined(base, overrides)) : base;
 }
 
 /**

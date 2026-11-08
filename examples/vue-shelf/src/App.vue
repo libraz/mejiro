@@ -79,9 +79,9 @@ function onPickFile(e: Event): void {
   <div v-if="!active" class="shelf">
     <MejiroShelf
       :volumes="volumes"
-      :current-id="library.current.value?.id"
+      :current-id="library.volume.value?.id"
       title="本棚"
-      @select="(v) => (activeId = v.id)"
+      @volume-select="(v) => (activeId = v.id)"
     />
     <div class="shelf-actions">
       <button
@@ -99,7 +99,7 @@ function onPickFile(e: Event): void {
 
   <MejiroReader
     v-else
-    :epub="active.meta.epub"
+    :epub="active.meta?.epub"
     :subtitle="active.author"
     :enable-drop-zone="false"
   >

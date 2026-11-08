@@ -3,7 +3,7 @@
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { EditableEpub } from '../../src/epub/editor.js';
+import { parseEditableEpub } from '../../src/epub/editor.js';
 import {
   assertEpubArchiveWithinLimits,
   assertEpubInputSize,
@@ -244,16 +244,16 @@ describe('EPUB archive limits across both import paths', () => {
     { limits: { maxCompressionRatio: 2 }, message: /compression ratio limit/ },
   ];
 
-  it('rejects the same archive for the same reason in parseEpub and EditableEpub.load', async () => {
+  it('rejects the same archive for the same reason in parseEpub and parseEditableEpub', async () => {
     const data = await makeArchive();
 
     // Neither path rejects the archive on its own.
     await expect(parseEpub(data)).resolves.toBeDefined();
-    await expect(EditableEpub.load(data)).resolves.toBeDefined();
+    await expect(parseEditableEpub(data)).resolves.toBeDefined();
 
     for (const { limits, message } of cases) {
       await expect(parseEpub(data, { limits }), JSON.stringify(limits)).rejects.toThrow(message);
-      await expect(EditableEpub.load(data, { limits }), JSON.stringify(limits)).rejects.toThrow(
+      await expect(parseEditableEpub(data, { limits }), JSON.stringify(limits)).rejects.toThrow(
         message,
       );
     }
@@ -263,7 +263,7 @@ describe('EPUB archive limits across both import paths', () => {
     const data = await makeArchive();
 
     await expect(parseEpub(data, { limits: { maxEntries: 0 } })).rejects.toThrow(RangeError);
-    await expect(EditableEpub.load(data, { limits: { maxEntries: 0 } })).rejects.toThrow(
+    await expect(parseEditableEpub(data, { limits: { maxEntries: 0 } })).rejects.toThrow(
       RangeError,
     );
   });
@@ -299,11 +299,11 @@ describe('EPUB archive expansion limits', () => {
     expect(peakBytes()).toBeLessThan(4 * MIB);
   });
 
-  it('rejects a size-spoofed archive from EditableEpub.load without expanding the whole entry', async () => {
+  it('rejects a size-spoofed archive from parseEditableEpub without expanding the whole entry', async () => {
     const data = await makeSizeSpoofedEpub(expandedBytes, declaredBytes);
 
     const peakBytes = trackPeakBufferBytes();
-    await expect(EditableEpub.load(data, { limits: { maxEntryBytes: MIB } })).rejects.toThrow(
+    await expect(parseEditableEpub(data, { limits: { maxEntryBytes: MIB } })).rejects.toThrow(
       /expanded size limit/,
     );
 
@@ -343,7 +343,7 @@ describe('EPUB archive expansion limits', () => {
       assertEpubArchiveWithinLimits(data, loaded, resolveEpubParseLimits({ limits })),
     ).not.toThrow();
     await expect(parseEpub(data, { limits })).rejects.toThrow(/total expanded size limit/);
-    await expect(EditableEpub.load(data, { limits })).rejects.toThrow(/total expanded size limit/);
+    await expect(parseEditableEpub(data, { limits })).rejects.toThrow(/total expanded size limit/);
 
     // Control: each entry alone fits the same total, and a total covering the
     // sum accepts the honest archive on both paths.
@@ -353,10 +353,10 @@ describe('EPUB archive expansion limits', () => {
     single.file('OPS/Text/chapter.xhtml', makeChapterXhtml(1.5 * MIB));
     const archive = await single.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
     await expect(parseEpub(archive, { limits })).resolves.toBeDefined();
-    await expect(EditableEpub.load(archive, { limits })).resolves.toBeDefined();
+    await expect(parseEditableEpub(archive, { limits })).resolves.toBeDefined();
     const roomy = { maxTotalBytes: 4 * MIB };
     await expect(parseEpub(honest, { limits: roomy })).resolves.toBeDefined();
-    await expect(EditableEpub.load(honest, { limits: roomy })).resolves.toBeDefined();
+    await expect(parseEditableEpub(honest, { limits: roomy })).resolves.toBeDefined();
   });
 
   it('rejects an entry whose real expansion passes the compression ratio limit', async () => {
@@ -380,7 +380,7 @@ describe('EPUB archive expansion limits', () => {
     await expect(parseEpub(data, { limits })).rejects.toThrow(/compression ratio limit/);
     expect(peakBytes()).toBeLessThan(4 * MIB);
 
-    await expect(EditableEpub.load(data, { limits })).rejects.toThrow(/compression ratio limit/);
+    await expect(parseEditableEpub(data, { limits })).rejects.toThrow(/compression ratio limit/);
   });
 
   it('accepts an honest archive that legitimately compresses well', async () => {

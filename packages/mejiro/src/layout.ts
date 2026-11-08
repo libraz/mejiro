@@ -4,10 +4,17 @@ import {
   regionalIndicatorPairStarts,
 } from './cluster.js';
 import { isHangingTarget } from './hanging.js';
-import { isLineEndProhibited, isLineStartProhibited, isUnbreakablePair } from './kinsoku.js';
+import {
+  endProhibited,
+  type KinsokuCheckOptions,
+  pairUnbreakable,
+  type ResolvedKinsoku,
+  resolveKinsoku,
+  startProhibited,
+} from './kinsoku.js';
 import { preprocessRuby } from './ruby.js';
 import { preprocessTcy } from './tcy.js';
-import type { BreakResult, KinsokuMode, KinsokuRules, LayoutInput } from './types.js';
+import type { BreakResult, LayoutInput } from './types.js';
 
 const LINE_FEED = 10;
 
@@ -18,9 +25,9 @@ const LINE_FEED = 10;
  * and optional hanging punctuation support.
  *
  * The shape of the result depends only on the options: `hangingAdjustments` is
- * present exactly when `enableHanging` is true, and `lineWidths` exactly when
- * per-line `lineWidths` were passed. Both hold one entry per line, i.e.
- * `breakPoints.length + 1`; for empty text both are zero-length.
+ * always present (zero-filled when `enableHanging` is false), and `lineWidths`
+ * is present exactly when per-line `lineWidths` were passed. Both hold one entry
+ * per line, i.e. `breakPoints.length + 1`; for empty text both are zero-length.
  *
  * A cluster wider than the available line width does not fit on any line; it is
  * split by the forced-break rule. That is the only case in which a break falls
@@ -31,7 +38,14 @@ const LINE_FEED = 10;
  * supersedes both `tokenBoundaries` and the whitespace/word preference.
  *
  * @param input - Layout parameters including text, advances, and line width.
- * @returns Break points and optional hanging adjustments.
+ * @returns Break points, hanging adjustments and, when requested, per-line widths.
+ * @throws RangeError when `advances`, `clusterIds` or `breakPenalties` do not
+ *   have one entry per code point of `text`; when `lineWidth` or an entry of
+ *   `lineWidths` is not a positive finite number; when an advance is negative or
+ *   not finite; when a `breakCost` field is out of range; when `kinsoku` is a
+ *   string that is not a known mode; or when a ruby annotation is rejected by
+ *   {@link preprocessRuby}. Malformed tate-chu-yoko spans are skipped instead.
+ * @throws TypeError when `kinsoku` is neither a mode string nor custom rules.
  */
 export function computeBreaks(input: LayoutInput): BreakResult {
   validateLayoutInput(input);
@@ -40,9 +54,8 @@ export function computeBreaks(input: LayoutInput): BreakResult {
     lineWidth: defaultLineWidth,
     lineWidths: perLineWidths,
     enableHanging = true,
-    mode = 'strict',
-    kinsokuRules,
   } = input;
+  const kinsoku = resolveKinsoku(input.kinsoku);
   let { clusterIds } = input;
 
   // Normalize tokenBoundaries: accept both Uint32Array and number[]
@@ -73,7 +86,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
     // the input length: the optional fields are present on every exit path.
     return {
       breakPoints: new Uint32Array(0),
-      hangingAdjustments: enableHanging ? new Float32Array(0) : undefined,
+      hangingAdjustments: new Float32Array(0),
       lineWidths: perLineWidths ? new Float32Array(0) : undefined,
     };
   }
@@ -144,7 +157,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
         enableHanging &&
         isHangingTarget(text[i]) &&
         accWidth - adv[i] <= lineWidth &&
-        isBreakAllowed(text, i, clusterIds, mode, kinsokuRules, pairStarts)
+        isBreakAllowed(text, i, clusterIds, kinsoku, pairStarts)
       ) {
         // No break after the last character or before a line feed, which ends the line itself.
         if (i === len - 1) {
@@ -188,7 +201,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
           if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, candidatePos, pairStarts)) {
             clusterSafePos = candidatePos;
           }
-          if (isBreakAllowed(text, candidatePos, clusterIds, mode, kinsokuRules, pairStarts)) {
+          if (isBreakAllowed(text, candidatePos, clusterIds, kinsoku, pairStarts)) {
             const shortfall = (lineWidth - candidateWidth) / emSize;
             const cost = penaltyWeight * breakPenalties[candidatePos] + shortfallWeight * shortfall;
             // The walk runs from the position that fills the line best downwards,
@@ -215,7 +228,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
           if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos, pairStarts)) {
             clusterSafePos = breakPos;
           }
-          if (isBreakAllowed(text, breakPos, clusterIds, mode, kinsokuRules, pairStarts)) {
+          if (isBreakAllowed(text, breakPos, clusterIds, kinsoku, pairStarts)) {
             if (tokenBoundarySet.has(breakPos)) {
               foundTokenBoundary = true;
               break;
@@ -235,7 +248,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
           if (clusterSafePos < 0 && isClusterBoundary(text, clusterIds, breakPos, pairStarts)) {
             clusterSafePos = breakPos;
           }
-          if (isBreakAllowed(text, breakPos, clusterIds, mode, kinsokuRules, pairStarts)) {
+          if (isBreakAllowed(text, breakPos, clusterIds, kinsoku, pairStarts)) {
             if (isWhitespace(text[breakPos])) {
               whitespacePos = breakPos;
               break;
@@ -255,8 +268,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
       // one cluster boundary it can never have recorded.
       if (
         breakPos < 0 ||
-        (breakPos === lineStart &&
-          !isBreakAllowed(text, breakPos, clusterIds, mode, kinsokuRules, pairStarts))
+        (breakPos === lineStart && !isBreakAllowed(text, breakPos, clusterIds, kinsoku, pairStarts))
       ) {
         if (
           clusterSafePos < lineStart &&
@@ -288,7 +300,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
 
   return {
     breakPoints: new Uint32Array(breaks),
-    hangingAdjustments: enableHanging ? new Float32Array(hangingAdj) : undefined,
+    hangingAdjustments: new Float32Array(hangingAdj),
     effectiveAdvances,
     lineWidths: perLineWidths ? new Float32Array(usedLineWidths) : undefined,
   };
@@ -439,10 +451,13 @@ function isClusterBoundary(
   pos: number,
   pairStarts?: Uint8Array,
 ): boolean {
-  return (
-    isClusterBreakAllowed(clusterIds, pos, text.length) &&
-    !isGraphemeContinuation(text, pos, pairStarts)
-  );
+  return isClusterBreakAllowed(clusterIds, pos) && !isGraphemeContinuation(text, pos, pairStarts);
+}
+
+/** Options of {@link canBreakAt}. */
+export interface CanBreakAtOptions extends KinsokuCheckOptions {
+  /** Cluster IDs for indivisible units; one entry per code point of `text`. */
+  clusterIds?: Uint32Array;
 }
 
 /**
@@ -454,19 +469,13 @@ function isClusterBoundary(
  *
  * @param text - Unicode codepoint array.
  * @param pos - Position to check (break would occur after this index).
- * @param clusterIds - Optional cluster IDs for indivisible units.
- * @param mode - Kinsoku mode.
- * @param rules - Optional custom kinsoku rules.
+ * @param options - Cluster IDs and the kinsoku rules to apply.
  * @returns `true` if a break is allowed at this position.
+ * @throws RangeError when `options.kinsoku` is a string that is not a known mode.
+ * @throws TypeError when `options.kinsoku` is neither a mode string nor rules.
  */
-export function canBreakAt(
-  text: Uint32Array,
-  pos: number,
-  clusterIds?: Uint32Array,
-  mode: KinsokuMode = 'strict',
-  rules?: KinsokuRules,
-): boolean {
-  return isBreakAllowed(text, pos, clusterIds, mode, rules);
+export function canBreakAt(text: Uint32Array, pos: number, options?: CanBreakAtOptions): boolean {
+  return isBreakAllowed(text, pos, options?.clusterIds, resolveKinsoku(options?.kinsoku));
 }
 
 /** {@link canBreakAt} with the regional-indicator pairing `computeBreaks` resolved up front. */
@@ -474,8 +483,7 @@ function isBreakAllowed(
   text: Uint32Array,
   pos: number,
   clusterIds: Uint32Array | undefined,
-  mode: KinsokuMode,
-  rules: KinsokuRules | undefined,
+  kinsoku: ResolvedKinsoku,
   pairStarts?: Uint8Array,
 ): boolean {
   // Cannot break within a cluster
@@ -483,15 +491,15 @@ function isBreakAllowed(
     return false;
   }
   // Line-end prohibition: cannot break if current char is prohibited at line end
-  if (isLineEndProhibited(text[pos], rules)) {
+  if (endProhibited(text[pos], kinsoku)) {
     return false;
   }
   // Line-start prohibition: cannot break if next char is prohibited at line start
-  if (pos + 1 < text.length && isLineStartProhibited(text[pos + 1], mode, rules)) {
+  if (pos + 1 < text.length && startProhibited(text[pos + 1], kinsoku)) {
     return false;
   }
   // Pair prohibition: cannot split inseparable adjacent punctuation pairs
-  if (pos + 1 < text.length && isUnbreakablePair(text[pos], text[pos + 1], rules)) {
+  if (pos + 1 < text.length && pairUnbreakable(text[pos], text[pos + 1], kinsoku)) {
     return false;
   }
   return true;

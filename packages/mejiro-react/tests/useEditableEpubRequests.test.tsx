@@ -9,8 +9,7 @@ const loadMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@libraz/mejiro/epub')>()),
-  // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
-  EditableEpub: { load: loadMock },
+  parseEditableEpub: loadMock,
 }));
 
 import { useEditableEpub } from '../src/useEditableEpub.js';
@@ -24,10 +23,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function stubEditor(exportImpl?: () => Promise<ArrayBuffer>): EditableEpub {
+function stubEditor(exportImpl?: () => Promise<Uint8Array>): EditableEpub {
   return {
-    book: { chapters: [], packageData: { files: new Map() } },
-    export: vi.fn(exportImpl ?? (async () => new ArrayBuffer(1))),
+    epub: { title: 'T', chapters: [] },
+    subscribe: vi.fn(() => () => {}),
+    export: vi.fn(exportImpl ?? (async () => new Uint8Array(1))),
   } as unknown as EditableEpub;
 }
 
@@ -63,19 +63,19 @@ describe('useEditableEpub (React) — abandoned loads', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('abandons a defaultUrl load when the URL is cleared mid-flight', async () => {
+  it('abandons a url load when the URL is cleared mid-flight', async () => {
     const pending = deferred<EditableEpub>();
     loadMock.mockReturnValue(pending.promise);
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new ArrayBuffer(8)));
     const onLoad = vi.fn();
     const { result, rerender } = renderHook(
-      ({ defaultUrl }: { defaultUrl?: string }) => useEditableEpub({ defaultUrl, onLoad }),
-      { initialProps: { defaultUrl: '/a.epub' } as { defaultUrl?: string } },
+      ({ url }: { url?: string }) => useEditableEpub({ url, onLoad }),
+      { initialProps: { url: '/a.epub' } as { url?: string } },
     );
     await waitFor(() => expect(loadMock).toHaveBeenCalled());
     expect(result.current.loading).toBe(true);
 
-    rerender({ defaultUrl: undefined });
+    rerender({ url: undefined });
     await act(async () => pending.resolve(stubEditor()));
 
     expect(onLoad).not.toHaveBeenCalled();
@@ -86,8 +86,8 @@ describe('useEditableEpub (React) — abandoned loads', () => {
 
 describe('useEditableEpub (React) — exporting', () => {
   it('stays true until the last overlapping export settles', async () => {
-    const first = deferred<ArrayBuffer>();
-    const second = deferred<ArrayBuffer>();
+    const first = deferred<Uint8Array>();
+    const second = deferred<Uint8Array>();
     const exports = [first, second];
     const editor = stubEditor();
     vi.mocked(editor.export).mockImplementation(() => (exports.shift() as typeof first).promise);
@@ -106,13 +106,13 @@ describe('useEditableEpub (React) — exporting', () => {
     expect(result.current.exporting).toBe(true);
 
     await act(async () => {
-      first.resolve(new ArrayBuffer(1));
+      first.resolve(new Uint8Array(1));
       await one;
     });
     expect(result.current.exporting).toBe(true);
 
     await act(async () => {
-      second.resolve(new ArrayBuffer(1));
+      second.resolve(new Uint8Array(1));
       await two;
     });
     expect(result.current.exporting).toBe(false);

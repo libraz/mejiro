@@ -20,6 +20,14 @@ export interface WidthCacheOptions {
   maxCodepointsPerFont?: number;
 }
 
+/** Aggregate size of a {@link WidthCache}. */
+export interface WidthCacheStats {
+  /** Number of distinct font specs with cached entries. */
+  fonts: number;
+  /** Total number of cached codepoint widths across all font specs. */
+  codepoints: number;
+}
+
 /**
  * Caches measured character widths keyed by font specification and codepoint.
  *
@@ -46,15 +54,15 @@ export class WidthCache {
   }
 
   /** Retrieves a cached width, or undefined if not cached. */
-  get(fontKey: string, codepoint: number): number | undefined {
-    const fontMap = this.store.get(fontKey);
+  get(fontSpec: string, codepoint: number): number | undefined {
+    const fontMap = this.store.get(fontSpec);
     if (!fontMap) return undefined;
     const value = fontMap.get(codepoint);
     if (value == null) return undefined;
     // Touch both layers so the LRU order tracks actual usage.
     if (Number.isFinite(this.maxFonts)) {
-      this.store.delete(fontKey);
-      this.store.set(fontKey, fontMap);
+      this.store.delete(fontSpec);
+      this.store.set(fontSpec, fontMap);
     }
     if (Number.isFinite(this.maxCodepointsPerFont)) {
       fontMap.delete(codepoint);
@@ -64,21 +72,21 @@ export class WidthCache {
   }
 
   /** Stores a measured width in the cache. */
-  set(fontKey: string, codepoint: number, width: number): void {
-    let fontMap = this.store.get(fontKey);
+  set(fontSpec: string, codepoint: number, width: number): void {
+    let fontMap = this.store.get(fontSpec);
     if (!fontMap) {
       fontMap = new Map();
-      this.store.set(fontKey, fontMap);
+      this.store.set(fontSpec, fontMap);
       while (this.store.size > this.maxFonts) {
         const oldest = this.store.keys().next().value;
-        if (oldest === undefined || oldest === fontKey) break;
+        if (oldest === undefined || oldest === fontSpec) break;
         this.store.delete(oldest);
       }
     } else {
       // Promote to MRU on every set when font-eviction is enabled.
       if (Number.isFinite(this.maxFonts)) {
-        this.store.delete(fontKey);
-        this.store.set(fontKey, fontMap);
+        this.store.delete(fontSpec);
+        this.store.set(fontSpec, fontMap);
       }
     }
     fontMap.set(codepoint, width);
@@ -91,11 +99,11 @@ export class WidthCache {
 
   /**
    * Clears cached entries.
-   * @param fontKey - If provided, clears only entries for this font. Otherwise clears all.
+   * @param fontSpec - If provided, clears only entries for this font spec. Otherwise clears all.
    */
-  clear(fontKey?: string): void {
-    if (fontKey) {
-      this.store.delete(fontKey);
+  clear(fontSpec?: string): void {
+    if (fontSpec) {
+      this.store.delete(fontSpec);
     } else {
       this.store.clear();
     }
@@ -103,11 +111,11 @@ export class WidthCache {
 
   /**
    * Returns the number of cached entries.
-   * @param fontKey - If provided, returns count for this font only. Otherwise returns total.
+   * @param fontSpec - If provided, returns count for this font only. Otherwise returns total.
    */
-  size(fontKey?: string): number {
-    if (fontKey) {
-      return this.store.get(fontKey)?.size ?? 0;
+  size(fontSpec?: string): number {
+    if (fontSpec) {
+      return this.store.get(fontSpec)?.size ?? 0;
     }
     let total = 0;
     for (const map of this.store.values()) {
@@ -122,7 +130,7 @@ export class WidthCache {
   }
 
   /** Returns aggregate cache statistics. */
-  stats(): { fonts: number; codepoints: number } {
+  stats(): WidthCacheStats {
     return { fonts: this.fontCount(), codepoints: this.size() };
   }
 }

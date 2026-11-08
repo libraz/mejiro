@@ -190,7 +190,7 @@ function prepareHints(corpus: Corpus, analyzer: TextAnalyzer): PreparedHints {
     analyses.push(analysis);
 
     const deriveStart = performance.now();
-    const hints = deriveTypographyHints(paragraph, analysis, { clusters: true, penalties: true });
+    const hints = deriveTypographyHints(analysis, { clusters: true, penalties: true });
     deriveMs += performance.now() - deriveStart;
 
     const paragraphLength = toCodepoints(paragraph).length;
@@ -224,7 +224,7 @@ function penaltiesAt(corpus: Corpus, hints: PreparedHints, keepWholePenalty: num
 
   for (let p = 0; p < corpus.paragraphs.length; p++) {
     const paragraph = corpus.paragraphs[p];
-    const derived = deriveTypographyHints(paragraph, hints.analyses[p], {
+    const derived = deriveTypographyHints(hints.analyses[p], {
       clusters: false,
       penalties: true,
       keepWholePenalty,
@@ -266,8 +266,8 @@ function collectKeepWhole(corpus: Corpus, hints: PreparedHints): KeepWholeCovera
       for (const morpheme of analysis.morphemes) {
         if (!(keepWhole.has(morpheme.extendedPos) || keepWhole.has(morpheme.pos))) continue;
         morphemes++;
-        chars += morpheme.end - morpheme.start;
-        for (let i = morpheme.start; i < morpheme.end - 1; i++) inside[offset + i] = 1;
+        chars += morpheme.endIndex - morpheme.startIndex;
+        for (let i = morpheme.startIndex; i < morpheme.endIndex - 1; i++) inside[offset + i] = 1;
       }
     }
     offset += toCodepoints(paragraph).length + 1;

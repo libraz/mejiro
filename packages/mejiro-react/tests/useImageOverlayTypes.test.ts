@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { moveImageOverlayRect } from '@libraz/mejiro';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import type { ImageRect } from '../src/index.js';
+import type { ImageOverlayRect } from '../src/index.js';
 
 /** Path of the in-memory probe module, placed beside this file so its imports resolve. */
 const PROBE_FILE = resolve(import.meta.dirname, '__overlay-types-probe.ts');
@@ -42,7 +42,7 @@ const PROBE_HEADER = `import type {
   ImageRect as CoreExclusionRect,
   ImageOverlayRect as CoreOverlayRect,
 } from '@libraz/mejiro';
-import type { ImageOverlayRect, ImageRect, UseImageOverlayReturn } from '../src/index.js';
+import type { ImageOverlayRect, UseImageOverlayReturn } from '../src/index.js';
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
 type Not<T extends boolean> = T extends true ? false : true;
@@ -50,11 +50,9 @@ type Not<T extends boolean> = T extends true ? false : true;
 
 /** Each contract a probe line asserts; a broken line fails to compile. */
 const CONTRACTS = [
-  // `ImageOverlayRect` is the name the package family agrees on; `ImageRect`
-  // stays as a deprecated alias so the rename is not a breaking change.
+  // `ImageOverlayRect` is the one name the package family uses for this shape.
   'Expect<Equal<ImageOverlayRect, CoreOverlayRect>>',
-  'Expect<Equal<ImageRect, CoreOverlayRect>>',
-  "Expect<Equal<UseImageOverlayReturn['imageRect'], CoreOverlayRect | null>>",
+  "Expect<Equal<UseImageOverlayReturn['currentImages'][number]['rect'], CoreOverlayRect>>",
   // The overlay rect stays distinct from the exclusion rect.
   'Expect<Not<Equal<CoreExclusionRect, CoreOverlayRect>>>',
   "Expect<Equal<'inlineMargin' extends keyof CoreExclusionRect ? true : false, true>>",
@@ -78,7 +76,7 @@ describe('image overlay rect type', () => {
   });
 
   it('feeds the barrel rect straight into the core overlay helpers', () => {
-    const rect: ImageRect = { x: 10, y: 20, w: 100, h: 120 };
-    expect(moveImageOverlayRect(rect, 5, -10)).toEqual({ x: 15, y: 10, w: 100, h: 120 });
+    const rect: ImageOverlayRect = { x: 10, y: 20, width: 100, height: 120 };
+    expect(moveImageOverlayRect(rect, 5, -10)).toEqual({ x: 15, y: 10, width: 100, height: 120 });
   });
 });

@@ -7,8 +7,10 @@ import { describe, expect, it } from 'vitest';
 import { MejiroBook } from '../../src/book/mejiro-book.js';
 import {
   type AnnotatedParagraph,
-  addEpubChapterImage,
-  EditableEpub,
+  type EditableEpub,
+  type EditableEpubChapter,
+  type EditableParagraphBlock,
+  parseEditableEpub,
   parseEpub,
   parseManuscript,
 } from '../../src/epub/index.js';
@@ -19,6 +21,18 @@ async function makeEpub(files: Record<string, string | Uint8Array>): Promise<Arr
     zip.file(path, contents);
   }
   return zip.generateAsync({ type: 'arraybuffer' });
+}
+
+/** Paragraph blocks of a chapter, in reading order. */
+function paragraphsOf(chapter: EditableEpubChapter): EditableParagraphBlock[] {
+  return chapter.blocks.filter(
+    (block): block is EditableParagraphBlock => block.kind === 'paragraph',
+  );
+}
+
+/** Id of the `n`-th paragraph block of a chapter. */
+function paragraphId(editor: EditableEpub, chapterIndex: number, n: number): string {
+  return paragraphsOf(editor.chapters[chapterIndex])[n].id;
 }
 
 const containerXml = `<?xml version="1.0"?>
@@ -50,7 +64,7 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': '<?xml version="1.0"?><html><body><p>本文</p></body></html>',
     });
 
-    await expect(EditableEpub.load(data, { limits: { maxEntries: 1 } })).rejects.toThrow(
+    await expect(parseEditableEpub(data, { limits: { maxEntries: 1 } })).rejects.toThrow(
       /entry limit/,
     );
   });
@@ -84,7 +98,7 @@ describe('EditableEpub', () => {
     expect(parsed.title).toBe('名前空間');
     expect(parsed.chapters[0].paragraphs.map((p) => p.text)).toEqual(['第一章', '本文']);
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     editor.addImage(0, {
       filename: 'inserted.png',
       mediaType: 'image/png',
@@ -106,10 +120,10 @@ describe('EditableEpub', () => {
 <x:html xmlns:x="http://www.w3.org/1999/xhtml"><x:body><x:h1>見出し</x:h1><x:p>本文</x:p></x:body></x:html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
     expect(editor.chapters[0].title).toBe('見出し');
-    expect(editor.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual([
+    expect(paragraphsOf(editor.chapters[0]).map((paragraph) => paragraph.text)).toEqual([
       '見出し',
       '本文',
     ]);
@@ -123,7 +137,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><h1>本のタイトル</h1><span id="chapter-title" hidden="">章タイトル</span><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
     expect(editor.chapters[0].title).toBe('章タイトル');
   });
@@ -136,10 +150,10 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../Styles/style.css"></head><body><h1>見出し</h1><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
     expect(editor.chapters[0].title).toBe('見出し');
-    expect(editor.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual([
+    expect(paragraphsOf(editor.chapters[0]).map((paragraph) => paragraph.text)).toEqual([
       '見出し',
       '本文',
     ]);
@@ -153,10 +167,10 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><head><link rel="stylesheet" href="../Styles/style.css"></link></head><body><h1>見出し</h1><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
     expect(editor.chapters[0].title).toBe('見出し');
-    expect(editor.chapters[0].paragraphs.map((paragraph) => paragraph.text)).toEqual([
+    expect(paragraphsOf(editor.chapters[0]).map((paragraph) => paragraph.text)).toEqual([
       '見出し',
       '本文',
     ]);
@@ -171,11 +185,11 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="x" content="keep" /></head><body><section class="chapter"><h1 class="title">第一章</h1><p class="body" data-keep="yes"><span class="lead">本文</span></p><aside>注記</aside></section></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.updateParagraph(0, 1, {
+    const editor = await parseEditableEpub(data);
+    editor.updateParagraph(0, paragraphId(editor, 0, 1), {
       text: '校正本文',
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'こうせい', type: 'group' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'こうせい', rubyType: 'group' },
       ],
     });
 
@@ -202,7 +216,7 @@ describe('EditableEpub', () => {
       'OPS/Styles/style.css': 'html { writing-mode: vertical-rl; }',
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
 
@@ -238,8 +252,8 @@ describe('EditableEpub', () => {
       'OPS/Styles/style.css': 'html { writing-mode: vertical-rl; }',
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.updateParagraph(0, 0, { text: '編集済み' });
+    const editor = await parseEditableEpub(data);
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集済み' });
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
     const edited = await zip.file('OPS/Text/chapter-1.xhtml')?.async('string');
@@ -257,8 +271,8 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><h1>章</h1><ul><li>項目1</li><li>項目2</li></ul><dl><dt>用語</dt><dd>定義</dd></dl></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual([
+    const editor = await parseEditableEpub(data);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual([
       '章',
       '項目1',
       '項目2',
@@ -278,11 +292,11 @@ describe('EditableEpub', () => {
     const expected = ['前文', '段落', '中文', '脇', '内側', '後', '末尾'];
 
     expect((await parseEpub(data)).chapters[0].paragraphs.map((p) => p.text)).toEqual(expected);
-    const editor = await EditableEpub.load(data);
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(expected);
+    const editor = await parseEditableEpub(data);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(expected);
     expect(editor.chapters[0].blocks.some((block) => block.kind === 'image')).toBe(true);
 
-    editor.updateParagraph(0, 1, { text: '編集' });
+    editor.updateParagraph(0, paragraphId(editor, 0, 1), { text: '編集' });
     const out = await editor.export();
     expect((await parseEpub(out)).chapters[0].paragraphs.map((p) => p.text)).toEqual([
       '前文',
@@ -299,11 +313,11 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第一章</h1><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.updateParagraph(0, 1, {
+    const editor = await parseEditableEpub(data);
+    editor.updateParagraph(0, paragraphId(editor, 0, 1), {
       text: '漢字を校正した本文',
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
       ],
     });
 
@@ -312,11 +326,11 @@ describe('EditableEpub', () => {
 
     expect(reparsed.chapters[0].paragraphs[1].text).toBe('漢字を校正した本文');
     expect(reparsed.chapters[0].paragraphs[1].inlineAnnotations[0]).toMatchObject({
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: 0,
       endIndex: 2,
       rubyText: 'かんじ',
-      type: 'group',
+      rubyType: 'group',
     });
   });
 
@@ -328,14 +342,14 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>ABCDEFG</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.setInlineAnnotations(0, 0, [
-      { kind: 'emphasis', startIndex: 0, endIndex: 1, style: 'dot' },
-      { kind: 'tcy', startIndex: 1, endIndex: 2 },
-      { kind: 'em', startIndex: 2, endIndex: 3 },
-      { kind: 'strong', startIndex: 3, endIndex: 4 },
-      { kind: 'link', startIndex: 4, endIndex: 5, href: 'https://example.test', title: '例' },
-      { kind: 'footnote', startIndex: 5, endIndex: 6, noteId: 'fn1' },
+    const editor = await parseEditableEpub(data);
+    editor.setInlineAnnotations(0, paragraphId(editor, 0, 0), [
+      { type: 'emphasis', startIndex: 0, endIndex: 1, style: 'dot' },
+      { type: 'tcy', startIndex: 1, endIndex: 2 },
+      { type: 'em', startIndex: 2, endIndex: 3 },
+      { type: 'strong', startIndex: 3, endIndex: 4 },
+      { type: 'link', startIndex: 4, endIndex: 5, href: 'https://example.test', title: '例' },
+      { type: 'footnote-ref', startIndex: 5, endIndex: 6, noteId: 'fn1' },
     ]);
 
     const out = await editor.export();
@@ -359,10 +373,10 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>漢字</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.setInlineAnnotations(0, 0, [
-      { kind: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+    const editor = await parseEditableEpub(data);
+    editor.setInlineAnnotations(0, paragraphId(editor, 0, 0), [
+      { type: 'link', startIndex: 0, endIndex: 2, href: 'https://example.test' },
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
     ]);
 
     const out = await editor.export();
@@ -390,7 +404,7 @@ describe('EditableEpub', () => {
     const rubyOf = (paragraphs: readonly AnnotatedParagraph[]) =>
       paragraphs.map((p) =>
         p.inlineAnnotations
-          .filter((ann) => ann.kind === 'ruby')
+          .filter((ann) => ann.type === 'ruby')
           .map((ann) => ({ ...ann }))
           .sort((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex),
       );
@@ -399,17 +413,17 @@ describe('EditableEpub', () => {
     const originalRuby = rubyOf(original);
     // Guard against a vacuous pass: every ruby paragraph carries a jukugo word.
     for (const anns of originalRuby.slice(1)) {
-      expect(anns.some((ann) => ann.kind === 'ruby' && ann.type === 'jukugo')).toBe(true);
+      expect(anns.some((ann) => ann.type === 'ruby' && ann.rubyType === 'jukugo')).toBe(true);
     }
     expect(originalRuby[2]).toContainEqual(
-      expect.objectContaining({ type: 'jukugo', rubyText: 'あじさい', jukugoSplitPoints: [1] }),
+      expect.objectContaining({ rubyType: 'jukugo', rubyText: 'あじさい', jukugoSplitPoints: [1] }),
     );
     expect(originalRuby[2]).toContainEqual(
-      expect.objectContaining({ type: 'jukugo', rubyText: 'おとな', jukugoSplitPoints: [1] }),
+      expect.objectContaining({ rubyType: 'jukugo', rubyText: 'おとな', jukugoSplitPoints: [1] }),
     );
 
-    const editor = await EditableEpub.load(data);
-    editor.updateParagraph(0, 0, { text: '編集後' });
+    const editor = await parseEditableEpub(data);
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集後' });
     const out = await editor.export();
 
     const reparsed = (await parseEpub(out)).chapters[0].paragraphs;
@@ -418,8 +432,8 @@ describe('EditableEpub', () => {
       ...original.slice(1).map((p) => p.text),
     ]);
     expect(rubyOf(reparsed)).toEqual(originalRuby);
-    const reloaded = await EditableEpub.load(out);
-    expect(rubyOf(reloaded.chapters[0].paragraphs)).toEqual(originalRuby);
+    const reloaded = await parseEditableEpub(out);
+    expect(rubyOf(paragraphsOf(reloaded.chapters[0]))).toEqual(originalRuby);
   });
 
   it('never writes a caller-supplied executable href into exported markup', async () => {
@@ -430,18 +444,18 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>ABCD</p><p>漢字</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.setInlineAnnotations(0, 0, [
-      { kind: 'link', startIndex: 0, endIndex: 1, href: 'javascript:alert(1)' },
-      { kind: 'link', startIndex: 1, endIndex: 2, href: ' VBScript:msgbox(1)' },
-      { kind: 'link', startIndex: 2, endIndex: 3, href: 'data:text/html,<script>' },
-      { kind: 'link', startIndex: 3, endIndex: 4, href: 'https://example.test' },
+    const editor = await parseEditableEpub(data);
+    editor.setInlineAnnotations(0, paragraphId(editor, 0, 0), [
+      { type: 'link', startIndex: 0, endIndex: 1, href: 'javascript:alert(1)' },
+      { type: 'link', startIndex: 1, endIndex: 2, href: ' VBScript:msgbox(1)' },
+      { type: 'link', startIndex: 2, endIndex: 3, href: 'data:text/html,<script>' },
+      { type: 'link', startIndex: 3, endIndex: 4, href: 'https://example.test' },
     ]);
-    editor.updateParagraph(0, 1, {
+    editor.updateParagraph(0, paragraphId(editor, 0, 1), {
       text: '漢字',
       inlineAnnotations: [
-        { kind: 'link', startIndex: 0, endIndex: 2, href: 'javascript:void(0)' },
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', type: 'group' },
+        { type: 'link', startIndex: 0, endIndex: 2, href: 'javascript:void(0)' },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'かんじ', rubyType: 'group' },
       ],
     });
 
@@ -453,13 +467,13 @@ describe('EditableEpub', () => {
     expect(chapter).toContain('<p>ABC<a href="https://example.test">D</a></p>');
     expect(chapter).toContain('<p><ruby>漢字<rt>かんじ</rt></ruby></p>');
 
-    const reparsed = await EditableEpub.load(out);
-    const [first, second] = reparsed.chapters[0].paragraphs;
+    const reparsed = await parseEditableEpub(out);
+    const [first, second] = paragraphsOf(reparsed.chapters[0]);
     expect(first.text).toBe('ABCD');
     expect(first.inlineAnnotations).toEqual([
-      { kind: 'link', startIndex: 3, endIndex: 4, href: 'https://example.test' },
+      { type: 'link', startIndex: 3, endIndex: 4, href: 'https://example.test' },
     ]);
-    expect(second.inlineAnnotations?.map((ann) => ann.kind)).toEqual(['ruby']);
+    expect(second.inlineAnnotations?.map((ann) => ann.type)).toEqual(['ruby']);
   });
 
   it('rejects exporting edited chapters with unsupported list structure', async () => {
@@ -470,8 +484,8 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>前</p><ul><li>項目</li></ul></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    editor.updateParagraph(0, 0, { text: '編集' });
+    const editor = await parseEditableEpub(data);
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集' });
 
     await expect(editor.export()).rejects.toThrow(
       /Cannot export edited chapter with <ul> structure/u,
@@ -486,14 +500,14 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p><em class="mejiro-emphasis" data-style="circle">A</em><span class="mejiro-tcy">12</span><em>B</em><strong>C</strong><a href="https://example.test">D</a><a class="mejiro-footnote-ref" href="#fn1">E</a></p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    expect(editor.chapters[0].paragraphs[0].inlineAnnotations).toEqual([
-      { kind: 'emphasis', startIndex: 0, endIndex: 1, style: 'circle' },
-      { kind: 'tcy', startIndex: 1, endIndex: 3 },
-      { kind: 'em', startIndex: 3, endIndex: 4 },
-      { kind: 'strong', startIndex: 4, endIndex: 5 },
-      { kind: 'link', startIndex: 5, endIndex: 6, href: 'https://example.test' },
-      { kind: 'footnote', startIndex: 6, endIndex: 7, noteId: 'fn1' },
+    const editor = await parseEditableEpub(data);
+    expect(paragraphsOf(editor.chapters[0])[0].inlineAnnotations).toEqual([
+      { type: 'emphasis', startIndex: 0, endIndex: 1, style: 'circle' },
+      { type: 'tcy', startIndex: 1, endIndex: 3 },
+      { type: 'em', startIndex: 3, endIndex: 4 },
+      { type: 'strong', startIndex: 4, endIndex: 5 },
+      { type: 'link', startIndex: 5, endIndex: 6, href: 'https://example.test' },
+      { type: 'footnote-ref', startIndex: 6, endIndex: 7, noteId: 'fn1' },
     ]);
 
     const out = await editor.export();
@@ -516,7 +530,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     editor.addImage(0, {
       filename: 'inserted.png',
       mediaType: 'image/png',
@@ -559,7 +573,7 @@ describe('EditableEpub', () => {
       'OPS/Images/existing.png': new Uint8Array([9, 8, 7]),
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(editor.chapters[0].blocks.map((block) => block.kind)).toEqual([
       'paragraph',
       'image',
@@ -610,7 +624,7 @@ describe('EditableEpub', () => {
       'OPS/Images/cover': new Uint8Array([1, 1, 2, 3]),
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(editor.chapters[0].imageAssets.get('cover')?.mediaType).toBe('image/avif');
 
     const out = await editor.export();
@@ -642,7 +656,7 @@ describe('EditableEpub', () => {
       'OPS/Media/existing.webp': new Uint8Array([5, 4, 3]),
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(editor.chapters[0].imageAssets.get('existing.webp')).toMatchObject({
       filename: 'existing.webp',
       href: 'OPS/Media/existing.webp',
@@ -682,12 +696,10 @@ describe('EditableEpub', () => {
       'OPS/Images/my pic.png': new Uint8Array([2, 4, 6]),
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(editor.chapters[0].imageAssets.get('my pic.png')).toMatchObject({
       filename: 'my pic.png',
       href: 'OPS/Images/my pic.png',
-      manifestId: 'fig1',
-      manifestHref: 'Images/my%20pic.png',
     });
 
     const out = await editor.export();
@@ -721,9 +733,9 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(editor.chapters[0].href).toBe('OPS/Text/chapter 1.xhtml');
-    editor.updateParagraph(0, 0, { text: '更新本文' });
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '更新本文' });
 
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
@@ -754,7 +766,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     editor.addImage(0, {
       filename: 'inserted.png',
       mediaType: 'image/png',
@@ -780,8 +792,8 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    const assetKey = editor.addImage(0, {
+    const editor = await parseEditableEpub(data);
+    const { assetKey } = editor.addImage(0, {
       filename: '../outside.png',
       mediaType: 'image/png',
       data: new Uint8Array([7, 8, 9]),
@@ -807,7 +819,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(() =>
       editor.addImage(0, {
         filename: '../',
@@ -817,15 +829,6 @@ describe('EditableEpub', () => {
     expect(editor.history.canUndo).toBe(false);
     expect(editor.chapters[0].blocks).toHaveLength(1);
     expect(editor.chapters[0].imageAssets.size).toBe(0);
-
-    expect(() =>
-      editor.addImage(0, {
-        href: 'OPS/Images/',
-        mediaType: 'image/png',
-        data: new Uint8Array([1]),
-      }),
-    ).toThrow(/Image filename must not be empty/);
-    expect(editor.history.canUndo).toBe(false);
   });
 
   it('uniques repeated added image filenames so blocks do not overwrite assets', async () => {
@@ -836,14 +839,14 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    const firstKey = editor.addImage(0, {
+    const editor = await parseEditableEpub(data);
+    const { assetKey: firstKey } = editor.addImage(0, {
       filename: 'dup.png',
       mediaType: 'image/png',
       data: new Uint8Array([1]),
       alt: '一枚目',
     });
-    const secondKey = editor.addImage(0, {
+    const { assetKey: secondKey } = editor.addImage(0, {
       filename: 'dup.png',
       data: new Uint8Array([2]),
       alt: '二枚目',
@@ -879,8 +882,8 @@ describe('EditableEpub', () => {
       'OPS/Images/cover.png': new Uint8Array([9]),
     });
 
-    const editor = await EditableEpub.load(data);
-    const key = editor.addImage(0, {
+    const editor = await parseEditableEpub(data);
+    const { assetKey: key } = editor.addImage(0, {
       filename: 'cover.png',
       data: new Uint8Array([1]),
       alt: '追加画像',
@@ -920,13 +923,13 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>二章</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
-    const firstKey = editor.addImage(0, {
+    const editor = await parseEditableEpub(data);
+    const { assetKey: firstKey } = editor.addImage(0, {
       filename: 'dup.png',
       data: new Uint8Array([1]),
       alt: '一章画像',
     });
-    const secondKey = editor.addImage(1, {
+    const { assetKey: secondKey } = editor.addImage(1, {
       filename: 'dup.png',
       data: new Uint8Array([2]),
       alt: '二章画像',
@@ -969,7 +972,7 @@ describe('EditableEpub', () => {
       'OPS/Styles/style.css': 'body { margin: 0; }',
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     editor.addImage(0, {
       filename: 'dup.png',
       data: new Uint8Array([1]),
@@ -984,7 +987,7 @@ describe('EditableEpub', () => {
     expect(opf).toContain('id="img-dup-png-2" href="Images/dup.png" media-type="image/png"');
   });
 
-  it('supports the v0.4 addImage shape (filename inferred from href, afterParagraph index)', async () => {
+  it('inserts an added image right after the block afterBlockId names', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
       'OPS/package.opf': opfXml,
@@ -992,13 +995,13 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文1</p><p>本文2</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     editor.addImage(0, {
-      href: 'OPS/Images/legacy.png',
+      filename: 'inserted.png',
       mediaType: 'image/png',
       data: new Uint8Array([1, 2, 3]),
       alt: '挿絵',
-      afterParagraph: 0,
+      afterBlockId: paragraphId(editor, 0, 0),
     });
 
     const out = await editor.export();
@@ -1009,14 +1012,14 @@ describe('EditableEpub', () => {
     expect(chapter).toMatch(/<p>本文1<\/p>[\s\S]*<figure[\s\S]*<\/figure>[\s\S]*<p>本文2<\/p>/u);
   });
 
-  it('rejects an insertion target naming no block identically for both addImage shapes', async () => {
+  it('rejects an insertion target naming no block', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
       'OPS/package.opf': opfXml,
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文1</p><p>本文2</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const bytes = new Uint8Array([1]);
 
     expect(() =>
@@ -1025,16 +1028,6 @@ describe('EditableEpub', () => {
     expect(() => editor.addImage(0, { filename: 'a.png', data: bytes, afterBlockId: '' })).toThrow(
       /Missing block/,
     );
-    for (const afterParagraph of [2, -1, 99]) {
-      expect(() =>
-        editor.addImage(0, {
-          href: 'OPS/Images/legacy.png',
-          mediaType: 'image/png',
-          data: bytes,
-          afterParagraph,
-        }),
-      ).toThrow(`Missing paragraph: ${afterParagraph}`);
-    }
     expect(editor.chapters[0].blocks.map((block) => block.kind)).toEqual([
       'paragraph',
       'paragraph',
@@ -1049,31 +1042,31 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>あいうえお</p><p>かきくけこ</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const chapter = editor.chapters[0];
 
     // Initial: [P(あいうえお), P(かきくけこ)]
     const firstId = chapter.blocks[0].id;
 
     // Split first paragraph after 'あい'.
-    const [leftId, rightId] = editor.splitParagraph(0, firstId, 2);
+    const right = editor.splitParagraph(0, firstId, 2);
     expect(chapter.blocks.length).toBe(3);
-    expect(chapter.paragraphs.map((p) => p.text)).toEqual(['あい', 'うえお', 'かきくけこ']);
+    expect(paragraphsOf(chapter).map((p) => p.text)).toEqual(['あい', 'うえお', 'かきくけこ']);
 
     // Merge them back.
-    const mergedId = editor.mergeParagraphs(0, leftId, rightId);
+    const merged = editor.mergeParagraphs(0, { leftId: firstId, rightId: right.id });
     expect(chapter.blocks.length).toBe(2);
-    expect(chapter.paragraphs[0].text).toBe('あいうえお');
-    expect(mergedId).toBe(leftId);
+    expect(paragraphsOf(chapter)[0].text).toBe('あいうえお');
+    expect(merged.id).toBe(firstId);
 
     // Insert a new heading at the top.
-    const headingId = editor.insertParagraph(0, 0, {
+    const { id: headingId } = editor.insertParagraph(0, 0, {
       text: 'タイトル',
       paragraphKind: 'heading',
       headingLevel: 1,
     });
     expect(chapter.blocks[0].id).toBe(headingId);
-    expect(chapter.paragraphs[0].headingLevel).toBe(1);
+    expect(paragraphsOf(chapter)[0].headingLevel).toBe(1);
 
     // Move the heading to the end, then delete it.
     editor.moveBlock(0, headingId, 99);
@@ -1095,45 +1088,45 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>あいうえおかきくけこ</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const chapter = editor.chapters[0];
     const firstId = chapter.blocks[0].id;
-    editor.updateParagraph(0, 0, {
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), {
       inlineAnnotations: [
-        { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'あい', type: 'group' },
-        { kind: 'strong', startIndex: 5, endIndex: 7 },
-        { kind: 'em', startIndex: 3, endIndex: 6 },
+        { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'あい', rubyType: 'group' },
+        { type: 'strong', startIndex: 5, endIndex: 7 },
+        { type: 'em', startIndex: 3, endIndex: 6 },
       ],
     });
 
-    const [leftId, rightId] = editor.splitParagraph(0, firstId, 4);
-    expect(chapter.paragraphs.map((p) => p.text)).toEqual(['あいうえ', 'おかきくけこ']);
-    expect(chapter.paragraphs[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'あい', type: 'group' },
+    const right = editor.splitParagraph(0, firstId, 4);
+    expect(paragraphsOf(chapter).map((p) => p.text)).toEqual(['あいうえ', 'おかきくけこ']);
+    expect(paragraphsOf(chapter)[0].inlineAnnotations).toEqual([
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'あい', rubyType: 'group' },
     ]);
-    expect(chapter.paragraphs[1].inlineAnnotations).toEqual([
-      { kind: 'strong', startIndex: 1, endIndex: 3 },
+    expect(paragraphsOf(chapter)[1].inlineAnnotations).toEqual([
+      { type: 'strong', startIndex: 1, endIndex: 3 },
     ]);
 
-    editor.mergeParagraphs(0, leftId, rightId);
-    expect(chapter.paragraphs[0].inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'あい', type: 'group' },
-      { kind: 'strong', startIndex: 5, endIndex: 7 },
+    editor.mergeParagraphs(0, { leftId: firstId, rightId: right.id });
+    expect(paragraphsOf(chapter)[0].inlineAnnotations).toEqual([
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'あい', rubyType: 'group' },
+      { type: 'strong', startIndex: 5, endIndex: 7 },
     ]);
   });
 
-  it('can clear a heading level with a partial paragraph update', async () => {
+  it('turns a heading back into body text with a kind change', async () => {
     const data = await makeEpub({
       'META-INF/container.xml': containerXml,
       'OPS/package.opf': opfXml,
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><h2>見出し</h2></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
-    expect(editor.chapters[0].paragraphs[0].headingLevel).toBe(2);
-    editor.updateParagraph(0, 0, { headingLevel: undefined });
-    expect(editor.chapters[0].paragraphs[0].headingLevel).toBeUndefined();
+    expect(paragraphsOf(editor.chapters[0])[0].headingLevel).toBe(2);
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { paragraphKind: 'body' });
+    expect(paragraphsOf(editor.chapters[0])[0].headingLevel).toBeUndefined();
 
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
@@ -1149,7 +1142,7 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     editor.addImage(0, {
       filename: 'pic.png',
       data: new Uint8Array([1, 2, 3]),
@@ -1180,14 +1173,14 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
-    const assetKey = editor.addImage(0, {
+    const editor = await parseEditableEpub(data);
+    const { assetKey } = editor.addImage(0, {
       filename: 'orphan.png',
       data: new Uint8Array([1]),
       mediaType: 'image/png',
     });
     expect(editor.chapters[0].imageAssets.has(assetKey)).toBe(true);
-    editor.removeImage(0, assetKey);
+    editor.removeImageAsset(assetKey);
     expect(editor.chapters[0].imageAssets.has(assetKey)).toBe(false);
   });
 
@@ -1198,8 +1191,8 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
-    const assetKey = editor.addImage(0, {
+    const editor = await parseEditableEpub(data);
+    const { assetKey } = editor.addImage(0, {
       filename: 'delete-block.png',
       data: new Uint8Array([1]),
       mediaType: 'image/png',
@@ -1240,11 +1233,11 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p><figure><img src="../Media/existing.webp" alt="既存" /></figure></body></html>`,
       'OPS/Media/existing.webp': new Uint8Array([5, 4, 3]),
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const imageBlock = editor.chapters[0].blocks.find((block) => block.kind === 'image');
     if (!imageBlock) throw new Error('missing image block');
 
-    editor.removeImage(0, imageBlock.id);
+    editor.deleteBlock(0, imageBlock.id);
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
     const opf = await zip.file('OPS/package.opf')?.async('string');
@@ -1280,11 +1273,11 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>二章</p><figure><img src="../Media/shared.webp" alt="共有2" /></figure></body></html>`,
       'OPS/Media/shared.webp': new Uint8Array([5, 4, 3]),
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const imageBlock = editor.chapters[0].blocks.find((block) => block.kind === 'image');
     if (!imageBlock) throw new Error('missing image block');
 
-    editor.removeImage(0, imageBlock.id);
+    editor.deleteBlock(0, imageBlock.id);
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
     const opf = await zip.file('OPS/package.opf')?.async('string');
@@ -1307,24 +1300,24 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(editor.history.canUndo).toBe(false);
 
-    editor.updateParagraph(0, 0, { text: '校正1' });
-    editor.updateParagraph(0, 0, { text: '校正2' });
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '校正1' });
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '校正2' });
     expect(editor.history.depth).toBe(2);
-    expect(editor.chapters[0].paragraphs[0].text).toBe('校正2');
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('校正2');
 
     expect(editor.undo()).toBe(true);
-    expect(editor.chapters[0].paragraphs[0].text).toBe('校正1');
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('校正1');
     expect(editor.history.canRedo).toBe(true);
 
     expect(editor.redo()).toBe(true);
-    expect(editor.chapters[0].paragraphs[0].text).toBe('校正2');
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('校正2');
 
     expect(editor.undo()).toBe(true);
     expect(editor.undo()).toBe(true);
-    expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('本文');
     expect(editor.undo()).toBe(false);
   });
 
@@ -1335,19 +1328,19 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文1</p><p>本文2</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const firstId = editor.chapters[0].blocks[0].id;
 
     editor.transaction(() => {
-      editor.updateParagraph(0, 0, { text: '校正1' });
-      editor.updateParagraph(0, 1, { text: '校正2' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '校正1' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 1), { text: '校正2' });
       editor.splitParagraph(0, firstId, 1);
     });
     expect(editor.history.depth).toBe(1);
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['校', '正1', '校正2']);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(['校', '正1', '校正2']);
 
     editor.undo();
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['本文1', '本文2']);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(['本文1', '本文2']);
   });
 
   it('keeps the outer history entry open after a successful nested transaction', async () => {
@@ -1357,20 +1350,24 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文1</p><p>本文2</p><p>本文3</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
     editor.transaction(() => {
-      editor.updateParagraph(0, 0, { text: '外側1' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '外側1' });
       editor.transaction(() => {
-        editor.updateParagraph(0, 1, { text: '内側' });
+        editor.updateParagraph(0, paragraphId(editor, 0, 1), { text: '内側' });
       });
-      editor.updateParagraph(0, 2, { text: '外側2' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 2), { text: '外側2' });
     });
 
     expect(editor.history.depth).toBe(1);
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['外側1', '内側', '外側2']);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(['外側1', '内側', '外側2']);
     editor.undo();
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['本文1', '本文2', '本文3']);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual([
+      '本文1',
+      '本文2',
+      '本文3',
+    ]);
   });
 
   it('rolls back a failing transaction', async () => {
@@ -1380,15 +1377,15 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     expect(() =>
       editor.transaction(() => {
-        editor.updateParagraph(0, 0, { text: '校正中' });
+        editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '校正中' });
         throw new Error('boom');
       }),
     ).toThrow(/boom/);
 
-    expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('本文');
     expect(editor.history.canUndo).toBe(false);
   });
 
@@ -1399,17 +1396,19 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文1</p><p>本文2</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const firstId = editor.chapters[0].blocks[0].id;
 
-    expect(() => editor.updateParagraph(0, 99, { text: 'なし' })).toThrow(/Missing paragraph: 99/);
-    expect(() => editor.setInlineAnnotations(0, 99, [])).toThrow(/Missing paragraph: 99/);
+    expect(() => editor.updateParagraph(0, 'missing', { text: 'なし' })).toThrow(/Missing block/);
+    expect(() => editor.setInlineAnnotations(0, 'missing', [])).toThrow(/Missing block/);
     expect(() => editor.insertParagraph(99, 0, { text: 'なし' })).toThrow(/Missing chapter: 99/);
     expect(() => editor.deleteBlock(0, 'missing')).toThrow(/Missing block: missing/);
     expect(() => editor.moveBlock(0, 'missing', 0)).toThrow(/Missing block: missing/);
-    expect(() => editor.mergeParagraphs(0, firstId, 'missing')).toThrow(/Merge target missing/);
+    expect(() => editor.mergeParagraphs(0, { leftId: firstId, rightId: 'missing' })).toThrow(
+      /Missing block: missing/,
+    );
 
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['本文1', '本文2']);
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(['本文1', '本文2']);
     expect(editor.history.depth).toBe(0);
     expect(editor.history.canUndo).toBe(false);
   });
@@ -1434,7 +1433,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p><figure><img src="../Media/existing.webp" alt="既存" /></figure></body></html>`,
       'OPS/Media/existing.webp': new Uint8Array([5, 4, 3]),
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const imageBlock = editor.chapters[0].blocks.find((block) => block.kind === 'image');
     if (!imageBlock) throw new Error('missing image block');
 
@@ -1451,9 +1450,9 @@ describe('EditableEpub', () => {
         afterBlockId: 'missing',
       }),
     ).toThrow(/Missing block: missing/);
-    expect(() => editor.removeImage(0, 'missing')).toThrow(/Missing image block or asset/);
+    expect(() => editor.removeImageAsset('missing')).toThrow(/Missing image asset/);
     expect(() => editor.updateImage(0, 'missing', { alt: 'なし' })).toThrow(
-      /Missing image block: missing/,
+      /Missing block: missing/,
     );
 
     expect(editor.chapters[0].blocks.map((block) => block.kind)).toEqual(['paragraph', 'image']);
@@ -1464,7 +1463,7 @@ describe('EditableEpub', () => {
 
   it('wraps non-ZIP buffers with a friendly "Not a valid EPUB file" error', async () => {
     const garbage = new TextEncoder().encode('not a zip file at all').buffer;
-    await expect(EditableEpub.load(garbage)).rejects.toThrow(/Not a valid EPUB file/);
+    await expect(parseEditableEpub(garbage)).rejects.toThrow(/Not a valid EPUB file/);
   });
 
   it('throws "Failed to parse chapter XHTML" with the failing href for malformed chapter content', async () => {
@@ -1473,7 +1472,7 @@ describe('EditableEpub', () => {
       'OPS/package.opf': opfXml,
       'OPS/Text/chapter.xhtml': '<html><body><p>unterminated',
     });
-    await expect(EditableEpub.load(data)).rejects.toThrow(
+    await expect(parseEditableEpub(data)).rejects.toThrow(
       /Failed to parse chapter XHTML: OPS\/Text\/chapter\.xhtml/,
     );
   });
@@ -1495,7 +1494,7 @@ describe('EditableEpub', () => {
 </package>`,
     });
 
-    await expect(EditableEpub.load(data)).rejects.toThrow(
+    await expect(parseEditableEpub(data)).rejects.toThrow(
       'Invalid EPUB href: Text/chapter%E0%A4%A.xhtml',
     );
   });
@@ -1507,7 +1506,7 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const events: Array<['serialize' | 'zip', number]> = [];
     await editor.export({
       onProgress: (phase, ratio) => events.push([phase, ratio]),
@@ -1523,7 +1522,7 @@ describe('EditableEpub', () => {
       'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const controller = new AbortController();
     controller.abort();
     await expect(editor.export({ signal: controller.signal })).rejects.toMatchObject({
@@ -1542,7 +1541,7 @@ describe('EditableEpub', () => {
         'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, { filename: 'remote.png', url: 'https://cdn.example.test/remote.png' });
       return editor;
     }
@@ -1602,10 +1601,10 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
     });
 
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
     const out = await editor.export();
-    const bytes = new Uint8Array(out);
-    const view = new DataView(out);
+    const bytes = out;
+    const view = new DataView(out.buffer, out.byteOffset, out.byteLength);
     const fileNameLength = view.getUint16(26, true);
     const extraLength = view.getUint16(28, true);
     const name = new TextDecoder().decode(bytes.slice(30, 30 + fileNameLength));
@@ -1620,7 +1619,7 @@ describe('EditableEpub', () => {
     expect(contents).toBe('application/epub+zip');
   });
 
-  it('keeps a chapter clean when the low-level image helper rejects its target', async () => {
+  it('keeps a chapter clean when addImage rejects its target', async () => {
     const originalChapter = `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="keep" content="yes" /></head><body><p>本文</p><aside>注記</aside></body></html>`;
     const data = await makeEpub({
@@ -1628,16 +1627,15 @@ describe('EditableEpub', () => {
       'OPS/package.opf': opfXml,
       'OPS/Text/chapter.xhtml': originalChapter,
     });
-    const editor = await EditableEpub.load(data);
+    const editor = await parseEditableEpub(data);
 
     expect(() =>
-      addEpubChapterImage(editor.book, 0, {
+      editor.addImage(0, {
         filename: 'figure.png',
         data: new Uint8Array([1]),
         afterBlockId: 'missing',
       }),
     ).toThrow(/Missing block/);
-    expect(editor.chapters[0].isDirty).toBeUndefined();
 
     const out = await editor.export();
     const zip = await JSZip.loadAsync(out);
@@ -1655,7 +1653,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, {
         filename: 'remote.png',
         mediaType: 'image/png',
@@ -1663,10 +1661,10 @@ describe('EditableEpub', () => {
         alt: 'remote',
       });
 
-      const calls: Array<{ assetKey: string; url: string }> = [];
+      const calls: Array<{ href: string; url: string }> = [];
       const out = await editor.export({
         assetResolver(request) {
-          calls.push({ assetKey: request.assetKey, url: request.url });
+          calls.push({ href: request.href, url: request.url });
           return new Uint8Array([42, 43, 44]);
         },
       });
@@ -1675,7 +1673,7 @@ describe('EditableEpub', () => {
       const stored = await zip.file('OPS/Images/remote.png')?.async('uint8array');
       expect(Array.from(stored ?? [])).toEqual([42, 43, 44]);
       expect(calls).toEqual([
-        { assetKey: 'remote.png', url: 'https://cdn.example.com/cover/remote.png' },
+        { href: 'OPS/Images/remote.png', url: 'https://cdn.example.com/cover/remote.png' },
       ]);
     });
 
@@ -1687,7 +1685,7 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, {
         filename: 'remote.png',
         url: 'https://cdn.example.com/remote.png',
@@ -1714,14 +1712,14 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, {
         filename: 'inline.png',
         data: new Uint8Array([7, 7, 7]),
       });
       // Manually attach a url to the stored asset; data must still win.
       const asset = editor.chapters[0].imageAssets.get('inline.png');
-      if (asset) asset.url = 'https://example.com/should-be-ignored.png';
+      if (asset) (asset as { url?: string }).url = 'https://example.com/should-be-ignored.png';
 
       let resolverCalled = false;
       const out = await editor.export({
@@ -1745,14 +1743,14 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, {
         filename: 'orphan.png',
         data: new Uint8Array([1]),
       });
       const asset = editor.chapters[0].imageAssets.get('orphan.png');
       // Force the invalid state to exercise the export-time guard.
-      if (asset) asset.data = undefined;
+      if (asset) (asset as { data?: Uint8Array }).data = undefined;
 
       await expect(editor.export()).rejects.toThrow(/has neither `data` nor `url`/);
     });
@@ -1765,8 +1763,8 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
-      editor.updateParagraph(0, 0, { text: '編集済み' });
+      const editor = await parseEditableEpub(data);
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集済み' });
       expect(editor.undo()).toBe(true);
       expect(editor.history).toMatchObject({ depth: 0, redoDepth: 1, canRedo: true });
 
@@ -1776,7 +1774,7 @@ describe('EditableEpub', () => {
         editor.addImage(0, { filename: 'empty.png' } as Parameters<typeof editor.addImage>[1]),
       ).toThrow(/must include either `data` or `url`/);
 
-      expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
+      expect(paragraphsOf(editor.chapters[0])[0].text).toBe('本文');
       expect(editor.chapters[0].imageAssets.has('empty.png')).toBe(false);
       expect(editor.history).toMatchObject({ depth: 0, redoDepth: 1, canRedo: true });
     });
@@ -1791,8 +1789,8 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>章</title></head><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
-      editor.updateParagraph(0, 0, { text: '編集済み' });
+      const editor = await parseEditableEpub(data);
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集済み' });
       const out = await editor.export();
       const zip = await JSZip.loadAsync(out);
       const chapter = (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '';
@@ -1805,8 +1803,8 @@ describe('EditableEpub', () => {
       expect(reparsed.getElementsByTagName('p')[0]?.textContent).toBe('編集済み');
 
       // The exported archive must survive a full re-import.
-      const reloaded = await EditableEpub.load(out);
-      expect(reloaded.chapters[0].paragraphs[0].text).toBe('編集済み');
+      const reloaded = await parseEditableEpub(out);
+      expect(paragraphsOf(reloaded.chapters[0])[0].text).toBe('編集済み');
     });
 
     it('writes exactly one XML declaration when the chapter shell is rebuilt from scratch', async () => {
@@ -1817,11 +1815,11 @@ describe('EditableEpub', () => {
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>本文</p></body></html>`,
       });
 
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       // Without a reusable source document the serializer builds the chapter
       // from its own skeleton, which carries its own declaration.
       editor.chapters[0].originalXhtml = '';
-      editor.updateParagraph(0, 0, { text: '骨組み' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '骨組み' });
       const out = await editor.export();
       const zip = await JSZip.loadAsync(out);
       const chapter = (await zip.file('OPS/Text/chapter.xhtml')?.async('string')) ?? '';
@@ -1848,7 +1846,7 @@ describe('EditableEpub', () => {
           'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>${xhtml}</p></body></html>`,
         });
-        return EditableEpub.load(data);
+        return parseEditableEpub(data);
       }
 
       function offsets(paragraph: AnnotatedParagraph): [number, number][] {
@@ -1871,15 +1869,18 @@ describe('EditableEpub', () => {
       async function run(text: string) {
         const editor = await load(text);
         const chapter = editor.chapters[0];
-        const loaded = structuredClone(chapter.paragraphs[0]);
-        const [left, right] = editor.splitParagraph(0, chapter.blocks[0].id, 3);
-        const split = structuredClone([chapter.paragraphs[0], chapter.paragraphs[1]]);
-        editor.mergeParagraphs(0, left, right);
-        const merged = structuredClone(chapter.paragraphs[0]);
+        const loaded = structuredClone(paragraphsOf(chapter)[0]);
+        const leftId = chapter.blocks[0].id;
+        const right = editor.splitParagraph(0, leftId, 3);
+        const split = structuredClone([paragraphsOf(chapter)[0], paragraphsOf(chapter)[1]]);
+        editor.mergeParagraphs(0, { leftId, rightId: right.id });
+        const merged = structuredClone(paragraphsOf(chapter)[0]);
         // Replace the leading character outside the ruby with another astral one.
         const chars = [...merged.text];
-        editor.updateParagraph(0, 0, { text: [chars[4], ...chars.slice(1)].join('') });
-        const reanchored = chapter.paragraphs[0];
+        editor.updateParagraph(0, paragraphId(editor, 0, 0), {
+          text: [chars[4], ...chars.slice(1)].join(''),
+        });
+        const reanchored = paragraphsOf(chapter)[0];
         return { loaded, split, merged, reanchored };
       }
 
@@ -1922,7 +1923,7 @@ describe('EditableEpub', () => {
         'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>むかしむかし<ruby>漢字<rt>かんじ</rt></ruby>がありました</p></body></html>`,
       });
-      return EditableEpub.load(data);
+      return parseEditableEpub(data);
     }
 
     function annotationBases(paragraph: AnnotatedParagraph): string[] {
@@ -1943,26 +1944,30 @@ describe('EditableEpub', () => {
 
     it('keeps annotations over the same base text when the prefix is shortened', async () => {
       const editor = await loadRubyChapter();
-      const before = annotationBases(editor.chapters[0].paragraphs[0]);
+      const before = annotationBases(paragraphsOf(editor.chapters[0])[0]);
       expect(before).toEqual(['漢字']);
 
-      editor.updateParagraph(0, 0, { text: 'むかし漢字がありました' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: 'むかし漢字がありました' });
 
-      const after = editor.chapters[0].paragraphs[0];
+      const after = paragraphsOf(editor.chapters[0])[0];
       expectAnnotationsInRange(after);
       expect(annotationBases(after)).toEqual(before);
 
       const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
       book.setPageSize({ pageWidth: 400, lineWidth: 200 });
-      await expect(book.layoutChapter({ paragraphs: [after] })).resolves.toBeDefined();
+      await expect(
+        book.layoutChapter({
+          paragraphs: [{ text: after.text, inlineAnnotations: after.inlineAnnotations }],
+        }),
+      ).resolves.toBeDefined();
     });
 
     it('keeps annotations over the same base text when the suffix is shortened', async () => {
       const editor = await loadRubyChapter();
 
-      editor.updateParagraph(0, 0, { text: 'むかしむかし漢字が' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: 'むかしむかし漢字が' });
 
-      const after = editor.chapters[0].paragraphs[0];
+      const after = paragraphsOf(editor.chapters[0])[0];
       expectAnnotationsInRange(after);
       expect(annotationBases(after)).toEqual(['漢字']);
     });
@@ -1970,20 +1975,24 @@ describe('EditableEpub', () => {
     it('drops annotations whose base characters were edited away', async () => {
       const editor = await loadRubyChapter();
 
-      editor.updateParagraph(0, 0, { text: 'むかしむかしがありました' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: 'むかしむかしがありました' });
 
-      const after = editor.chapters[0].paragraphs[0];
+      const after = paragraphsOf(editor.chapters[0])[0];
       expect(after.inlineAnnotations).toEqual([]);
       expectAnnotationsInRange(after);
 
       const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
       book.setPageSize({ pageWidth: 400, lineWidth: 200 });
-      await expect(book.layoutChapter({ paragraphs: [after] })).resolves.toBeDefined();
+      await expect(
+        book.layoutChapter({
+          paragraphs: [{ text: after.text, inlineAnnotations: after.inlineAnnotations }],
+        }),
+      ).resolves.toBeDefined();
     });
 
     it('exports a text-only update without corrupting the ruby base', async () => {
       const editor = await loadRubyChapter();
-      editor.updateParagraph(0, 0, { text: 'むかし漢字がありました' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: 'むかし漢字がありました' });
 
       const zip = await JSZip.loadAsync(await editor.export());
       const chapter = await zip.file('OPS/Text/chapter.xhtml')?.async('string');
@@ -1994,15 +2003,15 @@ describe('EditableEpub', () => {
     it('drops explicitly supplied annotations that fall outside the paragraph text', async () => {
       const editor = await loadRubyChapter();
 
-      editor.setInlineAnnotations(0, 0, [
-        { kind: 'emphasis', startIndex: 0, endIndex: 2, style: 'dot' },
-        { kind: 'ruby', startIndex: 90, endIndex: 99, rubyText: 'そと', type: 'group' },
-        { kind: 'tcy', startIndex: 3, endIndex: 3 },
+      editor.setInlineAnnotations(0, paragraphId(editor, 0, 0), [
+        { type: 'emphasis', startIndex: 0, endIndex: 2, style: 'dot' },
+        { type: 'ruby', startIndex: 90, endIndex: 99, rubyText: 'そと', rubyType: 'group' },
+        { type: 'tcy', startIndex: 3, endIndex: 3 },
       ]);
 
-      const after = editor.chapters[0].paragraphs[0];
+      const after = paragraphsOf(editor.chapters[0])[0];
       expect(after.inlineAnnotations).toEqual([
-        { kind: 'emphasis', startIndex: 0, endIndex: 2, style: 'dot' },
+        { type: 'emphasis', startIndex: 0, endIndex: 2, style: 'dot' },
       ]);
       expectAnnotationsInRange(after);
     });
@@ -2010,15 +2019,15 @@ describe('EditableEpub', () => {
     it('drops out-of-range annotations supplied alongside a text update', async () => {
       const editor = await loadRubyChapter();
 
-      editor.updateParagraph(0, 0, {
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), {
         text: '短い',
         inlineAnnotations: [
-          { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'みじか', type: 'group' },
-          { kind: 'ruby', startIndex: 5, endIndex: 8, rubyText: 'なし', type: 'group' },
+          { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'みじか', rubyType: 'group' },
+          { type: 'ruby', startIndex: 5, endIndex: 8, rubyText: 'なし', rubyType: 'group' },
         ],
       });
 
-      const after = editor.chapters[0].paragraphs[0];
+      const after = paragraphsOf(editor.chapters[0])[0];
       expect(after.inlineAnnotations).toHaveLength(1);
       expectAnnotationsInRange(after);
     });
@@ -2080,7 +2089,7 @@ describe('EditableEpub', () => {
       const data = await makeMixedSpineEpub();
 
       const reader = await parseEpub(data);
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
 
       expect(editor.chapters.map((chapter) => chapter.href)).toEqual([
         'OPS/Text/ch1.xhtml',
@@ -2091,18 +2100,18 @@ describe('EditableEpub', () => {
       );
       expect(editor.chapters.map((chapter) => chapter.title)).toEqual(['第一章', '第二章']);
       expect(
-        editor.chapters.map((chapter) => chapter.paragraphs.map((paragraph) => paragraph.text)),
+        editor.chapters.map((chapter) => paragraphsOf(chapter).map((paragraph) => paragraph.text)),
       ).toEqual(reader.chapters.map((chapter) => chapter.paragraphs.map((p) => p.text)));
-      expect(editor.book.pageProgressionDirection).toBe(reader.pageProgressionDirection);
-      expect(editor.book.pageProgressionDirection).toBe('rtl');
+      expect(editor.epub.pageProgressionDirection).toBe(reader.pageProgressionDirection);
+      expect(editor.epub.pageProgressionDirection).toBe('rtl');
       expect(editor.title).toBe(reader.title);
       expect(editor.author).toBe(reader.author);
     });
 
     it('keeps skipped spine documents in the package so export round-trips them', async () => {
       const data = await makeMixedSpineEpub();
-      const editor = await EditableEpub.load(data);
-      editor.updateParagraph(0, 0, { text: '編集済み' });
+      const editor = await parseEditableEpub(data);
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集済み' });
 
       const zip = await JSZip.loadAsync(await editor.export());
 
@@ -2143,7 +2152,7 @@ describe('EditableEpub', () => {
         'OPS/Text/chapter-2.xhtml': `<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><body><p>第二章</p></body></html>`,
       });
-      return EditableEpub.load(data);
+      return parseEditableEpub(data);
     }
 
     async function readPackage(out: ArrayBuffer): Promise<Record<string, string | undefined>> {
@@ -2177,14 +2186,14 @@ describe('EditableEpub', () => {
 
       // The export is now parked on the asset: chapter 1 is already serialized
       // and chapter 2 has not been reached yet. Edit both.
-      editor.updateParagraph(0, 0, { text: '編集後一' });
-      editor.updateParagraph(1, 0, { text: '編集後二' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集後一' });
+      editor.updateParagraph(1, paragraphId(editor, 1, 0), { text: '編集後二' });
       release();
 
       await expect(readPackage(await exporting)).resolves.toEqual(expected);
 
       // The edits are not lost — they belong to the next export.
-      expect(editor.chapters[0].paragraphs[0].text).toBe('編集後一');
+      expect(paragraphsOf(editor.chapters[0])[0].text).toBe('編集後一');
       const later = await readPackage(
         await editor.export({ assetResolver: () => new Uint8Array([1, 2, 3]) }),
       );
@@ -2241,7 +2250,7 @@ describe('EditableEpub', () => {
         ),
         'OPS/Images/gaiji.png': new Uint8Array([7]),
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       expect(editor.chapters[0].blocks.map((b) => b.kind)).toEqual([
         'image',
         'paragraph',
@@ -2249,7 +2258,7 @@ describe('EditableEpub', () => {
         'paragraph',
         'paragraph',
       ]);
-      editor.updateParagraph(0, 2, { text: '編集' });
+      editor.updateParagraph(0, paragraphId(editor, 0, 2), { text: '編集' });
 
       const chapter = await exportedChapter(editor);
       expect(chapter.match(/<img src="\.\.\/Images\/gaiji\.png"/gu) ?? []).toHaveLength(2);
@@ -2269,14 +2278,14 @@ describe('EditableEpub', () => {
           '<section id="chap-1"><h1>本の題</h1><span id="chapter-title" hidden="">章の題</span><p>本文</p></section>',
         ),
       });
-      const editor = await EditableEpub.load(data);
-      editor.updateParagraph(0, 1, { text: '改稿' });
+      const editor = await parseEditableEpub(data);
+      editor.updateParagraph(0, paragraphId(editor, 0, 1), { text: '改稿' });
 
       const chapter = await exportedChapter(editor);
       expect(chapter).toMatch(
         /<section id="chap-1"><span id="chapter-title" hidden="">章の題<\/span><h1>本の題<\/h1><p>改稿<\/p><\/section>/u,
       );
-      const reloaded = await EditableEpub.load(await editor.export());
+      const reloaded = await parseEditableEpub(await editor.export());
       expect(reloaded.chapters[0].title).toBe('章の題');
     });
 
@@ -2296,9 +2305,9 @@ describe('EditableEpub', () => {
           'OPS/package.opf': opfXml,
           'OPS/Text/chapter.xhtml': chapterXhtml(body),
         });
-        const editor = await EditableEpub.load(data);
+        const editor = await parseEditableEpub(data);
         let resolved = false;
-        editor.updateParagraph(0, 0, { text: '編集' });
+        editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集' });
         await expect(
           editor.export({
             assetResolver() {
@@ -2310,7 +2319,7 @@ describe('EditableEpub', () => {
         expect(resolved).toBe(false);
         // An unedited chapter is written back verbatim, so it still exports.
         expect(editor.undo()).toBe(true);
-        await expect(editor.export()).resolves.toBeInstanceOf(ArrayBuffer);
+        await expect(editor.export()).resolves.toBeInstanceOf(Uint8Array);
       }
     });
 
@@ -2320,19 +2329,26 @@ describe('EditableEpub', () => {
         'OPS/package.opf': opfXml,
         'OPS/Text/chapter.xhtml': chapterXhtml('<p>前</p><hr /><p>後</p>'),
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       const [, sceneBreak, after] = editor.chapters[0].blocks;
 
-      expect(() => editor.updateParagraph(0, 1, { text: '消える' })).toThrow(/sceneBreak/u);
-      expect(() => editor.mergeParagraphs(0, sceneBreak.id, after.id)).toThrow(/sceneBreak/u);
+      expect(() =>
+        editor.updateParagraph(0, paragraphId(editor, 0, 1), { text: '消える' }),
+      ).toThrow(/sceneBreak/u);
+      expect(() => editor.mergeParagraphs(0, { leftId: sceneBreak.id, rightId: after.id })).toThrow(
+        /sceneBreak/u,
+      );
       expect(() =>
         editor.insertParagraph(0, 0, { text: '消える', paragraphKind: 'sceneBreak' }),
       ).toThrow(/sceneBreak/u);
       expect(editor.history.depth).toBe(0);
-      expect(editor.chapters[0].isDirty).toBeFalsy();
 
       // Turning the break into a heading keeps the text.
-      editor.updateParagraph(0, 1, { text: '章', headingLevel: 2 });
+      editor.updateParagraph(0, paragraphId(editor, 0, 1), {
+        paragraphKind: 'heading',
+        headingLevel: 2,
+        text: '章',
+      });
       editor.splitParagraph(0, editor.chapters[0].blocks[0].id, 0);
       const chapter = await exportedChapter(editor);
       expect(chapter).toContain('<h2>章</h2>');
@@ -2349,15 +2365,14 @@ describe('EditableEpub', () => {
         ),
         'OPS/Images/gaiji.png': new Uint8Array([7]),
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       const image = editor.chapters[0].blocks[1];
       expect(image).toMatchObject({ caption: '説明' });
 
       editor.updateImage(0, image.id, { alt: '図', caption: '説明' });
       expect(editor.history.depth).toBe(0);
-      expect(editor.chapters[0].isDirty).toBeFalsy();
 
-      editor.setImageCaption(0, image.id, undefined);
+      editor.setImageCaption(0, image.id, null);
       editor.updateImage(0, image.id, { placement: undefined });
       expect(editor.history.depth).toBe(2);
       expect(editor.chapters[0].blocks[1]).not.toHaveProperty('caption');
@@ -2374,7 +2389,7 @@ describe('EditableEpub', () => {
         'OPS/package.opf': opfXml,
         'OPS/Text/chapter.xhtml': chapterXhtml('<p>本文</p>'),
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, { filename: 'remote.png', url: 'https://cdn.example.com/remote.png' });
       const controller = new AbortController();
       const originalFetch = globalThis.fetch;
@@ -2407,7 +2422,7 @@ describe('EditableEpub', () => {
         'OPS/package.opf': opfXml,
         'OPS/Text/chapter.xhtml': chapterXhtml('<p>本文</p>'),
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       editor.addImage(0, { filename: 'fig 100%.png', data: new Uint8Array([3]) });
       const out = await editor.export();
       const zip = await JSZip.loadAsync(out);
@@ -2416,7 +2431,7 @@ describe('EditableEpub', () => {
       expect(opf).toContain('href="Images/fig%20100%25.png"');
       expect(await exportedChapter(editor)).toContain('src="../Images/fig%20100%25.png"');
 
-      const reloaded = await EditableEpub.load(out);
+      const reloaded = await parseEditableEpub(out);
       expect(reloaded.chapters[0].imageAssets.get('fig 100%.png')?.data).toEqual(
         new Uint8Array([3]),
       );
@@ -2430,8 +2445,8 @@ describe('EditableEpub', () => {
         'OPS/Text/chapter.xhtml': `<?xml version="1.0"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>章</title>${link}<!-- <link rel="stylesheet" href="old.css"> --></head><body><p>本文</p></body></html>`,
       });
-      const editor = await EditableEpub.load(data);
-      editor.updateParagraph(0, 0, { text: '改稿' });
+      const editor = await parseEditableEpub(data);
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '改稿' });
 
       const chapter = await exportedChapter(editor);
       const doc = new DOMParser().parseFromString(chapter, 'application/xml');
@@ -2449,7 +2464,7 @@ describe('EditableEpub', () => {
         ),
         'OPS/Images/gaiji.png': new Uint8Array([7]),
       });
-      const editor = await EditableEpub.load(data);
+      const editor = await parseEditableEpub(data);
       const read = async () => {
         const zip = await JSZip.loadAsync(await editor.export());
         return {
@@ -2462,7 +2477,7 @@ describe('EditableEpub', () => {
       };
 
       editor.addImage(0, { filename: 'added.png', data: new Uint8Array([1]) });
-      editor.removeImage(0, 'gaiji.png');
+      editor.removeImageAsset('gaiji.png');
       let state = await read();
       expect(state.files).toEqual(['OPS/Images/added.png']);
       expect(state.opf).not.toContain('gaiji.png');
@@ -2483,7 +2498,7 @@ describe('EditableEpub', () => {
 
       expect(() =>
         editor.transaction(() => {
-          editor.removeImage(0, 'added.png');
+          editor.removeImageAsset('added.png');
           throw new Error('rollback');
         }),
       ).toThrow('rollback');

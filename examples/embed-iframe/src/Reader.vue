@@ -12,7 +12,7 @@ const epubUrl = new URLSearchParams(window.location.search).get('epub') ?? undef
   <MejiroReader
     :epub-url="epubUrl"
     :enable-drop-zone="false"
-    :enable-stats="false"
-    :enable-settings="false"
+    :show-settings="false"
+    title="mejiro"
   />
 </template>

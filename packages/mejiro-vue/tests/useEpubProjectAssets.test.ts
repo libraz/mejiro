@@ -25,9 +25,11 @@ function harness<T>(setup: () => T): { result: { current: T } } {
 
 describe('useEpubProject asset registration (Vue)', () => {
   it('registers a URL-only cover in the project it builds', () => {
-    const { result } = harness(() => useEpubProject({ chapters, debounceMs: 10_000 }));
+    const { result } = harness(() =>
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000 }),
+    );
 
-    result.current.setCover({ href: 'OPS/Images/cover.jpg', url: COVER_URL });
+    result.current.setCover({ url: COVER_URL, mediaType: 'image/jpeg' });
 
     expect(result.current.cover.value).toMatchObject({ url: COVER_URL });
     expect(result.current.buildProject().assets).toEqual([
@@ -41,25 +43,25 @@ describe('useEpubProject asset registration (Vue)', () => {
       return COVER_BYTES;
     });
     const { result } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 10_000, assetResolver }),
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000, assetResolver }),
     );
 
-    result.current.setCover({ href: 'OPS/Images/cover.jpg', url: COVER_URL });
+    result.current.setCover({ url: COVER_URL, mediaType: 'image/jpeg' });
 
-    const buffer = await result.current.exportEpub();
+    const bytes = await result.current.exportEpub();
 
     expect(assetResolver).toHaveBeenCalledTimes(1);
     expect(assetResolver.mock.calls[0][0]).toMatchObject({ url: COVER_URL });
-    expect(buffer.byteLength).toBeGreaterThan(0);
+    expect(bytes.byteLength).toBeGreaterThan(0);
   });
 
   it('drops the cover from the exported project when set back to null', async () => {
     const assetResolver = vi.fn(() => COVER_BYTES);
     const { result } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 10_000, assetResolver }),
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000, assetResolver }),
     );
 
-    result.current.setCover({ href: 'OPS/Images/cover.jpg', url: COVER_URL });
+    result.current.setCover({ url: COVER_URL, mediaType: 'image/jpeg' });
     result.current.setCover(null);
 
     await result.current.exportEpub();
@@ -73,7 +75,7 @@ describe('useEpubProject asset registration (Vue)', () => {
     const illustrationUrl = 'https://cdn.example.test/works/1/figure-01.png';
     const assetResolver = vi.fn(() => COVER_BYTES);
     const { result } = harness(() =>
-      useEpubProject({ chapters, debounceMs: 10_000, assetResolver }),
+      useEpubProject({ initialChapters: chapters, debounceMs: 10_000, assetResolver }),
     );
 
     result.current.setAssets([{ href: 'OPS/Images/figure-01.png', url: illustrationUrl }]);
@@ -90,10 +92,10 @@ describe('useEpubProject asset registration (Vue)', () => {
   it('seeds the cover and assets from the initial options', () => {
     const { result } = harness(() =>
       useEpubProject({
-        chapters,
+        initialChapters: chapters,
         debounceMs: 10_000,
-        cover: { href: 'OPS/Images/cover.jpg', url: COVER_URL },
-        assets: [{ href: 'OPS/Images/figure-01.png', data: COVER_BYTES }],
+        initialCover: { url: COVER_URL, mediaType: 'image/jpeg' },
+        initialAssets: [{ href: 'OPS/Images/figure-01.png', data: COVER_BYTES }],
       }),
     );
 
@@ -111,14 +113,14 @@ describe('useEpubProject asset registration (Vue)', () => {
       const onPreview = vi.fn();
       const assetResolver = vi.fn(() => COVER_BYTES);
       const { result } = harness(() =>
-        useEpubProject({ chapters, debounceMs: 10, assetResolver, onPreview }),
+        useEpubProject({ initialChapters: chapters, debounceMs: 10, assetResolver, onPreview }),
       );
 
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(onPreview).toHaveBeenCalledTimes(1));
       expect(assetResolver).not.toHaveBeenCalled();
 
-      result.current.setCover({ href: 'OPS/Images/cover.jpg', url: COVER_URL });
+      result.current.setCover({ url: COVER_URL, mediaType: 'image/jpeg' });
       await vi.advanceTimersByTimeAsync(10);
       await vi.waitFor(() => expect(onPreview).toHaveBeenCalledTimes(2));
 

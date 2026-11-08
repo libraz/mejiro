@@ -13,7 +13,7 @@
 
 ## 1. RenderEntry
 
-`RenderEntry` は、レイアウト結果をレンダリング処理へ渡すための中間データです。`layoutChapter()` の出力から段落ごとに 1 つ作ります。
+`RenderEntry` は、レイアウト結果をレンダリング処理へ渡すための中間データです。`MejiroBrowser.layoutParagraphs()` の出力から段落ごとに 1 つ作ります。
 
 <!-- doc-example: 07-walkthrough.ts#entries -->
 ```ts
@@ -30,12 +30,11 @@ const entries: RenderEntry[] = chapter.paragraphs.map((p, i) => ({
 
 | フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `chars` | `string[]` | 段落テキストを Unicode コードポイント単位で分けた配列です。`breakPoints` が指すコードポイントの位置と一致します。異体字セレクタや結合文字も独立した要素になりますが、改行位置がそれを基底文字から切り離すことはありません。 |
+| `chars` | `readonly string[]` | 段落テキストを Unicode コードポイント単位で分けた配列です。`breakPoints` が指すコードポイントの位置と一致します。異体字セレクタや結合文字も独立した要素になりますが、改行位置がそれを基底文字から切り離すことはありません。 |
 | `breakPoints` | `Uint32Array` | 行分割アルゴリズムによる分割位置。 |
-| `inlineAnnotations` | `InlineAnnotation[]` | この段落のルビ・圏点・縦中横・リンク等の注釈。 |
+| `inlineAnnotations` | `readonly InlineAnnotation[]` | この段落のルビ・圏点・縦中横・リンク等の注釈。 |
 | `kind` | `ParagraphKind \| undefined` | 段落の構造種別（`'body'` / `'heading'` / `'blockquote'` / `'sceneBreak'` / `'pre'` / `'figure'`）。ページ分割を越えて `RenderParagraph.kind` に残り、`mejiro-paragraph--*` クラスの選択に使われる。既定は `'body'`。 |
-| `headingLevel` | `number \| undefined` | 見出しレベル（1〜6）。レベル別の `headingStyles` はこの値で引くため、渡さないと見出しが全て同じ大きさになり、クラスも汎用の `--heading` 修飾子に落ちる。 |
-| `isHeading` | `boolean \| undefined` | 非推奨。代わりに `kind: 'heading'`（レベルが分かるなら `headingLevel` も）を設定する。`headingLevel` があるときは無視される。 |
+| `headingLevel` | `HeadingLevel \| undefined` | 見出しレベル（1〜6）。レベル別の `headingStyles` はこの値で引くため、渡さないと見出しが全て同じ大きさになり、クラスも汎用の `--heading` 修飾子に落ちる。 |
 
 ## 2. buildParagraphMeasures()
 
@@ -58,8 +57,7 @@ const measures = buildParagraphMeasures(entries, {
 | オプション | 型 | デフォルト | 説明 |
 |--------|------|---------|-------------|
 | `fontSize` | `number` | （必須） | 基準フォントサイズ（px）。 |
-| `lineSpacing` | `number` | `1` | 行間の倍率。ルビまたは傍点を含む段落は、この値にかかわらず 1 行あたり最低 `1.5`em を確保します。ブラウザがそのような行を描く高さに合わせた値です。 |
-| `lineHeight` | `number` | -- | `lineSpacing` の非推奨エイリアス。`lineSpacing` が無いときだけ使われる。 |
+| `lineSpacing` | `number` | `DEFAULT_LINE_SPACING`（1.8） | 行間の倍率。ルビまたは傍点を含む段落は、この値にかかわらず 1 行あたり最低 `1.5`em を確保します。ブラウザがそのような行を描く高さに合わせた値です。 |
 | `headingScale` | `number` | `1.4` | 見出しフォントのスケール。レベルのない見出しはこの値をそのまま使う（`16 * 1.4 = 22.4`）。レベル 1〜6 は `DEFAULT_HEADING_STYLES` のサイズ（1.6 / 1.4 / 1.2 / 1.1 / 1 / 1。スタイルシートが描くサイズと同じ）をこの値に比例して拡縮するので、`2.8` にすると全レベルが 2 倍になる。レベル別の `headingStyles` の `scale` が優先される。 |
 | `paragraphGapEm` | `number` | `0.4` | 本文段落前の間隔（em単位）。 |
 | `headingGapEm` | `number` | -- | 見出し段落後の間隔（em 単位）。`headingStyles` で上書きしていない全レベルに効く。未指定なら各レベルが `DEFAULT_HEADING_STYLES` の間隔（1.4 / 1.2 / 1 / 0.8 / 0.6 / 0.6。スタイルシートも同じ値を描く）を使い、レベルのない見出しは `1.2` になる。 |
@@ -125,23 +123,23 @@ const renderPage = buildRenderPage(pages[0], entries);
 
 ```ts
 interface RenderPage {
-  paragraphs: RenderParagraph[];
+  readonly paragraphs: readonly RenderParagraph[];
 }
 
 interface RenderParagraph {
-  lines: RenderLine[];
-  isHeading: boolean;
-  headingLevel?: number;
-  kind?: ParagraphKind;
+  readonly lines: readonly RenderLine[];
+  readonly headingLevel?: HeadingLevel;
+  readonly kind?: ParagraphKind;
+  readonly scale?: number;
 }
 
 interface RenderLine {
-  segments: RenderSegment[];
+  readonly segments: readonly RenderSegment[];
 }
 
 type RenderSegment =
   | { type: 'text'; text: string }
-  | { type: 'ruby'; base: string; rubyText: string; children?: readonly RenderSegment[] }
+  | { type: 'ruby'; text: string; rubyText: string; children?: readonly RenderSegment[] }
   | {
       type: 'emphasis';
       text: string;
@@ -155,9 +153,9 @@ type RenderSegment =
   | { type: 'footnote-ref'; text: string; noteId: string; children?: readonly RenderSegment[] };
 ```
 
-各行はセグメントに分割されます。`text` はプレーンテキスト、`ruby` はベース文字列とルビ（ふりがな）読みを表し、その他のセグメントは傍点、縦中横、意味的な強調、リンク、脚注参照を表します。
+各行はセグメントに分割されます。`text` はプレーンテキスト、`ruby` は親文字を `text` に、ルビ（ふりがな）の読みを `rubyText` に持ち、その他のセグメントは傍点、縦中横、意味的な強調、リンク、脚注参照を表します。
 
-`children` は入れ子の注釈（傍点の中のルビ、リンクの中の縦中横など）を保持します。`children` がある場合は、親の `text` / `base` ではなく children を描画してください。親側にもその範囲全体のフラットなテキストが入っているので、プレーンテキストだけが必要な描画では `children` を無視して構いません。
+`text` はその範囲の内容を平坦化した文字列で、`children` は同じ範囲を内側の注釈（傍点の中のルビ、リンクの中の縦中横など）ごとに入れ子で表します。描くのはどちらか一方だけで、両方を描くと文字が二重に出ます。`children` がある場合は、親の `text` ではなく children を描画してください。プレーンテキストだけが必要な描画では `text` を読み、`children` は無視します。`segmentToInlineNode()` を使えばこの選択を任せられます。
 
 ## 5. mejiro.css
 
@@ -265,14 +263,14 @@ import '@libraz/mejiro/render/mejiro.css';
 // 1. MejiroBrowserインスタンスを作成
 const fontSize = 16;
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: fontSize,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: fontSize,
 });
 
 // 2. 章をレイアウト。レベル 1 の見出しは buildParagraphMeasures() が計測する
 // サイズ（倍率を整数ピクセルに丸めたもの）で改行する
 const headingSize = Math.round(fontSize * (DEFAULT_HEADING_STYLES[1].scale ?? 1));
-const result = await mejiro.layoutChapter({
+const result = await mejiro.layoutParagraphs({
   paragraphs: [
     { text: '第一章', fontSize: headingSize },
     { text: '吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。' },

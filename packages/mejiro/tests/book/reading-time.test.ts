@@ -1,10 +1,8 @@
+import { enMessages, jaMessages } from '@libraz/mejiro';
+import { type BookParagraph, estimateReadingTime, formatReadingTime } from '@libraz/mejiro/book';
 import { describe, expect, it } from 'vitest';
-import {
-  estimateReadingTime,
-  formatReadingTime,
-  isHeadingParagraph,
-} from '../../src/book/reading-time.js';
-import type { BookParagraph } from '../../src/book/types.js';
+import { isHeadingParagraph } from '../../src/book/reading-time.js';
+import { expectTypeErrors } from '../type-probe.js';
 
 function chapterOf(...texts: Array<[string, number?]>): { paragraphs: BookParagraph[] } {
   return {
@@ -15,15 +13,15 @@ function chapterOf(...texts: Array<[string, number?]>): { paragraphs: BookParagr
 }
 
 describe('estimateReadingTime', () => {
-  it('returns ms based on characters and cpm', () => {
+  it('returns ms based on characters and the reading rate', () => {
     const chapter = chapterOf(['あ'.repeat(600)]);
     // 600 chars at 600cpm => exactly 60 seconds.
     expect(estimateReadingTime(chapter)).toBe(60_000);
   });
 
-  it('uses configurable cpm', () => {
+  it('uses a configurable reading rate', () => {
     const chapter = chapterOf(['a'.repeat(1200)]);
-    expect(estimateReadingTime(chapter, { cpm: 1200 })).toBe(60_000);
+    expect(estimateReadingTime(chapter, { charsPerMinute: 1200 })).toBe(60_000);
   });
 
   it('counts codepoints, not UTF-16 code units (no surrogate pair inflation)', () => {
@@ -47,10 +45,10 @@ describe('estimateReadingTime', () => {
     expect(estimateReadingTime(chapter, { includeHeadings: true })).toBe(120_000);
   });
 
-  it('returns zero for zero or negative cpm', () => {
+  it('returns zero for a zero or negative reading rate', () => {
     const chapter = chapterOf(['x'.repeat(1000)]);
-    expect(estimateReadingTime(chapter, { cpm: 0 })).toBe(0);
-    expect(estimateReadingTime(chapter, { cpm: -1 })).toBe(0);
+    expect(estimateReadingTime(chapter, { charsPerMinute: 0 })).toBe(0);
+    expect(estimateReadingTime(chapter, { charsPerMinute: -1 })).toBe(0);
   });
 });
 
@@ -72,8 +70,34 @@ describe('formatReadingTime', () => {
     expect(formatReadingTime(3_660_000)).toBe('1時間1分');
   });
 
-  it('formats English when requested', () => {
-    expect(formatReadingTime(60_000, 'en')).toBe('1m 0s');
-    expect(formatReadingTime(3_660_000, 'en')).toBe('1h 1m');
+  it('formats with the unit templates of the given message catalog', () => {
+    expect(formatReadingTime(60_000, { messages: enMessages })).toBe('1m 0s');
+    expect(formatReadingTime(125_000, { messages: enMessages })).toBe('2m 5s');
+    expect(formatReadingTime(45_000, { messages: enMessages })).toBe('45s');
+    expect(formatReadingTime(3_660_000, { messages: enMessages })).toBe('1h 1m');
+    expect(formatReadingTime(120_000, { messages: jaMessages })).toBe('2分');
+    expect(
+      formatReadingTime(125_000, {
+        messages: { ...jaMessages, readingTimeMinutesSeconds: '{minutes}:{seconds}' },
+      }),
+    ).toBe('2:5');
+  });
+
+  it('names the reading rate and the catalog option in the types', () => {
+    expectTypeErrors(
+      `import { enMessages } from '@libraz/mejiro';
+import {
+  estimateReadingTime,
+  formatReadingTime,
+  type FormatReadingTimeOptions,
+  type ReadingTimeOptions,
+} from '@libraz/mejiro/book';
+const rate: ReadingTimeOptions = { charsPerMinute: 400 };
+const format: FormatReadingTimeOptions = { messages: enMessages };
+formatReadingTime(estimateReadingTime({ paragraphs: [] }, rate), format);
+estimateReadingTime({ paragraphs: [] }, { cpm: 400 });
+formatReadingTime(0, 'en');`,
+      { fails: ['cpm: 400', "formatReadingTime(0, 'en')"] },
+    );
   });
 });

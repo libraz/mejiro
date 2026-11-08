@@ -65,9 +65,14 @@ describe('MejiroReader server rendering', () => {
     expect(html).toContain('static preview');
   });
 
-  it('renders fallbackHtml for a pre-parsed EPUB without touching the DOM', async () => {
+  it('renders static HTML through the fallback slot for a pre-parsed EPUB without touching the DOM', async () => {
     const app = createSSRApp({
-      render: () => h(MejiroReader, { epub: fakeEpub(), fallbackHtml: '<p>static preview</p>' }),
+      render: () =>
+        h(
+          MejiroReader,
+          { epub: fakeEpub() },
+          { fallback: () => h('div', { innerHTML: '<p>static preview</p>' }) },
+        ),
     });
     const html = await renderToString(app);
 

@@ -1,5 +1,5 @@
-import type { InlineAnnotation, InlineRubyAnnotation } from './browser/types.js';
 import { normalizeText } from './text.js';
+import type { InlineAnnotation, InlineRubyAnnotation } from './types.js';
 
 /** Upper bound on the characters normalized as one canonical composition group. */
 const MAX_COMPOSED_GROUP = 32;
@@ -134,15 +134,15 @@ function remapAnnotation(ann: InlineAnnotation, mapping: IndexMapping): InlineAn
   const startIndex = mapping.start(clampIndex(ann.startIndex, mapping.last));
   const endIndex = mapping.end(clampIndex(ann.endIndex, mapping.last));
   if (endIndex <= startIndex) return null;
-  if (ann.kind === 'ruby') {
+  if (ann.type === 'ruby') {
     return {
       ...ann,
       startIndex,
       endIndex,
       // The mono/group distinction follows the base length, which the
       // transform may have shortened.
-      ...(ann.type === 'mono' || ann.type === 'group'
-        ? { type: endIndex - startIndex === 1 ? ('mono' as const) : ('group' as const) }
+      ...(ann.rubyType === 'mono' || ann.rubyType === 'group'
+        ? { rubyType: endIndex - startIndex === 1 ? ('mono' as const) : ('group' as const) }
         : {}),
       ...(ann.jukugoSplitPoints
         ? { jukugoSplitPoints: remapSplitPoints(ann, mapping, startIndex, endIndex) }

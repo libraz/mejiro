@@ -8,7 +8,7 @@
  * carries the same geometry plus the margins reserved around the image.
  *
  * Coordinates use the `BookImage` frame that `useImageOverlay` and
- * `ChapterLayout.syncImages` apply: relative to the right page's top-left corner.
+ * `ChapterLayout.setImages` apply: relative to the right page's top-left corner.
  */
 export interface ImageOverlayRect {
   /** Horizontal offset from the left edge of the right page (px); negative reaches the left page. */
@@ -16,9 +16,9 @@ export interface ImageOverlayRect {
   /** Vertical offset from the top of the right page (px). */
   y: number;
   /** Width in the block direction (px). */
-  w: number;
+  width: number;
   /** Height in the inline direction (px). */
-  h: number;
+  height: number;
 }
 
 /**
@@ -70,5 +70,9 @@ export function resizeImageOverlayRect(
   deltaY: number,
   minSize = 40,
 ): ImageOverlayRect {
-  return { ...rect, w: Math.max(minSize, rect.w + deltaX), h: Math.max(minSize, rect.h + deltaY) };
+  return {
+    ...rect,
+    width: Math.max(minSize, rect.width + deltaX),
+    height: Math.max(minSize, rect.height + deltaY),
+  };
 }

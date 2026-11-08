@@ -41,14 +41,13 @@ interface LayoutInput {
   advances: Float32Array;                 // Per-character advance widths (px)
   lineWidth: number;                      // Available line width (px)
   lineWidths?: Float32Array;              // Per-line widths overriding lineWidth
-  mode?: KinsokuMode;                     // 'strict' (default) | 'loose'
+  kinsoku?: KinsokuMode | KinsokuRules;   // 'strict' (default) | 'loose' | custom rules
   enableHanging?: boolean;                // Default: true
   clusterIds?: Uint32Array;               // Characters with same ID cannot be split
-  rubyAnnotations?: RubyAnnotation[];       // Core-level ruby preprocessing (see 04-ruby.md)
+  rubyAnnotations?: readonly RubyAnnotation[]; // Core-level ruby preprocessing (see 04-ruby.md)
   tokenBoundaries?: Uint32Array | readonly number[]; // Preferred break positions
   breakPenalties?: Uint8Array;            // Per-position break cost (see section 8)
   breakCost?: BreakCostOptions;           // Weights for the penalty search
-  kinsokuRules?: KinsokuRules;            // Custom prohibition rules
 }
 ```
 
@@ -58,14 +57,13 @@ interface LayoutInput {
 | `advances`         | はい | --       | 文字ごとの送り幅（ピクセル単位）。`text` と同じ長さである必要があります。 |
 | `lineWidth`        | はい | --       | 行の最大幅（ピクセル単位）。                                        |
 | `lineWidths`       | いいえ | --     | 行ごとの幅（ピクセル単位）。i 行目は `lineWidths[i]` を使い、配列長を超えた行は `lineWidth` にフォールバックします。列ごとに使える高さが変わる画像排除で使われます。 |
-| `mode`             | いいえ | `'strict'` | 禁則処理モード。第4節を参照。                                     |
+| `kinsoku`          | いいえ | `'strict'` | 禁則ルール。組み込みのモードか、組み込みルールを完全に置き換えるカスタムの `KinsokuRules`。第4節を参照。 |
 | `enableHanging`    | いいえ | `true`   | ぶら下げ組みを有効にするかどうか。第5節を参照。                     |
 | `clusterIds`       | いいえ | --       | 分割不可の文字グループ用クラスタ ID。第6節を参照。                  |
 | `rubyAnnotations`  | いいえ | --       | コアレベルのルビ注釈。改行処理の前にルビの前処理が実行されます。                 |
 | `tokenBoundaries`  | いいえ | --       | 各トークンの末尾コードポイントのインデックス。アルゴリズムはこれらの位置での改行を優先します。形態素解析器の出力から変換するには `tokenLengthsToBoundaries()` を使用します。 |
 | `breakPenalties`   | いいえ | --       | 各インデックスの後ろで改行するコスト。コードポイントごとに 1 要素。後方探索が範囲を区切ったコスト探索に切り替わり、`tokenBoundaries` に優先します。第8節を参照。 |
 | `breakCost`        | いいえ | --       | そのコスト探索の重み。`breakPenalties` がない場合は無視されます。   |
-| `kinsokuRules`     | いいえ | --       | カスタム禁則ルール。組み込みルールを完全に置き換えます。             |
 
 ### 最小限の使用例
 
@@ -95,10 +93,9 @@ const result = computeBreaks({
   text: toCodepoints('あいうえお、かきくけこ'),
   advances: new Float32Array(11).fill(16),
   lineWidth: 80,
-  mode: 'loose',
+  kinsoku: customRules,
   enableHanging: true,
   tokenBoundaries: new Uint32Array([4, 10]),
-  kinsokuRules: customRules,
 });
 ```
 
@@ -111,7 +108,7 @@ const result = computeBreaks({
 ```ts
 interface BreakResult {
   breakPoints: Uint32Array;             // Indices of last char before each break
-  hangingAdjustments?: Float32Array;    // Hanging overhang per line (px), 0 if none
+  hangingAdjustments: Float32Array;     // Hanging overhang per line (px), 0 if none
   effectiveAdvances?: Float32Array;     // Per-char advances after tate-chu-yoko and ruby
   lineWidths?: Float32Array;            // Width actually used per line
 }
@@ -129,7 +126,7 @@ interface BreakResult {
 
 ### hangingAdjustments
 
-`enableHanging` が `true`（デフォルト）の場合に存在します。要素は行ごとに 1 つで、最終行も含みます。空でないテキストでは `breakPoints.length + 1` 個です。ゼロでない値は、その行の最後の文字が行端からはみ出しているピクセル数を示します。
+常に存在します。要素は行ごとに 1 つで、最終行も含みます。空でないテキストでは `breakPoints.length + 1` 個です。ゼロでない値は、その行の最後の文字が行端からはみ出しているピクセル数を示します。`enableHanging: false` ではすべて 0 です。
 
 ### effectiveAdvances
 
@@ -190,9 +187,7 @@ strict モードを少し緩め、次の文字の行頭配置を許可します�
 function canBreakAt(
   text: Uint32Array,
   pos: number,
-  clusterIds?: Uint32Array,
-  mode?: KinsokuMode,
-  rules?: KinsokuRules,
+  options?: CanBreakAtOptions, // { kinsoku?, clusterIds? }
 ): boolean;
 ```
 
@@ -210,20 +205,20 @@ const advances = new Float32Array(11).fill(16);
 // strict モード: っ（小さいつ）は行頭禁則文字。
 // インデックス4の後で単純に改行すると（あいうえお）、2行目の先頭がっになる。
 // アルゴリズムはこれを避けるためインデックス3まで後退する。
-const strict = computeBreaks({ text, advances, lineWidth: 80, mode: 'strict' });
+const strict = computeBreaks({ text, advances, lineWidth: 80, kinsoku: 'strict' });
 // strict.breakPoints → [3, 8]
 // 1行目: あいうえ (4文字), 2行目はおっ...から開始
 
 // loose モード: っ は行頭に許容される。
 // インデックス4で改行できる。
-const loose = computeBreaks({ text, advances, lineWidth: 80, mode: 'loose' });
+const loose = computeBreaks({ text, advances, lineWidth: 80, kinsoku: 'loose' });
 // loose.breakPoints → [4, 9]
 // 1行目: あいうえお (5文字), 2行目はっか...から開始
 ```
 
 ### カスタム禁則ルール
 
-`buildKinsokuRules()` を使用して、事前計算されたルックアップセットを持つカスタムルールを作成できます:
+`buildKinsokuRules()` でカスタムルールを作成し、`kinsoku` に渡します:
 
 <!-- doc-example: 03-custom-rules.ts#custom-rules -->
 ```ts
@@ -238,11 +233,11 @@ const result = computeBreaks({
   text: toCodepoints('あいう「えお'),
   advances: new Float32Array(6).fill(16),
   lineWidth: 48,
-  kinsokuRules: rules,
+  kinsoku: rules,
 });
 ```
 
-`kinsokuRules` を指定すると、組み込みルールが**完全に置き換え**られます。デフォルトを拡張したい場合は、`getDefaultKinsokuRules()` を起点として使用してください。
+`kinsoku` に渡したカスタムルールは、組み込みルールを**完全に置き換え**ます。デフォルトに追加したい場合は、`getDefaultKinsokuRules()` を `extendKinsokuRules()` に渡してください（[高度な使い方](09-advanced.md) を参照）。
 
 ---
 
@@ -302,7 +297,7 @@ const result = computeBreaks({
 // 3行目: けこ
 ```
 
-注意: `enableHanging` が `false` の場合、結果の `hangingAdjustments` は `undefined` になります。
+注意: `enableHanging` が `false` の場合も `hangingAdjustments` は存在し、行ごとに 0 が入ります。
 
 ---
 
@@ -512,7 +507,7 @@ const hinted = computeBreaks({ text, advances, lineWidth: 96, breakPenalties });
 ```ts
 import { DEFAULT_KEEP_WHOLE_POS, deriveTypographyHints } from '@libraz/mejiro';
 
-const hints = deriveTypographyHints(text, analysis, {
+const hints = deriveTypographyHints(analysis, {
   penalties: true,
   keepWholePos: [...DEFAULT_KEEP_WHOLE_POS, 'NOUN_形式'],
 });
@@ -570,14 +565,24 @@ const book = new MejiroBook({
 
 `BookOptions.keepWholePos` と `BookOptions.keepWholePenalty` は、そのまま `deriveTypographyHints()` に渡ります。参照されるのは、罰則を出す唯一の段階である `'full'` のときだけです。
 
-optional peer dependency の `@libraz/suzume` が未インストールの場合、`createSuzumeAnalyzer()` の Promise は reject します。この関数を呼ぶこと自体が、その解析器を明示的に要求する行為だからです。黙って品質を落とすほうがよい呼び出し側は、reject を捕まえて解析器なしでブックを構築します。
+optional peer dependency の `@libraz/suzume` が未インストールの場合、`createSuzumeAnalyzer()` の Promise は `MejiroError` `analyzer-unavailable` で reject します。この関数を呼ぶこと自体が、その解析器を明示的に要求する行為だからです。黙って品質を落とすほうがよい呼び出し側は、reject を捕まえて解析器なしでブックを構築します。
 
 組み込みにあたっては、次の 4 点を押さえておいてください。
 
 - 解析が走るのはレイアウトの前、段落ごとに 1 回だけです。リサイズ、フォント変更、画像回り込みの再計算は、いずれも最初の結果を再生するだけで再解析しません。解析は対話操作の経路には乗りません。
-- 解析器の失敗で落ちるのは品質だけで、可用性は落ちません。解析器がない場合も例外を投げた場合も、その段落は文字種規則だけで、正しくレイアウトされます。コンソールへの通知はブックごとに 1 回であり、段落ごとには出しません。
+- 解析器の失敗で落ちるのは品質だけで、可用性は落ちません。解析器がない場合も例外を投げた場合も、その段落は文字種規則だけで、正しくレイアウトされます。失敗はブックごとに 1 回（段落ごとではありません）、`analyzer-failed` の `MejiroError` として `BookOptions.onError` に報告されます。`onError` がなければ `console.warn` に出します。
 - 段落ごとにヒントを持たせられます。`BookParagraph.hints` を指定した段落では、ブック側の解析器は参照されません。解析結果を計算済みで持っているときや、その段落だけ別の規則で組みたいときに使います。
 - スナップショットのヒントが残るのは、解析器が一致したときだけです。`ChapterLayout.snapshot()` は解析器の identity を記録し、`layoutFromSnapshot()` は復元先のブックが同じ名前・同じバージョンの解析器を持つ場合にかぎって、保存されたヒントを使います。復元時に再解析は行いません。
+
+解析の経路で起きる失敗と劣化は、次のように現れます。
+
+| 状況 | 呼び出し側に見えるもの | レイアウト |
+|---|---|---|
+| `@libraz/suzume` がない、またはモジュールの読み込みに失敗 | `createSuzumeAnalyzer()` が `analyzer-unavailable` で reject | 解析器なしでブックを作る。文字種規則で組む |
+| `dispose()` 後に `analyze()` を呼んだ | `analyzer-disposed` を投げる | — |
+| レイアウト中に解析器が例外を投げた | `BookOptions.onError` に `analyzer-failed`（ブックごとに 1 回） | その段落は文字種規則で組む |
+| 解析器の出力をテキストと整列できない | `TextAnalysis.warnings` に `alignment-failed`。`morphemes` は空 | その段落はヒントなし |
+| 一部の形態素がテキストに合わない | `TextAnalysis.warnings` に `morphemes-dropped` | 合った形態素だけでヒントを作る |
 
 各段階を自分で組み合わせるなら、`TextAnalysis` から `deriveTypographyHints()` でヒントを作り、それを `computeBreaks()` に渡します。上の 2 つの例で書き出した配列が、まさにその出力にあたります。
 

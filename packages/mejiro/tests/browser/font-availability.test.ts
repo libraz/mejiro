@@ -213,9 +213,10 @@ describe('font availability', () => {
       strictFontCheck: true,
     });
     strict.setPageSize({ pageWidth: 400, lineWidth: 200 });
-    await expect(strict.layoutChapter({ paragraphs })).rejects.toThrow(
-      /Font not available \(possible fallback\)/,
-    );
+    await expect(strict.layoutChapter({ paragraphs })).rejects.toMatchObject({
+      name: 'MejiroError',
+      code: 'font-unavailable',
+    });
 
     // The same strict book accepts a family the host can really render.
     const strictOnInstalled = new MejiroBook({
@@ -253,7 +254,7 @@ describe('font availability', () => {
     const lenient = new MejiroBrowser();
     await expect(lenient.layout(request)).resolves.toBeDefined();
     await expect(
-      lenient.layoutChapter({ ...request, paragraphs: [{ text: request.text }] }),
+      lenient.layoutParagraphs({ ...request, paragraphs: [{ text: request.text }] }),
     ).resolves.toBeDefined();
     await expect(lenient.preloadFont('"Down JP"', 16)).resolves.toBeUndefined();
     await expect(layoutText(request)).resolves.toBeDefined();
@@ -265,8 +266,10 @@ describe('font availability', () => {
     ).resolves.toBeDefined();
 
     const strict = new MejiroBrowser({ strictFontCheck: true });
-    await expect(strict.layout(request)).rejects.toThrow(/possible fallback/);
-    await expect(strict.preloadFont('"Down JP"', 16)).rejects.toThrow(/possible fallback/);
+    await expect(strict.layout(request)).rejects.toMatchObject({ code: 'font-unavailable' });
+    await expect(strict.preloadFont('"Down JP"', 16)).rejects.toMatchObject({
+      code: 'font-unavailable',
+    });
   });
 
   it('leaves no loadingdone listener behind once a book or browser is disposed', async () => {
@@ -277,7 +280,7 @@ describe('font availability', () => {
       const book = new MejiroBook({ fontFamily: 'serif', fontSize: 16 });
       book.setPageSize({ pageWidth: 400, lineWidth: 200 });
       await book.layoutChapter({ paragraphs: [{ text: 'あいうえお' }] });
-      await book.setOptions({ fontSize: 18 });
+      await book.updateOptions({ fontSize: 18 });
       expect(fonts.listeners()).toBe(1);
       book.dispose();
       expect(fonts.listeners()).toBe(0);

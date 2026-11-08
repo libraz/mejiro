@@ -36,6 +36,57 @@ function overlapsRange(start: number, end: number, rangeStart: number, rangeEnd:
   return end - rangeStart > OVERLAP_EPSILON && rangeEnd - start > OVERLAP_EPSILON;
 }
 
+/** Throws a `RangeError` naming `field` unless `value` is a finite number above 0. */
+function requirePositive(caller: string, field: string, value: number): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${caller}: ${field} must be a finite number greater than 0`);
+  }
+}
+
+/** Throws a `RangeError` naming `field` unless `value` is a finite number of at least 0. */
+function requireNonNegative(caller: string, field: string, value: number): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(`${caller}: ${field} must be a finite number of at least 0`);
+  }
+}
+
+/** Throws a `RangeError` when an image rectangle holds a non-finite number or a negative extent. */
+function validateImages(caller: string, images: readonly ImageRect[]): void {
+  for (const image of images) {
+    for (const field of ['x', 'y'] as const) {
+      if (!Number.isFinite(image[field])) {
+        throw new RangeError(`${caller}: image ${field} must be a finite number`);
+      }
+    }
+    requireNonNegative(caller, 'image width', image.width);
+    requireNonNegative(caller, 'image height', image.height);
+    for (const field of ['inlineMargin', 'blockMargin'] as const) {
+      const margin = image[field];
+      if (margin !== undefined && !Number.isFinite(margin)) {
+        throw new RangeError(`${caller}: image ${field} must be a finite number`);
+      }
+    }
+  }
+}
+
+/** Throws a `RangeError` when a page geometry or an image cannot produce valid line widths. */
+function validatePage(
+  caller: string,
+  geometry: ExclusionPageGeometry,
+  images: readonly ImageRect[],
+): void {
+  requirePositive(caller, 'lineWidth', geometry.lineWidth);
+  if (!Number.isInteger(geometry.lineCount) || geometry.lineCount < 0) {
+    throw new RangeError(`${caller}: lineCount must be a non-negative integer`);
+  }
+  requirePositive(caller, 'linePitch', geometry.linePitch);
+  requireNonNegative(caller, 'contentWidth', geometry.contentWidth);
+  if (geometry.minGapHeight !== undefined) {
+    requireNonNegative(caller, 'minGapHeight', geometry.minGapHeight);
+  }
+  validateImages(caller, images);
+}
+
 /**
  * Computes per-line widths by subtracting exclusion zones from the base line width.
  *
@@ -90,15 +141,19 @@ export function computeLineWidths(
 /**
  * A rectangle in content-area coordinates representing an image or obstacle.
  *
+ * Used by {@link ExclusionEngine}. {@link SpreadExclusionEngine} takes
+ * {@link SpreadImageRect} instead, which measures from the right page's
+ * corner rather than from the content area.
+ *
  * In vertical writing mode:
- * - `x` / `w` are in the block direction (horizontal, columns flow right-to-left).
- * - `y` / `h` are in the inline direction (vertical, text flows top-to-bottom).
+ * - `x` / `width` are in the block direction (horizontal, columns flow right-to-left).
+ * - `y` / `height` are in the inline direction (vertical, text flows top-to-bottom).
  *
  * Coordinates are relative to the content area origin (top-left of the
  * area where text is rendered, after padding).
  *
  * This is the layout-side shape: it adds the margins the exclusion engine
- * reserves around the image. The bare `{ x, y, w, h }` shape a host drags
+ * reserves around the image. The bare `{ x, y, width, height }` shape a host drags
  * around in its UI is `ImageOverlayRect`.
  */
 export interface ImageRect {
@@ -107,9 +162,9 @@ export interface ImageRect {
   /** Vertical offset from the top of the content area (px). */
   y: number;
   /** Width in the block direction (px). */
-  w: number;
+  width: number;
   /** Height in the inline direction (px). */
-  h: number;
+  height: number;
   /** Margin in the inline direction (top/bottom in vertical-rl) in pixels. Applied to both sides. @defaultValue 0 */
   inlineMargin?: number;
   /** Margin in the block direction (left/right in vertical-rl) in pixels. Applied to both sides. @defaultValue 0 */
@@ -150,16 +205,52 @@ export interface ExclusionPageGeometry {
   lineWidth: number;
   /** Number of columns on the page. */
   lineCount: number;
-  /** Column pitch (fontSize × lineHeight) in pixels. */
+  /** Column pitch (fontSize × line spacing) in pixels. */
   linePitch: number;
   /** Total content width in the block direction (px). */
   contentWidth: number;
-  /** Minimum vertical gap height usable for text. Defaults to `linePitch`. */
+  /**
+   * Minimum vertical gap height usable for text (px).
+   * @defaultValue `linePitch`
+   */
   minGapHeight?: number;
 }
 
 /**
+ * Slots and line widths computed by {@link ExclusionEngine.compute} and
+ * {@link computeExclusionSlots}.
+ */
+export interface ExclusionResult {
+  /**
+   * Text placements in reading order. May hold more or fewer entries than the
+   * page has columns; see {@link ExclusionEngine.compute}.
+   */
+  slots: readonly ColumnSlot[];
+  /** Inline size of each slot, entry for entry, as the `lineWidths` input of `computeBreaks()`. */
+  lineWidths: Float32Array;
+  /**
+   * Whether any column's slot coverage differs from the unobstructed layout
+   * (one full-height slot per column). True also when a column is blocked
+   * entirely and therefore produces no slot at all.
+   */
+  affected: boolean;
+}
+
+/**
  * Manages image exclusion zones for text layout on a page.
+ *
+ * Coordinate frames, in px:
+ *
+ * | Value | Origin | Grows toward |
+ * | --- | --- | --- |
+ * | `ImageRect.x`, `width` | left edge of the content area | right |
+ * | `ImageRect.y`, `height` | top of the content area | down |
+ * | `ColumnSlot.xPos` | right edge of the content area | left |
+ * | `ColumnSlot.yStart`, `height` | top of the content area | down |
+ *
+ * Note that `ColumnSlot.xPos` is measured from the right edge while
+ * `ImageRect.x` is measured from the left. {@link SpreadExclusionEngine}
+ * takes its images from the right page's top-left corner instead.
  *
  * Computes per-column text placement by finding all contiguous
  * vertical gaps not occupied by any image. Each gap becomes a
@@ -182,7 +273,7 @@ export interface ExclusionPageGeometry {
  *   contentWidth: 380,
  * });
  *
- * engine.addImage({ x: 100, y: 50, w: 120, h: 160 });
+ * engine.addImage({ x: 100, y: 50, width: 120, height: 160 });
  *
  * const { slots, lineWidths } = engine.compute();
  * const result = computeBreaks({ text, advances, lineWidth: 600, lineWidths });
@@ -214,13 +305,28 @@ export class ExclusionEngine {
     return this.geometry;
   }
 
-  /** Adds an image to the exclusion set. Returns `this` for chaining. */
-  addImage(rect: ImageRect): this {
+  /**
+   * Adds an image to the exclusion set.
+   *
+   * The engine keeps `rect` itself, not a copy, so later edits to the object
+   * change the next {@link ExclusionEngine.compute} and
+   * {@link ExclusionEngine.removeImage} needs that same object.
+   *
+   * @param rect - Image in content-area coordinates.
+   */
+  addImage(rect: ImageRect): void {
     this.images.push(rect);
-    return this;
   }
 
-  /** Removes a previously added image by reference equality. */
+  /**
+   * Removes an image previously passed to {@link ExclusionEngine.addImage}.
+   *
+   * Matches by object identity (`===`): a copy with equal fields is a different
+   * image and is not removed.
+   *
+   * @param rect - The object that was added.
+   * @returns Whether that object was in the set.
+   */
   removeImage(rect: ImageRect): boolean {
     const idx = this.images.indexOf(rect);
     if (idx >= 0) {
@@ -267,8 +373,14 @@ export class ExclusionEngine {
    * @returns Slots for rendering, line widths for `computeBreaks()`,
    *   and whether any column's slot coverage differs from the unobstructed
    *   layout (one full-height slot per column).
+   * @throws RangeError if `lineWidth` or `linePitch` is not a finite number
+   *   above 0, `lineCount` is not a non-negative integer, `contentWidth` or
+   *   `minGapHeight` is not a finite number of at least 0, or an image has a
+   *   non-finite `x`, `y` or margin or a negative or non-finite `width` or
+   *   `height`. The geometry and images are checked here rather than when set.
    */
-  compute(): { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean } {
+  compute(): ExclusionResult {
+    validatePage('ExclusionEngine.compute', this.geometry, this.images);
     const { lineWidth, lineCount, linePitch, contentWidth } = this.geometry;
     const minGapHeight = this.geometry.minGapHeight ?? linePitch;
     const columns: ColumnGaps[] = [];
@@ -298,6 +410,12 @@ export class ExclusionEngine {
   }
 }
 
+/** Input of {@link computeExclusionSlots}: a page geometry plus the images placed on it. */
+export interface ComputeExclusionSlotsInput extends ExclusionPageGeometry {
+  /** Image rectangles in content-area coordinates. */
+  images: readonly ImageRect[];
+}
+
 /**
  * Computes per-column text placement slots for images on a page.
  *
@@ -308,13 +426,9 @@ export class ExclusionEngine {
  * @param options - Page geometry and image placements.
  * @returns Column slots for rendering, line widths for layout, and whether
  *   any column's slot coverage differs from the unobstructed layout.
+ * @throws RangeError under the conditions of {@link ExclusionEngine.compute}.
  */
-export function computeExclusionSlots(
-  options: ExclusionPageGeometry & {
-    /** Image rectangles in content-area coordinates. */
-    images: readonly ImageRect[];
-  },
-): { slots: ColumnSlot[]; lineWidths: Float32Array; affected: boolean } {
+export function computeExclusionSlots(options: ComputeExclusionSlotsInput): ExclusionResult {
   const { images, ...geometry } = options;
   const engine = new ExclusionEngine(geometry);
   for (const img of images) {
@@ -442,10 +556,10 @@ export function columnGapsAt(
     const bm = img.blockMargin ?? 0;
     const im = img.inlineMargin ?? 0;
     const effX = img.x - bm;
-    const effW = img.w + bm * 2;
+    const effW = img.width + bm * 2;
     if (overlapsRange(effX, effX + effW, colLeft, colRight)) {
       const top = Math.max(0, img.y - im);
-      const bottom = Math.min(lineWidth, img.y + img.h + im);
+      const bottom = Math.min(lineWidth, img.y + img.height + im);
       if (bottom > top) intervals.push([top, bottom]);
     }
   }
@@ -502,9 +616,9 @@ export interface SpreadGeometry {
   /** Width of each page in pixels (both pages are the same width). */
   pageWidth: number;
   /** Horizontal padding on each side of each page (px). */
-  pagePaddingX: number;
+  paddingX: number;
   /** Vertical padding at the top of each page (px). */
-  pagePaddingY: number;
+  paddingY: number;
   /** Base line width (inline size of a full column) in pixels. */
   lineWidth: number;
   /** Column pitch (fontSize × lineHeight) in pixels. */
@@ -512,25 +626,44 @@ export interface SpreadGeometry {
 }
 
 /**
- * An image rectangle positioned relative to the **right page's top-left corner**.
+ * An image rectangle for {@link SpreadExclusionEngine}, positioned relative to
+ * the **right page's top-left corner**, page padding included.
  *
- * Negative `x` values indicate the image extends into the left page.
- * The engine handles the gutter (padding between pages) automatically.
+ * This differs from {@link ImageRect}, whose origin is the content area inside
+ * the padding: an image at `{ x: paddingX, y: paddingY }` here sits at
+ * the content area's top-left corner. Negative `x` values indicate the image
+ * extends into the left page. The engine handles the gutter (padding between
+ * pages) automatically. {@link ImageOverlayRect} uses the same frame.
  */
-export type SpreadImageRect = ImageRect;
+export interface SpreadImageRect {
+  /** Horizontal offset from the left edge of the right page (px); negative reaches the left page. */
+  x: number;
+  /** Vertical offset from the top of the right page (px). */
+  y: number;
+  /** Width in the block direction (px). */
+  width: number;
+  /** Height in the inline direction (px). */
+  height: number;
+  /** Margin in the inline direction (top/bottom in vertical-rl) in pixels. Applied to both sides. @defaultValue 0 */
+  inlineMargin?: number;
+  /** Margin in the block direction (left/right in vertical-rl) in pixels. Applied to both sides. @defaultValue 0 */
+  blockMargin?: number;
+}
 
 /**
  * Result of spread exclusion computation.
  */
 export interface SpreadExclusionResult {
   /** Slots for the right page. */
-  rightSlots: ColumnSlot[];
+  rightSlots: readonly ColumnSlot[];
   /** Slots for the left page. */
-  leftSlots: ColumnSlot[];
-  /** Combined lineWidths for a single `computeBreaks()` call (right page then left page). */
+  leftSlots: readonly ColumnSlot[];
+  /**
+   * Combined lineWidths for a single `computeBreaks()` call: one entry per
+   * right-page slot, then one per left-page slot. The first `rightSlots.length`
+   * entries belong to the right page.
+   */
   lineWidths: Float32Array;
-  /** Number of layout lines (slots) allocated to the right page. */
-  rightSlotCount: number;
   /**
    * Whether any right-page column's slot coverage differs from the
    * unobstructed layout (one full-height slot per column). True also when a
@@ -558,32 +691,32 @@ export interface SpreadPageImages {
  * @param geometry - Page extent and padding of the spread.
  */
 export function splitSpreadImages(
-  images: readonly ImageRect[],
-  geometry: Pick<SpreadGeometry, 'pageWidth' | 'pagePaddingX' | 'pagePaddingY'>,
+  images: readonly SpreadImageRect[],
+  geometry: Pick<SpreadGeometry, 'pageWidth' | 'paddingX' | 'paddingY'>,
 ): SpreadPageImages {
-  const { pageWidth, pagePaddingX, pagePaddingY } = geometry;
-  const contentW = pageWidth - pagePaddingX * 2;
+  const { pageWidth, paddingX, paddingY } = geometry;
+  const contentW = pageWidth - paddingX * 2;
   const pages: SpreadPageImages = { right: [], left: [] };
   for (const img of images) {
     // Convert from right-page-relative to content-area coordinates
-    const cx = img.x - pagePaddingX;
+    const cx = img.x - paddingX;
     const bm = img.blockMargin ?? 0;
     const baseProps = {
-      y: img.y - pagePaddingY,
-      w: img.w,
-      h: img.h,
+      y: img.y - paddingY,
+      width: img.width,
+      height: img.height,
       inlineMargin: img.inlineMargin,
       blockMargin: img.blockMargin,
     };
 
     // Right page: image overlaps if its right edge > 0 and left edge < contentW
-    if (overlapsRange(cx - bm, cx + img.w + bm, 0, contentW)) {
+    if (overlapsRange(cx - bm, cx + img.width + bm, 0, contentW)) {
       pages.right.push({ ...baseProps, x: cx });
     }
 
-    // Left page: image extends past the right page's left edge (x < pagePaddingX)
+    // Left page: image extends past the right page's left edge (x < paddingX)
     // Coordinate conversion accounts for the gutter (both pages' inner padding)
-    if (overlapsRange(img.x - bm, img.x + img.w + bm, Number.NEGATIVE_INFINITY, 0)) {
+    if (overlapsRange(img.x - bm, img.x + img.width + bm, Number.NEGATIVE_INFINITY, 0)) {
       pages.left.push({ ...baseProps, x: cx + pageWidth });
     }
   }
@@ -593,8 +726,10 @@ export function splitSpreadImages(
 /**
  * Manages image exclusion across a two-page spread.
  *
- * Images are positioned relative to the right page's top-left corner.
- * The engine automatically converts coordinates for the left page,
+ * Images are {@link SpreadImageRect}s, positioned relative to the right page's
+ * top-left corner with page padding included (unlike {@link ExclusionEngine},
+ * whose images start at the content area). The engine automatically converts
+ * coordinates for the left page,
  * accounting for the gutter (page padding on inner edges).
  *
  * Text flows continuously from the right page to the left page.
@@ -605,29 +740,29 @@ export function splitSpreadImages(
  * ```ts
  * const spread = new SpreadExclusionEngine({
  *   pageWidth: 537,
- *   pagePaddingX: 52,
- *   pagePaddingY: 56,
+ *   paddingX: 52,
+ *   paddingY: 56,
  *   lineWidth: 676,
  *   linePitch: 30.4,
  * });
  *
  * // Image on the right page
- * spread.addImage({ x: 200, y: 100, w: 120, h: 160, inlineMargin: 16 });
+ * spread.addImage({ x: 200, y: 100, width: 120, height: 160, inlineMargin: 16 });
  *
  * // Image straddling the gutter (negative x = left page)
- * spread.addImage({ x: -100, y: 300, w: 200, h: 100 });
+ * spread.addImage({ x: -100, y: 300, width: 200, height: 100 });
  *
- * const { rightSlots, leftSlots, lineWidths, rightSlotCount } = spread.compute();
+ * const { rightSlots, leftSlots, lineWidths } = spread.compute();
  * const result = computeBreaks({ text, advances, lineWidth: 676, lineWidths });
  *
  * // Split lines for rendering:
- * // Lines 0..rightSlotCount-1 → right page using rightSlots
- * // Lines rightSlotCount..    → left page using leftSlots
+ * // Lines 0..rightSlots.length-1 → right page using rightSlots
+ * // Lines rightSlots.length..     → left page using leftSlots
  * ```
  */
 export class SpreadExclusionEngine {
   private geometry: SpreadGeometry;
-  private images: ImageRect[] = [];
+  private images: SpreadImageRect[] = [];
 
   /**
    * Creates an engine for one spread's geometry with an empty image set. Column
@@ -655,15 +790,27 @@ export class SpreadExclusionEngine {
   /**
    * Adds an image positioned relative to the right page's top-left corner.
    * Negative `x` values indicate the image extends into the left page.
-   * Returns `this` for chaining.
+   *
+   * The engine keeps `rect` itself, not a copy, so later edits to the object
+   * change the next {@link SpreadExclusionEngine.compute} and
+   * {@link SpreadExclusionEngine.removeImage} needs that same object.
+   *
+   * @param rect - Image in right-page-corner coordinates, padding included.
    */
-  addImage(rect: ImageRect): this {
+  addImage(rect: SpreadImageRect): void {
     this.images.push(rect);
-    return this;
   }
 
-  /** Removes a previously added image by reference equality. */
-  removeImage(rect: ImageRect): boolean {
+  /**
+   * Removes an image previously passed to {@link SpreadExclusionEngine.addImage}.
+   *
+   * Matches by object identity (`===`): a copy with equal fields is a different
+   * image and is not removed.
+   *
+   * @param rect - The object that was added.
+   * @returns Whether that object was in the set.
+   */
+  removeImage(rect: SpreadImageRect): boolean {
     const idx = this.images.indexOf(rect);
     if (idx >= 0) {
       this.images.splice(idx, 1);
@@ -678,7 +825,7 @@ export class SpreadExclusionEngine {
   }
 
   /** Returns the current list of images (read-only). */
-  getImages(): readonly ImageRect[] {
+  getImages(): readonly SpreadImageRect[] {
     return this.images;
   }
 
@@ -698,10 +845,26 @@ export class SpreadExclusionEngine {
    * Each page also reports whether its slot coverage was changed by the images,
    * so callers can tell "no image effect" from "image effect that happens to
    * leave every surviving slot at full height".
+   *
+   * @throws RangeError if `pageWidth`, `lineWidth` or `linePitch` is not a
+   *   finite number above 0, a padding is not a finite number of at least 0,
+   *   the horizontal padding takes half the page width or more, or an image
+   *   has a non-finite `x`, `y` or margin or a negative or non-finite `width`
+   *   or `height`. The geometry and images are checked here rather than when set.
    */
   compute(): SpreadExclusionResult {
-    const { pageWidth, pagePaddingX, lineWidth, linePitch } = this.geometry;
-    const contentW = pageWidth - pagePaddingX * 2;
+    const { pageWidth, paddingX, paddingY, lineWidth, linePitch } = this.geometry;
+    const caller = 'SpreadExclusionEngine.compute';
+    requirePositive(caller, 'pageWidth', pageWidth);
+    requireNonNegative(caller, 'paddingX', paddingX);
+    requireNonNegative(caller, 'paddingY', paddingY);
+    requirePositive(caller, 'lineWidth', lineWidth);
+    requirePositive(caller, 'linePitch', linePitch);
+    if (paddingX * 2 >= pageWidth) {
+      throw new RangeError(`${caller}: paddingX must be less than half of pageWidth`);
+    }
+    validateImages(caller, this.images);
+    const contentW = pageWidth - paddingX * 2;
     // Same 0.5px tolerance as paginate(), so float error cannot lose a column.
     const slotsPerPage = Math.floor((contentW + 0.5) / linePitch);
 
@@ -731,7 +894,6 @@ export class SpreadExclusionEngine {
       rightSlots: rightResult.slots,
       leftSlots: leftResult.slots,
       lineWidths,
-      rightSlotCount: rightResult.slots.length,
       rightAffected: rightResult.affected,
       leftAffected: leftResult.affected,
     };

@@ -8,7 +8,6 @@ import { act, renderHook } from '@testing-library/react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { useImageOverlay } from '../src/useImageOverlay.js';
-import { useMultiImageOverlay } from '../src/useMultiImageOverlay.js';
 
 const css = readFileSync(
   resolve(import.meta.dirname, '../../mejiro/src/render/mejiro-reader.css'),
@@ -17,7 +16,7 @@ const css = readFileSync(
 
 function layout(): ChapterLayout {
   return {
-    syncImages: vi.fn(() => ({})),
+    getSpread: vi.fn(() => ({})),
     setImages: vi.fn(() => ({})),
     clearImages: vi.fn(() => ({})),
   } as unknown as ChapterLayout;
@@ -55,37 +54,22 @@ function overlayElements(): { overlay: HTMLElement; handle: HTMLElement } {
   return { overlay, handle };
 }
 
-describe('overlay hooks (React) — drag feedback class', () => {
-  it('useImageOverlay marks move and resize drags with the stylesheet drag class', () => {
-    const { result } = renderHook(() => useImageOverlay(layout(), 0, vi.fn()));
-    act(() => result.current.toggleImage());
+describe('useImageOverlay (React) — drag feedback class', () => {
+  it('marks move and resize drags with the stylesheet drag class', () => {
+    const { result } = renderHook(() => useImageOverlay(layout(), { spreadIndex: 0 }));
+    let id = '';
+    act(() => {
+      id = result.current.addOverlay().id;
+    });
     const { overlay, handle } = overlayElements();
 
-    act(() => result.current.onOverlayPointerDown(pointerDown(overlay)));
+    act(() => result.current.onOverlayPointerDown(id, pointerDown(overlay)));
     const moveClass = dragClassOf(overlay);
     pointerUp();
     expect(overlay.classList.contains(moveClass)).toBe(false);
 
-    act(() => result.current.onResizePointerDown(pointerDown(handle)));
+    act(() => result.current.onResizePointerDown(id, pointerDown(handle)));
     expect(dragClassOf(overlay)).toBe(moveClass);
-    pointerUp();
-  });
-
-  it('uses the same class as useMultiImageOverlay', () => {
-    const single = renderHook(() => useImageOverlay(layout(), 0, vi.fn()));
-    act(() => single.result.current.toggleImage());
-    const a = overlayElements().overlay;
-    act(() => single.result.current.onOverlayPointerDown(pointerDown(a)));
-
-    const multi = renderHook(() => useMultiImageOverlay(layout(), 0));
-    let id = '';
-    act(() => {
-      id = multi.result.current.addImage().id;
-    });
-    const b = overlayElements().overlay;
-    act(() => multi.result.current.onOverlayPointerDown(id, pointerDown(b)));
-
-    expect(dragClassOf(a)).toBe(dragClassOf(b));
     pointerUp();
   });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { EditableEpub } from '@libraz/mejiro/epub';
+import { type EditableEpub, parseEditableEpub } from '@libraz/mejiro/epub';
 import { fireEvent, render, waitFor } from '@testing-library/vue';
 import JSZip from 'jszip';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -83,6 +83,13 @@ async function renderEditor(props: Record<string, unknown> = {}) {
   };
 }
 
+/** The first block of the first chapter, which the editor tests target. */
+function firstBlock(editor: EditableEpub) {
+  const block = editor.epub.chapters[0].blocks[0];
+  if (block.kind !== 'paragraph') throw new Error('expected a paragraph block');
+  return block;
+}
+
 /** Places the textarea selection at `[start, end)` and lets the editor capture it. */
 async function select(el: HTMLTextAreaElement, start: number, end: number): Promise<void> {
   el.setSelectionRange(start, end);
@@ -102,28 +109,26 @@ describe('MejiroEditor (Vue) — pending edit commit', () => {
     await fireEvent.update(view.rubyInput(), 'す');
     await fireEvent.click(view.button('Apply ruby'));
 
-    const ruby = view.editor.book.chapters[0].paragraphs[0].inlineAnnotations.filter(
-      (ann) => ann.kind === 'ruby',
-    );
+    const ruby = firstBlock(view.editor).inlineAnnotations.filter((ann) => ann.type === 'ruby');
     expect(ruby).toEqual([
-      { kind: 'ruby', startIndex: 3, endIndex: 4, rubyText: 'す', type: 'mono' },
+      { type: 'ruby', startIndex: 3, endIndex: 4, rubyText: 'す', rubyType: 'mono' },
     ]);
   });
 
   it('keeps every non-ruby annotation the new ruby overlaps', async () => {
     const view = await renderEditor();
-    const before = view.editor.book.chapters[0].paragraphs[0].inlineAnnotations;
-    expect(before.some((ann) => ann.kind !== 'ruby')).toBe(true);
+    const before = firstBlock(view.editor).inlineAnnotations;
+    expect(before.some((ann) => ann.type !== 'ruby')).toBe(true);
     await select(view.textarea(), 0, 3);
     await fireEvent.update(view.rubyInput(), 'かんじで');
     await fireEvent.click(view.button('Apply ruby'));
 
-    const after = view.editor.book.chapters[0].paragraphs[0].inlineAnnotations;
-    expect(after.filter((ann) => ann.kind !== 'ruby')).toEqual(
-      before.filter((ann) => ann.kind !== 'ruby'),
+    const after = firstBlock(view.editor).inlineAnnotations;
+    expect(after.filter((ann) => ann.type !== 'ruby')).toEqual(
+      before.filter((ann) => ann.type !== 'ruby'),
     );
-    expect(after.filter((ann) => ann.kind === 'ruby')).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 3, rubyText: 'かんじで', type: 'group' },
+    expect(after.filter((ann) => ann.type === 'ruby')).toEqual([
+      { type: 'ruby', startIndex: 0, endIndex: 3, rubyText: 'かんじで', rubyType: 'group' },
     ]);
   });
 
@@ -135,33 +140,32 @@ describe('MejiroEditor (Vue) — pending edit commit', () => {
     expect(view.button('Apply ruby').disabled).toBe(false);
     await fireEvent.click(view.button('Apply ruby'));
 
-    const paragraph = view.editor.book.chapters[0].paragraphs[0];
+    const paragraph = firstBlock(view.editor);
     expect(paragraph.text).toBe('新漢字です');
     expect(paragraph.inlineAnnotations).toContainEqual({
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: 1,
       endIndex: 2,
       rubyText: 'かん',
-      type: 'mono',
+      rubyType: 'mono',
     });
     expect(view.editor.undo()).toBe(true);
-    expect(view.editor.book.chapters[0].paragraphs[0].text).toBe('漢字です');
+    expect(firstBlock(view.editor).text).toBe('漢字です');
   });
 
   it('exports text typed in the proofread box but not yet applied', async () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob://stub');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-    const onBeforeExport = vi.fn(() => undefined);
-    const view = await renderEditor({ onBeforeExport });
+    const view = await renderEditor();
     await fireEvent.update(view.textarea(), '書き換えた');
     await fireEvent.click(view.button('Export EPUB'));
-    await waitFor(() => expect(view.emitted<[ArrayBuffer]>().export).toHaveLength(1));
+    await waitFor(() => expect(view.emitted<[Uint8Array]>().export).toHaveLength(1));
 
-    const buffer = (view.emitted<[ArrayBuffer]>().export as [ArrayBuffer][])[0][0];
-    const exported = await EditableEpub.load(buffer);
-    expect(exported.book.chapters[0].paragraphs[0].text).toBe('書き換えた');
-    expect(onBeforeExport.mock.calls[0][0]).toBe(buffer);
+    const bytes = (view.emitted<[Uint8Array]>().export as [Uint8Array][])[0][0];
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    const exported = await parseEditableEpub(bytes);
+    expect(firstBlock(exported).text).toBe('書き換えた');
   });
 
   it('offers no text or ruby editing on a selected scene break', async () => {

@@ -149,13 +149,19 @@ describe('API reference coverage', () => {
 });
 
 describe('shared export-path contracts', () => {
-  it.each(LOCALES)('shows how to narrow AssetResolverAsset in the %s guide', async (locale) => {
-    // One resolver serves both export paths, so the union has to be narrowed by
-    // an `in` check; the guide is the only place that spells the recipe out.
-    const text = await readFile(resolve(repoRoot, `docs/${locale}/09-advanced.md`), 'utf8');
-    expect(text).toContain("'filename' in asset");
-    expect(text).toContain('AssetResolverAsset');
-  });
+  it.each(LOCALES)(
+    'shows one resolver serving both export paths in the %s guide',
+    async (locale) => {
+      // Both export paths hand the resolver the same request, keyed by the ZIP
+      // href the bytes are written to; the guide is where that is spelled out.
+      const text = await readFile(resolve(repoRoot, `docs/${locale}/09-advanced.md`), 'utf8');
+      expect(text).toContain('AssetResolverRequest');
+      expect(text).toContain(
+        'const resolver: AssetResolver = async ({ href, url, mediaType, signal })',
+      );
+      expect(text).not.toContain('AssetResolverAsset');
+    },
+  );
 
   it('renders paragraph kinds through the shared helper in both frameworks', async () => {
     // The reference promises identical `mejiro-paragraph--*` modifiers across
@@ -173,23 +179,29 @@ describe('shared export-path contracts', () => {
     }
   });
 
-  it('restores the reading position through the same hook contract in both readers', async () => {
-    // Both readers reset their spread index when a new layout arrives, so the
-    // restore has to follow that reset: they consume `pendingRestore` after
-    // `useSpread` rather than handing the hook a `restorePosition` callback.
-    for (const path of [
-      'packages/mejiro-react/src/MejiroReader.tsx',
-      'packages/mejiro-vue/src/MejiroReader.ts',
-    ]) {
-      const text = await readFile(resolve(repoRoot, path), 'utf8');
-      expect(text, `${path} passes restorePosition`).not.toMatch(/restorePosition\s*:/u);
-      expect(text, `${path} does not consume pendingRestore`).toContain(
-        'layoutCtx.pendingRestore.current = null',
-      );
-      expect(text.indexOf('useSpread('), `${path} restores before useSpread`).toBeLessThan(
-        text.indexOf('layoutCtx.pendingRestore.current'),
-      );
-    }
+  it('restores the reading position after the spread index resets in both readers', async () => {
+    // A new layout resets the spread index, so a restore must land after that
+    // reset. React consumes `pendingRestore` after `useSpread`; Vue hands the
+    // hook a `restorePosition` that moves the spread through `useSpread().goTo`.
+    const react = await readFile(
+      resolve(repoRoot, 'packages/mejiro-react/src/MejiroReader.tsx'),
+      'utf8',
+    );
+    expect(react, 'React passes restorePosition').not.toMatch(/restorePosition\s*:/u);
+    expect(react, 'React does not consume pendingRestore').toContain(
+      'layoutCtx.pendingRestore.current = null',
+    );
+    expect(react.indexOf('useSpread('), 'React restores before useSpread').toBeLessThan(
+      react.indexOf('layoutCtx.pendingRestore.current'),
+    );
+    const vue = await readFile(
+      resolve(repoRoot, 'packages/mejiro-vue/src/MejiroReader.ts'),
+      'utf8',
+    );
+    expect(vue).toMatch(/restorePosition: \(layout, anchor\) => positionBridge\.restore\(/u);
+    expect(vue).toMatch(
+      /restore\(layout: ChapterLayout, anchor: InChapterAnchor\)[^}]*spreadCtx\.goTo\(/su,
+    );
   });
 });
 
@@ -205,7 +217,7 @@ describe('tate-chu-yoko contract', () => {
       /縦中横[^。]{0,40}(?:描画専用|レンダリング専用)/u,
     ];
     const sources = [
-      'packages/mejiro/src/browser/types.ts',
+      'packages/mejiro/src/types.ts',
       'docs/en/10-api-reference.md',
       'docs/ja/10-api-reference.md',
     ];
@@ -218,7 +230,7 @@ describe('tate-chu-yoko contract', () => {
   });
 
   it('documents the two annotation kinds the line breaker consumes', async () => {
-    const text = await readFile(resolve(repoRoot, 'packages/mejiro/src/browser/types.ts'), 'utf8');
+    const text = await readFile(resolve(repoRoot, 'packages/mejiro/src/types.ts'), 'utf8');
     expect(text).toMatch(/`ruby` and `tcy` variants reach the line breaker/u);
     expect(text).toMatch(/'ruby'` and `'tcy'` are\s*\n?\s*\*\s*the two variants/u);
   });

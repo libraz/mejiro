@@ -103,9 +103,9 @@ export default function App() {
     <div className="shelf">
       <MejiroShelf
         volumes={volumes}
-        currentId={library.current?.id}
+        currentId={library.volume?.id}
         title="本棚"
-        onSelect={(v) => setActiveId(v.id)}
+        onVolumeSelect={(v) => setActiveId(v.id)}
       />
       <div className="shelf-actions">
         <button

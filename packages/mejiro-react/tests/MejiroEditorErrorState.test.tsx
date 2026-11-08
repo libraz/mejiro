@@ -21,40 +21,37 @@ vi.mock('../src/MejiroReader.js', () => ({
   ),
 }));
 
-const exportMock = vi.hoisted(() => vi.fn(async () => new ArrayBuffer(8)));
+const exportMock = vi.hoisted(() => vi.fn(async () => new Uint8Array(8)));
 const loadMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@libraz/mejiro/epub')>()),
-  // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
-  EditableEpub: { load: loadMock },
-  exportEditableEpub: exportMock,
+  parseEditableEpub: loadMock,
 }));
 
 import { MejiroEditor } from '../src/MejiroEditor.js';
 
 function stubEditor(): EditableEpub {
-  const book = {
+  const epub = {
     title: 'Book',
     author: 'A',
     chapters: [
       {
         title: 'Ch1',
         href: 'OPS/Text/ch1.xhtml',
-        paragraphs: [{ text: 'abcdef', inlineAnnotations: [] }],
         blocks: [{ kind: 'paragraph', id: 'b-1', text: 'abcdef', inlineAnnotations: [] }],
         imageAssets: new Map(),
       },
     ],
-    packageData: { rootfilePath: 'OPS/package.opf', opfDir: 'OPS/', opfXml: '', files: new Map() },
   };
   return {
-    book,
-    title: book.title,
-    author: book.author,
+    epub,
+    title: epub.title,
+    author: epub.author,
     updateParagraph: vi.fn(),
     transaction: (fn: () => void) => fn(),
     addImage: vi.fn(),
+    export: exportMock,
   } as unknown as EditableEpub;
 }
 
@@ -78,7 +75,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   readerState.props.length = 0;
   exportMock.mockReset();
-  exportMock.mockImplementation(async () => new ArrayBuffer(8));
+  exportMock.mockImplementation(async () => new Uint8Array(8));
   loadMock.mockReset();
 });
 

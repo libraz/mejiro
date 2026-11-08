@@ -1,7 +1,5 @@
 # ルビ注釈
 
-> **v0.5 で変更:** ブラウザ / book / render で扱う段落注釈は、`InlineAnnotation` 判別共用体の `kind: 'ruby'` バリアントになりました。フィールド名は `inlineAnnotations` です。ルビを直接書く場合は `kind: 'ruby'` を付けてください。`RubyInputAnnotation` は互換用に `InlineRubyAnnotation` の deprecated エイリアスとして残しています。
-
 ## ルビとは
 
 ルビ（振り仮名）は、本文の文字に添えて小さく表示する読みです。日本語では、漢字の読みを示すためによく使われます。
@@ -22,7 +20,7 @@ JLReq（日本語組版処理の要件、W3C）仕様では、3種類のルビ�
 
 モノルビでは、各注釈が独立しているため、注釈付き文字間での改行が可能です。
 
-`type` の既定値は `'mono'` で、モノルビの注釈は親文字ちょうど 1 文字にかかります。`type` を省略したまま 2 文字以上にかけた注釈は、`preprocessRuby()` と、それを実行する `MejiroBrowser.layout()` / `layoutChapter()` が `RangeError` で拒否します。このような範囲には `type: 'group'` または `'jukugo'` を指定してください。
+`rubyType` の既定値は `'mono'` で、モノルビの注釈は親文字ちょうど 1 文字にかかります。`rubyType` を省略したまま 2 文字以上にかけた注釈は、`preprocessRuby()` と、それを実行する `MejiroBrowser.layout()` / `layoutParagraphs()` が `RangeError` で拒否します。このような範囲には `rubyType: 'group'` または `'jukugo'` を指定してください。
 
 ### グループルビ
 
@@ -48,8 +46,8 @@ interface RubyAnnotation {
   endIndex: number;          // 親文字コードポイント配列の終了位置（含まない）
   rubyText: Uint32Array;     // コードポイントとしてのルビテキスト
   rubyAdvances: Float32Array; // 測定済みルビ文字幅（ピクセル単位）
-  type?: 'mono' | 'group' | 'jukugo'; // デフォルト: 'mono'
-  jukugoSplitPoints?: number[]; // 熟語用: 改行可能な親文字相対インデックス
+  rubyType?: 'mono' | 'group' | 'jukugo'; // デフォルト: 'mono'
+  jukugoSplitPoints?: readonly number[]; // 熟語用: 改行可能な親文字相対インデックス
 }
 ```
 
@@ -78,7 +76,7 @@ const annotations: RubyAnnotation[] = [{
   endIndex: 2,
   rubyText: toCodepoints('かんじ'),
   rubyAdvances: new Float32Array([8, 8, 8]), // ルビ3文字 x 8px = 24px
-  type: 'group',
+  rubyType: 'group',
 }];
 
 const { effectiveAdvances, clusterIds } = preprocessRuby(text, advances, annotations);
@@ -109,7 +107,7 @@ const result = computeBreaks({
       endIndex: 2,
       rubyText: toCodepoints('かんじ'),
       rubyAdvances: new Float32Array([8, 8, 8]),
-      type: 'group',
+      rubyType: 'group',
     },
   ],
 });
@@ -124,16 +122,16 @@ const result = computeBreaks({
 
 ```ts
 interface InlineRubyAnnotation {
-  kind: 'ruby';
+  type: 'ruby';
   startIndex: number;   // 親文字テキスト文字列の文字インデックス
   endIndex: number;     // 終了インデックス（含まない）
   rubyText: string;     // プレーンな文字列としてのルビテキスト
-  type?: 'mono' | 'group' | 'jukugo';
-  jukugoSplitPoints?: number[];
+  rubyType?: 'mono' | 'group' | 'jukugo';
+  jukugoSplitPoints?: readonly number[];
 }
 ```
 
-`MejiroBrowser.layout()` または `layoutChapter()` に `inlineAnnotations` を渡すと、ブラウザ層が自動的に以下を行います:
+`MejiroBrowser.layout()` または `layoutParagraphs()` に `inlineAnnotations` を渡すと、ブラウザ層が自動的に以下を行います:
 
 1. ルビテキスト文字列を `Uint32Array` のコードポイントに変換。
 2. `Canvas.measureText()` を使用してルビ文字の送り幅を測定。
@@ -153,31 +151,31 @@ const result = await mejiro.layout({
   lineWidth: 200,
   inlineAnnotations: [
     {
-      kind: 'ruby',
+      type: 'ruby',
       startIndex: 0,
       endIndex: 2,
       rubyText: 'かんじ',
-      type: 'group',
+      rubyType: 'group',
     },
   ],
 });
 ```
 
-複数段落を含む章レベルのレイアウトには `layoutChapter()` を使用します:
+複数段落を含む章レベルのレイアウトには `layoutParagraphs()` を使用します:
 
 <!-- doc-example: 04-ruby-browser.ts#chapter -->
 ```ts
-const chapterResult = await mejiro.layoutChapter({
+const chapterResult = await mejiro.layoutParagraphs({
   paragraphs: [
     {
       text: '漢字を読む',
       inlineAnnotations: [
         {
-          kind: 'ruby',
+          type: 'ruby',
           startIndex: 0,
           endIndex: 2,
           rubyText: 'かんじ',
-          type: 'group',
+          rubyType: 'group',
         },
       ],
     },
@@ -199,8 +197,8 @@ EPUBファイルを解析する際、`extractRubyContent()` 関数はXHTMLコン
 ```ts
 import { parseEpub } from '@libraz/mejiro/epub';
 
-const book = await parseEpub(buffer);
-const paragraph = book.chapters[0].paragraphs[0];
+const epub = await parseEpub(buffer);
+const paragraph = epub.chapters[0].paragraphs[0];
 // paragraph.text   -- ルビコンテンツを除去した親文字テキスト
 // paragraph.inlineAnnotations -- テキストへの文字インデックスを持つ InlineAnnotation[]
 ```
@@ -232,10 +230,10 @@ for (const para of page.paragraphs) {
   for (const line of para.lines) {
     for (const segment of line.segments) {
       if (segment.type === 'ruby') {
-        // segment.base     -- 親文字テキスト文字列
+        // segment.text     -- 親文字テキスト文字列
         // segment.rubyText -- ルビテキスト文字列
         // segment.children -- 親文字の内側に入れ子になった注釈（あれば）
-        // 以下のようにレンダリング: <ruby>base<rt>rubyText</rt></ruby>
+        // 以下のようにレンダリング: <ruby>text<rt>rubyText</rt></ruby>
       } else {
         // ルビ以外: 'text' / 'emphasis' / 'tcy' / 'em' / 'strong' / 'link' /
         // 'footnote-ref'。いずれも `text` フィールドを持ちます。

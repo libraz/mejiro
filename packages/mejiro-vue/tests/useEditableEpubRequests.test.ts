@@ -9,8 +9,7 @@ const loadMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@libraz/mejiro/epub')>()),
-  // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
-  EditableEpub: { load: loadMock },
+  parseEditableEpub: loadMock,
 }));
 
 import { type UseEditableEpubOptions, useEditableEpub } from '../src/useEditableEpub.js';
@@ -26,8 +25,9 @@ function deferred<T>() {
 
 function stubEditor(): EditableEpub {
   return {
-    book: { chapters: [], packageData: { files: new Map() } },
-    export: vi.fn(async () => new ArrayBuffer(1)),
+    epub: { chapters: [] },
+    subscribe: vi.fn(() => () => {}),
+    export: vi.fn(async () => new Uint8Array(1)),
   } as unknown as EditableEpub;
 }
 
@@ -78,18 +78,18 @@ describe('useEditableEpub (Vue) — abandoned loads', () => {
     expect(onError).not.toHaveBeenCalled();
   });
 
-  it('abandons a defaultUrl load when the URL is cleared mid-flight', async () => {
+  it('abandons a url load when the URL is cleared mid-flight', async () => {
     const pending = deferred<EditableEpub>();
     loadMock.mockReturnValue(pending.promise);
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(new ArrayBuffer(8)));
     const onLoad = vi.fn();
-    const options = reactive<UseEditableEpubOptions>({ defaultUrl: '/a.epub', onLoad });
+    const options = reactive<UseEditableEpubOptions>({ url: '/a.epub', onLoad });
     const { result } = harness(options);
     await flushPromises();
     expect(loadMock).toHaveBeenCalled();
     expect(result.current.loading.value).toBe(true);
 
-    options.defaultUrl = undefined;
+    options.url = undefined;
     await nextTick();
     pending.resolve(stubEditor());
     await flushPromises();
@@ -102,8 +102,8 @@ describe('useEditableEpub (Vue) — abandoned loads', () => {
 
 describe('useEditableEpub (Vue) — exporting', () => {
   it('stays true until the last overlapping export settles', async () => {
-    const first = deferred<ArrayBuffer>();
-    const second = deferred<ArrayBuffer>();
+    const first = deferred<Uint8Array>();
+    const second = deferred<Uint8Array>();
     const exports = [first, second];
     const editor = stubEditor();
     vi.mocked(editor.export).mockImplementation(() => (exports.shift() as typeof first).promise);
@@ -115,11 +115,11 @@ describe('useEditableEpub (Vue) — exporting', () => {
     const two = result.current.exportEpub();
     expect(result.current.exporting.value).toBe(true);
 
-    first.resolve(new ArrayBuffer(1));
+    first.resolve(new Uint8Array(1));
     await one;
     expect(result.current.exporting.value).toBe(true);
 
-    second.resolve(new ArrayBuffer(1));
+    second.resolve(new Uint8Array(1));
     await two;
     expect(result.current.exporting.value).toBe(false);
   });

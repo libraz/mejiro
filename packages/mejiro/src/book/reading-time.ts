@@ -1,16 +1,18 @@
+import { formatMessage, jaMessages, type MejiroMessages } from '../i18n.js';
 import { isHeadingParagraph } from '../render/measures.js';
-import type { BookParagraph } from './types.js';
+import type { ChapterSource } from '../types.js';
 
 export { isHeadingParagraph };
 
 /** Options for {@link estimateReadingTime}. */
 export interface ReadingTimeOptions {
   /**
-   * Characters-per-minute reading rate. Defaults to 600 — a commonly cited
-   * average for Japanese text. Override for slow / fast readers or for
-   * languages with different unit sizes.
+   * Reading rate in characters per minute. Override for slow / fast readers
+   * or for languages with different unit sizes; zero or a negative rate
+   * estimates zero.
+   * @defaultValue 600, a commonly cited average for Japanese text
    */
-  cpm?: number;
+  charsPerMinute?: number;
   /**
    * Include heading paragraphs in the character count. A paragraph counts as a
    * heading when {@link isHeadingParagraph} says so, i.e. it carries a
@@ -21,19 +23,16 @@ export interface ReadingTimeOptions {
   includeHeadings?: boolean;
 }
 
-/**
- * Minimal chapter shape {@link estimateReadingTime} needs.
- *
- * Structural on purpose: an `EpubChapter`, a `ChapterLayout` source chapter or
- * a bare object literal all satisfy it, so the estimate can be taken before a
- * chapter has been laid out.
- */
-export interface ChapterLike {
-  /** Paragraphs whose characters are counted, headings included or not per options. */
-  paragraphs: readonly BookParagraph[];
+/** Options for {@link formatReadingTime}. */
+export interface FormatReadingTimeOptions {
+  /**
+   * Catalog whose `readingTime*` templates spell the units.
+   * @defaultValue {@link jaMessages}
+   */
+  messages?: MejiroMessages;
 }
 
-function countChars(chapter: ChapterLike, includeHeadings: boolean): number {
+function countChars(chapter: ChapterSource, includeHeadings: boolean): number {
   let total = 0;
   for (const p of chapter.paragraphs) {
     if (!includeHeadings && isHeadingParagraph(p)) continue;
@@ -51,27 +50,33 @@ function countChars(chapter: ChapterLike, includeHeadings: boolean): number {
  * {@link ReadingTimeOptions.includeHeadings} is set.
  */
 export function estimateReadingTime(
-  chapter: ChapterLike,
+  chapter: ChapterSource,
   options: ReadingTimeOptions = {},
 ): number {
-  const cpm = options.cpm ?? 600;
-  if (cpm <= 0) return 0;
+  const charsPerMinute = options.charsPerMinute ?? 600;
+  if (charsPerMinute <= 0) return 0;
   const chars = countChars(chapter, options.includeHeadings ?? false);
-  return Math.round((chars / cpm) * 60_000);
+  return Math.round((chars / charsPerMinute) * 60_000);
 }
 
-/** Format a millisecond duration as compact Japanese or English text. */
-export function formatReadingTime(ms: number, locale: 'ja' | 'en' = 'ja'): string {
+/**
+ * Format a millisecond duration as compact text, rounded to whole seconds.
+ *
+ * Picks one of the catalog's templates: `readingTimeHoursMinutes` from one
+ * hour up, `readingTimeMinutesSeconds` or (on a whole minute)
+ * `readingTimeMinutes` from one minute up, and `readingTimeSeconds` below it.
+ */
+export function formatReadingTime(ms: number, options: FormatReadingTimeOptions = {}): string {
+  const messages = options.messages ?? jaMessages;
   const totalSeconds = Math.max(0, Math.round(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (locale === 'en') {
-    if (hours > 0) return `${hours}h ${minutes}m`;
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
+  if (hours > 0) return formatMessage(messages.readingTimeHoursMinutes, { hours, minutes });
+  if (minutes > 0) {
+    return seconds > 0
+      ? formatMessage(messages.readingTimeMinutesSeconds, { minutes, seconds })
+      : formatMessage(messages.readingTimeMinutes, { minutes });
   }
-  if (hours > 0) return `${hours}時間${minutes}分`;
-  if (minutes > 0) return `${minutes}分${seconds > 0 ? `${seconds}秒` : ''}`;
-  return `${seconds}秒`;
+  return formatMessage(messages.readingTimeSeconds, { seconds });
 }

@@ -2,13 +2,41 @@ import { describe, expect, it } from 'vitest';
 import { parseManuscript } from '../src/manuscript.js';
 import { tokenizeManuscriptSource } from '../src/manuscript-tokens.js';
 import { expectElapsedUnder } from './timing.js';
+import { expectTypeErrors } from './type-probe.js';
+
+describe('manuscript ranges', () => {
+  it('count UTF-16 offsets in tokens and code point indices in annotations', () => {
+    const source = '𠮟｜漢字《かんじ》';
+    const [token] = tokenizeManuscriptSource(source);
+    const [annotation] = parseManuscript(source).inlineAnnotations;
+
+    expect(token).toEqual({ kind: 'ruby', startOffset: 2, endOffset: 10 });
+    expect(source.slice(token.startOffset, token.endOffset)).toBe('｜漢字《かんじ》');
+    expect(annotation).toMatchObject({ type: 'ruby', startIndex: 1, endIndex: 3 });
+  });
+
+  it('name token bounds startOffset and endOffset and morpheme bounds startIndex and endIndex', () => {
+    expectTypeErrors(
+      `import { tokenizeManuscriptSource } from '@libraz/mejiro';
+import type { ManuscriptToken, MorphemeLike } from '@libraz/mejiro';
+const [token] = tokenizeManuscriptSource('a');
+export const bounds: [number, number] = [token.startOffset, token.endOffset];
+export const morpheme: MorphemeLike = { surface: 'a', startIndex: 0, endIndex: 1, pos: 'n', extendedPos: 'n' };
+export const literal: ManuscriptToken = { kind: 'ruby', startOffset: 0, endOffset: 1 };
+export const oldToken: ManuscriptToken = { kind: 'ruby', start: 0, end: 1 };
+export const oldBound = token.start;
+`,
+      { fails: ['const oldToken', 'const oldBound'] },
+    );
+  });
+});
 
 describe('tokenizeManuscriptSource', () => {
   it('detects bar-notation ruby spans with correct source ranges', () => {
     const text = 'AB｜漢字《かんじ》CD';
     const tokens = tokenizeManuscriptSource(text);
     expect(tokens).toHaveLength(1);
-    expect(text.slice(tokens[0].start, tokens[0].end)).toBe('｜漢字《かんじ》');
+    expect(text.slice(tokens[0].startOffset, tokens[0].endOffset)).toBe('｜漢字《かんじ》');
   });
 
   it('accepts half-width bar ruby notation', () => {
@@ -17,7 +45,7 @@ describe('tokenizeManuscriptSource', () => {
 
     expect(parsed.text).toBe('これは漢字です');
     expect(parsed.inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 3, endIndex: 5, rubyText: 'かんじ', type: 'group' },
+      { type: 'ruby', startIndex: 3, endIndex: 5, rubyText: 'かんじ', rubyType: 'group' },
     ]);
     expect(tokens.map((token) => token.kind)).toEqual(['ruby']);
   });
@@ -27,7 +55,7 @@ describe('tokenizeManuscriptSource', () => {
     const tokens = tokenizeManuscriptSource(text);
     expect(tokens).toHaveLength(1);
     expect(tokens[0].kind).toBe('ruby');
-    expect(text.slice(tokens[0].start, tokens[0].end)).toBe('漢字《かんじ》');
+    expect(text.slice(tokens[0].startOffset, tokens[0].endOffset)).toBe('漢字《かんじ》');
   });
 
   it('does not consume emphasis opening as auto-ruby text', () => {
@@ -36,10 +64,10 @@ describe('tokenizeManuscriptSource', () => {
     const parsed = parseManuscript(text);
 
     expect(tokens.map((token) => token.kind)).toEqual(['emphasis']);
-    expect(text.slice(tokens[0].start, tokens[0].end)).toBe('《《かんじ》》');
+    expect(text.slice(tokens[0].startOffset, tokens[0].endOffset)).toBe('《《かんじ》》');
     expect(parsed.text).toBe('漢字かんじです');
     expect(parsed.inlineAnnotations).toEqual([
-      { kind: 'emphasis', startIndex: 2, endIndex: 5, style: 'sesame' },
+      { type: 'emphasis', startIndex: 2, endIndex: 5, style: 'sesame' },
     ]);
   });
 
@@ -77,7 +105,7 @@ describe('tokenizeManuscriptSource', () => {
 
     expect(parsed.text).toBe('がく');
     expect(parsed.inlineAnnotations).toEqual([
-      { kind: 'emphasis', startIndex: 1, endIndex: 2, style: 'sesame' },
+      { type: 'emphasis', startIndex: 1, endIndex: 2, style: 'sesame' },
     ]);
   });
 
@@ -119,7 +147,9 @@ describe('tokenizeManuscriptSource', () => {
     const parsed = parseManuscript(source);
 
     expect(tokens.map((token) => token.kind)).toEqual(['em', 'link']);
-    expect(source.slice(tokens[1].start, tokens[1].end)).toBe('[ラベル](https://example.test)');
+    expect(source.slice(tokens[1].startOffset, tokens[1].endOffset)).toBe(
+      '[ラベル](https://example.test)',
+    );
     expect(parsed.text).toBe('[未対応\n強調 ラベル');
   });
   it('rejects unsafe markdown link targets', () => {
@@ -130,10 +160,12 @@ describe('tokenizeManuscriptSource', () => {
 
     expect(parsed.text).toBe('[x](javascript:alert(1)) y');
     expect(tokens.map((token) => token.kind)).toEqual(['link']);
-    expect(source.slice(tokens[0].start, tokens[0].end)).toBe('[y](https://example.test)');
+    expect(source.slice(tokens[0].startOffset, tokens[0].endOffset)).toBe(
+      '[y](https://example.test)',
+    );
     expect(parsed.inlineAnnotations).toEqual([
       {
-        kind: 'link',
+        type: 'link',
         startIndex: linkStart,
         endIndex: linkStart + 1,
         href: 'https://example.test',
@@ -168,7 +200,7 @@ describe('parseManuscript normalization', () => {
 
     expect(parsed.text).toBe(`${compat}本と${supplement}とが`);
     expect(parsed.inlineAnnotations).toEqual([
-      { kind: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'つかもと', type: 'group' },
+      { type: 'ruby', startIndex: 0, endIndex: 2, rubyText: 'つかもと', rubyType: 'group' },
     ]);
   });
 });
@@ -220,11 +252,16 @@ describe('auto ruby with variation selectors', () => {
       const parsed = parseManuscript(source);
       expect(parsed.text, source).toBe(text);
       expect(parsed.inlineAnnotations, source).toEqual([
-        expect.objectContaining({ kind: 'ruby', startIndex: start, endIndex: end, type: 'group' }),
+        expect.objectContaining({
+          type: 'ruby',
+          startIndex: start,
+          endIndex: end,
+          rubyType: 'group',
+        }),
       ]);
       const tokens = tokenizeManuscriptSource(source);
       expect(
-        tokens.map((t) => source.slice(t.start, t.end)),
+        tokens.map((t) => source.slice(t.startOffset, t.endOffset)),
         source,
       ).toEqual([token]);
     }
@@ -243,9 +280,9 @@ describe('parseManuscript cost and offsets', () => {
     const parsed = parseManuscript('𠮟*強*〔12〕𩸽《ほっけ》');
     expect(parsed.text).toBe('𠮟強12𩸽');
     expect(parsed.inlineAnnotations).toEqual([
-      { kind: 'em', startIndex: 1, endIndex: 2 },
-      { kind: 'tcy', startIndex: 2, endIndex: 4 },
-      { kind: 'ruby', startIndex: 4, endIndex: 5, rubyText: 'ほっけ', type: 'mono' },
+      { type: 'em', startIndex: 1, endIndex: 2 },
+      { type: 'tcy', startIndex: 2, endIndex: 4 },
+      { type: 'ruby', startIndex: 4, endIndex: 5, rubyText: 'ほっけ', rubyType: 'mono' },
     ]);
   });
 

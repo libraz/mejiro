@@ -2,7 +2,12 @@
 /** @jsxImportSource react */
 
 import type { PageSlice } from '@libraz/mejiro';
-import { type BookParagraph, ChapterLayout } from '@libraz/mejiro/book';
+import {
+  type BookParagraph,
+  type ChapterLayout,
+  type ChapterLayoutSnapshot,
+  MejiroBook,
+} from '@libraz/mejiro/book';
 import {
   buildRenderPage,
   paragraphClassName,
@@ -28,7 +33,6 @@ function entriesFor(paragraphs: readonly BookParagraph[]): RenderEntry[] {
     chars: [...p.text],
     breakPoints: new Uint32Array([]),
     inlineAnnotations: p.inlineAnnotations ?? [],
-    isHeading: p.headingLevel != null || p.kind === 'heading',
     headingLevel: p.headingLevel,
     kind: p.kind,
   }));
@@ -48,29 +52,27 @@ function renderedParagraphClasses(container: HTMLElement): string[] {
 
 /** A real layout of `paragraphs`, one line each, with h2 set to scale 2. */
 function layoutFor(paragraphs: readonly BookParagraph[]): ChapterLayout {
-  const entries = entriesFor(paragraphs);
-  const cached = paragraphs.map((p, i) => ({
-    text: Uint32Array.from([...p.text], (c) => c.codePointAt(0) ?? 0),
-    advances: new Float32Array([...p.text].length).fill(10),
-    chars: entries[i].chars,
-    inlineAnnotations: [],
-    isHeading: entries[i].isHeading,
-    headingLevel: p.headingLevel,
-    kind: p.kind,
-  }));
-  return new ChapterLayout(
-    cached,
-    entries,
-    {
+  const snapshot: ChapterLayoutSnapshot = {
+    version: 3,
+    config: {
       fontSize: 10,
       lineSpacing: 1,
       headingScale: 1.4,
       headingStyles: { 2: { scale: 2 } },
-      mode: 'strict',
+      kinsoku: 'strict',
       enableHanging: true,
     },
-    { pageWidth: 400, lineWidth: 400, pagePaddingX: 0, pagePaddingY: 0 },
-  );
+    size: { pageWidth: 400, lineWidth: 400, paddingX: 0, paddingY: 0 },
+    paragraphs: paragraphs.map((p) => ({
+      text: p.text,
+      advances: [...p.text].map(() => 10),
+      breakPoints: [],
+      inlineAnnotations: [],
+      headingLevel: p.headingLevel,
+      kind: p.kind === 'body' ? undefined : p.kind,
+    })),
+  };
+  return new MejiroBook({ fontFamily: 'serif', fontSize: 10 }).layoutFromSnapshot(snapshot);
 }
 
 describe('MejiroPage paragraph classes', () => {
@@ -87,7 +89,7 @@ describe('MejiroPage paragraph classes', () => {
     expect(classes).toContain('mejiro-paragraph mejiro-paragraph--h2');
   });
 
-  it('styles a legacy isHeading paragraph as a heading from the page data alone', () => {
+  it('styles a heading paragraph without a level as a heading from the page data alone', () => {
     const page = buildRenderPage(
       [{ paragraphIndex: 0, lineStart: 0, lineEnd: 1 }],
       [
@@ -95,7 +97,7 @@ describe('MejiroPage paragraph classes', () => {
           chars: [...'見出しのみ'],
           breakPoints: new Uint32Array([]),
           inlineAnnotations: [],
-          isHeading: true,
+          kind: 'heading',
         },
       ],
     );

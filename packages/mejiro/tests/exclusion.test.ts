@@ -1,3 +1,10 @@
+import {
+  type ExclusionPageGeometry,
+  type ExclusionResult,
+  ExclusionEngine as PublicExclusionEngine,
+  SpreadExclusionEngine as PublicSpreadExclusionEngine,
+  computeExclusionSlots as publicComputeExclusionSlots,
+} from '@libraz/mejiro';
 import { describe, expect, it } from 'vitest';
 import {
   type ColumnSlot,
@@ -12,6 +19,7 @@ import {
 import { computeBreaks } from '../src/layout.js';
 import { paginate } from '../src/paginate.js';
 import { toCodepoints, uniformAdvances } from './helpers.js';
+import { expectTypeErrors } from './type-probe.js';
 
 describe('computeLineWidths', () => {
   it('covers every line a fractional zone touches', () => {
@@ -268,7 +276,7 @@ describe('computeExclusionSlots', () => {
         lineCount,
         linePitch,
         contentWidth: lineCount * linePitch,
-        images: [{ x: k * linePitch, y: 100, w: linePitch, h: 100 }],
+        images: [{ x: k * linePitch, y: 100, width: linePitch, height: 100 }],
       });
       const obstructed = new Set(
         slots.filter((slot) => slot.height < 400).map((s) => s.columnIndex),
@@ -282,7 +290,7 @@ describe('computeExclusionSlots', () => {
     // Content=150, linePitch=30. Col 0: 120..150, Col 1: 90..120, Col 2: 60..90
     const { slots } = computeExclusionSlots({
       ...base,
-      images: [{ x: 90, y: 100, w: 30, h: 160 }],
+      images: [{ x: 90, y: 100, width: 30, height: 160 }],
     });
     // Col 0: 1 slot (unaffected), Col 1: 2 slots (above+below), Cols 2-4: 1 each → 6
     expect(slots.length).toBe(6);
@@ -299,7 +307,7 @@ describe('computeExclusionSlots', () => {
     // Image at y=0, h=100 → blocks 0..100, gap below = 400-100 = 300
     const { slots } = computeExclusionSlots({
       ...base,
-      images: [{ x: 0, y: 0, w: 150, h: 100 }],
+      images: [{ x: 0, y: 0, width: 150, height: 100 }],
     });
     // Each column gets one slot (below the image)
     expect(slots).toHaveLength(5);
@@ -316,8 +324,8 @@ describe('computeExclusionSlots', () => {
     const { slots } = computeExclusionSlots({
       ...base,
       images: [
-        { x: 0, y: 0, w: 150, h: 80 },
-        { x: 0, y: 200, w: 150, h: 100 },
+        { x: 0, y: 0, width: 150, height: 80 },
+        { x: 0, y: 200, width: 150, height: 100 },
       ],
     });
     // 5 columns × 2 gaps each = 10 slots; the full-width images divide the
@@ -346,8 +354,8 @@ describe('computeExclusionSlots', () => {
     const { slots } = computeExclusionSlots({
       ...base,
       images: [
-        { x: 0, y: 50, w: 150, h: 150 },
-        { x: 0, y: 150, w: 150, h: 200 },
+        { x: 0, y: 50, width: 150, height: 150 },
+        { x: 0, y: 150, width: 150, height: 200 },
       ],
     });
     // 5 columns × 2 gaps each = 10 slots; the full-width merged block divides
@@ -363,7 +371,7 @@ describe('computeExclusionSlots', () => {
     // Col 0: 2 slots (above + below). Cols 1-4: 1 slot each.
     const { slots } = computeExclusionSlots({
       ...base,
-      images: [{ x: 130, y: 100, w: 15, h: 200 }],
+      images: [{ x: 130, y: 100, width: 15, height: 200 }],
     });
     expect(slots).toHaveLength(6); // 2 + 1 + 1 + 1 + 1
     // Col 0's two slots
@@ -376,14 +384,14 @@ describe('computeExclusionSlots', () => {
   it('uses linePitch as the default minimum usable gap height', () => {
     const { slots } = computeExclusionSlots({
       ...base,
-      images: [{ x: 0, y: 10, w: 150, h: 380 }],
+      images: [{ x: 0, y: 10, width: 150, height: 380 }],
     });
     expect(slots).toHaveLength(0);
 
     const custom = computeExclusionSlots({
       ...base,
       minGapHeight: 8,
-      images: [{ x: 0, y: 10, w: 150, h: 380 }],
+      images: [{ x: 0, y: 10, width: 150, height: 380 }],
     });
     expect(custom.slots).toHaveLength(10);
   });
@@ -393,13 +401,13 @@ describe('computeExclusionSlots', () => {
     // lineCount, so per-column indexing is invalid in both directions.
     const more = computeExclusionSlots({
       ...base,
-      images: [{ x: 90, y: 100, w: 30, h: 160 }],
+      images: [{ x: 90, y: 100, width: 30, height: 160 }],
     });
     expect(more.slots.length).toBeGreaterThan(base.lineCount);
 
     const fewer = computeExclusionSlots({
       ...base,
-      images: [{ x: 90, y: 0, w: 60, h: 400 }],
+      images: [{ x: 90, y: 0, width: 60, height: 400 }],
     });
     expect(fewer.slots.length).toBeLessThan(base.lineCount);
 
@@ -411,7 +419,7 @@ describe('computeExclusionSlots', () => {
   it('lineWidths matches slot heights', () => {
     const { slots, lineWidths } = computeExclusionSlots({
       ...base,
-      images: [{ x: 50, y: 100, w: 60, h: 200 }],
+      images: [{ x: 50, y: 100, width: 60, height: 200 }],
     });
     expect(lineWidths).toHaveLength(slots.length);
     for (let i = 0; i < slots.length; i++) {
@@ -423,7 +431,7 @@ describe('computeExclusionSlots', () => {
     // Image covers entire inline extent
     const { slots, lineWidths } = computeExclusionSlots({
       ...base,
-      images: [{ x: 0, y: 0, w: 150, h: 400 }],
+      images: [{ x: 0, y: 0, width: 150, height: 400 }],
     });
     expect(slots).toHaveLength(0);
     expect(lineWidths).toHaveLength(0);
@@ -434,7 +442,7 @@ describe('computeExclusionSlots', () => {
     const { slots, lineWidths } = computeExclusionSlots({
       ...base,
       minGapHeight: 0,
-      images: [{ x: 0, y: 0, w: 150, h: 100 }],
+      images: [{ x: 0, y: 0, width: 150, height: 100 }],
     });
     expect(slots).toHaveLength(5);
     for (const w of lineWidths) expect(w).toBeGreaterThan(0);
@@ -456,8 +464,8 @@ describe('computeExclusionSlots', () => {
       ...base,
       minGapHeight: 0,
       images: [
-        { x: 120, y: 0, w: 30, h: 400 },
-        { x: 90, y: 100, w: 30, h: 100 },
+        { x: 120, y: 0, width: 30, height: 400 },
+        { x: 90, y: 100, width: 30, height: 100 },
       ],
     });
     expect(slots.every((s) => s.xPos !== 0)).toBe(true);
@@ -478,13 +486,14 @@ describe('computeExclusionSlots', () => {
     expect(computeExclusionSlots({ ...base, images: [] }).affected).toBe(false);
     // Image beyond the last column leaves every column untouched.
     expect(
-      computeExclusionSlots({ ...base, images: [{ x: -100, y: 0, w: 20, h: 100 }] }).affected,
+      computeExclusionSlots({ ...base, images: [{ x: -100, y: 0, width: 20, height: 100 }] })
+        .affected,
     ).toBe(false);
     // A fully blocked column leaves every surviving slot at full height,
     // yet the page's coverage still differs from the unobstructed layout.
     const blocked = computeExclusionSlots({
       ...base,
-      images: [{ x: 120, y: 0, w: 30, h: 400 }],
+      images: [{ x: 120, y: 0, width: 30, height: 400 }],
     });
     expect(blocked.slots).toHaveLength(4);
     expect(blocked.slots.every((s) => s.height === base.lineWidth)).toBe(true);
@@ -496,7 +505,7 @@ describe('computeExclusionSlots', () => {
     // Gaps: 0..80 (80px) and 220..400 (180px)
     const { slots } = computeExclusionSlots({
       ...base,
-      images: [{ x: 0, y: 100, w: 150, h: 100, inlineMargin: 20 }],
+      images: [{ x: 0, y: 100, width: 150, height: 100, inlineMargin: 20 }],
     });
     // 5 columns × 2 gaps each = 10 slots; the full-width image divides the page
     // into tiers, read top tier first
@@ -515,7 +524,7 @@ describe('computeExclusionSlots', () => {
       lineCount: 8,
       linePitch: 30,
       contentWidth: 240,
-      images: [{ x: 60, y: 150, w: 120, h: 100 }],
+      images: [{ x: 60, y: 150, width: 120, height: 100 }],
     });
 
     // Columns 0-1 and 6-7 keep a single full-height slot; columns 2-5 are
@@ -543,7 +552,7 @@ describe('computeExclusionSlots', () => {
       lineCount: 8,
       linePitch: 30,
       contentWidth: 240,
-      images: [{ x: 60, y: 150, w: 120, h: 100 }],
+      images: [{ x: 60, y: 150, width: 120, height: 100 }],
     });
 
     // Split columns take two slots each, so the array position is not the column.
@@ -562,8 +571,8 @@ describe('computeExclusionSlots', () => {
       linePitch: 30,
       contentWidth: 60,
       images: [
-        { x: 30, y: 0, w: 30, h: 200 },
-        { x: 0, y: 100, w: 30, h: 300 },
+        { x: 30, y: 0, width: 30, height: 200 },
+        { x: 0, y: 100, width: 30, height: 300 },
       ],
     });
 
@@ -581,8 +590,8 @@ describe('computeExclusionSlots', () => {
       linePitch: 30.4,
       contentWidth: 380,
       images: [
-        { x: 100, y: 50, w: 120, h: 160 },
-        { x: 50, y: 300, w: 80, h: 100 },
+        { x: 100, y: 50, width: 120, height: 160 },
+        { x: 50, y: 300, width: 80, height: 100 },
       ],
     });
 
@@ -595,7 +604,7 @@ describe('computeExclusionSlots', () => {
     // With margin: col 0 (120..150) and col 1 (90..120) affected (110 < 120)
     const { slots } = computeExclusionSlots({
       ...base,
-      images: [{ x: 120, y: 100, w: 10, h: 200, blockMargin: 10 }],
+      images: [{ x: 120, y: 100, width: 10, height: 200, blockMargin: 10 }],
     });
     // Col 0: affected (2 slots), Col 1: affected (2 slots), Cols 2-4: 1 slot each → 7
     expect(slots).toHaveLength(7);
@@ -607,8 +616,8 @@ describe('ExclusionEngine', () => {
 
   it('computes same result as computeExclusionSlots', () => {
     const images = [
-      { x: 0, y: 0, w: 150, h: 80 },
-      { x: 0, y: 200, w: 150, h: 100 },
+      { x: 0, y: 0, width: 150, height: 80 },
+      { x: 0, y: 200, width: 150, height: 100 },
     ];
     const fromFn = computeExclusionSlots({ ...geometry, images });
     const engine = new ExclusionEngine(geometry);
@@ -619,20 +628,19 @@ describe('ExclusionEngine', () => {
     expect([...fromClass.lineWidths]).toEqual([...fromFn.lineWidths]);
   });
 
-  it('supports addImage chaining', () => {
+  it('counts every added image', () => {
     const engine = new ExclusionEngine(geometry);
-    const result = engine
-      .addImage({ x: 0, y: 0, w: 50, h: 50 })
-      .addImage({ x: 50, y: 50, w: 50, h: 50 });
-    expect(result).toBe(engine);
+    engine.addImage({ x: 0, y: 0, width: 50, height: 50 });
+    engine.addImage({ x: 50, y: 50, width: 50, height: 50 });
     expect(engine.imageCount).toBe(2);
   });
 
   it('removeImage removes by reference', () => {
     const engine = new ExclusionEngine(geometry);
-    const img1 = { x: 0, y: 0, w: 50, h: 50 };
-    const img2 = { x: 50, y: 50, w: 50, h: 50 };
-    engine.addImage(img1).addImage(img2);
+    const img1 = { x: 0, y: 0, width: 50, height: 50 };
+    const img2 = { x: 50, y: 50, width: 50, height: 50 };
+    engine.addImage(img1);
+    engine.addImage(img2);
     expect(engine.removeImage(img1)).toBe(true);
     expect(engine.imageCount).toBe(1);
     expect(engine.getImages()).toEqual([img2]);
@@ -640,12 +648,13 @@ describe('ExclusionEngine', () => {
 
   it('removeImage returns false for unknown image', () => {
     const engine = new ExclusionEngine(geometry);
-    expect(engine.removeImage({ x: 0, y: 0, w: 1, h: 1 })).toBe(false);
+    expect(engine.removeImage({ x: 0, y: 0, width: 1, height: 1 })).toBe(false);
   });
 
   it('clearImages removes all', () => {
     const engine = new ExclusionEngine(geometry);
-    engine.addImage({ x: 0, y: 0, w: 50, h: 50 }).addImage({ x: 50, y: 0, w: 50, h: 50 });
+    engine.addImage({ x: 0, y: 0, width: 50, height: 50 });
+    engine.addImage({ x: 50, y: 0, width: 50, height: 50 });
     engine.clearImages();
     expect(engine.imageCount).toBe(0);
     const { slots } = engine.compute();
@@ -654,7 +663,7 @@ describe('ExclusionEngine', () => {
 
   it('setGeometry updates dimensions', () => {
     const engine = new ExclusionEngine(geometry);
-    engine.addImage({ x: 0, y: 0, w: 150, h: 400 });
+    engine.addImage({ x: 0, y: 0, width: 150, height: 400 });
     // All blocked with lineWidth=400
     expect(engine.compute().slots).toHaveLength(0);
     // Increase lineWidth → gap appears below the image
@@ -667,19 +676,18 @@ describe('SpreadExclusionEngine', () => {
   // Page: 200px wide, 20px padding on each side → 160px content, linePitch=32 → 5 cols/page
   const spread = {
     pageWidth: 200,
-    pagePaddingX: 20,
-    pagePaddingY: 10,
+    paddingX: 20,
+    paddingY: 10,
     lineWidth: 400,
     linePitch: 32,
   };
 
   it('produces continuous lineWidths for both pages', () => {
     const engine = new SpreadExclusionEngine(spread);
-    const { lineWidths, rightSlotCount, rightSlots, leftSlots } = engine.compute();
+    const { lineWidths, rightSlots, leftSlots } = engine.compute();
     // 5 cols/page × 2 pages = 10 total, no images → all full height
     expect(rightSlots).toHaveLength(5);
     expect(leftSlots).toHaveLength(5);
-    expect(rightSlotCount).toBe(5);
     expect(lineWidths).toHaveLength(10);
     for (let i = 0; i < 10; i++) expect(lineWidths[i]).toBe(400);
   });
@@ -687,7 +695,7 @@ describe('SpreadExclusionEngine', () => {
   it('image on right page only affects right slots', () => {
     const engine = new SpreadExclusionEngine(spread);
     // Image at page-relative (50, 50), content-area (30, 40), covers 1-2 columns
-    engine.addImage({ x: 50, y: 50, w: 50, h: 100 });
+    engine.addImage({ x: 50, y: 50, width: 50, height: 100 });
     const { rightSlots, leftSlots, lineWidths } = engine.compute();
     // Right page has some affected slots (extra due to split)
     expect(rightSlots.length).toBeGreaterThanOrEqual(5);
@@ -702,7 +710,7 @@ describe('SpreadExclusionEngine', () => {
     const engine = new SpreadExclusionEngine(spread);
     // Image at page-relative x=-100, meaning 100px to the left of pageRight
     // Left-page content coord: (-100 - 20) + 200 = 80
-    engine.addImage({ x: -100, y: 50, w: 50, h: 100 });
+    engine.addImage({ x: -100, y: 50, width: 50, height: 100 });
     const { rightSlots, leftSlots } = engine.compute();
     // Right page unaffected (image is fully on left page)
     expect(rightSlots).toHaveLength(5);
@@ -714,7 +722,7 @@ describe('SpreadExclusionEngine', () => {
   it('image straddling gutter affects both pages', () => {
     const engine = new SpreadExclusionEngine(spread);
     // Image from x=-30 to x=+30 (60px wide, crosses the gutter)
-    engine.addImage({ x: -30, y: 50, w: 60, h: 100 });
+    engine.addImage({ x: -30, y: 50, width: 60, height: 100 });
     const { rightSlots, leftSlots } = engine.compute();
     // Both pages have some affected slots
     expect(rightSlots.length).toBeGreaterThanOrEqual(5);
@@ -723,7 +731,7 @@ describe('SpreadExclusionEngine', () => {
 
   it('classifies spread images using blockMargin-expanded bounds', () => {
     const engine = new SpreadExclusionEngine(spread);
-    engine.addImage({ x: 5, y: 50, w: 10, h: 100, blockMargin: 30 });
+    engine.addImage({ x: 5, y: 50, width: 10, height: 100, blockMargin: 30 });
     const { rightSlots, leftSlots } = engine.compute();
 
     expect(rightSlots.length).toBeGreaterThan(5);
@@ -736,12 +744,12 @@ describe('SpreadExclusionEngine', () => {
     // column drops out entirely and every surviving slot is still full height.
     const engine = new SpreadExclusionEngine({
       pageWidth: 400,
-      pagePaddingX: 40,
-      pagePaddingY: 40,
+      paddingX: 40,
+      paddingY: 40,
       lineWidth: 600,
       linePitch: 30.4,
     });
-    engine.addImage({ x: 330, y: 40, w: 30, h: 600 });
+    engine.addImage({ x: 330, y: 40, width: 30, height: 600 });
     const { rightSlots, leftSlots, rightAffected, leftAffected } = engine.compute();
 
     expect(rightSlots).toHaveLength(9);
@@ -752,11 +760,10 @@ describe('SpreadExclusionEngine', () => {
     expect(leftAffected).toBe(false);
   });
 
-  it('rightSlotCount splits lineWidths correctly', () => {
+  it('lays the right-page line widths before the left-page ones', () => {
     const engine = new SpreadExclusionEngine(spread);
-    engine.addImage({ x: 50, y: 50, w: 50, h: 100 });
-    const { lineWidths, rightSlotCount, rightSlots, leftSlots } = engine.compute();
-    expect(rightSlotCount).toBe(rightSlots.length);
+    engine.addImage({ x: 50, y: 50, width: 50, height: 100 });
+    const { lineWidths, rightSlots, leftSlots } = engine.compute();
     expect(lineWidths).toHaveLength(rightSlots.length + leftSlots.length);
     // Right portion
     for (let i = 0; i < rightSlots.length; i++) {
@@ -764,7 +771,7 @@ describe('SpreadExclusionEngine', () => {
     }
     // Left portion
     for (let i = 0; i < leftSlots.length; i++) {
-      expect(lineWidths[rightSlotCount + i]).toBe(leftSlots[i].height);
+      expect(lineWidths[rightSlots.length + i]).toBe(leftSlots[i].height);
     }
   });
 });
@@ -779,12 +786,12 @@ describe('SpreadExclusionEngine column count', () => {
   it('keeps the last column when the content width is an exact multiple of the pitch', () => {
     const engine = new SpreadExclusionEngine({
       pageWidth: 328,
-      pagePaddingX: 52,
-      pagePaddingY: 10,
+      paddingX: 52,
+      paddingY: 10,
       lineWidth: 400,
       linePitch: 14 * 1.6,
     });
-    expect(engine.compute().rightSlotCount).toBe(10);
+    expect(engine.compute().rightSlots).toHaveLength(10);
   });
 
   it('fits the same number of columns as paginate across common font sizes and line heights', () => {
@@ -795,12 +802,12 @@ describe('SpreadExclusionEngine column count', () => {
           const contentW = Math.round(columns * linePitch * 10) / 10;
           const engine = new SpreadExclusionEngine({
             pageWidth: contentW + 40,
-            pagePaddingX: 20,
-            pagePaddingY: 10,
+            paddingX: 20,
+            paddingY: 10,
             lineWidth: 400,
             linePitch,
           });
-          expect(engine.compute().rightSlotCount, `${fontSize}px x ${lh} x ${columns}`).toBe(
+          expect(engine.compute().rightSlots.length, `${fontSize}px x ${lh} x ${columns}`).toBe(
             columnsOnPage(contentW, linePitch),
           );
         }
@@ -820,7 +827,7 @@ describe('exclusion reading order', () => {
 
   it('continues a column below a partial image before opening the next column', () => {
     // Columns 2-4 carry text above y=100 and below y=180; the rest are whole.
-    expect(order([{ x: 90, y: 100, w: 90, h: 80 }])).toEqual([
+    expect(order([{ x: 90, y: 100, width: 90, height: 80 }])).toEqual([
       '0@0',
       '1@0',
       '2@0',
@@ -836,7 +843,7 @@ describe('exclusion reading order', () => {
   });
 
   it('reads the tier above a full-width image across the page before the tier below', () => {
-    const slots = order([{ x: 0, y: 100, w: FULL, h: 80 }]);
+    const slots = order([{ x: 0, y: 100, width: FULL, height: 80 }]);
     expect(slots).toEqual([
       ...Array.from({ length: 8 }, (_, c) => `${c}@0`),
       ...Array.from({ length: 8 }, (_, c) => `${c}@180`),
@@ -846,7 +853,7 @@ describe('exclusion reading order', () => {
   it('keeps a page one tier when the image leaves a single edge column whole', () => {
     // Columns 0-6 are split; column 7 (x = 0..30) runs the full height, so
     // no inline range is blocked in every column.
-    const slots = order([{ x: 30, y: 100, w: FULL - 30, h: 80 }]);
+    const slots = order([{ x: 30, y: 100, width: FULL - 30, height: 80 }]);
     expect(slots.slice(0, 4)).toEqual(['0@0', '0@180', '1@0', '1@180']);
     expect(slots.at(-1)).toBe('7@0');
   });
@@ -856,8 +863,8 @@ describe('exclusion reading order', () => {
     // of the lower tier again, and the reader steps over it column by column.
     expect(
       order([
-        { x: 0, y: 100, w: FULL, h: 40 },
-        { x: 150, y: 250, w: 60, h: 50 },
+        { x: 0, y: 100, width: FULL, height: 40 },
+        { x: 150, y: 250, width: 60, height: 50 },
       ]),
     ).toEqual([
       ...Array.from({ length: 8 }, (_, c) => `${c}@0`),
@@ -876,8 +883,8 @@ describe('exclusion reading order', () => {
 
   it('reads three tiers top to bottom under two full-width images', () => {
     const slots = order([
-      { x: 0, y: 80, w: FULL, h: 40 },
-      { x: 0, y: 220, w: FULL, h: 40 },
+      { x: 0, y: 80, width: FULL, height: 40 },
+      { x: 0, y: 220, width: FULL, height: 40 },
     ]);
     const tops = slots.map((s) => Number(s.split('@')[1]));
     expect(tops).toEqual([...Array(8).fill(0), ...Array(8).fill(120), ...Array(8).fill(260)]);
@@ -886,8 +893,8 @@ describe('exclusion reading order', () => {
   it('ignores a fully blocked column when deciding whether a band divides the page', () => {
     // Column 0 is blocked top to bottom; every other column is split by the band.
     const slots = order([
-      { x: 210, y: 0, w: 30, h: 400 },
-      { x: 0, y: 100, w: FULL, h: 80 },
+      { x: 210, y: 0, width: 30, height: 400 },
+      { x: 0, y: 100, width: FULL, height: 80 },
     ]);
     expect(slots).toEqual([
       ...Array.from({ length: 7 }, (_, c) => `${c + 1}@0`),
@@ -899,8 +906,8 @@ describe('exclusion reading order', () => {
     // The band crosses the page, but column 3 is also blocked below it, so the
     // reader could not finish an upper tier there; the page stays one tier.
     const slots = order([
-      { x: 0, y: 100, w: FULL, h: 80 },
-      { x: 120, y: 180, w: 30, h: 220 },
+      { x: 0, y: 100, width: FULL, height: 80 },
+      { x: 120, y: 180, width: 30, height: 220 },
     ]);
     expect(slots.slice(0, 7)).toEqual(['0@0', '0@180', '1@0', '1@180', '2@0', '2@180', '3@0']);
     expect(slots[7]).toBe('4@0');
@@ -910,14 +917,14 @@ describe('exclusion reading order', () => {
     // 160px content per page, five 32px columns; left-page content x = image x + 180.
     const engine = new SpreadExclusionEngine({
       pageWidth: 200,
-      pagePaddingX: 20,
-      pagePaddingY: 0,
+      paddingX: 20,
+      paddingY: 0,
       lineWidth: 400,
       linePitch: 32,
     });
     // A partial image on the right page, a full-width band on the left page.
-    engine.addImage({ x: 60, y: 100, w: 60, h: 80 });
-    engine.addImage({ x: -180, y: 100, w: 160, h: 80 });
+    engine.addImage({ x: 60, y: 100, width: 60, height: 80 });
+    engine.addImage({ x: -180, y: 100, width: 160, height: 80 });
     const { rightSlots, leftSlots } = engine.compute();
 
     const right = rightSlots.map((s) => s.columnIndex as number);
@@ -990,7 +997,7 @@ describe('exclusion reading order invariants', () => {
         const fullWidth = rand() < 0.3;
         const x = fullWidth ? 0 : Math.floor(rand() * 200);
         const w = fullWidth ? page.contentWidth : 20 + Math.floor(rand() * (page.contentWidth - x));
-        return { x, y: Math.floor(rand() * 340), w, h: 20 + Math.floor(rand() * 120) };
+        return { x, y: Math.floor(rand() * 340), width: w, height: 20 + Math.floor(rand() * 120) };
       });
       const { slots } = computeExclusionSlots({ ...page, images });
       const columns = Array.from(
@@ -1047,5 +1054,262 @@ describe('exclusion reading order invariants', () => {
         if (ca === cb) expect(b.yStart, context).toBeGreaterThan(a.yStart);
       }
     }
+  });
+});
+
+describe('spread image coordinates', () => {
+  // 200px pages with 20px side padding and 10px top padding: 160px of content,
+  // five 32px columns per page.
+  const spread = {
+    pageWidth: 200,
+    paddingX: 20,
+    paddingY: 10,
+    lineWidth: 400,
+    linePitch: 32,
+  };
+
+  it('reads an image position from the right page top-left corner, padding included', () => {
+    const engine = new PublicSpreadExclusionEngine(spread);
+    // Content-area column 0 spans x 128..160, i.e. 148..180 from the page corner;
+    // content-area y 50..150 is 60..160 from the page corner.
+    engine.addImage({ x: 148, y: 60, width: 32, height: 100 });
+
+    const { rightSlots, leftSlots } = engine.compute();
+
+    const column0 = rightSlots.filter((slot) => slot.columnIndex === 0);
+    expect(column0.map((slot) => [slot.yStart, slot.height])).toEqual([
+      [0, 50],
+      [150, 250],
+    ]);
+    expect(rightSlots.filter((slot) => slot.columnIndex !== 0)).toHaveLength(4);
+    expect(leftSlots).toHaveLength(5);
+  });
+
+  it('accepts the same image from getImages and removes it by identity', () => {
+    const engine = new PublicSpreadExclusionEngine(spread);
+    const image = { x: 148, y: 60, width: 32, height: 100 };
+    engine.addImage(image);
+
+    expect(engine.getImages()).toEqual([image]);
+    expect(engine.removeImage({ ...image })).toBe(false);
+    expect(engine.removeImage(image)).toBe(true);
+    expect(engine.imageCount).toBe(0);
+  });
+
+  it('types a spread image as a width and height rectangle', () => {
+    const header = `import { SpreadExclusionEngine } from '@libraz/mejiro';
+import type { SpreadImageRect } from '@libraz/mejiro';
+const engine = new SpreadExclusionEngine({ pageWidth: 200, paddingX: 20, paddingY: 10, lineWidth: 400, linePitch: 32 });
+`;
+    expectTypeErrors(
+      `${header}export const rect: SpreadImageRect = { x: 148, y: 60, width: 32, height: 100, inlineMargin: 4 };
+engine.addImage(rect);
+`,
+      { fails: [] },
+    );
+    expectTypeErrors(
+      `${header}export const rect: SpreadImageRect = { x: 148, y: 60, w: 32, h: 100 };
+`,
+      { fails: ['const rect'] },
+    );
+  });
+});
+
+describe('exclusion results', () => {
+  const geometry: ExclusionPageGeometry = {
+    lineWidth: 400,
+    lineCount: 5,
+    linePitch: 32,
+    contentWidth: 160,
+  };
+
+  it('returns slots, line widths and the affected flag from both entry points', () => {
+    const image = { x: 128, y: 50, width: 32, height: 100 };
+    const engine = new PublicExclusionEngine(geometry);
+    engine.addImage(image);
+
+    const fromEngine = engine.compute();
+    const fromFunction = publicComputeExclusionSlots({ ...geometry, images: [image] });
+
+    expect(Object.keys(fromEngine).sort()).toEqual(['affected', 'lineWidths', 'slots']);
+    expect(Object.keys(fromFunction).sort()).toEqual(['affected', 'lineWidths', 'slots']);
+    expect(fromEngine.affected).toBe(true);
+    expect(fromEngine.slots).toEqual(fromFunction.slots);
+  });
+
+  it('leaves the right-page slot count to the slots array of the spread result', () => {
+    const engine = new PublicSpreadExclusionEngine({
+      pageWidth: 200,
+      paddingX: 20,
+      paddingY: 10,
+      lineWidth: 400,
+      linePitch: 32,
+    });
+
+    const result = engine.compute();
+
+    expect(Object.keys(result).sort()).toEqual([
+      'leftAffected',
+      'leftSlots',
+      'lineWidths',
+      'rightAffected',
+      'rightSlots',
+    ]);
+  });
+
+  it('names the result type and drops the slot count at the type level', () => {
+    const header = `import { ExclusionEngine, SpreadExclusionEngine, computeExclusionSlots } from '@libraz/mejiro';
+import type { ExclusionResult } from '@libraz/mejiro';
+const engine = new ExclusionEngine({ lineWidth: 400, lineCount: 5, linePitch: 32, contentWidth: 160 });
+const spread = new SpreadExclusionEngine({ pageWidth: 200, paddingX: 20, paddingY: 10, lineWidth: 400, linePitch: 32 });
+`;
+    expectTypeErrors(
+      `${header}export const fromEngine: ExclusionResult = engine.compute();
+export const fromFunction: ExclusionResult = computeExclusionSlots({ lineWidth: 400, lineCount: 5, linePitch: 32, contentWidth: 160, images: [] });
+export const slots: readonly unknown[] = spread.compute().rightSlots;
+`,
+      { fails: [] },
+    );
+    expectTypeErrors(
+      `${header}export const count = spread.compute().rightSlotCount;
+export const mutate = engine.compute().slots.push();
+`,
+      { fails: ['const count', 'const mutate'] },
+    );
+    const typed: ExclusionResult | undefined = undefined;
+    expect(typed).toBeUndefined();
+  });
+});
+
+describe('exclusion engine mutators', () => {
+  const geometry: ExclusionPageGeometry = {
+    lineWidth: 400,
+    lineCount: 5,
+    linePitch: 32,
+    contentWidth: 160,
+  };
+  const spreadGeometry = {
+    pageWidth: 200,
+    paddingX: 20,
+    paddingY: 10,
+    lineWidth: 400,
+    linePitch: 32,
+  };
+
+  it('adds an image without handing the engine back', () => {
+    const page = new PublicExclusionEngine(geometry);
+    const spread = new PublicSpreadExclusionEngine(spreadGeometry);
+
+    expect(page.addImage({ x: 0, y: 0, width: 10, height: 10 })).toBeUndefined();
+    expect(spread.addImage({ x: 0, y: 0, width: 10, height: 10 })).toBeUndefined();
+  });
+
+  it('rules out chaining at the type level', () => {
+    const header = `import { ExclusionEngine, SpreadExclusionEngine } from '@libraz/mejiro';
+const page = new ExclusionEngine({ lineWidth: 400, lineCount: 5, linePitch: 32, contentWidth: 160 });
+const spread = new SpreadExclusionEngine({ pageWidth: 200, paddingX: 20, paddingY: 10, lineWidth: 400, linePitch: 32 });
+`;
+    expectTypeErrors(
+      `${header}page.addImage({ x: 0, y: 0, width: 10, height: 10 });
+spread.addImage({ x: 0, y: 0, width: 10, height: 10 });
+export const removed: boolean = page.removeImage({ x: 0, y: 0, width: 10, height: 10 });
+`,
+      { fails: [] },
+    );
+    expectTypeErrors(
+      `${header}export const pageChain = page.addImage({ x: 0, y: 0, width: 10, height: 10 }).addImage({ x: 0, y: 0, width: 10, height: 10 });
+export const spreadChain = spread.addImage({ x: 0, y: 0, width: 10, height: 10 }).addImage({ x: 0, y: 0, width: 10, height: 10 });
+`,
+      { fails: ['const pageChain', 'const spreadChain'] },
+    );
+  });
+
+  it('removes an image only by the object that was added', () => {
+    const page = new PublicExclusionEngine(geometry);
+    const image = { x: 0, y: 0, width: 10, height: 10 };
+    page.addImage(image);
+
+    expect(page.removeImage({ ...image })).toBe(false);
+    expect(page.removeImage(image)).toBe(true);
+    expect(page.removeImage(image)).toBe(false);
+  });
+});
+
+describe('exclusion compute input validation', () => {
+  const page: ExclusionPageGeometry = {
+    lineWidth: 400,
+    lineCount: 5,
+    linePitch: 32,
+    contentWidth: 160,
+  };
+  const spread = {
+    pageWidth: 200,
+    paddingX: 20,
+    paddingY: 10,
+    lineWidth: 400,
+    linePitch: 32,
+  };
+
+  it.each([
+    ['lineWidth 0', { lineWidth: 0 }],
+    ['lineWidth -0', { lineWidth: -0 }],
+    ['lineWidth NaN', { lineWidth: Number.NaN }],
+    ['lineWidth Infinity', { lineWidth: Number.POSITIVE_INFINITY }],
+    ['lineWidth negative', { lineWidth: -1 }],
+    ['lineCount negative', { lineCount: -1 }],
+    ['lineCount fractional', { lineCount: 1.5 }],
+    ['lineCount NaN', { lineCount: Number.NaN }],
+    ['linePitch 0', { linePitch: 0 }],
+    ['linePitch NaN', { linePitch: Number.NaN }],
+    ['linePitch Infinity', { linePitch: Number.POSITIVE_INFINITY }],
+    ['contentWidth negative', { contentWidth: -1 }],
+    ['contentWidth NaN', { contentWidth: Number.NaN }],
+    ['minGapHeight negative', { minGapHeight: -1 }],
+    ['minGapHeight NaN', { minGapHeight: Number.NaN }],
+  ])('rejects a page geometry with %s', (_label, override) => {
+    const engine = new PublicExclusionEngine({ ...page, ...override });
+
+    expect(() => engine.compute()).toThrow(RangeError);
+  });
+
+  it.each([
+    ['x NaN', { x: Number.NaN }],
+    ['y Infinity', { y: Number.POSITIVE_INFINITY }],
+    ['width negative', { width: -1 }],
+    ['height NaN', { height: Number.NaN }],
+    ['inlineMargin Infinity', { inlineMargin: Number.POSITIVE_INFINITY }],
+    ['blockMargin NaN', { blockMargin: Number.NaN }],
+  ])('rejects an image with %s', (_label, override) => {
+    const image = { x: 0, y: 0, width: 10, height: 10, ...override };
+    const onPage = new PublicExclusionEngine(page);
+    const onSpread = new PublicSpreadExclusionEngine(spread);
+    onPage.addImage(image);
+    onSpread.addImage(image);
+
+    expect(() => onPage.compute()).toThrow(RangeError);
+    expect(() => onSpread.compute()).toThrow(RangeError);
+  });
+
+  it.each([
+    ['pageWidth 0', { pageWidth: 0 }],
+    ['pageWidth NaN', { pageWidth: Number.NaN }],
+    ['paddingX negative', { paddingX: -1 }],
+    ['paddingX NaN', { paddingX: Number.NaN }],
+    ['paddingY negative', { paddingY: -1 }],
+    ['padding of half the page or more', { paddingX: 100 }],
+    ['lineWidth 0', { lineWidth: 0 }],
+    ['linePitch 0', { linePitch: 0 }],
+    ['linePitch NaN', { linePitch: Number.NaN }],
+  ])('rejects a spread geometry with %s', (_label, override) => {
+    const engine = new PublicSpreadExclusionEngine({ ...spread, ...override });
+
+    expect(() => engine.compute()).toThrow(RangeError);
+  });
+
+  it('accepts zero padding and a page with no images', () => {
+    const engine = new PublicSpreadExclusionEngine({ ...spread, paddingX: 0, paddingY: 0 });
+
+    expect(engine.compute().lineWidths).toHaveLength(12);
+    expect(new PublicExclusionEngine({ ...page, lineCount: 0 }).compute().slots).toEqual([]);
   });
 });

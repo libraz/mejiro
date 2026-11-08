@@ -1,4 +1,4 @@
-import type { InChapterAnchor, ReadingAnchor } from './book/index.js';
+import type { InChapterAnchor, ReadingAnchor } from './types.js';
 
 /**
  * Minimal key-value storage interface used by reader persistence helpers.
@@ -37,38 +37,30 @@ export interface MejiroStorage {
   removeItem(key: string): void;
 }
 
-/** Persisted reading position. */
-export type ReadingPositionValue = ReadingAnchor;
+const READING_POSITION_VERSION = 3;
 
-const READING_POSITION_VERSION = 2;
-
-interface PersistedReadingPositionV2 {
-  version: 2;
-  chapter: number;
-  paragraph: number;
-  charIndex: number;
-}
-
-interface LegacyReadingPositionV1 {
-  chapter: number;
-  spreadIdx: number;
+interface PersistedReadingPosition extends ReadingAnchor {
+  version: typeof READING_POSITION_VERSION;
 }
 
 /**
- * Parses current and legacy reading-position payloads.
+ * Parses a stored reading position.
  *
- * Accepts the versioned envelope written by {@link serializeReadingPosition},
- * the legacy `{ chapter, spreadIdx }` shape, and a bare `ReadingAnchor` object
- * (`{ chapter, paragraph, charIndex }`) — the shape a host gets from stringifying
- * an anchor itself, e.g. when mirroring positions to a server.
+ * Reads the versioned envelope written by {@link serializeReadingPosition}, the
+ * layouts earlier releases wrote — version 2 and unversioned
+ * `{ chapter, paragraph, charIndex }` — and the legacy `{ chapter, spreadIdx }`
+ * shape, which resumes at the start of its chapter because a spread index does
+ * not survive reflow. A bare anchor object (`{ chapterIndex, paragraphIndex,
+ * charIndex }`), the shape a host gets from stringifying an anchor itself, is
+ * accepted too.
  *
- * Returns `null` for anything that is not a well-formed position, including
- * payloads whose `chapter` / `paragraph` / `charIndex` are not non-negative
+ * Returns `null` for anything that is not a well-formed position — invalid
+ * JSON, a non-object, an unknown `version`, or fields that are not non-negative
  * safe integers (fractional, negative, `NaN`, `Infinity` or beyond
- * `Number.MAX_SAFE_INTEGER`), so consumers can index layout data with the
+ * `Number.MAX_SAFE_INTEGER`) — so consumers can index layout data with the
  * returned fields without further checks.
  */
-export function parseReadingPosition(raw: string | null): ReadingPositionValue | null {
+export function parseReadingPosition(raw: string | null): ReadingAnchor | null {
   if (!raw) return null;
   let parsed: unknown;
   try {
@@ -76,41 +68,53 @@ export function parseReadingPosition(raw: string | null): ReadingPositionValue |
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== 'object') return null;
-  const p = parsed as Partial<PersistedReadingPositionV2 & LegacyReadingPositionV1>;
-  if (!isNonNegativeInteger(p.chapter)) return null;
-  if (p.version === READING_POSITION_VERSION) {
-    if (!(isNonNegativeInteger(p.paragraph) && isNonNegativeInteger(p.charIndex))) return null;
-    return { chapter: p.chapter, paragraph: p.paragraph, charIndex: p.charIndex };
+  if (!isRecord(parsed)) return null;
+  const { version } = parsed;
+  if (version === READING_POSITION_VERSION || version === undefined) {
+    const current = readAnchor(parsed, 'chapterIndex', 'paragraphIndex');
+    if (current) return current;
   }
-  if (typeof p.spreadIdx === 'number') {
-    // biome-ignore lint/suspicious/noConsole: intentional one-time migration notice
-    if (typeof console !== 'undefined' && typeof console.warn === 'function') {
-      // biome-ignore lint/suspicious/noConsole: intentional one-time migration notice
-      console.warn(
-        '[mejiro] useReadingPosition: migrating legacy {chapter, spreadIdx} format. ' +
-          'spreadIdx has been dropped because it does not survive reflow; the position ' +
-          'now resumes at the start of the chapter. Persist new positions via save() to upgrade.',
-      );
-    }
-    return { chapter: p.chapter, paragraph: 0, charIndex: 0 };
+  if (version === 2 || version === undefined) {
+    const earlier = readAnchor(parsed, 'chapter', 'paragraph');
+    if (earlier) return earlier;
   }
   if (
-    p.version === undefined &&
-    isNonNegativeInteger(p.paragraph) &&
-    isNonNegativeInteger(p.charIndex)
+    version === undefined &&
+    isNonNegativeInteger(parsed.chapter) &&
+    typeof parsed.spreadIdx === 'number'
   ) {
-    return { chapter: p.chapter, paragraph: p.paragraph, charIndex: p.charIndex };
+    return { chapterIndex: parsed.chapter, paragraphIndex: 0, charIndex: 0 };
   }
   return null;
 }
 
+/** Reads an anchor whose chapter and paragraph live under the given keys. */
+function readAnchor(
+  record: Record<string, unknown>,
+  chapterKey: string,
+  paragraphKey: string,
+): ReadingAnchor | null {
+  const chapterIndex = record[chapterKey];
+  const paragraphIndex = record[paragraphKey];
+  const charIndex = record.charIndex;
+  if (
+    !(
+      isNonNegativeInteger(chapterIndex) &&
+      isNonNegativeInteger(paragraphIndex) &&
+      isNonNegativeInteger(charIndex)
+    )
+  ) {
+    return null;
+  }
+  return { chapterIndex, paragraphIndex, charIndex };
+}
+
 /** Serializes a reading-position anchor. */
-export function serializeReadingPosition(value: ReadingPositionValue): string {
-  const payload: PersistedReadingPositionV2 = {
+export function serializeReadingPosition(value: ReadingAnchor): string {
+  const payload: PersistedReadingPosition = {
     version: READING_POSITION_VERSION,
-    chapter: value.chapter,
-    paragraph: value.paragraph,
+    chapterIndex: value.chapterIndex,
+    paragraphIndex: value.paragraphIndex,
     charIndex: value.charIndex,
   };
   return JSON.stringify(payload);
@@ -121,7 +125,7 @@ export function serializeReadingPosition(value: ReadingPositionValue): string {
  *
  * `start` and `end` are reflow-independent: they address paragraph and character
  * offsets rather than page or spread positions, so an annotation survives a font
- * or page-size change. Both anchors are interpreted within `chapter`; an
+ * or page-size change. Both anchors are interpreted within `chapterIndex`; an
  * annotation therefore cannot span chapters.
  *
  * {@link parseAnnotations} drops entries that do not match this shape, so any
@@ -134,10 +138,10 @@ export interface Annotation {
    */
   id: string;
   /** Zero-based chapter index. A non-negative safe integer. */
-  chapter: number;
-  /** Inclusive start of the annotated range within `chapter`. */
+  chapterIndex: number;
+  /** Inclusive start of the annotated range within `chapterIndex`. */
   start: InChapterAnchor;
-  /** Exclusive end of the annotated range within `chapter`; never before `start`. */
+  /** Exclusive end of the annotated range within `chapterIndex`; never before `start`. */
   end: InChapterAnchor;
   /** Highlight color as a CSS color string. Host-defined; the core never interprets it. */
   color?: string;
@@ -145,60 +149,91 @@ export interface Annotation {
   note?: string;
   /**
    * Creation time as a millisecond epoch. Only required to be a finite number —
-   * it is never used for ordering, which {@link sortAnnotations} derives from the
-   * range instead.
+   * it is never used for ordering, which {@link toSortedAnnotations} derives from
+   * the range instead.
    */
   createdAt?: number;
 }
 
-const ANNOTATIONS_VERSION = 1;
+const ANNOTATIONS_VERSION = 3;
+/** The release-0.10 envelope, whose entries spell the chapter and paragraph keys without `Index`. */
+const LEGACY_ANNOTATIONS_VERSION = 1;
 
 interface PersistedAnnotations {
-  version: number;
+  version: typeof ANNOTATIONS_VERSION;
   annotations: Annotation[];
 }
 
 /**
- * Parses an annotation payload, returning an empty list for invalid data.
+ * Parses an annotation payload.
  *
- * Accepts the versioned envelope written by {@link serializeAnnotations} and a
- * bare annotation array — the shape a host gets from stringifying the list
+ * Accepts the versioned envelope written by {@link serializeAnnotations}, the
+ * version 1 envelope earlier releases wrote (its entries spell `chapter` and
+ * `paragraph` without `Index`), and a bare annotation array — the shape a host gets from stringifying the list
  * itself, e.g. when mirroring annotations to a server. Entries that are not
  * well-formed annotations, whose `end` precedes `start`, or whose `id` repeats
  * an earlier entry's are dropped.
+ *
+ * @param raw - The stored string, or `null` when nothing was stored.
+ * @returns The annotations; an empty list when nothing was stored; and `null`
+ *   when the payload cannot be read at all — invalid JSON, a non-object, or an
+ *   envelope of an unknown version — so a caller can tell unreadable data from
+ *   an empty list and avoid overwriting it.
  */
-export function parseAnnotations(raw: string | null): Annotation[] {
+export function parseAnnotations(raw: string | null): Annotation[] | null {
   if (!raw) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as Partial<PersistedAnnotations> | unknown[];
-    if (Array.isArray(parsed)) return validAnnotations(parsed);
-    if (parsed?.version !== ANNOTATIONS_VERSION || !Array.isArray(parsed.annotations)) return [];
-    return validAnnotations(parsed.annotations);
+    parsed = JSON.parse(raw);
   } catch {
-    // Bad JSON — treat as empty.
+    return null;
   }
-  return [];
+  if (Array.isArray(parsed)) return validAnnotations(parsed);
+  if (!(isRecord(parsed) && Array.isArray(parsed.annotations))) return null;
+  if (parsed.version === ANNOTATIONS_VERSION || parsed.version === LEGACY_ANNOTATIONS_VERSION) {
+    return validAnnotations(parsed.annotations);
+  }
+  return null;
 }
 
-/** Keeps well-formed entries, the first one per id. */
+/** Keeps well-formed entries, the first one per id, reading either key spelling. */
 function validAnnotations(entries: readonly unknown[]): Annotation[] {
   const seen = new Set<string>();
-  return entries.filter((entry): entry is Annotation => {
+  return entries.map(fromLegacyAnnotation).filter((entry): entry is Annotation => {
     if (!isAnnotation(entry) || seen.has(entry.id)) return false;
     seen.add(entry.id);
     return true;
   });
 }
 
+/** Spells a release-0.10 entry with the current keys; any other value passes through. */
+function fromLegacyAnnotation(entry: unknown): unknown {
+  if (!isRecord(entry) || entry.chapter === undefined) return entry;
+  const { chapter, start, end, ...rest } = entry;
+  return {
+    ...rest,
+    chapterIndex: chapter,
+    start: fromLegacyAnchor(start),
+    end: fromLegacyAnchor(end),
+  };
+}
+
+function fromLegacyAnchor(anchor: unknown): unknown {
+  if (!isRecord(anchor) || anchor.paragraph === undefined) return anchor;
+  const { paragraph, ...rest } = anchor;
+  return { ...rest, paragraphIndex: paragraph };
+}
+
 function isAnnotation(value: unknown): value is Annotation {
   if (!isRecord(value)) return false;
-  if (typeof value.id !== 'string' || !value.id || !isNonNegativeInteger(value.chapter)) {
+  if (typeof value.id !== 'string' || !value.id || !isNonNegativeInteger(value.chapterIndex)) {
     return false;
   }
   if (!(isAnchor(value.start) && isAnchor(value.end))) return false;
   if (
-    value.end.paragraph < value.start.paragraph ||
-    (value.end.paragraph === value.start.paragraph && value.end.charIndex < value.start.charIndex)
+    value.end.paragraphIndex < value.start.paragraphIndex ||
+    (value.end.paragraphIndex === value.start.paragraphIndex &&
+      value.end.charIndex < value.start.charIndex)
   ) {
     return false;
   }
@@ -210,7 +245,7 @@ function isAnnotation(value: unknown): value is Annotation {
 function isAnchor(value: unknown): value is InChapterAnchor {
   return (
     isRecord(value) &&
-    isNonNegativeInteger(value.paragraph) &&
+    isNonNegativeInteger(value.paragraphIndex) &&
     isNonNegativeInteger(value.charIndex)
   );
 }
@@ -232,11 +267,19 @@ export function serializeAnnotations(annotations: readonly Annotation[]): string
   return JSON.stringify(payload);
 }
 
-/** Sorts annotations by chapter, paragraph, then character index. */
-export function sortAnnotations(annotations: readonly Annotation[]): Annotation[] {
+/**
+ * Returns a new array of the annotations ordered by chapter, then by the
+ * paragraph and character index where each starts.
+ *
+ * The input is not modified. The order does not consider `end`, so annotations
+ * starting at the same position keep their input order.
+ */
+export function toSortedAnnotations(annotations: readonly Annotation[]): Annotation[] {
   return [...annotations].sort((a, b) => {
-    if (a.chapter !== b.chapter) return a.chapter - b.chapter;
-    if (a.start.paragraph !== b.start.paragraph) return a.start.paragraph - b.start.paragraph;
+    if (a.chapterIndex !== b.chapterIndex) return a.chapterIndex - b.chapterIndex;
+    if (a.start.paragraphIndex !== b.start.paragraphIndex) {
+      return a.start.paragraphIndex - b.start.paragraphIndex;
+    }
     return a.start.charIndex - b.start.charIndex;
   });
 }

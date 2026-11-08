@@ -1,18 +1,23 @@
 import JSZip from 'jszip';
+import { MejiroError } from '../errors.js';
+import type { BinaryInput } from '../types.js';
 import { CHAPTER_TITLE_ID } from './chapter-markup.js';
 import {
+  assertBinaryInput,
   assertEpubArchiveWithinLimits,
   assertEpubInputSize,
   EpubExpansionBudget,
+  type EpubParseLimits,
   type EpubParseOptions,
   resolveEpubParseLimits,
+  throwIfAborted,
 } from './limits.js';
 import { extractRubyContent, isNonRenderedElement } from './ruby-extractor.js';
 import type { AnnotatedParagraph, EpubBook, EpubChapter } from './types.js';
-import { stripStylesheetLinks } from './xml-utils.js';
+import { assertEpubDomAvailable, stripStylesheetLinks } from './xml-utils.js';
 
 /**
- * Parses an EPUB file from an ArrayBuffer.
+ * Parses an EPUB file.
  *
  * Reads the ZIP structure, extracts OPF metadata (title, author),
  * follows the spine order, and extracts ruby-annotated paragraphs
@@ -21,29 +26,32 @@ import { stripStylesheetLinks } from './xml-utils.js';
  * Requires host DOM globals (`DOMParser`, `XMLSerializer`, `Node`). Node and
  * SSR runtimes must register a DOM implementation (happy-dom, jsdom) first.
  *
- * @param data - EPUB file contents as ArrayBuffer.
- * @param options - Resource limits applied while reading the archive.
+ * @param data - EPUB file contents. A `Uint8Array` (a Node `Buffer` included)
+ *   is read through its own view. The input is neither retained nor modified.
+ * @param options - Resource limits applied while reading the archive, and a
+ *   signal that cancels the parse.
  * @returns Parsed book with chapters and ruby annotations.
- * @throws When the host has no DOM implementation, or the archive is not a readable EPUB.
+ * @throws {TypeError} When `data` is not an `ArrayBuffer` or `Uint8Array`, or
+ *   `options.signal` is not an `AbortSignal`.
+ * @throws {RangeError} When a limit in `options.limits` is not a positive integer.
+ * @throws {MejiroError} `epub-invalid-archive` when `data` is not a readable ZIP
+ *   archive, `epub-invalid-package` when the container, package document or a
+ *   chapter is malformed or no chapter is readable, `epub-limit-exceeded` when
+ *   the archive passes one of the limits, `dom-unavailable` when the host has
+ *   no DOM implementation.
+ * @throws The `signal.reason` when `options.signal` aborts.
  */
 export async function parseEpub(
-  data: ArrayBuffer,
+  data: BinaryInput,
   options: EpubParseOptions = {},
 ): Promise<EpubBook> {
   const limits = resolveEpubParseLimits(options);
+  assertBinaryInput(data);
+  const { signal } = options;
+  throwIfAborted(signal);
   assertEpubInputSize(data.byteLength, limits);
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(data);
-  } catch (err) {
-    // JSZip's native messages ("Can't find end of central directory…") leak
-    // internal terminology. Wrap so the consumer sees a stable, user-friendly
-    // failure mode for arbitrary non-EPUB input (corrupt buffer, wrong file
-    // type, truncated upload).
-    throw new Error(`Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  assertEpubArchiveWithinLimits(data, zip, limits);
-  const budget = new EpubExpansionBudget(limits);
+  const zip = await openEpubArchive(data, limits, signal);
+  const budget = new EpubExpansionBudget(limits, signal);
 
   // 1. Read container.xml to find rootfile path
   const containerXml = await readZipText(zip, budget, 'META-INF/container.xml');
@@ -66,6 +74,7 @@ export async function parseEpub(
   const chapters: EpubChapter[] = [];
   for (const href of spineHrefs) {
     const xhtml = await readZipTextOrNull(zip, budget, href);
+    throwIfAborted(signal);
     if (xhtml == null) continue;
     let paragraphs: AnnotatedParagraph[];
     try {
@@ -73,8 +82,10 @@ export async function parseEpub(
     } catch (err) {
       // Wrap so the failing chapter is identifiable. Bare XHTML parser errors
       // would otherwise leave the consumer guessing which spine entry broke.
-      throw new Error(
+      throw new MejiroError(
+        'epub-invalid-package',
         `Failed to parse chapter XHTML: ${href} (${err instanceof Error ? err.message : String(err)})`,
+        { cause: err },
       );
     }
     const chapterTitle = extractChapterTitleOrUndefined(xhtml) ?? navTitles.get(href);
@@ -85,7 +96,7 @@ export async function parseEpub(
   }
 
   if (chapters.length === 0) {
-    throw new Error('EPUB has no readable chapters');
+    throw new MejiroError('epub-invalid-package', 'EPUB has no readable chapters');
   }
 
   return {
@@ -96,10 +107,43 @@ export async function parseEpub(
   };
 }
 
+/**
+ * @internal
+ * Opens `data` as a ZIP archive and checks its self-declared sizes against
+ * `limits`. Shared by the read-only and editable imports so both reject the
+ * same inputs for the same reason.
+ *
+ * @throws {MejiroError} `epub-invalid-archive` when `data` is not a readable
+ *   ZIP archive, `epub-limit-exceeded` when its declared sizes pass a limit.
+ */
+export async function openEpubArchive(
+  data: BinaryInput,
+  limits: EpubParseLimits,
+  signal?: AbortSignal,
+): Promise<JSZip> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(data);
+  } catch (err) {
+    // JSZip's native messages ("Can't find end of central directory…") leak
+    // internal terminology. Wrap so the consumer sees a stable, user-friendly
+    // failure mode for arbitrary non-EPUB input (corrupt buffer, wrong file
+    // type, truncated upload).
+    throw new MejiroError(
+      'epub-invalid-archive',
+      `Not a valid EPUB file: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
+  }
+  throwIfAborted(signal);
+  assertEpubArchiveWithinLimits(data, zip, limits);
+  return zip;
+}
+
 /** Reads a text file from the ZIP archive, charged against the expansion budget. */
 async function readZipText(zip: JSZip, budget: EpubExpansionBudget, path: string): Promise<string> {
   const file = zip.file(path);
-  if (!file) throw new Error(`Missing file in EPUB: ${path}`);
+  if (!file) throw new MejiroError('epub-invalid-package', `Missing file in EPUB: ${path}`);
   return budget.readText(file);
 }
 
@@ -112,31 +156,13 @@ async function readZipTextOrNull(
   return file ? budget.readText(file) : null;
 }
 
-/**
- * @internal
- * Fails with a mejiro error naming the missing host globals, so a Node or SSR
- * caller sees what to register instead of a bare `ReferenceError`.
- *
- * @throws When the host provides no DOM implementation.
- */
-export function assertEpubDomAvailable(): void {
-  const missing: string[] = [];
-  if (typeof DOMParser === 'undefined') missing.push('DOMParser');
-  if (typeof XMLSerializer === 'undefined') missing.push('XMLSerializer');
-  if (typeof Node === 'undefined') missing.push('Node');
-  if (missing.length === 0) return;
-  throw new Error(
-    `EPUB parsing requires a DOM implementation providing ${missing.join(', ')}. Node and SSR runtimes must register one globally (for example from happy-dom or jsdom) before calling mejiro/epub.`,
-  );
-}
-
 /** Parses XML string into a Document. */
 function parseXml(xml: string): Document {
   assertEpubDomAvailable();
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length > 0) {
-    throw new Error('Failed to parse XML document');
+    throw new MejiroError('epub-invalid-package', 'Failed to parse XML document');
   }
   return doc;
 }
@@ -147,7 +173,8 @@ function parseXml(xml: string): Document {
  * string, so it is decoded by the same {@link resolveZipPath} as manifest hrefs.
  *
  * @returns The OPF's ZIP path and its directory, with a trailing slash.
- * @throws When container.xml names no rootfile or its path is malformed.
+ * @throws {MejiroError} `epub-invalid-package` when container.xml is malformed,
+ *   names no rootfile or its path is malformed.
  */
 export function packageDocumentLocation(containerXml: string): {
   rootfilePath: string;
@@ -156,7 +183,9 @@ export function packageDocumentLocation(containerXml: string): {
   const doc = parseXml(containerXml);
   const rootfile = firstElementByName(doc, 'rootfile');
   const fullPath = rootfile?.getAttribute('full-path');
-  if (!fullPath) throw new Error('Cannot find rootfile path in container.xml');
+  if (!fullPath) {
+    throw new MejiroError('epub-invalid-package', 'Cannot find rootfile path in container.xml');
+  }
   const rootfilePath = resolveZipPath('', fullPath);
   const opfDir = rootfilePath.includes('/')
     ? rootfilePath.substring(0, rootfilePath.lastIndexOf('/') + 1)
@@ -496,7 +525,8 @@ function childElementsByName(parent: Element | undefined, localName: string): El
  * @param baseDir - Directory the href is relative to, with a trailing slash.
  * @param href - Href as written in the source document.
  * @returns Normalized ZIP path.
- * @throws When the href contains invalid percent encoding.
+ * @throws {MejiroError} `epub-invalid-package` when the href contains invalid
+ *   percent encoding.
  */
 export function resolveZipPath(baseDir: string, href: string): string {
   const hrefPath = href.split('#', 1)[0].split('?', 1)[0];
@@ -504,7 +534,7 @@ export function resolveZipPath(baseDir: string, href: string): string {
   try {
     decodedHref = decodeURIComponent(hrefPath);
   } catch {
-    throw new Error(`Invalid EPUB href: ${href}`);
+    throw new MejiroError('epub-invalid-package', `Invalid EPUB href: ${href}`);
   }
   const parts = `${baseDir}${decodedHref}`.split('/');
   const normalized: string[] = [];

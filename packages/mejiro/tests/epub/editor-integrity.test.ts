@@ -3,7 +3,26 @@
  */
 import JSZip from 'jszip';
 import { describe, expect, it } from 'vitest';
-import { EditableEpub, EpubProject, parseEpub } from '../../src/epub/index.js';
+import {
+  type EditableEpub,
+  type EditableEpubChapter,
+  type EditableParagraphBlock,
+  EpubProject,
+  parseEditableEpub,
+  parseEpub,
+} from '../../src/epub/index.js';
+
+/** Paragraph blocks of a chapter, in reading order. */
+function paragraphsOf(chapter: EditableEpubChapter): EditableParagraphBlock[] {
+  return chapter.blocks.filter(
+    (block): block is EditableParagraphBlock => block.kind === 'paragraph',
+  );
+}
+
+/** Id of the `n`-th paragraph block of a chapter. */
+function paragraphId(editor: EditableEpub, chapterIndex: number, n: number): string {
+  return paragraphsOf(editor.chapters[chapterIndex])[n].id;
+}
 
 async function makeEpub(files: Record<string, string | Uint8Array>): Promise<ArrayBuffer> {
   const zip = new JSZip();
@@ -30,7 +49,7 @@ async function loadChapter(
   body: string,
   extra: Record<string, string | Uint8Array> = {},
 ): Promise<EditableEpub> {
-  return EditableEpub.load(
+  return parseEditableEpub(
     await makeEpub({
       'META-INF/container.xml': containerXml(),
       'OPS/package.opf': opfXml(),
@@ -40,7 +59,7 @@ async function loadChapter(
   );
 }
 
-async function chapterOf(out: ArrayBuffer, path = 'OPS/Text/chapter.xhtml'): Promise<string> {
+async function chapterOf(out: Uint8Array, path = 'OPS/Text/chapter.xhtml'): Promise<string> {
   const zip = await JSZip.loadAsync(out);
   return (await zip.file(path)?.async('string')) ?? '';
 }
@@ -69,20 +88,20 @@ async function projectParagraphTexts(body: string): Promise<string[]> {
 describe('EditableEpub export shares the project serializer', () => {
   it('writes a newline as <br> so an edited chapter reloads with it, as EpubProject does', async () => {
     const editor = await loadChapter('<p>前<br/>後</p>');
-    expect(editor.chapters[0].paragraphs[0].text).toBe('前\n後');
-    editor.updateParagraph(0, 0, { text: 'a\nb' });
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('前\n後');
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: 'a\nb' });
 
     const out = await editor.export();
     expect(await chapterOf(out)).toMatch(/<p>a<br ?\/>b<\/p>/u);
-    const reloaded = await EditableEpub.load(out);
-    expect(reloaded.chapters[0].paragraphs[0].text).toBe('a\nb');
+    const reloaded = await parseEditableEpub(out);
+    expect(paragraphsOf(reloaded.chapters[0])[0].text).toBe('a\nb');
     expect(await projectParagraphTexts('a\nb')).toEqual(['a\nb']);
   });
 
   it('strips XML-illegal characters from text and attributes, matching EpubProject', async () => {
     const editor = await loadChapter('<p>本文</p>');
     const dirty = `a\u0001b\uD800c\uFFFEd`;
-    editor.updateParagraph(0, 0, { text: dirty });
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: dirty });
     editor.addImage(0, {
       filename: 'f.png',
       data: new Uint8Array([1]),
@@ -103,26 +122,21 @@ describe('EditableEpub export shares the project serializer', () => {
 
 describe('EditableEpub paragraph blocks are built by one normalizer', () => {
   it('rejects a heading without a level and levels outside integer 1-6 on every mutator', async () => {
-    const editor = await loadChapter('<p>本文</p>');
+    const editor = await loadChapter('<h2>見出し</h2><p>本文</p>');
+    const source = await chapterOf(await editor.export());
+    const headingId = paragraphId(editor, 0, 0);
     for (const level of [2.5, 9, 0, Number.NaN]) {
+      const headingLevel = level as 1;
       expect(() =>
-        editor.insertParagraph(0, 0, {
-          text: '見出し',
-          inlineAnnotations: [],
-          headingLevel: level,
-        }),
-      ).toThrow(/headingLevel/u);
-      expect(() => editor.updateParagraph(0, 0, { headingLevel: level })).toThrow(/headingLevel/u);
+        editor.insertParagraph(0, 0, { text: '見出し', paragraphKind: 'heading', headingLevel }),
+      ).toThrow(RangeError);
+      expect(() => editor.updateParagraph(0, headingId, { headingLevel })).toThrow(RangeError);
     }
     expect(() =>
-      editor.insertParagraph(0, 0, {
-        text: '見出し',
-        inlineAnnotations: [],
-        paragraphKind: 'heading',
-      }),
-    ).toThrow(/headingLevel/u);
+      editor.insertParagraph(0, 0, { text: '見出し', paragraphKind: 'heading' } as never),
+    ).toThrow(TypeError);
     expect(editor.history.depth).toBe(0);
-    expect(editor.chapters[0].isDirty).toBeFalsy();
+    expect(await chapterOf(await editor.export())).toBe(source);
 
     editor.insertParagraph(0, 0, {
       text: '見出し',
@@ -136,35 +150,38 @@ describe('EditableEpub paragraph blocks are built by one normalizer', () => {
   it('drops invalid annotations on insert exactly as updateParagraph does', async () => {
     const editor = await loadChapter('<p>本文</p>');
     const annotations = [
-      { kind: 'em' as const, startIndex: 0, endIndex: 2 },
-      { kind: 'em' as const, startIndex: 1, endIndex: 9 },
-      { kind: 'strong' as const, startIndex: 0.5, endIndex: 1 },
+      { type: 'em' as const, startIndex: 0, endIndex: 2 },
+      { type: 'em' as const, startIndex: 1, endIndex: 9 },
+      { type: 'strong' as const, startIndex: 0.5, endIndex: 1 },
     ];
     editor.insertParagraph(0, 0, { text: '挿入文', inlineAnnotations: annotations });
-    editor.updateParagraph(0, 1, { text: '更新文', inlineAnnotations: annotations });
-    expect(editor.chapters[0].paragraphs[0].inlineAnnotations).toEqual([annotations[0]]);
-    expect(editor.chapters[0].paragraphs[1].inlineAnnotations).toEqual([annotations[0]]);
+    editor.updateParagraph(0, paragraphId(editor, 0, 1), {
+      text: '更新文',
+      inlineAnnotations: annotations,
+    });
+    expect(paragraphsOf(editor.chapters[0])[0].inlineAnnotations).toEqual([annotations[0]]);
+    expect(paragraphsOf(editor.chapters[0])[1].inlineAnnotations).toEqual([annotations[0]]);
   });
 
   it('splits at a truncated integer index and rejects a non-finite one before recording', async () => {
     const editor = await loadChapter('<p>あいうえ</p>');
     const block = editor.chapters[0].blocks[0];
-    editor.setInlineAnnotations(0, 0, [
-      { kind: 'em', startIndex: 1, endIndex: 2 },
-      { kind: 'strong', startIndex: 2, endIndex: 4 },
+    editor.setInlineAnnotations(0, block.id, [
+      { type: 'em', startIndex: 1, endIndex: 2 },
+      { type: 'strong', startIndex: 2, endIndex: 4 },
     ]);
     const depth = editor.history.depth;
     expect(() => editor.splitParagraph(0, block.id, Number.NaN)).toThrow(/split index/u);
     expect(editor.history.depth).toBe(depth);
 
     editor.splitParagraph(0, block.id, 1.5);
-    const [left, right] = editor.chapters[0].paragraphs;
+    const [left, right] = paragraphsOf(editor.chapters[0]);
     expect(left.text).toBe('あ');
     expect(right.text).toBe('いうえ');
     expect(left.inlineAnnotations).toEqual([]);
     expect(right.inlineAnnotations).toEqual([
-      { kind: 'em', startIndex: 0, endIndex: 1 },
-      { kind: 'strong', startIndex: 1, endIndex: 3 },
+      { type: 'em', startIndex: 0, endIndex: 1 },
+      { type: 'strong', startIndex: 1, endIndex: 3 },
     ]);
   });
 });
@@ -179,8 +196,8 @@ describe('edited chapters either round-trip a construct or fail naming the chapt
     expect(editor.chapters[0].blocks.map((b) => b.kind === 'paragraph' && b.paragraphKind)).toEqual(
       [undefined, 'blockquote', 'blockquote'],
     );
-    editor.updateParagraph(0, 0, { text: '改稿' });
-    const reloaded = await EditableEpub.load(await editor.export());
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '改稿' });
+    const reloaded = await parseEditableEpub(await editor.export());
     expect(
       reloaded.chapters[0].blocks.map((b) => b.kind === 'paragraph' && [b.text, b.paragraphKind]),
     ).toEqual([
@@ -199,7 +216,7 @@ describe('edited chapters either round-trip a construct or fail naming the chapt
       '<p>本文</p><figure><img src="../Images/g.png" alt="一" /><p>図の外の文</p></figure>',
     ];
     for (const body of cases) {
-      const editor = await EditableEpub.load(
+      const editor = await parseEditableEpub(
         await makeEpub({
           'META-INF/container.xml': containerXml(),
           'OPS/package.opf': opf,
@@ -208,17 +225,17 @@ describe('edited chapters either round-trip a construct or fail naming the chapt
         }),
       );
       // Unedited, the chapter is written back verbatim.
-      await expect(editor.export()).resolves.toBeInstanceOf(ArrayBuffer);
-      editor.updateParagraph(0, 0, { text: '編集' });
+      await expect(editor.export()).resolves.toBeInstanceOf(Uint8Array);
+      editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集' });
       await expect(editor.export()).rejects.toThrow(failsNamingChapter);
     }
   });
 
   it('loads a book whose image src has a malformed percent escape', async () => {
     const editor = await loadChapter('<p>本文</p><p><img src="a%zz.png" alt="壊" /></p>');
-    expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['本文']);
-    await expect(editor.export()).resolves.toBeInstanceOf(ArrayBuffer);
-    editor.updateParagraph(0, 0, { text: '編集' });
+    expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(['本文']);
+    await expect(editor.export()).resolves.toBeInstanceOf(Uint8Array);
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '編集' });
     await expect(editor.export()).rejects.toThrow(failsNamingChapter);
   });
 });
@@ -235,10 +252,10 @@ describe('import fidelity shared by parseEpub and EditableEpub.load', () => {
     const book = await parseEpub(data);
     expect(book.chapters[0].paragraphs[1].text).toBe('line 1\nline 2\n  line 3');
 
-    const editor = await EditableEpub.load(data);
-    expect(editor.chapters[0].paragraphs[1].text).toBe('line 1\nline 2\n  line 3');
-    editor.updateParagraph(0, 0, { text: '改稿' });
-    const reloaded = await EditableEpub.load(await editor.export());
+    const editor = await parseEditableEpub(data);
+    expect(paragraphsOf(editor.chapters[0])[1].text).toBe('line 1\nline 2\n  line 3');
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '改稿' });
+    const reloaded = await parseEditableEpub(await editor.export());
     const block = reloaded.chapters[0].blocks[1];
     expect(block).toMatchObject({ text: 'line 1\nline 2\n  line 3', paragraphKind: 'pre' });
   });
@@ -257,8 +274,8 @@ describe('import fidelity shared by parseEpub and EditableEpub.load', () => {
       });
       const book = await parseEpub(data);
       expect(book.chapters[0].paragraphs.map((p) => p.text)).toEqual(['vis']);
-      const editor = await EditableEpub.load(data);
-      expect(editor.chapters[0].paragraphs.map((p) => p.text)).toEqual(['vis']);
+      const editor = await parseEditableEpub(data);
+      expect(paragraphsOf(editor.chapters[0]).map((p) => p.text)).toEqual(['vis']);
     }
   });
 
@@ -269,11 +286,11 @@ describe('import fidelity shared by parseEpub and EditableEpub.load', () => {
       'my book/Text/chapter.xhtml': chapterXhtml('<p>本文</p>'),
     });
     expect((await parseEpub(data)).chapters[0].paragraphs[0].text).toBe('本文');
-    const editor = await EditableEpub.load(data);
-    expect(editor.chapters[0].paragraphs[0].text).toBe('本文');
-    editor.updateParagraph(0, 0, { text: '改稿' });
+    const editor = await parseEditableEpub(data);
+    expect(paragraphsOf(editor.chapters[0])[0].text).toBe('本文');
+    editor.updateParagraph(0, paragraphId(editor, 0, 0), { text: '改稿' });
     const out = await editor.export();
     expect(await chapterOf(out, 'my book/Text/chapter.xhtml')).toContain('<p>改稿</p>');
-    expect((await EditableEpub.load(out)).chapters[0].paragraphs[0].text).toBe('改稿');
+    expect(paragraphsOf((await parseEditableEpub(out)).chapters[0])[0].text).toBe('改稿');
   });
 });

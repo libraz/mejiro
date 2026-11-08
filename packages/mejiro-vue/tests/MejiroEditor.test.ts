@@ -13,72 +13,60 @@ function fakeEditableBook(title = 'Editable'): EditableEpubBook {
       {
         title: 'Ch1',
         href: 'OPS/Text/ch1.xhtml',
-        paragraphs: [{ text: 'one', inlineAnnotations: [] }],
+        originalXhtml: '',
         blocks: [{ kind: 'paragraph', id: 'b-1', text: 'one', inlineAnnotations: [] }],
         imageAssets: new Map(),
       },
     ],
-    packageData: {
-      rootfilePath: 'OPS/package.opf',
-      opfDir: 'OPS/',
-      opfXml: '',
-      files: new Map(),
-    },
   } as unknown as EditableEpubBook;
 }
 
+/** Editable stub over `epub` whose commands are spies. */
+function stubEditor(epub: EditableEpubBook): EditableEpub {
+  return {
+    epub,
+    title: epub.title,
+    author: epub.author,
+    subscribe: () => () => {},
+    updateParagraph: vi.fn(),
+    setInlineAnnotations: vi.fn(),
+    transaction: (fn: () => void) => fn(),
+    addImage: vi.fn(),
+    export: vi.fn(async () => new Uint8Array(8)),
+  } as unknown as EditableEpub;
+}
+
 vi.mock('@libraz/mejiro/epub', async (importOriginal) => {
-  // Only the load/export entry points are faked; the module's pure helpers
-  // (the book clone the preview relies on) stay real.
+  // Only the load entry point is faked; the module's pure helpers (the book
+  // projection the preview relies on) stay real.
   const actual = await importOriginal<typeof import('@libraz/mejiro/epub')>();
-
-  function fakeEditorForBuffer(buffer: ArrayBuffer): EditableEpub {
-    const marker = new Uint8Array(buffer)[0];
-    const title = marker === 1 ? 'First' : marker === 2 ? 'Second' : 'Editable';
-    const book = fakeEditableBook(title);
-    return {
-      book,
-      title: book.title,
-      author: book.author,
-      updateParagraph: vi.fn(),
-      addImage: vi.fn(),
-      export: vi.fn(async () => new ArrayBuffer(8)),
-    } as unknown as EditableEpub;
-  }
-
   return {
     ...actual,
-    // biome-ignore lint/style/useNamingConvention: mocked export name matches the public class.
-    EditableEpub: {
-      load: vi.fn(async (buffer: ArrayBuffer) => fakeEditorForBuffer(buffer)),
-    },
-    exportEditableEpub: vi.fn(async () => new ArrayBuffer(8)),
+    parseEditableEpub: vi.fn(async (bytes: ArrayBuffer | Uint8Array) => {
+      const marker = (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes))[0];
+      const title = marker === 1 ? 'First' : marker === 2 ? 'Second' : 'Editable';
+      return stubEditor(fakeEditableBook(title));
+    }),
   };
 });
 
-import {
-  EditableEpub as RuntimeEditableEpub,
-  exportEditableEpub as runtimeExportEditableEpub,
-} from '@libraz/mejiro/epub';
+import { parseEditableEpub as runtimeParseEditableEpub } from '@libraz/mejiro/epub';
 import { enMessages, MejiroI18nProvider } from '../src/i18n.js';
 import { MejiroEditor } from '../src/MejiroEditor.js';
 
 /**
  * Editable stub with two paragraphs whose `updateParagraph` writes through to
- * the book, the way the core editor re-syncs its paragraph mirror.
+ * the block it names, the way the core editor applies a patch.
  */
 function twoParagraphEditor(): EditableEpub {
-  const book = {
+  const epub = {
     title: 'Two',
     author: 'A',
     chapters: [
       {
         title: 'Ch1',
         href: 'OPS/Text/ch1.xhtml',
-        paragraphs: [
-          { text: 'one', inlineAnnotations: [] },
-          { text: 'two', inlineAnnotations: [] },
-        ],
+        originalXhtml: '',
         blocks: [
           { kind: 'paragraph', id: 'b-1', text: 'one', inlineAnnotations: [] },
           { kind: 'paragraph', id: 'b-2', text: 'two', inlineAnnotations: [] },
@@ -86,29 +74,17 @@ function twoParagraphEditor(): EditableEpub {
         imageAssets: new Map(),
       },
     ],
-    packageData: {
-      rootfilePath: 'OPS/package.opf',
-      opfDir: 'OPS/',
-      opfXml: '',
-      files: new Map(),
-    },
   };
-  return {
-    book,
-    title: book.title,
-    author: book.author,
-    updateParagraph: vi.fn((chapter: number, paragraph: number, patch: { text: string }) => {
-      const target = book.chapters[chapter];
-      target.paragraphs = target.paragraphs.map((entry, index) =>
-        index === paragraph ? { ...entry, text: patch.text } : entry,
-      );
-      target.blocks = target.blocks.map((block, index) =>
-        index === paragraph ? { ...block, text: patch.text } : block,
-      );
-    }),
-    addImage: vi.fn(),
-    export: vi.fn(async () => new ArrayBuffer(8)),
-  } as unknown as EditableEpub;
+  const stub = stubEditor(epub as unknown as EditableEpubBook);
+  vi.mocked(stub.updateParagraph).mockImplementation((chapter, blockId, patch) => {
+    const target = epub.chapters[chapter];
+    target.blocks = target.blocks.map((block) =>
+      block.id === blockId && 'text' in patch
+        ? { ...block, text: patch.text ?? block.text }
+        : block,
+    );
+  });
+  return stub;
 }
 
 async function renderLoaded(props: Record<string, unknown> = {}) {
@@ -124,7 +100,7 @@ async function renderLoaded(props: Record<string, unknown> = {}) {
 
 /** Renders the editor against a specific editable stub instead of the default fake. */
 async function renderWithEditor(stub: EditableEpub, props: Record<string, unknown> = {}) {
-  const loadMock = vi.mocked(RuntimeEditableEpub.load);
+  const loadMock = vi.mocked(runtimeParseEditableEpub);
   const previousLoad = loadMock.getMockImplementation();
   loadMock.mockImplementation(async () => stub);
   const rendered = await renderLoaded(props);
@@ -177,8 +153,8 @@ describe('MejiroEditor (Vue) — section toggles', () => {
     fetchSpy.mockRestore();
   });
 
-  it('enableExport={false} hides Export button', async () => {
-    const { container, fetchSpy } = await renderLoaded({ enableExport: false });
+  it('showExportButton={false} hides Export button', async () => {
+    const { container, fetchSpy } = await renderLoaded({ showExportButton: false });
     expect(container.querySelector('.mejiro-editor-export')).toBeNull();
     fetchSpy.mockRestore();
   });
@@ -214,8 +190,8 @@ describe('MejiroEditor (Vue) — section toggles', () => {
     );
     await fireEvent.click(paragraphButtons[1] as HTMLButtonElement);
 
-    expect(stub.updateParagraph).toHaveBeenCalledWith(0, 0, { text: 'one edited' });
-    expect(stub.book.chapters[0].paragraphs[0].text).toBe('one edited');
+    expect(stub.updateParagraph).toHaveBeenCalledWith(0, 'b-1', { text: 'one edited' });
+    expect(stub.epub.chapters[0].blocks[0]).toMatchObject({ text: 'one edited' });
     await waitFor(() =>
       expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('two'),
     );
@@ -243,8 +219,9 @@ describe('MejiroEditor (Vue) — section toggles', () => {
   it('forwards the limits prop to the EPUB loader', async () => {
     const { fetchSpy } = await renderLoaded({ limits: { maxTotalBytes: 4096 } });
 
-    expect(RuntimeEditableEpub.load).toHaveBeenLastCalledWith(expect.anything(), {
+    expect(runtimeParseEditableEpub).toHaveBeenLastCalledWith(expect.anything(), {
       limits: { maxTotalBytes: 4096 },
+      signal: expect.any(AbortSignal),
     });
     fetchSpy.mockRestore();
   });
@@ -261,7 +238,7 @@ describe('MejiroEditor (Vue) — section toggles', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation((url) => {
       return url === '/first' ? first : second;
     });
-    const loadCallsBefore = vi.mocked(RuntimeEditableEpub.load).mock.calls.length;
+    const loadCallsBefore = vi.mocked(runtimeParseEditableEpub).mock.calls.length;
     const { container, rerender } = render(MejiroEditor, { props: { epubUrl: '/first' } });
 
     await rerender({ epubUrl: '/second' });
@@ -274,42 +251,29 @@ describe('MejiroEditor (Vue) — section toggles', () => {
     resolveFirst(new Response(new Uint8Array([1]).buffer, { status: 200 }));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(RuntimeEditableEpub.load).toHaveBeenCalledTimes(loadCallsBefore + 1);
+    expect(runtimeParseEditableEpub).toHaveBeenCalledTimes(loadCallsBefore + 1);
     expect(container.querySelector('.mejiro-editor-head strong')?.textContent).toBe('Second');
     fetchSpy.mockRestore();
   });
 });
 
-describe('MejiroEditor (Vue) — onBeforeExport', () => {
-  it('suppresses the download when onBeforeExport returns false', async () => {
-    const onBeforeExport = vi.fn(() => false);
+describe('MejiroEditor (Vue) — export download', () => {
+  it('suppresses the download when exportPolicy.download is false', async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    const { container, fetchSpy } = await renderLoaded({ onBeforeExport });
-    const exportBtn = container.querySelector('.mejiro-editor-export') as HTMLButtonElement;
-    await fireEvent.click(exportBtn);
-    await waitFor(() => expect(onBeforeExport).toHaveBeenCalled());
+    const { container, emitted, fetchSpy } = await renderLoaded({
+      exportPolicy: { download: false },
+    });
+    await fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
+    await waitFor(() => expect(emitted().export).toHaveLength(1));
     expect(clickSpy).not.toHaveBeenCalled();
     clickSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 
-  it('triggers the download when onBeforeExport is omitted', async () => {
+  it('triggers the download when no export policy is given', async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     const { container, fetchSpy } = await renderLoaded();
-    const exportBtn = container.querySelector('.mejiro-editor-export') as HTMLButtonElement;
-    await fireEvent.click(exportBtn);
-    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
-    clickSpy.mockRestore();
-    fetchSpy.mockRestore();
-  });
-
-  it('triggers the download when onBeforeExport returns undefined', async () => {
-    const onBeforeExport = vi.fn(() => undefined);
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    const { container, fetchSpy } = await renderLoaded({ onBeforeExport });
-    const exportBtn = container.querySelector('.mejiro-editor-export') as HTMLButtonElement;
-    await fireEvent.click(exportBtn);
-    await waitFor(() => expect(onBeforeExport).toHaveBeenCalled());
+    await fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
     await waitFor(() => expect(clickSpy).toHaveBeenCalled());
     clickSpy.mockRestore();
     fetchSpy.mockRestore();
@@ -317,9 +281,7 @@ describe('MejiroEditor (Vue) — onBeforeExport', () => {
 });
 
 describe('MejiroEditor (Vue) — loaded document', () => {
-  it('exports the loaded document itself, not a reactive wrapper around it', async () => {
-    const exportSpy = vi.mocked(runtimeExportEditableEpub);
-    exportSpy.mockClear();
+  it('exports through the loaded editor itself, not a reactive wrapper around it', async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     let loaded: EditableEpub | undefined;
     const { container, fetchSpy } = await renderLoaded({
@@ -327,55 +289,46 @@ describe('MejiroEditor (Vue) — loaded document', () => {
         loaded = editor;
       },
     });
+    const exportSpy = vi.mocked((loaded as EditableEpub).export);
+    let receiver: unknown;
+    exportSpy.mockImplementation(async function (this: unknown) {
+      receiver = this;
+      return new Uint8Array(8);
+    });
 
     await fireEvent.click(container.querySelector('.mejiro-editor-export') as HTMLButtonElement);
     await waitFor(() => expect(exportSpy).toHaveBeenCalled());
 
-    const exported = exportSpy.mock.calls[0][0];
-    expect(exported).toBe((loaded as EditableEpub).book);
-    expect(isReactive(exported)).toBe(false);
+    expect(receiver).toBe(loaded);
+    expect(isReactive(receiver)).toBe(false);
 
     clickSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 });
 
-/** Watermark paragraphs of one chapter of an exported book. */
-function watermarkParagraphs(book: EditableEpubBook, chapterIndex: number): string[] {
-  return book.chapters[chapterIndex].blocks.flatMap((block) =>
-    block.kind === 'paragraph' && block.text.startsWith('[mejiro-watermark]') ? [block.text] : [],
-  );
-}
-
 describe('MejiroEditor (Vue) — exportPolicy.watermark', () => {
-  it('watermarks each export without mutating the edited document', async () => {
-    const exportSpy = vi.mocked(runtimeExportEditableEpub);
-    exportSpy.mockClear();
+  it('asks the export for the marked watermark without touching the edited document', async () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     let loaded: EditableEpub | undefined;
     const { container, fetchSpy } = await renderLoaded({
-      exportPolicy: { watermark: { text: 'reader@example.com' } },
+      exportPolicy: { watermark: 'reader@example.com' },
       onLoad: (editor: EditableEpub) => {
         loaded = editor;
       },
     });
-    const blocksBefore = (loaded as EditableEpub).book.chapters.map(
-      (chapter) => chapter.blocks.length,
-    );
+    const editor = loaded as EditableEpub;
+    const blocksBefore = editor.epub.chapters.map((chapter) => chapter.blocks.length);
 
     const exportBtn = container.querySelector('.mejiro-editor-export') as HTMLButtonElement;
     for (let run = 1; run <= 3; run++) {
       await fireEvent.click(exportBtn);
-      await waitFor(() => expect(exportSpy).toHaveBeenCalledTimes(run));
+      await waitFor(() => expect(editor.export).toHaveBeenCalledTimes(run));
     }
 
-    const book = (loaded as EditableEpub).book;
-    expect(book.chapters.map((chapter) => chapter.blocks.length)).toEqual(blocksBefore);
-    expect(watermarkParagraphs(book, 0)).toEqual([]);
-    expect(exportSpy).toHaveBeenCalledTimes(3);
-    for (const call of exportSpy.mock.calls) {
-      const exported = call[0] as EditableEpubBook;
-      expect(watermarkParagraphs(exported, 0)).toEqual(['[mejiro-watermark] reader@example.com']);
+    expect(editor.epub.chapters.map((chapter) => chapter.blocks.length)).toEqual(blocksBefore);
+    for (const call of vi.mocked(editor.export).mock.calls) {
+      expect(call[0]).toMatchObject({ watermark: '[mejiro-watermark] reader@example.com' });
     }
 
     clickSpy.mockRestore();

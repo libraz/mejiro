@@ -1,12 +1,13 @@
-import type { AnchorRect } from '@libraz/mejiro/book';
 import { type CSSProperties, defineComponent, h, type PropType, type VNode } from 'vue';
+import type { SelectionRect } from './MejiroSpread.js';
 
 /**
  * Renders a selection-highlight overlay inside a page-content container.
  *
  * Use as a child of `.mejiro-reader-page-clip` (or any element that shares
  * the page's content coordinate frame). Pointer-transparent so it does not
- * interfere with selection drag on the page below.
+ * interfere with selection drag on the page below. A `class` attribute is
+ * added to the outer wrapper.
  */
 export const MejiroSelectionLayer = defineComponent({
   name: 'MejiroSelectionLayer',
@@ -19,13 +20,11 @@ export const MejiroSelectionLayer = defineComponent({
      * (`.mejiro-selection-rect`, themeable via `--mejiro-selection-bg`).
      */
     rects: {
-      type: Array as PropType<readonly (AnchorRect & { color?: string })[]>,
+      type: Array as PropType<readonly SelectionRect[]>,
       required: true,
     },
     /** Which page-side this layer is rendered into. */
     side: { type: String as PropType<'right' | 'left'>, required: true },
-    /** Optional class added to the outer wrapper. */
-    layerClass: { type: String, default: undefined },
     /** Optional class for each rectangle (defaults to `mejiro-selection-rect`). */
     rectClass: { type: String, default: 'mejiro-selection-rect' },
     /** Optional inline style for each rectangle. Takes precedence over `color`. */
@@ -33,9 +32,6 @@ export const MejiroSelectionLayer = defineComponent({
   },
   setup(props) {
     return (): VNode => {
-      const wrapperClass = props.layerClass
-        ? `mejiro-selection-layer ${props.layerClass}`
-        : 'mejiro-selection-layer';
       const children: VNode[] = [];
       for (const r of props.rects) {
         if (r.side !== props.side) continue;
@@ -60,7 +56,7 @@ export const MejiroSelectionLayer = defineComponent({
       return h(
         'div',
         {
-          class: wrapperClass,
+          class: 'mejiro-selection-layer',
           style: {
             position: 'absolute',
             inset: 0,

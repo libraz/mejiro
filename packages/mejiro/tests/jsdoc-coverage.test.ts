@@ -52,9 +52,12 @@ const FULLY_DOCUMENTED_MODULES = [
   'mejiro/src/epub/editor.ts',
   'mejiro/src/epub/project.ts',
   'mejiro/src/epub/types.ts',
+  'mejiro/src/errors.ts',
   'mejiro/src/exclusion.ts',
   'mejiro/src/hanging.ts',
   'mejiro/src/i18n.ts',
+  'mejiro/src/kinsoku.ts',
+  'mejiro/src/layout.ts',
   'mejiro/src/manuscript-tokens.ts',
   'mejiro/src/manuscript.ts',
   'mejiro/src/overlay.ts',
@@ -63,6 +66,7 @@ const FULLY_DOCUMENTED_MODULES = [
   'mejiro/src/render/inline-tree.ts',
   'mejiro/src/render/segment-descriptor.ts',
   'mejiro/src/text.ts',
+  'mejiro/src/types.ts',
   'mejiro/src/url.ts',
 ];
 
@@ -76,6 +80,33 @@ const FULLY_DOCUMENTED_MODULES = [
  * you document one of these; never grow it.
  */
 const UNDOCUMENTED_DECLARATIONS: string[] = [];
+
+/**
+ * Repo-relative source path prefixes from `MEJIRO_CHECK_MODULES`
+ * (comma-separated). When set, only modules under one of them are checked, and
+ * a prefix list that matches no module fails the run instead of passing empty.
+ */
+const CHECK_PREFIXES = (process.env.MEJIRO_CHECK_MODULES ?? '')
+  .split(',')
+  .map((prefix) => prefix.trim())
+  .filter(Boolean);
+
+/** True when `module` (relative to `packages/`) is within the requested prefixes. */
+function isChecked(module: string): boolean {
+  return (
+    CHECK_PREFIXES.length === 0 ||
+    CHECK_PREFIXES.some((prefix) => `packages/${module}`.startsWith(prefix))
+  );
+}
+
+/** True when some requested prefix reaches into the sources of `pkg`. */
+function isPackageChecked(pkg: string): boolean {
+  const dir = `packages/${pkg}/`;
+  return (
+    CHECK_PREFIXES.length === 0 ||
+    CHECK_PREFIXES.some((prefix) => prefix.startsWith(dir) || dir.startsWith(prefix))
+  );
+}
 
 interface Gap {
   /** `<module>:<symbol>` key, e.g. `mejiro/src/i18n.ts:formatMessage`. */
@@ -192,7 +223,7 @@ function scanGaps(includeMembers: boolean): Gap[] {
 
   const record = (module: string, symbol: string, node: ts.Node, sourceFile: ts.SourceFile) => {
     const key = `${module}:${symbol}`;
-    if (gaps.has(key)) return;
+    if (gaps.has(key) || !isChecked(module)) return;
     const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
     gaps.set(key, { key, module, line });
   };
@@ -237,6 +268,25 @@ function scanGaps(includeMembers: boolean): Gap[] {
   return [...gaps.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
 
+/** Modules (relative to `packages/`) that declare at least one barrel export. */
+function reachableModules(): Set<string> {
+  const reachable = new Set<string>();
+  const { program, checker } = createProgram();
+  for (const barrel of BARRELS) {
+    const sourceFile = program.getSourceFile(`${PACKAGES_DIR}${barrel}`) as ts.SourceFile;
+    const moduleSymbol = checker.getSymbolAtLocation(sourceFile) as ts.Symbol;
+    for (const exported of checker.getExportsOfModule(moduleSymbol)) {
+      const symbol =
+        exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+      for (const declaration of symbol.getDeclarations() ?? []) {
+        const fileName = declaration.getSourceFile().fileName;
+        if (isPublishedSource(fileName)) reachable.add(fileName.slice(PACKAGES_DIR.length));
+      }
+    }
+  }
+  return reachable;
+}
+
 describe('JSDoc coverage of public exports', () => {
   it('scans a source barrel for every published subpath, including the framework packages', () => {
     expect(BARRELS).toEqual(
@@ -262,40 +312,42 @@ describe('JSDoc coverage of public exports', () => {
     ).toEqual([]);
   });
 
-  it.each(FULLY_DOCUMENTED_MODULES)('documents every export and member of %s', (module) => {
-    const gaps = findGaps(true)
-      .filter((gap) => gap.module === module)
-      .map((gap) => `${gap.module}:${gap.line} ${gap.key.split(':')[1]}`);
+  it.each(FULLY_DOCUMENTED_MODULES.filter(isChecked))(
+    'documents every export and member of %s',
+    (module) => {
+      const gaps = findGaps(true)
+        .filter((gap) => gap.module === module)
+        .map((gap) => `${gap.module}:${gap.line} ${gap.key.split(':')[1]}`);
 
-    expect(gaps).toEqual([]);
-  });
+      expect(gaps).toEqual([]);
+    },
+  );
 
-  it.each(['mejiro-react', 'mejiro-vue'])('documents every export and member of %s', (pkg) => {
-    const gaps = findGaps(true)
-      .filter((gap) => gap.module.startsWith(`${pkg}/`))
-      .map((gap) => `${gap.module}:${gap.line} ${gap.key.split(':')[1]}`);
+  it.each(['mejiro-react', 'mejiro-vue'].filter(isPackageChecked))(
+    'documents every export and member of %s',
+    (pkg) => {
+      const gaps = findGaps(true)
+        .filter((gap) => gap.module.startsWith(`${pkg}/`))
+        .map((gap) => `${gap.module}:${gap.line} ${gap.key.split(':')[1]}`);
 
-    expect(gaps).toEqual([]);
-  });
+      expect(gaps).toEqual([]);
+    },
+  );
 
   it('keeps every strictly checked module reachable from a public barrel', () => {
-    const reachable = new Set<string>();
-    const { program, checker } = createProgram();
-    for (const barrel of BARRELS) {
-      const sourceFile = program.getSourceFile(`${PACKAGES_DIR}${barrel}`) as ts.SourceFile;
-      const moduleSymbol = checker.getSymbolAtLocation(sourceFile) as ts.Symbol;
-      for (const exported of checker.getExportsOfModule(moduleSymbol)) {
-        const symbol =
-          exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
-        for (const declaration of symbol.getDeclarations() ?? []) {
-          const fileName = declaration.getSourceFile().fileName;
-          if (isPublishedSource(fileName)) reachable.add(fileName.slice(PACKAGES_DIR.length));
-        }
-      }
-    }
+    const reachable = reachableModules();
 
     // A module dropping off the public surface would silently make its strict
     // entry vacuous, so require the list to stay grounded in real exports.
-    expect(FULLY_DOCUMENTED_MODULES.filter((module) => !reachable.has(module))).toEqual([]);
+    expect(
+      FULLY_DOCUMENTED_MODULES.filter(isChecked).filter((module) => !reachable.has(module)),
+    ).toEqual([]);
   });
+
+  it.runIf(CHECK_PREFIXES.length > 0)(
+    'checks at least one module under MEJIRO_CHECK_MODULES',
+    () => {
+      expect([...reachableModules()].filter(isChecked)).not.toEqual([]);
+    },
+  );
 });

@@ -5,22 +5,15 @@ import type { AnchorLocation } from './anchor.js';
  */
 export interface FindTextOptions {
   /**
-   * Treat `query` as a regular expression source string instead of a literal
-   * substring. The pattern is compiled with the `g` flag plus `i` when
-   * {@link FindTextOptions.caseSensitive} is `false`.
-   * @defaultValue false
-   */
-  regex?: boolean;
-  /**
-   * Match case sensitively. When `false`, both literal and regex matches use
-   * the `i` flag.
+   * Match a string query case sensitively. A `RegExp` query keeps its own
+   * flags and ignores this option.
    * @defaultValue false
    */
   caseSensitive?: boolean;
   /**
-   * Cap on the number of matches returned, rounded down; `0` returns none.
-   * Useful for incremental UIs that only render the first N hits. Unlimited
-   * when omitted.
+   * Cap on the number of matches returned, rounded down; it must be at least
+   * `1`. Useful for incremental UIs that only render the first N hits.
+   * Unlimited when omitted.
    */
   maxResults?: number;
 }
@@ -34,11 +27,11 @@ export interface FindTextOptions {
  */
 export interface SearchMatch extends AnchorLocation {
   /** Zero-based paragraph index containing the match. */
-  paragraph: number;
+  paragraphIndex: number;
   /** Inclusive codepoint offset of the match start (anchor-compatible). */
-  charStart: number;
+  startIndex: number;
   /** Exclusive codepoint offset of the match end. */
-  charEnd: number;
+  endIndex: number;
   /** The matched substring. */
   match: string;
 }

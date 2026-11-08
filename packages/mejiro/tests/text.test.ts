@@ -22,7 +22,7 @@ describe('normalizeText / toCodepoints', () => {
 
   it('keeps compatibility ideographs through normalizeAnnotatedText with indices intact', () => {
     const result = normalizeAnnotatedText('か\u3099\u{FA19}社', [
-      { kind: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'かみ', type: 'mono' },
+      { type: 'ruby', startIndex: 2, endIndex: 3, rubyText: 'かみ', rubyType: 'mono' },
     ]);
     expect(result.text).toBe('が\u{FA19}社');
     expect(result.inlineAnnotations[0]).toMatchObject({ startIndex: 1, endIndex: 2 });

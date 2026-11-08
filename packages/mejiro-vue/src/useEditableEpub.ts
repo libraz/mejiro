@@ -1,44 +1,71 @@
-import type { InlineAnnotation } from '@libraz/mejiro/browser';
+import type { BinaryInput, InlineAnnotation } from '@libraz/mejiro';
 import {
   type AddImageInput,
-  type AnnotatedParagraph,
   type AssetResolver,
   clampEditableEpubSelection,
-  cloneEditableEpubBook,
-  EditableEpub,
+  type EditableEpub,
   type EditableEpubBook,
-  type EditableEpubImage,
+  type EditableEpubExportOptions,
   type EditableEpubSelection,
-  type EpubExportOptions,
+  type EditableImageBlock,
+  type EditableParagraphBlock,
+  type EditHistoryState,
+  type EpubBook,
   type EpubParseLimits,
+  editableEpubToEpubBook,
+  type ParagraphPatch,
+  parseEditableEpub,
 } from '@libraz/mejiro/epub';
 import {
   type ComputedRef,
   computed,
+  getCurrentScope,
+  type MaybeRefOrGetter,
+  markRaw,
   onBeforeUnmount,
   onMounted,
+  onScopeDispose,
   type Ref,
-  ref,
+  shallowReadonly,
   shallowRef,
+  toValue,
   type WatchStopHandle,
   watch,
 } from 'vue';
 import { markBookIdentity } from './bookIdentity.js';
 import { fetchEpubBuffer, readEpubFile, toError } from './errors.js';
+import type { FetchEpubOptions } from './useEpub.js';
 import { createRequestToken } from './useRequestToken.js';
 
 export type { EditableEpubSelection } from '@libraz/mejiro/epub';
 
 /** Options for {@link useEditableEpub}. */
 export interface UseEditableEpubOptions {
-  /** URL fetched and loaded on mount. */
-  defaultUrl?: string;
+  /**
+   * URL fetched and loaded once mounted. A ref or getter loads every new URL,
+   * abandoning the load still in flight; an empty value loads nothing.
+   */
+  url?: MaybeRefOrGetter<string | null | undefined>;
   /** Called after a successful load. */
   onLoad?: (editor: EditableEpub) => void;
-  /** Called when a load fails. */
+  /**
+   * Called when a load or an export fails. A failed export also lands in
+   * `error`, and its promise still rejects. A `MejiroError` arrives as thrown.
+   */
   onError?: (error: Error) => void;
-  /** Called after export completes. */
-  onExport?: (buffer: ArrayBuffer) => void;
+  /** Called with the EPUB bytes once an export completes. */
+  onExport?: (bytes: Uint8Array<ArrayBuffer>) => void;
+  /**
+   * Extra options merged into the `fetch` call when loading by URL. Useful
+   * for sending bearer tokens or cookies (`credentials: 'include'`). Its
+   * `signal` is replaced by the composable's own.
+   */
+  fetchOptions?: RequestInit;
+  /**
+   * Custom EPUB fetcher used in place of the global `fetch`. Returns the raw
+   * bytes. Overrides {@link UseEditableEpubOptions.fetchOptions} when set.
+   */
+  fetchEpub?: (url: string, options: FetchEpubOptions) => Promise<BinaryInput>;
   /**
    * Archive resource limits applied while opening an EPUB. Raise them for
    * trusted, image-heavy books; tighten them for a public drop zone. Omitted
@@ -54,76 +81,108 @@ export interface UseEditableEpubOptions {
 
 /** Return value of {@link useEditableEpub}. */
 export interface UseEditableEpubReturn {
-  /** Loaded editor, or `null` before any load. */
-  editor: Ref<EditableEpub | null>;
+  /**
+   * Loaded editor, or `null` before any load. Edits made on it directly are
+   * picked up like the composable's own: `revision`, `history` and
+   * `previewEpub` follow every change it reports.
+   */
+  editor: Readonly<Ref<EditableEpub | null>>;
   /** The editor's live document, or `null` before any load. */
-  book: ComputedRef<EditableEpubBook | null>;
-  /** Snapshot of `book` re-cloned on every edit, for feeding a preview reader. */
-  previewBook: ComputedRef<EditableEpubBook | null>;
+  epub: ComputedRef<EditableEpubBook | null>;
+  /**
+   * The edited document as an {@link EpubBook}, rebuilt on every change, for
+   * feeding a preview reader. `null` before any load.
+   */
+  previewEpub: ComputedRef<EpubBook | null>;
   /** Whether a load is in progress. */
-  loading: Ref<boolean>;
+  loading: Readonly<Ref<boolean>>;
   /** Whether an export is in progress. */
-  exporting: Ref<boolean>;
-  /** Last load error, if any. */
-  error: Ref<Error | null>;
-  /** Counter bumped on every load, edit, undo and redo. */
-  revision: Ref<number>;
+  exporting: Readonly<Ref<boolean>>;
+  /** Last load or export error, if any. */
+  error: Readonly<Ref<Error | null>>;
+  /** Counter bumped on every load and every change the editor reports. */
+  revision: Readonly<Ref<number>>;
   /** Undo / redo availability, or `null` before any load. */
-  history: ComputedRef<{
-    canUndo: boolean;
-    canRedo: boolean;
-    depth: number;
-    redoDepth: number;
-  } | null>;
-  /** Paragraph targeted by the editing commands. */
-  selection: Ref<EditableEpubSelection>;
-  /** The paragraph at `selection`, or `null` when there is none. */
-  selectedParagraph: ComputedRef<AnnotatedParagraph | null>;
+  history: ComputedRef<EditHistoryState | null>;
+  /** Block targeted by the editing commands. Change it through `setSelection`. */
+  selection: Readonly<Ref<EditableEpubSelection>>;
+  /** The paragraph block at `selection`, or `null` when none is selected or it is an image. */
+  selectedParagraph: ComputedRef<EditableParagraphBlock | null>;
   /** Moves the selection, clamped to the loaded book. */
   setSelection: (selection: EditableEpubSelection) => void;
-  /** Loads an EPUB from an in-memory buffer. */
-  loadBuffer: (buffer: ArrayBuffer) => Promise<EditableEpub | null>;
+  /** Loads an EPUB from in-memory bytes. */
+  loadBuffer: (bytes: BinaryInput) => Promise<EditableEpub | null>;
   /** Loads an EPUB from a {@link File}. */
   loadFile: (file: File) => Promise<EditableEpub | null>;
   /** Fetches and loads an EPUB; a non-2xx response is reported as an error. */
   loadUrl: (url: string) => Promise<EditableEpub | null>;
-  /** Replaces the selected paragraph's text and, optionally, its inline annotations. */
-  updateParagraph: (text: string, inlineAnnotations?: readonly InlineAnnotation[]) => void;
-  /** Replaces the selected paragraph's inline annotations. */
+  /**
+   * Applies `patch` to the selected paragraph. No-op without a loaded editor
+   * or a selected block.
+   * @throws RangeError when the selected block is not a paragraph.
+   */
+  updateParagraph: (patch: ParagraphPatch) => void;
+  /**
+   * Replaces the selected paragraph's inline annotations. No-op without a
+   * loaded editor or a selected block.
+   * @throws RangeError when the selected block is not a paragraph.
+   */
   setInlineAnnotations: (inlineAnnotations: readonly InlineAnnotation[]) => void;
-  /** Inserts an image into the selected chapter. */
-  addImage: (image: AddImageInput | EditableEpubImage) => void;
+  /**
+   * Inserts an image into the selected chapter and returns the block it
+   * created, or `null` without a loaded editor.
+   */
+  addImage: (image: AddImageInput) => EditableImageBlock | null;
   /** Reverts the last edit. Returns `false` when there is nothing to undo. */
   undo: () => boolean;
   /** Re-applies the last undone edit. Returns `false` when there is nothing to redo. */
   redo: () => boolean;
-  /** Packages the edited document as an EPUB buffer. */
-  exportEpub: (options?: EpubExportOptions) => Promise<ArrayBuffer | null>;
+  /**
+   * Packages the edited document as EPUB bytes; `null` without a loaded
+   * editor. A failure lands in `error` and `onError` and the promise rejects.
+   */
+  exportEpub: (options?: EditableEpubExportOptions) => Promise<Uint8Array<ArrayBuffer> | null>;
 }
 
-/** Vue composable for custom editable-EPUB UIs. */
+/** The selection a freshly loaded book starts with: its first block. */
+function initialSelection(epub: EditableEpubBook): EditableEpubSelection {
+  return { chapterIndex: 0, blockId: epub.chapters[0]?.blocks[0]?.id ?? null };
+}
+
+/**
+ * Vue composable for custom editable-EPUB UIs.
+ *
+ * Starting a load aborts the one still in flight — its fetch and parse are
+ * cancelled through their `signal`, and it settles to `null` without
+ * reporting — and so does disposing the owning scope. When `options.url` is
+ * set, it is fetched and loaded once mounted, and again whenever a reactive
+ * `url` changes.
+ */
 export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditableEpubReturn {
   const editor = shallowRef<EditableEpub | null>(null);
-  const loading = ref(false);
-  const exporting = ref(false);
+  const loading = shallowRef(false);
+  const exporting = shallowRef(false);
   const error = shallowRef<Error | null>(null);
-  const revision = ref(0);
-  const selection = ref<EditableEpubSelection>({ chapter: 0, paragraph: 0 });
+  const revision = shallowRef(0);
+  const selection = shallowRef<EditableEpubSelection>({ chapterIndex: 0, blockId: null });
   const request = createRequestToken();
+  let controller: AbortController | null = null;
+  let unsubscribe: (() => void) | null = null;
   let exportsInFlight = 0;
-  const book = computed(() => editor.value?.book ?? null);
+
+  const epub = computed(() => editor.value?.epub ?? null);
+  // Edits, undo and redo change the document in place, so the revision counter
+  // is what re-evaluates the derived values below.
   const selectedParagraph = computed(() => {
-    // Edits, undo and redo replace the paragraph mirror in place, so the
-    // revision counter is what re-evaluates this computed.
     void revision.value;
-    return (
-      book.value?.chapters[selection.value.chapter]?.paragraphs[selection.value.paragraph] ?? null
-    );
+    const { chapterIndex, blockId } = selection.value;
+    const block = epub.value?.chapters[chapterIndex]?.blocks.find((b) => b.id === blockId);
+    return block?.kind === 'paragraph' ? block : null;
   });
-  const previewBook = computed(() => {
+  const previewEpub = computed(() => {
     void revision.value;
-    return book.value && editor.value
-      ? markBookIdentity(cloneEditableEpubBook(book.value), editor.value)
+    return epub.value && editor.value
+      ? markBookIdentity(editableEpubToEpubBook(epub.value), editor.value)
       : null;
   });
   const history = computed(() => {
@@ -131,18 +190,42 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     return editor.value?.history ?? null;
   });
 
-  async function loadBufferWithRequest(
-    buffer: ArrayBuffer,
-    currentRequest: number,
+  /** Makes `next` the current editor, following every change it reports. */
+  function adopt(next: EditableEpub): void {
+    unsubscribe?.();
+    editor.value = next;
+    selection.value = initialSelection(next.epub);
+    revision.value++;
+    unsubscribe = next.subscribe(() => {
+      revision.value++;
+    });
+  }
+
+  /** Aborts the load in flight, if any, and makes its result stale. */
+  function abandon(): void {
+    request.invalidate();
+    controller?.abort();
+    controller = null;
+  }
+
+  async function load(
+    read: (signal: AbortSignal) => Promise<BinaryInput>,
   ): Promise<EditableEpub | null> {
+    controller?.abort();
+    const own = new AbortController();
+    controller = own;
+    const currentRequest = request.begin();
     loading.value = true;
     error.value = null;
     try {
-      const next = await EditableEpub.load(buffer, { limits: options.limits });
+      const next = markRaw(
+        await parseEditableEpub(await read(own.signal), {
+          limits: options.limits,
+          signal: own.signal,
+        }),
+      );
       if (!request.isCurrent(currentRequest)) return null;
-      editor.value = next;
-      selection.value = { chapter: 0, paragraph: 0 };
-      revision.value++;
+      adopt(next);
       options.onLoad?.(next);
       return next;
     } catch (err) {
@@ -152,52 +235,34 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
       }
       return null;
     } finally {
-      if (request.isCurrent(currentRequest)) loading.value = false;
-    }
-  }
-
-  async function loadBuffer(buffer: ArrayBuffer): Promise<EditableEpub | null> {
-    const currentRequest = request.begin();
-    return loadBufferWithRequest(buffer, currentRequest);
-  }
-
-  async function loadFile(file: File): Promise<EditableEpub | null> {
-    const currentRequest = request.begin();
-    loading.value = true;
-    error.value = null;
-    try {
-      return await loadBufferWithRequest(await readEpubFile(file, options.limits), currentRequest);
-    } catch (err) {
       if (request.isCurrent(currentRequest)) {
-        error.value = toError(err);
-        options.onError?.(error.value);
         loading.value = false;
+        controller = null;
       }
-      return null;
     }
   }
 
-  async function loadUrl(url: string): Promise<EditableEpub | null> {
-    const currentRequest = request.begin();
-    loading.value = true;
-    error.value = null;
-    try {
-      return await loadBufferWithRequest(await fetchEpubBuffer(url), currentRequest);
-    } catch (err) {
-      if (request.isCurrent(currentRequest)) {
-        error.value = toError(err);
-        options.onError?.(error.value);
-        loading.value = false;
-      }
-      return null;
-    }
+  function loadBuffer(bytes: BinaryInput): Promise<EditableEpub | null> {
+    return load(async () => bytes);
+  }
+
+  function loadFile(file: File): Promise<EditableEpub | null> {
+    return load(() => readEpubFile(file, options.limits));
+  }
+
+  function loadUrl(url: string): Promise<EditableEpub | null> {
+    return load((signal) =>
+      options.fetchEpub
+        ? options.fetchEpub(url, { signal })
+        : fetchEpubBuffer(url, { ...options.fetchOptions, signal }),
+    );
   }
 
   // Deferred to mount so server-side setup never fetches.
-  let stopDefaultUrlWatch: WatchStopHandle | undefined;
+  let stopUrlWatch: WatchStopHandle | undefined;
   onMounted(() => {
-    stopDefaultUrlWatch = watch(
-      () => options.defaultUrl,
+    stopUrlWatch = watch(
+      () => toValue(options.url),
       (url, _previous, onCleanup) => {
         if (!url) return;
         void loadUrl(url);
@@ -205,7 +270,7 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
         // A URL load still in flight when the URL changes or clears is abandoned.
         onCleanup(() => {
           if (!request.isCurrent(urlRequest)) return;
-          request.invalidate();
+          abandon();
           loading.value = false;
         });
       },
@@ -213,77 +278,76 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
     );
   });
   onBeforeUnmount(() => {
-    stopDefaultUrlWatch?.();
+    stopUrlWatch?.();
   });
-
-  function setSelection(nextSelection: EditableEpubSelection): void {
-    selection.value = clampEditableEpubSelection(book.value, nextSelection);
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      abandon();
+      unsubscribe?.();
+      unsubscribe = null;
+    });
   }
 
-  function updateParagraph(text: string, inlineAnnotations?: readonly InlineAnnotation[]): void {
-    if (!editor.value) return;
-    editor.value.updateParagraph(selection.value.chapter, selection.value.paragraph, {
-      text,
-      inlineAnnotations,
-    });
-    revision.value++;
+  function setSelection(nextSelection: EditableEpubSelection): void {
+    selection.value = clampEditableEpubSelection(epub.value, nextSelection);
+  }
+
+  function updateParagraph(patch: ParagraphPatch): void {
+    const { chapterIndex, blockId } = selection.value;
+    if (!(editor.value && blockId !== null)) return;
+    editor.value.updateParagraph(chapterIndex, blockId, patch);
   }
 
   function setInlineAnnotations(inlineAnnotations: readonly InlineAnnotation[]): void {
-    if (!editor.value) return;
-    editor.value.setInlineAnnotations(
-      selection.value.chapter,
-      selection.value.paragraph,
-      inlineAnnotations,
-    );
-    revision.value++;
+    const { chapterIndex, blockId } = selection.value;
+    if (!(editor.value && blockId !== null)) return;
+    editor.value.setInlineAnnotations(chapterIndex, blockId, inlineAnnotations);
   }
 
-  function addImage(image: AddImageInput | EditableEpubImage): void {
-    if (!editor.value) return;
-    editor.value.addImage(selection.value.chapter, image);
-    revision.value++;
+  function addImage(image: AddImageInput): EditableImageBlock | null {
+    if (!editor.value) return null;
+    return editor.value.addImage(selection.value.chapterIndex, image);
   }
 
   function undo(): boolean {
-    if (!editor.value) return false;
-    const changed = editor.value.undo();
-    if (changed) revision.value++;
-    return changed;
+    return editor.value ? editor.value.undo() : false;
   }
 
   function redo(): boolean {
-    if (!editor.value) return false;
-    const changed = editor.value.redo();
-    if (changed) revision.value++;
-    return changed;
+    return editor.value ? editor.value.redo() : false;
   }
 
-  async function exportEpub(exportOptions?: EpubExportOptions): Promise<ArrayBuffer | null> {
+  async function exportEpub(
+    exportOptions?: EditableEpubExportOptions,
+  ): Promise<Uint8Array<ArrayBuffer> | null> {
     if (!editor.value) return null;
     exportsInFlight++;
     exporting.value = true;
     try {
-      const buffer = await editor.value.export(
+      const bytes = await editor.value.export(
         withAssetResolver(exportOptions, options.assetResolver),
       );
-      options.onExport?.(buffer);
-      return buffer;
+      options.onExport?.(bytes);
+      return bytes;
+    } catch (err) {
+      error.value = toError(err);
+      options.onError?.(error.value);
+      throw err;
     } finally {
       exporting.value = --exportsInFlight > 0;
     }
   }
 
   return {
-    editor,
-    book,
-    previewBook,
-    loading,
-    exporting,
-    error,
-    revision,
+    editor: shallowReadonly(editor),
+    epub,
+    previewEpub,
+    loading: shallowReadonly(loading),
+    exporting: shallowReadonly(exporting),
+    error: shallowReadonly(error),
+    revision: shallowReadonly(revision),
     history,
-    selection,
+    selection: shallowReadonly(selection),
     selectedParagraph,
     setSelection,
     loadBuffer,
@@ -300,9 +364,9 @@ export function useEditableEpub(options: UseEditableEpubOptions = {}): UseEditab
 
 /** Applies the composable-level `resolver` unless the per-call options carry their own. */
 function withAssetResolver(
-  options: EpubExportOptions | undefined,
+  options: EditableEpubExportOptions | undefined,
   resolver: AssetResolver | undefined,
-): EpubExportOptions | undefined {
+): EditableEpubExportOptions | undefined {
   if (!resolver || options?.assetResolver) return options;
   return { ...options, assetResolver: resolver };
 }

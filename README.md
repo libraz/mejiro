@@ -76,8 +76,8 @@ import { getLineRanges, paginate, toCodepoints } from '@libraz/mejiro';
 import { MejiroBrowser } from '@libraz/mejiro/browser';
 
 const mejiro = new MejiroBrowser({
-  fixedFontFamily: '"Noto Serif JP"',
-  fixedFontSize: 16,
+  fontFamily: '"Noto Serif JP"',
+  fontSize: 16,
 });
 
 const text = '吾輩は猫である。名前はまだ無い。';
@@ -103,30 +103,29 @@ const pages = paginate(400, [
 pagination, so a reader only deals in chapters and spreads.
 
 ```ts
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { parseEpub } from '@libraz/mejiro/epub';
 
 const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
-// Auto-compute page size from a container element
-book.computePageSize(document.querySelector('.reading-surface')!);
+// Measure a container element and store the page size on the book
+book.fitPageSize(document.querySelector('.reading-surface')!);
 
-const epub = await parseEpub(epubArrayBuffer);
+const epub = await parseEpub(epubBytes);
 const layout = await book.layoutChapter(epub.chapters[0]);
 
 // Get a two-page spread
 const spread = layout.getSpread(0);
 // spread.right.page → RenderPage (paragraphs → lines → segments)
 // spread.right.lines / spread.right.slots → for absolute positioning
-// spread.totalPages → total page count
+// spread.pageCount → page count of the chapter
 
 // Place images with text wrapping (returns updated spread)
-const updated = layout.syncImages(0, [{ x: 80, y: 100, w: 120, h: 160 }]);
+const updated = layout.setImages(0, [{ x: 80, y: 100, width: 120, height: 160 }]);
 ```
 
 ### React
@@ -173,8 +172,8 @@ breaks alone leave loose lines. The analyzer costs roughly 628 KB of WebAssembly
 with its dictionaries embedded, about 260 KB gzipped; without it everything else
 works unchanged.
 
-Custom kinsoku rules go through `LayoutInput.kinsokuRules` on the core
-`computeBreaks()` API. [Line breaking](docs/en/03-line-breaking.md) has the full
+Custom kinsoku rules go through `LayoutInput.kinsoku` on the core
+`computeBreaks()` API; `extendKinsokuRules()` adds to the defaults. [Line breaking](docs/en/03-line-breaking.md) has the full
 character lists, the conformance table and worked examples.
 
 ## Architecture
@@ -196,7 +195,7 @@ Guides and the full API reference live in [`docs/en/`](docs/en/)
 
 - **Learn** — [Getting started](docs/en/01-getting-started.md) · [Core concepts](docs/en/02-core-concepts.md) · [Line breaking](docs/en/03-line-breaking.md) · [Ruby](docs/en/04-ruby.md)
 - **Build** — [Browser integration](docs/en/05-browser-integration.md) · [EPUB](docs/en/06-epub.md) · [Pagination and rendering](docs/en/07-pagination-and-rendering.md) · [React and Vue](docs/en/08-react-and-vue.md)
-- **Details** — [Advanced](docs/en/09-advanced.md) · [API reference](docs/en/10-api-reference.md)
+- **Details** — [Advanced](docs/en/09-advanced.md) · [API reference](docs/en/10-api-reference.md) · [Migrating to 0.11](docs/en/11-migrating-to-0.11.md)
 
 ## Design decisions
 

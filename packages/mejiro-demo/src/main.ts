@@ -72,7 +72,7 @@ let wordAwareBusy = false;
  * stage.
  *
  * The stage cannot be patched onto a live book: `wordAwareBreaking` and
- * `analyzer` are read when a chapter is laid out and `MejiroBook.setOptions()`
+ * `analyzer` are read when a chapter is laid out and `MejiroBook.updateOptions()`
  * deliberately refuses them, so changing the stage means a new book.
  */
 function createBook(): MejiroBook {
@@ -80,7 +80,7 @@ function createBook(): MejiroBook {
     fontFamily: fontFamilySelect.value,
     fontSize: Number(fontSizeInput.value),
     lineSpacing: Number(lineSpacingInput.value),
-    mode: modeSelect.value as 'strict' | 'loose',
+    kinsoku: modeSelect.value as 'strict' | 'loose',
     enableHanging: hangingSelect.value === 'true',
     headingStyles: DEFAULT_HEADING_STYLES,
     wordAwareBreaking,
@@ -324,7 +324,7 @@ interface BreakBaseline {
   /** Layout inputs the positions were produced from, per {@link layoutKey}. */
   key: string;
   /** Ascending break positions, one array per paragraph. */
-  breaks: number[][];
+  breaks: (readonly number[])[];
 }
 
 let breakBaseline: BreakBaseline | null = null;
@@ -414,7 +414,7 @@ function layoutKey(snapshot: ChapterLayoutSnapshot, chapter: number): string {
     fontFamilySelect.value,
     config.fontSize,
     config.lineSpacing,
-    config.mode,
+    config.kinsoku,
     config.enableHanging,
     size.pageWidth,
     size.lineWidth,
@@ -548,16 +548,16 @@ function setupOverlayDrag(placement: ImagePlacement): void {
     e.preventDefault();
     createOverlayDragSession({
       mode: 'resize',
-      rect: { x: placement.x, y: placement.y, w: placement.w, h: placement.h },
+      rect: { x: placement.x, y: placement.y, width: placement.w, height: placement.h },
       startX: e.clientX,
       startY: e.clientY,
       pointerId: e.pointerId,
       captureElement: resizeEl,
       activeElement: placement.el,
       dragClass: 'is-dragging',
-      onChange: (rect) => {
-        placement.w = rect.w;
-        placement.h = rect.h;
+      onRectChange: (rect) => {
+        placement.w = rect.width;
+        placement.h = rect.height;
         applyOverlayStyle(placement);
         scheduleReflow();
       },
@@ -569,14 +569,14 @@ function setupOverlayDrag(placement: ImagePlacement): void {
     e.preventDefault();
     createOverlayDragSession({
       mode: 'move',
-      rect: { x: placement.x, y: placement.y, w: placement.w, h: placement.h },
+      rect: { x: placement.x, y: placement.y, width: placement.w, height: placement.h },
       startX: e.clientX,
       startY: e.clientY,
       pointerId: e.pointerId,
       captureElement: placement.el,
       activeElement: placement.el,
       dragClass: 'is-dragging',
-      onChange: (rect) => {
+      onRectChange: (rect) => {
         placement.x = rect.x;
         placement.y = rect.y;
         applyOverlayStyle(placement);
@@ -594,7 +594,7 @@ function syncImagesToLayout(): void {
     if (placements.length > 0) {
       layout.setImages(
         si,
-        placements.map((p) => ({ x: p.x, y: p.y, w: p.w, h: p.h, margin: fontSize })),
+        placements.map((p) => ({ x: p.x, y: p.y, width: p.w, height: p.h, margin: fontSize })),
       );
     }
   }
@@ -714,7 +714,7 @@ function showSpreadOverlays(): void {
 
 function applyPageSize(): void {
   const surface = document.querySelector('.mejiro-reader-surface') as HTMLElement;
-  const { pageWidth, pageHeight, contentHeight } = book.computePageSize(surface);
+  const { pageWidth, pageHeight, contentHeight } = book.fitPageSize(surface);
   for (const page of [pageRight, pageLeft]) {
     page.style.width = `${pageWidth}px`;
     page.style.height = `${pageHeight}px`;
@@ -740,7 +740,7 @@ function renderSegmentToDOM(parent: Node, segment: RenderSegment): void {
       return;
     case 'ruby': {
       const ruby = document.createElement('ruby');
-      ruby.appendChild(document.createTextNode(segment.base));
+      ruby.appendChild(document.createTextNode(segment.text));
       const rt = document.createElement('rt');
       rt.textContent = segment.rubyText;
       ruby.appendChild(rt);
@@ -790,8 +790,6 @@ function renderPageToDOM(contentEl: HTMLElement, renderPage: RenderPage): void {
     let paraClass = 'mejiro-paragraph';
     if (paragraph.headingLevel != null) {
       paraClass += ` mejiro-paragraph--h${paragraph.headingLevel}`;
-    } else if (paragraph.isHeading) {
-      paraClass += ' mejiro-paragraph--heading';
     }
     paraDiv.className = paraClass;
     contentEl.appendChild(paraDiv);
@@ -844,7 +842,7 @@ function renderCurrentSpread(): void {
 
   const spreadIdx = Math.floor(currentPage / 2);
   const result = layout.getSpread(spreadIdx);
-  totalPages = result.totalPages;
+  totalPages = result.pageCount;
 
   const hasImg = layout.hasImages;
   pageRight.style.overflow = hasImg ? 'visible' : '';
@@ -964,11 +962,11 @@ async function renderChapter(): Promise<void> {
   const fontSize = Number(fontSizeInput.value);
 
   // Staged font options only apply once the font has loaded; measure after that.
-  await book.setOptions({
+  await book.updateOptions({
     fontFamily: fontFamilySelect.value,
     fontSize,
     lineSpacing: Number(lineSpacingInput.value),
-    mode: modeSelect.value as 'strict' | 'loose',
+    kinsoku: modeSelect.value as 'strict' | 'loose',
     enableHanging: hangingSelect.value === 'true',
   });
   if (generation !== renderGeneration) return;
@@ -1000,9 +998,9 @@ async function renderChapter(): Promise<void> {
   }
 
   const elapsed = performance.now() - t0;
-  totalPages = layout.totalPages;
+  totalPages = layout.pageCount;
   const restored = keptAnchor ? layout.locateAnchor(keptAnchor) : null;
-  currentPage = restored ? restored.spreadIdx * 2 : 0;
+  currentPage = restored ? restored.spreadIndex * 2 : 0;
 
   const movedBreaks = countMovedBreaks(layout);
 
@@ -1010,7 +1008,7 @@ async function renderChapter(): Promise<void> {
 
   const totalChars = chapter.paragraphs.reduce((s, p) => s + p.text.length, 0);
   const totalRuby = chapter.paragraphs.reduce(
-    (s, p) => s + p.inlineAnnotations.filter((a) => a.kind === 'ruby').length,
+    (s, p) => s + p.inlineAnnotations.filter((a) => a.type === 'ruby').length,
     0,
   );
   const fontName = fontFamilySelect.options[fontFamilySelect.selectedIndex].text;

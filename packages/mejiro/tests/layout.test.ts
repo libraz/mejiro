@@ -86,7 +86,9 @@ describe('edge cases', () => {
       lineWidth: 160,
       enableHanging: false,
     });
-    expect(result.hangingAdjustments).toBeUndefined();
+    expect([...result.hangingAdjustments]).toEqual(
+      new Array(result.breakPoints.length + 1).fill(0),
+    );
   });
 
   it('throws when advances length does not match text length', () => {
@@ -177,7 +179,7 @@ describe('hanging punctuation before a line feed', () => {
         lineWidth: 30,
       });
       expect([...result.breakPoints], s).toEqual(breakPoints);
-      expect([...(result.hangingAdjustments ?? [])], s).toEqual(hangs);
+      expect([...result.hangingAdjustments], s).toEqual(hangs);
       // No line holds only the line feed.
       expect(linesFromBreakPoints(s, result.breakPoints), s).not.toContain('\n');
     }
@@ -423,15 +425,15 @@ describe('canBreakAt', () => {
   it('disallows break within a cluster', () => {
     const text = toCodepoints('あいう');
     const clusterIds = new Uint32Array([0, 0, 1]);
-    expect(canBreakAt(text, 0, clusterIds)).toBe(false);
-    expect(canBreakAt(text, 1, clusterIds)).toBe(true);
+    expect(canBreakAt(text, 0, { clusterIds })).toBe(false);
+    expect(canBreakAt(text, 1, { clusterIds })).toBe(true);
   });
 
   it('respects loose mode', () => {
     // ぁ is line-start-prohibited in strict but allowed in loose
     const text = toCodepoints('あぁい');
-    expect(canBreakAt(text, 0, undefined, 'strict')).toBe(false);
-    expect(canBreakAt(text, 0, undefined, 'loose')).toBe(true);
+    expect(canBreakAt(text, 0, { kinsoku: 'strict' })).toBe(false);
+    expect(canBreakAt(text, 0, { kinsoku: 'loose' })).toBe(true);
   });
 
   it('uses custom kinsoku rules', () => {
@@ -440,8 +442,8 @@ describe('canBreakAt', () => {
       lineStartProhibited: [0x42], // 'B'
       lineEndProhibited: [],
     });
-    expect(canBreakAt(text, 0, undefined, 'strict', rules)).toBe(false); // next is B
-    expect(canBreakAt(text, 1, undefined, 'strict', rules)).toBe(true); // next is C
+    expect(canBreakAt(text, 0, { kinsoku: rules })).toBe(false); // next is B
+    expect(canBreakAt(text, 1, { kinsoku: rules })).toBe(true); // next is C
   });
 
   it('disallows breaks inside custom unbreakable pairs', () => {
@@ -451,8 +453,8 @@ describe('canBreakAt', () => {
       lineEndProhibited: [],
       unbreakablePairs: [[0x41, 0x42]],
     });
-    expect(canBreakAt(text, 0, undefined, 'strict', rules)).toBe(false);
-    expect(canBreakAt(text, 1, undefined, 'strict', rules)).toBe(true);
+    expect(canBreakAt(text, 0, { kinsoku: rules })).toBe(false);
+    expect(canBreakAt(text, 1, { kinsoku: rules })).toBe(true);
   });
 });
 
@@ -603,11 +605,11 @@ describe('hanging punctuation with kinsoku', () => {
 
     expect([...result.breakPoints]).not.toContain(8);
     expect([...result.breakPoints]).toEqual([6]);
-    expect(result.hangingAdjustments ? [...result.hangingAdjustments] : undefined).toEqual([0, 0]);
+    expect([...result.hangingAdjustments]).toEqual([0, 0]);
   });
 });
 
-describe('computeBreaks with mode: loose', () => {
+describe('computeBreaks with kinsoku: loose', () => {
   it('allows small kana at line start in loose mode', () => {
     // "あいうえおっかきく" — ッ at index 5 is line-start-prohibited in strict
     // lineWidth = 80 fits 5 chars. In strict, break should avoid leaving っ at start.
@@ -617,13 +619,13 @@ describe('computeBreaks with mode: loose', () => {
       text,
       advances: uniformAdvances(text.length, 16),
       lineWidth: 80,
-      mode: 'strict',
+      kinsoku: 'strict',
     });
     const looseResult = computeBreaks({
       text,
       advances: uniformAdvances(text.length, 16),
       lineWidth: 80,
-      mode: 'loose',
+      kinsoku: 'loose',
     });
     // In strict, break at 4 would put っ at line start → must backtrack to 3
     // In loose, break at 4 is fine (っ at line start allowed)
@@ -632,7 +634,7 @@ describe('computeBreaks with mode: loose', () => {
   });
 });
 
-describe('computeBreaks with custom kinsokuRules', () => {
+describe('computeBreaks with custom kinsoku rules', () => {
   it('uses custom rules instead of built-in', () => {
     // Custom rule: prohibit 'い' (U+3044) at line start
     const rules = buildKinsokuRules({
@@ -647,7 +649,7 @@ describe('computeBreaks with custom kinsokuRules', () => {
       text,
       advances: uniformAdvances(text.length, 16),
       lineWidth: 80,
-      kinsokuRules: rules,
+      kinsoku: rules,
     });
     expect([...result.breakPoints]).toContain(3);
   });
@@ -664,7 +666,7 @@ describe('computeBreaks with custom kinsokuRules', () => {
       text,
       advances: uniformAdvances(text.length, 16),
       lineWidth: 80,
-      kinsokuRules: rules,
+      kinsoku: rules,
     });
     // With empty custom rules, break at 4 is fine even though 」follows
     expect([...result.breakPoints]).toContain(4);

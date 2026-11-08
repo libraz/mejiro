@@ -1,3 +1,6 @@
+import type { MejiroWarning } from '../errors.js';
+import { MejiroError } from '../errors.js';
+
 /**
  * Options for {@link prepareImage}. All fields are optional; defaults are
  * conservative so calling `prepareImage(file)` is safe. A field set to
@@ -7,12 +10,19 @@ export interface PrepareImageOptions {
   /**
    * Maximum file size in bytes after re-encoding. If the encoded image still
    * exceeds this size, `prepareImage` keeps reducing the JPEG/WebP quality
-   * (down to 0.4) before emitting a warning. Default: 2 MiB.
+   * (down to 0.4) before reporting a `max-bytes-exceeded` warning.
+   * @defaultValue 2097152 (2 MiB)
    */
   maxBytes?: number;
-  /** Maximum width in CSS pixels after downscale. Default: 2048. */
+  /**
+   * Maximum width in CSS pixels after downscale.
+   * @defaultValue 2048
+   */
   maxWidth?: number;
-  /** Maximum height in CSS pixels after downscale. Default: 2048. */
+  /**
+   * Maximum height in CSS pixels after downscale.
+   * @defaultValue 2048
+   */
   maxHeight?: number;
   /**
    * Output format. `auto` keeps the source format when it is JPEG, PNG or WebP,
@@ -22,29 +32,39 @@ export interface PrepareImageOptions {
    * The request is not a guarantee: a platform that cannot encode the requested
    * format silently produces another one, and
    * {@link PrepareImageResult.mediaType} then reports what was actually written.
+   * @defaultValue 'auto'
    */
   convertTo?: 'auto' | 'webp' | 'jpeg' | 'png';
-  /** Initial JPEG/WebP quality. Default: 0.85. */
+  /**
+   * Initial JPEG/WebP quality, from 0 to 1.
+   * @defaultValue 0.85
+   */
   quality?: number;
+  /**
+   * Cancels the preparation. The returned promise then rejects with
+   * `signal.reason` (an `AbortError` by default), also when the signal is
+   * already aborted at the call. The decoded bitmap is released either way.
+   * @defaultValue no cancellation
+   */
+  signal?: AbortSignal;
 }
 
 /** Result of preparing an image for EPUB embedding. */
 export interface PrepareImageResult {
   /** Re-encoded binary payload, ready to drop into an EPUB. */
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
   /**
    * MIME type of the bytes in {@link PrepareImageResult.data}, taken from the
    * encoder's output rather than from the requested format. Browsers that
-   * cannot encode the requested format fall back to another one; a warning is
-   * added whenever that happens.
+   * cannot encode the requested format fall back to another one.
    */
   mediaType: string;
   /** Decoded pixel width after any downscale step. */
   width: number;
   /** Decoded pixel height after any downscale step. */
   height: number;
-  /** Diagnostic notices (downscaling, quality drops, format fallbacks). */
-  warnings: string[];
+  /** Degradations the caller may want to act on. Empty when the result is as requested. */
+  warnings: readonly MejiroWarning[];
 }
 
 const DEFAULTS = {
@@ -55,10 +75,16 @@ const DEFAULTS = {
   quality: 0.85,
 };
 
-type ResolvedOptions = Required<PrepareImageOptions>;
+type ResolvedOptions = Required<Omit<PrepareImageOptions, 'signal'>>;
 
-/** Fills each unset field from {@link DEFAULTS} and rejects bounds no encoder can honour. */
+/**
+ * Fills each unset field from {@link DEFAULTS} and rejects bounds no encoder can
+ * honour and a `signal` that is not an `AbortSignal`.
+ */
 function resolveOptions(options: PrepareImageOptions): ResolvedOptions {
+  if (options.signal !== undefined && !(options.signal instanceof AbortSignal)) {
+    throw new TypeError('prepareImage: signal must be an AbortSignal');
+  }
   const config: ResolvedOptions = {
     maxBytes: options.maxBytes ?? DEFAULTS.maxBytes,
     maxWidth: options.maxWidth ?? DEFAULTS.maxWidth,
@@ -85,21 +111,42 @@ function resolveOptions(options: PrepareImageOptions): ResolvedOptions {
  * `HTMLCanvasElement`). The library itself does not depend on this module —
  * import it from `@libraz/mejiro/image` only when needed.
  *
+ * The input is only read: it is neither retained nor modified, and `data` in
+ * the result is a fresh `Uint8Array` that owns its buffer. A result that still
+ * exceeds `maxBytes` at the lowest quality is returned, not thrown, with a
+ * `max-bytes-exceeded` entry in `warnings`.
+ *
+ * @param file - The image to prepare; any format the platform can decode.
+ * @param options - Bounds, output format and cancellation.
+ * @returns The re-encoded image with its final size and media type.
  * @throws RangeError if `maxBytes`, `maxWidth` or `maxHeight` is not a positive
  *   finite number, or `quality` is not a finite number in [0, 1].
+ * @throws TypeError if `options.signal` is set but is not an `AbortSignal`.
+ * @throws MejiroError with code `environment-unsupported` when
+ *   `createImageBitmap`, or both `OffscreenCanvas` and a document canvas with a
+ *   2D context, are missing.
+ * @throws MejiroError with code `image-decode-failed` when the platform cannot
+ *   decode `file`; the platform error is the `cause`.
+ * @throws MejiroError with code `image-encode-failed` when the canvas cannot
+ *   encode the image; the platform error, if any, is the `cause`.
+ * @throws The `signal.reason` when `options.signal` aborts, which is an
+ *   `AbortError` unless the caller aborted with another reason.
  */
 export async function prepareImage(
   file: Blob | File,
   options: PrepareImageOptions = {},
 ): Promise<PrepareImageResult> {
   const config = resolveOptions(options);
-  const warnings: string[] = [];
+  const { signal } = options;
+  const warnings: MejiroWarning[] = [];
 
-  const bitmap = await decodeImage(file);
+  signal?.throwIfAborted();
+  const bitmap = await decodeImage(file, signal);
 
   // Everything that runs after the bitmap exists belongs inside the try, so no
   // exit path can leave a decoded bitmap holding GPU/CPU memory.
   try {
+    signal?.throwIfAborted();
     const sourceWidth = bitmap.width;
     const sourceHeight = bitmap.height;
 
@@ -107,16 +154,13 @@ export async function prepareImage(
     const width = Math.max(1, Math.round(sourceWidth * scale));
     const height = Math.max(1, Math.round(sourceHeight * scale));
 
-    if (scale < 1) {
-      warnings.push(`Image downscaled from ${sourceWidth}x${sourceHeight} to ${width}x${height}`);
-    }
-
-    const sourceType = await sniffMediaType(file, warnings);
-    const targetType = resolveTargetType(config.convertTo, sourceType, warnings);
-    warnAboutPotentialFlattening(sourceType, targetType, warnings);
+    const sourceType = await sniffMediaType(file);
+    signal?.throwIfAborted();
+    const targetType = resolveTargetType(config.convertTo, sourceType);
 
     let quality = config.quality;
     let blob = await renderToBlob(bitmap, width, height, targetType, quality);
+    signal?.throwIfAborted();
     // Quality only affects lossy encoders, so the decay loop is driven by what
     // the canvas actually produced — not by what was asked for.
     let encodedType = encodedMediaType(blob, targetType);
@@ -127,22 +171,18 @@ export async function prepareImage(
     ) {
       quality = Math.max(0.4, quality - 0.1);
       blob = await renderToBlob(bitmap, width, height, targetType, quality);
+      signal?.throwIfAborted();
       encodedType = encodedMediaType(blob, targetType);
     }
-    if (encodedType !== targetType) {
-      warnings.push(
-        `Canvas encoded the image as "${encodedType}" instead of the requested "${targetType}"`,
-      );
-    }
     if (blob.size > config.maxBytes) {
-      warnings.push(
-        `Encoded size ${blob.size} bytes exceeds maxBytes (${config.maxBytes}); quality is already at ${quality.toFixed(2)}`,
-      );
-    } else if (quality < config.quality) {
-      warnings.push(`Quality reduced to ${quality.toFixed(2)} to fit maxBytes`);
+      warnings.push({
+        code: 'max-bytes-exceeded',
+        message: `Encoded size ${blob.size} bytes exceeds maxBytes (${config.maxBytes}); quality is already at ${quality.toFixed(2)}`,
+      });
     }
 
     const data = new Uint8Array(await blob.arrayBuffer());
+    signal?.throwIfAborted();
     return { data, mediaType: encodedType, width, height, warnings };
   } finally {
     bitmap.close?.();
@@ -158,24 +198,31 @@ function encodedMediaType(blob: Blob, targetType: string): string {
   return declared || targetType;
 }
 
-async function decodeImage(file: Blob): Promise<ImageBitmap> {
+/**
+ * Decodes `file`, wrapping a platform decode failure. A failure the abort
+ * itself caused is reported as the abort, not as a decode failure.
+ */
+async function decodeImage(file: Blob, signal: AbortSignal | undefined): Promise<ImageBitmap> {
   if (typeof createImageBitmap !== 'function') {
-    throw new Error('prepareImage requires createImageBitmap (browser/worker environment)');
+    throw new MejiroError(
+      'environment-unsupported',
+      'prepareImage requires createImageBitmap (browser/worker environment)',
+    );
   }
-  return createImageBitmap(file);
+  try {
+    return await createImageBitmap(file);
+  } catch (cause) {
+    signal?.throwIfAborted();
+    throw new MejiroError('image-decode-failed', 'prepareImage could not decode the image', {
+      cause,
+    });
+  }
 }
 
-async function sniffMediaType(file: Blob, warnings: string[]): Promise<string> {
-  const declared = file.type || '';
+/** Source media type: the magic bytes when they identify one, else the declared type. */
+async function sniffMediaType(file: Blob): Promise<string> {
   const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
-  const detected = mediaTypeFromMagicBytes(bytes);
-  if (detected) {
-    if (declared && declared !== detected) {
-      warnings.push(`Declared source type "${declared}" does not match image bytes "${detected}"`);
-    }
-    return detected;
-  }
-  return declared || 'application/octet-stream';
+  return mediaTypeFromMagicBytes(bytes) ?? (file.type || 'application/octet-stream');
 }
 
 function mediaTypeFromMagicBytes(bytes: Uint8Array): string | undefined {
@@ -225,7 +272,6 @@ function mediaTypeFromMagicBytes(bytes: Uint8Array): string | undefined {
 function resolveTargetType(
   convertTo: NonNullable<PrepareImageOptions['convertTo']>,
   sourceType: string,
-  warnings: string[],
 ): string {
   if (convertTo === 'webp') return 'image/webp';
   if (convertTo === 'jpeg') return 'image/jpeg';
@@ -235,21 +281,7 @@ function resolveTargetType(
     return sourceType;
   }
   if (sourceType === 'image/gif') return 'image/png';
-  warnings.push(`Unsupported source type "${sourceType}" — re-encoded as JPEG`);
   return 'image/jpeg';
-}
-
-function warnAboutPotentialFlattening(
-  sourceType: string,
-  targetType: string,
-  warnings: string[],
-): void {
-  if (sourceType === 'image/png' && targetType === 'image/jpeg') {
-    warnings.push('PNG transparency may be flattened when re-encoded as JPEG');
-  }
-  if (sourceType === 'image/gif' && targetType !== 'image/gif') {
-    warnings.push('GIF animation is flattened to a static image during re-encoding');
-  }
 }
 
 async function renderToBlob(
@@ -262,9 +294,20 @@ async function renderToBlob(
   if (typeof OffscreenCanvas === 'function') {
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to acquire 2D context on OffscreenCanvas');
+    if (!ctx) {
+      throw new MejiroError(
+        'environment-unsupported',
+        'prepareImage could not acquire a 2D context on OffscreenCanvas',
+      );
+    }
     ctx.drawImage(bitmap, 0, 0, width, height);
-    return canvas.convertToBlob({ type: mediaType, quality });
+    try {
+      return await canvas.convertToBlob({ type: mediaType, quality });
+    } catch (cause) {
+      throw new MejiroError('image-encode-failed', 'prepareImage could not encode the image', {
+        cause,
+      });
+    }
   }
 
   if (typeof document !== 'undefined') {
@@ -272,16 +315,29 @@ async function renderToBlob(
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Failed to acquire 2D context on HTMLCanvasElement');
+    if (!ctx) {
+      throw new MejiroError(
+        'environment-unsupported',
+        'prepareImage could not acquire a 2D context on HTMLCanvasElement',
+      );
+    }
     ctx.drawImage(bitmap, 0, 0, width, height);
     return new Promise<Blob>((resolve, reject) => {
       canvas.toBlob(
-        (result) => (result ? resolve(result) : reject(new Error('toBlob returned null'))),
+        (result) =>
+          result
+            ? resolve(result)
+            : reject(
+                new MejiroError('image-encode-failed', 'prepareImage could not encode the image'),
+              ),
         mediaType,
         quality,
       );
     });
   }
 
-  throw new Error('prepareImage requires OffscreenCanvas or HTMLCanvasElement');
+  throw new MejiroError(
+    'environment-unsupported',
+    'prepareImage requires OffscreenCanvas or HTMLCanvasElement',
+  );
 }

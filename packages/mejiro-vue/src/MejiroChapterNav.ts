@@ -1,6 +1,6 @@
 import type { EpubBook } from '@libraz/mejiro/epub';
 import { defineComponent, h, type PropType } from 'vue';
-import { format, useI18n } from './i18n.js';
+import { formatMessage, useI18n } from './i18n.js';
 
 /**
  * Layout of {@link MejiroChapterNav}: `'select'` is a compact dropdown,
@@ -15,14 +15,10 @@ function textPreview(text: string, max = 72): string {
 }
 
 /**
- * Chapter selector for an {@link EpubBook}.
- *
- * Renders a `<select>` styled by the reader CSS. Use `v-model:chapter` to
- * bind the current chapter index, or listen to `update:chapter`.
- *
- * @deprecated Prefer {@link MejiroToc} for new code. `MejiroToc` adds
- * search and current-anchor highlighting. The `<select>` variant remains
- * supported here for existing `MejiroReader` integration.
+ * Chapter picker for an {@link EpubBook}: a compact `<select>` or a panel of
+ * chapter cards, styled by the reader CSS. Bind the current chapter with
+ * `v-model:chapter-index`. For search and current-anchor highlighting over a
+ * long table of contents, use {@link MejiroToc}.
  */
 export const MejiroChapterNav = defineComponent({
   name: 'MejiroChapterNav',
@@ -33,17 +29,20 @@ export const MejiroChapterNav = defineComponent({
       required: true,
     },
     /** Current chapter index (zero-based). */
-    chapter: {
+    chapterIndex: {
       type: Number,
       required: true,
     },
-    /** Visual treatment for the chapter list. */
+    /** Visual treatment for the chapter list. @defaultValue 'select' */
     variant: {
       type: String as PropType<MejiroChapterNavVariant>,
       default: 'select',
     },
   },
-  emits: ['update:chapter'],
+  emits: {
+    /** The user picked a chapter; carries its zero-based index. */
+    'update:chapterIndex': (_chapterIndex: number) => true,
+  },
   setup(props, { emit }) {
     const messages = useI18n();
     return () => {
@@ -61,7 +60,7 @@ export const MejiroChapterNav = defineComponent({
               'ol',
               { class: 'mejiro-reader-chapter-list' },
               props.epub.chapters.map((ch, i) => {
-                const title = ch.title ?? format(messages.value.chapterN, { n: i + 1 });
+                const title = ch.title ?? formatMessage(messages.value.chapterN, { n: i + 1 });
                 const preview = ch.paragraphs.find((p) => !p.headingLevel && p.text.trim())?.text;
                 // Keyed by paragraph index: heading text can repeat within a chapter.
                 const headings = ch.paragraphs
@@ -77,9 +76,12 @@ export const MejiroChapterNav = defineComponent({
                     'button',
                     {
                       type: 'button',
-                      class: ['mejiro-reader-chapter-card', { 'is-active': i === props.chapter }],
-                      'aria-current': i === props.chapter ? 'true' : undefined,
-                      onClick: () => emit('update:chapter', i),
+                      class: [
+                        'mejiro-reader-chapter-card',
+                        { 'is-active': i === props.chapterIndex },
+                      ],
+                      'aria-current': i === props.chapterIndex ? 'true' : undefined,
+                      onClick: () => emit('update:chapterIndex', i),
                     },
                     [
                       h(
@@ -125,15 +127,15 @@ export const MejiroChapterNav = defineComponent({
         h(
           'select',
           {
-            value: props.chapter,
+            value: props.chapterIndex,
             onChange: (e: Event) =>
-              emit('update:chapter', Number((e.target as HTMLSelectElement).value)),
+              emit('update:chapterIndex', Number((e.target as HTMLSelectElement).value)),
           },
           props.epub.chapters.map((ch, i) =>
             h(
               'option',
               { key: i, value: i },
-              ch.title ?? format(messages.value.chapterN, { n: i + 1 }),
+              ch.title ?? formatMessage(messages.value.chapterN, { n: i + 1 }),
             ),
           ),
         ),

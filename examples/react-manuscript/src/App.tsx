@@ -1,7 +1,7 @@
 // Opt in to the demo webfonts (Shippori Mincho / Noto Serif JP /
 // Zen Kaku Gothic New). Skip this line for system fonts.
 import '@libraz/mejiro/render/mejiro-fonts.css';
-import { type ManuscriptEditorChapter, MejiroManuscriptEditor } from '@libraz/mejiro-react';
+import { type ManuscriptChapter, MejiroManuscriptEditor } from '@libraz/mejiro-react';
 
 /*
  * MejiroManuscriptEditor is the author flow for writing a NEW EPUB from
@@ -16,7 +16,7 @@ import { type ManuscriptEditorChapter, MejiroManuscriptEditor } from '@libraz/me
  * The preview is debounced and rebuilds whenever metadata or chapters
  * change. For editing an existing EPUB, see the `react-editor` example.
  */
-const initialChapters: ManuscriptEditorChapter[] = [
+const initialChapters: ManuscriptChapter[] = [
   {
     id: 'chapter-1',
     title: '第一話 出会い',

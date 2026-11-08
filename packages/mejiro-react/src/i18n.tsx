@@ -1,31 +1,39 @@
 import {
   enMessages,
-  formatMessage,
   type MejiroLocale,
   type MejiroMessages,
   messageCatalogs,
-  resolveMessages as resolveCoreMessages,
+  resolveMessages,
 } from '@libraz/mejiro';
 import { createContext, type ReactNode, useContext, useMemo } from 'react';
 
-export { enMessages, jaMessages } from '@libraz/mejiro';
+export { enMessages, formatMessage, jaMessages, resolveMessages } from '@libraz/mejiro';
 export type { MejiroLocale, MejiroMessages };
 
 const I18nContext = createContext<MejiroMessages>(enMessages);
+
+/** Props for {@link MejiroI18nProvider}. */
+export interface MejiroI18nProviderProps {
+  /**
+   * Built-in locale to use as the base catalog. Without it the catalog of the
+   * enclosing provider is the base, or the English catalog at the top level.
+   */
+  locale?: MejiroLocale;
+  /** Overrides merged on top of the base catalog. */
+  messages?: Partial<MejiroMessages>;
+  /** Subtree the catalog applies to. */
+  children: ReactNode;
+}
 
 /** Provider that scopes a message catalog to its descendants. */
 export function MejiroI18nProvider({
   locale,
   messages,
   children,
-}: {
-  locale?: MejiroLocale;
-  messages?: Partial<MejiroMessages>;
-  children: ReactNode;
-}): ReactNode {
+}: MejiroI18nProviderProps): ReactNode {
   const fromContext = useContext(I18nContext);
   const value = useMemo(
-    () => resolveCoreMessages(locale, messages, locale != null ? enMessages : fromContext),
+    () => resolveMessages(locale, messages, locale != null ? enMessages : fromContext),
     [locale, messages, fromContext],
   );
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
@@ -52,21 +60,8 @@ export function useI18n(options: UseI18nOptions = {}): MejiroMessages {
   const { locale, messages } = options;
   return useMemo(() => {
     if (locale == null && messages == null) return fromContext;
-    return resolveCoreMessages(locale, messages, fromContext);
+    return resolveMessages(locale, messages, fromContext);
   }, [locale, messages, fromContext]);
-}
-
-/** Build a catalog without invoking React (useful in plain modules). */
-export function resolveMessages(
-  locale: MejiroLocale | undefined,
-  overrides: Partial<MejiroMessages> | undefined,
-): MejiroMessages {
-  return resolveCoreMessages(locale, overrides);
-}
-
-/** Replace `{name}` placeholders in a template. */
-export function format(template: string, vars: Record<string, string | number>): string {
-  return formatMessage(template, vars);
 }
 
 /** Built-in message catalogs, keyed by locale. */

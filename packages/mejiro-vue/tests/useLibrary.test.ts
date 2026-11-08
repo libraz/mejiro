@@ -26,108 +26,110 @@ function harness<T>(setup: () => T): { result: { current: T } } {
 describe('useLibrary (Vue)', () => {
   it('starts on the first volume by default', () => {
     const { result } = harness(() => useLibrary({ volumes }));
-    expect(result.current.currentIndex.value).toBe(0);
-    expect(result.current.current.value?.id).toBe('a');
+    expect(result.current.volumeIndex.value).toBe(0);
+    expect(result.current.volume.value?.id).toBe('a');
   });
 
   it('honors initialVolumeId', () => {
     const { result } = harness(() => useLibrary({ volumes, initialVolumeId: 'c' }));
-    expect(result.current.currentIndex.value).toBe(2);
+    expect(result.current.volumeIndex.value).toBe(2);
   });
 
-  it('next / prev / goTo and onChange', () => {
-    const onChange = vi.fn();
-    const { result } = harness(() => useLibrary({ volumes, onChange }));
+  it('next / prev / selectVolume and onVolumeChange', () => {
+    const onVolumeChange = vi.fn();
+    const { result } = harness(() => useLibrary({ volumes, onVolumeChange }));
     result.current.next();
-    expect(result.current.current.value?.id).toBe('b');
-    expect(onChange).toHaveBeenLastCalledWith(volumes[1]);
-    result.current.goTo('c');
-    expect(result.current.current.value?.id).toBe('c');
+    expect(result.current.volume.value?.id).toBe('b');
+    expect(onVolumeChange).toHaveBeenLastCalledWith(volumes[1]);
+    result.current.selectVolume('c');
+    expect(result.current.volume.value?.id).toBe('c');
     result.current.prev();
-    expect(result.current.current.value?.id).toBe('b');
-    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(result.current.volume.value?.id).toBe('b');
+    expect(onVolumeChange).toHaveBeenCalledTimes(3);
   });
 
-  it('returns null current for an empty library', () => {
+  it('returns a null volume for an empty library', () => {
     const { result } = harness(() => useLibrary({ volumes: [] }));
-    expect(result.current.current.value).toBeNull();
-    expect(result.current.currentIndex.value).toBe(-1);
+    expect(result.current.volume.value).toBeNull();
+    expect(result.current.volumeIndex.value).toBe(-1);
   });
 
   it('keeps selection by id when volumes are replaced and resets on empty lists', async () => {
     const list = ref(volumes);
     const { result } = harness(() => useLibrary({ volumes: list }));
 
-    result.current.goTo('c');
+    result.current.selectVolume('c');
     const reordered = [volumes[2], volumes[1], volumes[0]];
     list.value = reordered;
     await nextTick();
 
-    expect(result.current.current.value?.id).toBe('c');
-    expect(result.current.currentIndex.value).toBe(0);
+    expect(result.current.volume.value?.id).toBe('c');
+    expect(result.current.volumeIndex.value).toBe(0);
 
     list.value = [];
     await nextTick();
-    expect(result.current.current.value).toBeNull();
-    expect(result.current.currentIndex.value).toBe(-1);
+    expect(result.current.volume.value).toBeNull();
+    expect(result.current.volumeIndex.value).toBe(-1);
   });
 
   it('falls back immediately when the selected volume disappears', () => {
     const list = ref(volumes);
-    const onChange = vi.fn();
-    const { result } = harness(() => useLibrary({ volumes: list, onChange }));
+    const onVolumeChange = vi.fn();
+    const { result } = harness(() => useLibrary({ volumes: list, onVolumeChange }));
 
-    result.current.goTo('c');
+    result.current.selectVolume('c');
     list.value = [volumes[0], volumes[1]];
 
-    expect(result.current.current.value?.id).toBe('a');
-    expect(result.current.currentIndex.value).toBe(0);
-    expect(onChange).toHaveBeenLastCalledWith(volumes[0]);
+    expect(result.current.volume.value?.id).toBe('a');
+    expect(result.current.volumeIndex.value).toBe(0);
+    expect(onVolumeChange).toHaveBeenLastCalledWith(volumes[0]);
   });
 
   it('opens initialVolumeId once a list arriving after mount contains it', () => {
     const list = ref<typeof volumes>([]);
-    const onChange = vi.fn();
-    const { result } = harness(() => useLibrary({ volumes: list, initialVolumeId: 'c', onChange }));
-    expect(result.current.current.value).toBeNull();
+    const onVolumeChange = vi.fn();
+    const { result } = harness(() =>
+      useLibrary({ volumes: list, initialVolumeId: 'c', onVolumeChange }),
+    );
+    expect(result.current.volume.value).toBeNull();
 
     list.value = volumes;
 
-    expect(result.current.current.value?.id).toBe('c');
-    expect(result.current.currentIndex.value).toBe(2);
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenLastCalledWith(volumes[2]);
+    expect(result.current.volume.value?.id).toBe('c');
+    expect(result.current.volumeIndex.value).toBe(2);
+    expect(onVolumeChange).toHaveBeenCalledTimes(1);
+    expect(onVolumeChange).toHaveBeenLastCalledWith(volumes[2]);
   });
 
   it('switches to initialVolumeId when a later list adds it, until the user navigates', () => {
     const list = ref([volumes[0], volumes[1]]);
     const { result } = harness(() => useLibrary({ volumes: list, initialVolumeId: 'c' }));
-    expect(result.current.current.value?.id).toBe('a');
+    expect(result.current.volume.value?.id).toBe('a');
 
     list.value = volumes;
-    expect(result.current.current.value?.id).toBe('c');
+    expect(result.current.volume.value?.id).toBe('c');
 
-    result.current.goTo('a');
+    result.current.selectVolume('a');
     list.value = [...volumes];
-    expect(result.current.current.value?.id).toBe('a');
+    expect(result.current.volume.value?.id).toBe('a');
   });
 
   it('re-resolves the current volume when a reactive array is mutated in place', () => {
     const list = ref([...volumes]);
-    const onChange = vi.fn();
-    const { result } = harness(() => useLibrary({ volumes: list, onChange }));
-    result.current.goTo('b');
-    onChange.mockClear();
+    const onVolumeChange = vi.fn();
+    const { result } = harness(() => useLibrary({ volumes: list, onVolumeChange }));
+    result.current.selectVolume('b');
+    onVolumeChange.mockClear();
 
     list.value.splice(1, 1);
 
-    expect(result.current.current.value?.id).toBe('a');
-    expect(result.current.currentIndex.value).toBe(0);
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenLastCalledWith(volumes[0]);
+    expect(result.current.volume.value?.id).toBe('a');
+    expect(result.current.volumeIndex.value).toBe(0);
+    expect(onVolumeChange).toHaveBeenCalledTimes(1);
+    expect(onVolumeChange).toHaveBeenLastCalledWith(volumes[0]);
 
     result.current.next();
-    expect(result.current.current.value?.id).toBe('c');
+    expect(result.current.volume.value?.id).toBe('c');
   });
 
   it('opens initialVolumeId pushed into a reactive array after mount', () => {
@@ -136,6 +138,6 @@ describe('useLibrary (Vue)', () => {
 
     list.value.push(...volumes);
 
-    expect(result.current.current.value?.id).toBe('b');
+    expect(result.current.volume.value?.id).toBe('b');
   });
 });

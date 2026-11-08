@@ -19,7 +19,7 @@ peer dependency は `react >= 18` です。TypeScript プロジェクトでは�
 
 ### コンポーネントの選び方
 
-- **`<MejiroReader>`** -- 「EPUB を渡したらリーダーがそのまま立ち上がる」全部入りコンポーネント。ヘッダー、章ナビ、設定パネル、見開き、ページめくり、キーボード操作などをまとめて提供します。投稿サイト等の「公開閲覧画面」用途では、まずこれを使うのが最短です。
+- **`<MejiroReader>`** -- 「EPUB を渡したらリーダーがそのまま立ち上がる」全部入りコンポーネント。章ナビ、設定パネル、見開き、ページめくり、キーボード操作などをまとめて提供し、`title` を渡すとヘッダーも表示します。投稿サイト等の「公開閲覧画面」用途では、まずこれを使うのが最短です。
 - **`<MejiroEditor>` / `<MejiroManuscriptEditor>`** -- 既存 EPUB を編集するエディタと、原稿テキストから EPUB を生成するエディタです。`useEditableEpub` / `useEpubProject` を組み合わせてヘッドレスにも使えます。
 - **`<MejiroPageView>`** -- 1 ページ単位の低レベル表示。リーダーの周りの UI（コメント欄、SNS シェア等）を自前で組みたい場合に、自前の見開きレイアウト内に配置します。
 - **`<MejiroPage>`** -- 最低レベル。`RenderPage` 1 ページを CSS `writing-mode: vertical-rl` でレンダリングするだけのコンポーネントで、独自のページ分割ロジックを使う場合に利用します。
@@ -46,10 +46,26 @@ import { MejiroReader } from '@libraz/mejiro-react';
 
 原稿モードでは、各章の本文が空行で段落に分割され、`parseManuscript()` を通してからレイアウトされます。自作の原稿エディタでライブプレビューを出す場合はこのモードを使います。
 
-`bare` で chrome をまとめて消し、`enableHeader` / `enableChapterNav` / `enableSettings` などで個別に再オプトインできます。
+最短の呼び出しでは、ページインジケーター、設定ボタン、章の選択が表示されます。ヘッダーはリーダーに `title`（または `logo`）を渡すまで出ず、開発用の統計も出ません。各クロムには個別のスイッチがあります: `showSettings`、`showPageIndicator`、`showStats`、`showImageOverlayButton`、`chapterNavMode`（`'none'` で章ナビゲーションを隠す）。
 
 ```tsx
-<MejiroReader epubUrl="/books/sample.epub" bare enableChapterNav />
+<MejiroReader epubUrl="/books/sample.epub" title="吾輩は猫である" showSettings={false} />
+```
+
+矢印キーと Escape は、フォーカスを持ったリーダーのルートで働きます。そのため、1 ページに複数のリーダーがあってもキーを奪い合いません。
+
+#### 読書位置の props
+
+`chapterIndex`、`spreadIndex`、`anchor` はリーダーを開く位置を決めます。対応するハンドラ（`onChapterIndexChange`、`onSpreadIndexChange`、`onAnchorChange`）を渡すと、その値は controlled になります。リーダーは移動のたびにハンドラで報告し、prop が示す位置を表示します。ハンドラがなければ、prop は開始位置にすぎません。
+
+- `spreadIndex` は単ページ表示でも常に章レイアウト上の見開きを数えます。単ページ表示で `spreadIndex` だけを渡すと、その見開きの右ページ（読み順で先）を開きます。1 つの見開きの中で右ページから左ページへ送っても見開きは変わらないので、`onSpreadIndexChange` は発火しません。ページ単位で追従したいときは `onAnchorChange` を使ってください。
+- `anchor`（`ReadingAnchor`）は `chapterIndex` と `spreadIndex` に優先し、見開きの番号と違って再レイアウトしても失われません。
+- 非有限の位置は `0` として読み、小数は切り捨て、末尾を超える添字は丸めます。
+
+```tsx
+const [chapterIndex, setChapterIndex] = useState(0);
+
+<MejiroReader epub={epub} chapterIndex={chapterIndex} onChapterIndexChange={setChapterIndex} />
 ```
 
 #### MejiroReader の imperative handle
@@ -69,73 +85,55 @@ reader.current?.goToSpread(12);
 
 | メソッド | シグネチャ | 用途 |
 |----------|-----------|------|
-| `goToSpread` | `(index: number) => void` | 見開きインデックスへジャンプ（範囲外はクランプ）。 |
+| `goToSpread` | `(index: number) => void` | ナビゲーション位置へジャンプ（範囲外はクランプ）。 |
 | `next` | `() => void` | 1 見開き進める。 |
 | `prev` | `() => void` | 1 見開き戻す。 |
 | `goToChapter` | `(index: number) => void` | 章へ移動し（インデックスは書籍の章の範囲に丸める）、見開きを 0 にリセット。 |
-| `getReadingPosition` | `() => ReadingPosition` | 現在の `{ chapter, spreadIdx, totalPages, totalSpreads }` を取得。 |
+| `getSpreadPosition` | `() => SpreadPosition` | 現在の `{ chapterIndex, spreadIndex, spreadCount, pageCount }` を取得。 |
 | `goToAnchor` | `(anchor: ReadingAnchor) => Promise<void>` | `ReadingAnchor` へ、ページめくりのアニメーションなしで移動。章が異なれば章を切り替えてからアンカー解決。書籍の読み込み前に呼んだ場合は、読み込み後に適用されます。Promise は見開きが適用された時点で resolve し、アンカーの章や位置が書籍に存在しない場合は移動せずに resolve します。続けて別の `goToAnchor` が呼ばれた場合、先の Promise は即座に resolve（supersede）。アンマウント時も resolve するので `await` がハングしません。 |
 | `getAnchor` | `() => ReadingAnchor \| null` | 現在の見開きに表示中の本文の先頭の `ReadingAnchor`。レイアウト未確定時は `null`。画像がページ全体を覆っているときは、本文のある次のページから取ります。 |
-| `getVisibleRange` | `() => { start, end } \| null` | 見開きに表示中のアンカー半開区間（`end` は本文のある次の見開きの本文先頭、なければ章末）。 |
-| `setOptions` | `(partial: Partial<BookOptions>) => Promise<void>` | フォントや行間などを実行時変更。再計測・再レイアウトを伴います。 |
+| `getVisibleRange` | `() => ReadingAnchorRange \| null` | 見開きに表示中のアンカー半開区間（`end` は本文のある次の見開きの本文先頭、なければ章末）。 |
+| `updateOptions` | `(patch: BookOptionsPatch) => Promise<void>` | フォントや行間などを実行時変更。再計測・再レイアウトを伴います。 |
 | `subscribe` | `(event, listener) => () => void` | ライフサイクルイベントを購読。返り値で解除。 |
 
 `subscribe` で購読できるイベント:
 
 | イベント | ペイロード | 発火タイミング |
 |---------|-----------|---------------|
-| `spreadChanged` | `{ chapter, spreadIdx }` | 見開きが切り替わった後。 |
+| `spreadIndexChange` | `{ chapterIndex, spreadIndex }` | 見開きが切り替わった後。 |
 | `turnStart` | `{ from }` | めくりアニメーション開始時（表示前）。 |
 | `turnEnd` | `{ to }` | めくりアニメーション完了時。 |
-| `chapterFinished` | `{ chapter }` | 章の最終見開きに到達したとき。`onChapterCompleted` プロップと同等。 |
+| `chapterFinished` | `{ chapterIndex }` | 章の最終見開きに到達したとき。章の添字を受け取る `onChapterFinished` プロップと同等。 |
 
-読み込み後に最初に落ち着いた位置は基準点として扱い、イベントは発火しません。以降は章か見開きインデックスが変わるたびに `spreadChanged` が 1 回発火し、新しいインデックスが章の最後であれば続けて `chapterFinished` が発火します。インデックスが変わらない再レイアウトでは何も発火しません。`onPageRead(anchor, dwellMs)` プロップも同じ遷移で呼ばれ、離れた側の見開きを受け取ります。書籍の差し替えとアンマウントでは呼ばれません。非制御のリーダーが別の章にいるときに書籍を差し替えると、章 0 へリセットされ、`onChapterChange` が `0` で発火します。React と Vue は同じ順序でイベントを発火します。
+読み込み後に最初に落ち着いた位置は基準点として扱い、イベントは発火しません。以降は章か見開きインデックスが変わるたびに `spreadIndexChange` が 1 回発火し、新しいインデックスが章の最後であれば続けて `chapterFinished` が発火します。インデックスが変わらない再レイアウトでは何も発火しません。`onPageRead(anchor, dwellMs)` プロップも同じ遷移で呼ばれ、離れた側の見開きを受け取ります。書籍の差し替えとアンマウントでは呼ばれません。非制御のリーダーが別の章にいるときに書籍を差し替えると、章 0 へリセットされ、`onChapterIndexChange` が `0` で発火します。React と Vue は同じ順序でイベントを発火します。
 
-単ページ表示（`spreadMode="single"`、または縦長の表示面での `"auto"`）では 1 ページずつ表示し、上記の見開きインデックスはすべてページ単位になります。対象は `goToSpread`・`next` / `prev`・`spreadIdx` / `totalSpreads`・`spreadChanged` のペイロード・`onSpreadIdxChange` です。`getAnchor` と `getVisibleRange` も現在のページを対象にします。`"auto"` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。
+単ページ表示（`spreadMode="single"`、または縦長の表示面での `"auto"`）では 1 ページずつ表示します。`goToSpread`・`next`・`prev` はページ単位で動き、`spreadIndex`・`onSpreadIndexChange`・`spreadIndexChange` イベント・`SpreadPosition` は引き続きレイアウト上の見開きを数えます。`getAnchor` と `getVisibleRange` は現在のページを対象にします。`"auto"` がモードを切り替えるときは、表示中のページが見えたままになるようインデックスを換算します。
 
 #### 読書位置の永続化
 
-`useReadingPosition` は `ReadingAnchor`（`{ chapter, paragraph, charIndex }`）形式で位置を保存します。スプレッド番号と違い、フォントサイズ変更や画面リサイズで再ページネーションされてもアンカーは保持されるため、リフロー耐性のある永続化に向いています。
+`useReadingPosition` は `ReadingAnchor`（`{ chapterIndex, paragraphIndex, charIndex }`）形式で位置を保存します。スプレッド番号と違い、フォントサイズ変更や画面リサイズで再ページネーションされてもアンカーは保持されるため、リフロー耐性のある永続化に向いています。
 
 ```tsx
-import { useEffect, useRef } from 'react';
-import {
-  MejiroReader,
-  useReadingPosition,
-  type MejiroReaderHandle,
-} from '@libraz/mejiro-react';
+import { MejiroReader, useReadingPosition } from '@libraz/mejiro-react';
 
-const reader = useRef<MejiroReaderHandle>(null);
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${bookId}`,
   // storage を省略すると window.localStorage を使用。
   // サーバ保存にする場合は { getItem, setItem, removeItem } を実装して渡す。
 });
 
-// 保存されたアンカーへの復帰はマウント時に 1 回だけ行う。依存配列に position を
-// 入れると下の save() のたびに再実行され、ページをめくるたびに引き戻される。
-useEffect(() => {
-  if (position) reader.current?.goToAnchor(position);
-}, []);
-
-<MejiroReader
-  ref={reader}
-  epubUrl={url}
-  onSpreadChange={() => {
-    const anchor = reader.current?.getAnchor();
-    if (anchor) save(anchor);
-  }}
-/>
+// リーダーは保存されたアンカーで開き、移動のたびに save() に報告する。
+<MejiroReader epubUrl={url} anchor={position} onAnchorChange={save} />
 ```
 
-`storage` は `localStorage` 互換の最小インターフェース（`getItem` / `setItem` / `removeItem`）を持つ任意の実装を受け付けます。サーバへ非同期書き込みする場合は、`storage` を局所的なメモリミラーにしつつ `onChange` でサーバへ送る形が定石です。送信するバイト列は `serializeReadingPosition` で作ります。これは `storage` に書き込まれるものと同じペイロードで、次回訪問時に `parseReadingPosition` がそのまま読み戻せます。
+`storage` は `localStorage` 互換の最小インターフェース（`getItem` / `setItem` / `removeItem`）を持つ任意の実装を受け付けます。サーバへ非同期書き込みする場合は、`storage` を局所的なメモリミラーにしつつ `onPositionChange` でサーバへ送る形が定石です。送信するバイト列は `serializeReadingPosition` で作ります。これは `storage` に書き込まれるものと同じペイロードで、次回訪問時に `parseReadingPosition` がそのまま読み戻せます。
 
 ```tsx
 import { serializeReadingPosition } from '@libraz/mejiro';
 
 const { position, save } = useReadingPosition({
   key: `mejiro:position:${bookId}`,
-  onChange: (next) => {
+  onPositionChange: (next) => {
     void fetch(`/api/books/${bookId}/position`, {
       method: next ? 'PUT' : 'DELETE',
       body: next ? serializeReadingPosition(next) : undefined,
@@ -153,7 +151,7 @@ const restored = parseReadingPosition(await loadPositionFromServer(bookId));
 if (restored) reader.current?.goToAnchor(restored);
 ```
 
-`onChange` は `save()` / `clear()` の直後に同期的に呼ばれます（初回ハイドレートと `key` の変更では発火しません）。ローカル永続化（`storage`）は debounce されたままなので、サーバ側で別レートに調整したい場合はこちらに任せます。
+`onPositionChange` は `save()` / `clear()` の直後に同期的に呼ばれます（初回ハイドレートと `key` の変更では発火しません）。ローカル永続化（`storage`）は `debounceMs` のままなので、サーバ側で別レートに調整したい場合はこちらに任せます。例外を投げたストレージや読み戻せないデータは `onError` に報告されます（`storage-read-failed`、`storage-write-failed`、`storage-corrupt`）。壊れたデータは最初の変更まで上書きしません。
 
 ### MejiroPageView（推奨）
 
@@ -164,9 +162,10 @@ Props:
 | Prop | 型 | 説明 |
 |------|------|-------------|
 | `result` | `PageResult` | 必須。`layout.getSpread()` から取得したページデータ。 |
+| `layout` | `ChapterLayout` | `layout.typography` から `fontFamily` と `lineSpacing` の既定値を与える。 |
 | `fontFamily` | `string` | スロットベースレンダリング用のフォントファミリー。 |
 | `lineSpacing` | `number` | スロットベースレンダリング用の行間倍率。 |
-| `slotMode` | `boolean` | スロットベースレンダリングを強制（いずれかの見開きに画像がある場合は `true` に設定）。 |
+| `slotMode` | `boolean` | スロットベースレンダリングを強制（`result.hasImages` から設定する）。 |
 | `className` | `string` | 追加のCSSクラス。 |
 | `style` | `CSSProperties` | 追加のインラインスタイル。 |
 
@@ -179,7 +178,7 @@ Props:
 <!-- doc-example: 08-react-vertical-reader.tsx#reader -->
 ```tsx
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
@@ -187,41 +186,41 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [layout, setLayout] = useState<ChapterLayout | null>(null);
   const [spread, setSpread] = useState<SpreadResult | null>(null);
-  const [spreadIdx, setSpreadIdx] = useState(0);
-  const [pageSize, setPageSize] = useState({ w: 0, h: 0 });
+  const [spreadIndex, setSpreadIndex] = useState(0);
+  const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
 
-  // Image overlay hook
-  const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-    useImageOverlay(layout, spreadIdx, setSpread);
+  // 画像オーバーレイ: 変更のたびに周囲の本文を再流し込みします
+  const { currentImages, addOverlay, clearOverlays, onOverlayPointerDown, onResizePointerDown } =
+    useImageOverlay(layout, { spreadIndex, onReflow: setSpread });
+  const overlay = currentImages[0];
 
-  // Compute page size from container and lay out the chapter
+  // コンテナを測って章をレイアウト
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    const { pageWidth, pageHeight } = book.computePageSize(el);
-    setPageSize({ w: pageWidth, h: pageHeight });
+    const { pageWidth, pageHeight } = book.fitPageSize(el);
+    setPageSize({ width: pageWidth, height: pageHeight });
 
     book.layoutChapter({ paragraphs }).then((lo) => {
       setLayout(lo);
       setSpread(lo.getSpread(0));
-      setSpreadIdx(0);
+      setSpreadIndex(0);
     });
   }, [paragraphs]);
 
   // Navigate spreads
   const goTo = useCallback(
-    (idx: number) => {
+    (index: number) => {
       if (!layout) return;
-      setSpreadIdx(idx);
-      setSpread(layout.getSpread(idx));
+      setSpreadIndex(index);
+      setSpread(layout.getSpread(index));
     },
     [layout],
   );
@@ -229,34 +228,34 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
   // 計測するコンテナはどの分岐でも描画するので、最初のコミットで effect が取得できる
   if (!spread) return <div ref={containerRef}>Loading...</div>;
 
-  const totalSpreads = Math.ceil(spread.totalPages / 2);
+  const spreadCount = Math.ceil(spread.pageCount / 2);
 
   return (
     <div ref={containerRef}>
       <div style={{ display: 'flex', gap: 4, justifyContent: 'center' }}>
         {/* Right page (first in vertical-rl order) */}
-        <div style={{ width: pageSize.w, height: pageSize.h, position: 'relative' }}>
+        <div style={{ width: pageSize.width, height: pageSize.height, position: 'relative' }}>
           <MejiroPageView
             result={spread.right}
             fontFamily='"Noto Serif JP"'
             lineSpacing={1.8}
-            slotMode={hasImage}
+            slotMode={spread.right.hasImages}
             style={{ width: '100%', height: '100%' }}
           />
           {/* Image overlay on the right page */}
-          {imageRect && (
+          {overlay && (
             <div
               style={{
                 position: 'absolute',
-                left: imageRect.x,
-                top: imageRect.y,
-                width: imageRect.w,
-                height: imageRect.h,
+                left: overlay.rect.x,
+                top: overlay.rect.y,
+                width: overlay.rect.width,
+                height: overlay.rect.height,
                 background: 'rgba(0,0,0,0.1)',
                 border: '2px dashed #888',
                 cursor: 'move',
               }}
-              onPointerDown={onOverlayPointerDown}
+              onPointerDown={(e) => onOverlayPointerDown(overlay.id, e)}
             >
               {/* Resize handle */}
               <div
@@ -268,40 +267,44 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
                   height: 16,
                   cursor: 'nwse-resize',
                 }}
-                onPointerDown={onResizePointerDown}
+                onPointerDown={(e) => onResizePointerDown(overlay.id, e)}
               />
             </div>
           )}
         </div>
 
         {/* Left page */}
-        <div style={{ width: pageSize.w, height: pageSize.h }}>
+        <div style={{ width: pageSize.width, height: pageSize.height }}>
           <MejiroPageView
             result={spread.left}
             fontFamily='"Noto Serif JP"'
             lineSpacing={1.8}
-            slotMode={hasImage}
+            slotMode={spread.left.hasImages}
             style={{ width: '100%', height: '100%' }}
           />
         </div>
       </div>
 
       <div style={{ textAlign: 'center', marginTop: 8 }}>
-        <button type="button" onClick={() => goTo(spreadIdx - 1)} disabled={spreadIdx === 0}>
+        <button type="button" onClick={() => goTo(spreadIndex - 1)} disabled={spreadIndex === 0}>
           Previous
         </button>
         <span style={{ margin: '0 1em' }}>
-          {spreadIdx + 1} / {totalSpreads}
+          {spreadIndex + 1} / {spreadCount}
         </span>
         <button
           type="button"
-          onClick={() => goTo(spreadIdx + 1)}
-          disabled={spreadIdx >= totalSpreads - 1}
+          onClick={() => goTo(spreadIndex + 1)}
+          disabled={spreadIndex >= spreadCount - 1}
         >
           Next
         </button>
-        <button type="button" onClick={toggleImage} style={{ marginLeft: '1em' }}>
-          {hasImage ? 'Remove Image' : 'Add Image'}
+        <button
+          type="button"
+          onClick={() => (overlay ? clearOverlays(spreadIndex) : addOverlay())}
+          style={{ marginLeft: '1em' }}
+        >
+          {overlay ? 'Remove Image' : 'Add Image'}
         </button>
       </div>
     </div>
@@ -314,57 +317,70 @@ function VerticalReader({ paragraphs }: { paragraphs: { text: string }[] }) {
 `useChapterLayout` は、サーフェスのリサイズや組版に影響するオプション変更のたびに章をレイアウトし直します。ただし、現在のレイアウトを計測したときと同じボックスを報告するリサイズ通知ではリフローしません。book はすでに導出した改行ヒントを再利用するので、アナライザーが再実行されることはありません。ただし結果は新しい `ChapterLayout` インスタンスになり、下流の見開きインデックスは 0 に戻ります。フックは次の 3 段階で読書位置を引き継ぎます。Vue のコンポーザブルもまったく同じ形です。
 
 - `capturePosition(layout)` はリフロー直前に差し替えられるレイアウトを受け取り、残すアンカー（または `null`）を返します。内容の切り替えに伴う空白化した再レイアウトでは呼ばれません。
-- `pendingRestore.current` は、新しいレイアウトが揃うまでそのアンカーを保持します。
+- `pendingRestore.current`（Vue では `pendingRestore.value`）は、新しいレイアウトが揃うまでそのアンカーを保持します。
 - `restorePosition(layout, anchor)` を渡した場合、新しいレイアウトが揃った時点で呼ばれます（React ではコミット後、描画前）。呼ばれる時点で `pendingRestore` はすでに空です。
 
 <!-- doc-example: 08-reflow-options.tsx#react -->
 ```tsx
-const layout = useChapterLayout(book, epub, chapter, surface, {
-  capturePosition: (l) => l.anchorAt(spreadIdx, 'right'),
-  restorePosition: (l, anchor) => setSpreadIdx(l.locateAnchor(anchor)?.spreadIdx ?? 0),
+const layout = useChapterLayout(book, {
+  epub,
+  chapterIndex,
+  surface,
+  capturePosition: (l) => l.anchorAt(spreadIndex),
+  restorePosition: (l, anchor) => setSpreadIndex(l.locateAnchor(anchor)?.spreadIndex ?? 0),
 });
 ```
 
 <!-- doc-example: 08-reflow-options-vue.ts#vue -->
 ```ts
-// Vue: オプションは同じ。`layout.layout` は Ref です。
-const layout = useChapterLayout(book, epub, chapter, surface, {
-  capturePosition: (l) => l.anchorAt(spreadIdx.value, 'right'),
+// Vue: 同じオプションで、Ref も渡せます。`layout.layout` は Ref です。
+const layout = useChapterLayout(book, {
+  epub,
+  chapterIndex,
+  surface,
+  capturePosition: (l) => l.anchorAt(spreadIndex.value),
   restorePosition: (l, anchor) => {
-    spreadIdx.value = l.locateAnchor(anchor)?.spreadIdx ?? 0;
+    spreadIndex.value = l.locateAnchor(anchor)?.spreadIndex ?? 0;
   },
 });
 ```
 
-`restorePosition` を渡さない場合は、新しいレイアウトが揃ったあとに `pendingRestore.current` を自分で読み、`null` に戻します。見開きインデックスを自前のレイアウトエフェクトでリセットし、そのあとで復元したいコンポーネントにはこちらが向いています。原稿プレビュー用の `useManuscriptLayout` も同じオプションを受け取り、同じ `pendingRestore` を返します。
+見開きの添字を `useSpread` が持っている場合は、1 つのオプションで済みます。`useSpread(layout, { preservePosition: true })` は、置き換えたレイアウトを旧レイアウトが表示していた本文の位置で開きます。
+
+`restorePosition` を渡さない場合は、新しいレイアウトが揃ったあとに `pendingRestore.current`（Vue では `.value`）を自分で読み、`null` に戻します。見開きインデックスを自前のレイアウトエフェクトでリセットし、そのあとで復元したいコンポーネントにはこちらが向いています。原稿プレビュー用の `useManuscriptLayout` も同じオプションを受け取り、同じ `pendingRestore` を返します。
 
 ### useImageOverlay フック
 
-`useImageOverlay` はドラッグ・リサイズ可能な画像矩形を管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。レイアウトが差し替わったときや見開きが変わったときには排除を再登録するため、リサイズやページ送りのあともテキストは画像を避けて流れ続けます。React では `margin` オプションが変わったときも再登録します。Vue のコンポーザブルはオプションを呼び出し時に 1 度だけ読みます。ドラッグは `isPrimaryPointerPress` が受け付ける押下（タッチ、ペン、マウスの主ボタン）でだけ始まり、`MejiroSpread` はオーバーレイ上の押下ではページをめくりません。`enableImageOverlay` を有効にした `MejiroReader` は、本を読み込んだときと章が変わったときにオーバーレイを消去します。
+`useImageOverlay` は見開きごとのドラッグ・リサイズ可能な画像オーバーレイを管理し、レイアウトエンジンと同期してリアルタイムのテキストリフローを行います。オーバーレイを変更するたびにその見開きを `ChapterLayout.setImages` で流し直し、レイアウトが差し替わったときにはオーバーレイを適用し直すので、リサイズのあともテキストは画像を避けて流れます。React では `margin` オプションの変更でも適用し直します。Vue のコンポーザブルはオプションを呼び出し時に一度だけ読みます。ドラッグは `isPrimaryPointerPress` が受け付ける押下（タッチ、ペン、マウスの主ボタン）でだけ始まり、`MejiroSpread` はオーバーレイ上の押下ではページをめくりません。`showImageOverlayButton` を有効にした `MejiroReader` は、本の読み込みや章の切り替えでオーバーレイを消去します。
 
 ```ts
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, onUpdate, options?);
+const nav = useSpread(layout);
+const overlays = useImageOverlay(layout, {
+  spreadIndex: nav.spreadIndex,
+  onReflow: () => nav.refresh(),
+});
 ```
 
-パラメータ:
+オプション（`UseImageOverlayOptions`）:
 
-| パラメータ | 型 | 説明 |
-|-----------|------|-------------|
-| `layout` | `ChapterLayout \| null` | 現在のチャプターレイアウト。 |
-| `spreadIdx` | `number` | 現在の見開きインデックス。 |
-| `onUpdate` | `(spread: SpreadResult) => void` | リフロー後に呼ばれるコールバック。 |
-| `options` | `UseImageOverlayOptions` | デフォルトのサイズ・位置（`defaultWidth`、`defaultHeight`、`defaultX`、`defaultY`、`margin`）。 |
+| オプション | 型 | 説明 |
+|--------|------|-------------|
+| `spreadIndex` | `number` | 必須。`addOverlay` がオーバーレイを置くレイアウト上の見開き。 |
+| `onReflow` | `(spread: SpreadResult) => void` | オーバーレイの変更後に流し直した見開きごとに呼ばれる。`useSpread().refresh()` と組み合わせる。既定は何もしない。 |
+| `defaultWidth` / `defaultHeight` / `defaultX` / `defaultY` | `number` | 新しいオーバーレイのサイズと位置（80, 100 に 120 × 160）。 |
+| `margin` | `number` | 各オーバーレイの周囲の余白。既定は book のフォントサイズ。 |
 
-戻り値:
+戻り値（`UseImageOverlayReturn`）:
 
 | フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `imageRect` | `ImageRect \| null` | 現在の矩形 `{ x, y, w, h }`、またはオーバーレイがない場合は `null`。 |
-| `hasImage` | `boolean` | オーバーレイがアクティブかどうか。 |
-| `toggleImage` | `() => void` | オーバーレイのオン/オフを切替。 |
-| `onOverlayPointerDown` | `(e: PointerEvent) => void` | ドラッグ用にオーバーレイdivにアタッチ。 |
-| `onResizePointerDown` | `(e: PointerEvent) => void` | リサイズ用にコーナーハンドルにアタッチ。 |
+| `imagesBySpread` | `ReadonlyMap<number, readonly MultiImageItem[]>` | 見開きの添字をキーにしたオーバーレイ。 |
+| `currentImages` | `readonly MultiImageItem[]` | `spreadIndex` のオーバーレイ。`MejiroSpread` の `images` に渡す。 |
+| `hasOverlays` | `boolean` | どれかの見開きにオーバーレイがあるか。 |
+| `addOverlay` | `(overrides?: Partial<ImageOverlayRect>) => MultiImageItem` | 現在の見開きにオーバーレイを追加する。 |
+| `removeOverlay` / `updateOverlay` | `(id) => void` / `(id, rect) => void` | オーバーレイを削除する、または矩形をマージする。 |
+| `clearOverlays` | `(spreadIndex?: number) => void` | すべてのオーバーレイ、または 1 つの見開きのものを削除する。 |
+| `onOverlayPointerDown` / `onResizePointerDown` | `(id: string, e: PointerEvent) => void` | ドラッグ用にオーバーレイ本体へ、リサイズ用に角のハンドルへ付ける。 |
 
 ### MejiroPage（低レベル）
 
@@ -406,32 +422,20 @@ function jump(): void {
 </template>
 ```
 
-ソース指定は React 版と同じ4通り（`epub-url` / `epub` / `manuscript`（任意で `dialect`）/ 未指定で drop-zone）です。`MejiroReaderHandle` は React 版と同じシグネチャを公開しているため、メソッド一覧は [React 側の表](#mejiroreader-の-imperative-handle) を参照してください。Vue 版では `ref` の `.value` 経由で呼び出します。
+ソース指定は React 版と同じ4通り（`epub-url` / `epub` / `manuscript`（任意で `dialect`）/ 未指定で drop-zone）です。位置 props は `v-model:chapter-index`、`v-model:spread-index`、`v-model:anchor` で結べます。React と同じく、`update:` イベントを購読せずに結んだ値は開始位置にすぎません。`MejiroReaderHandle` は React 版と同じシグネチャを公開しているため、メソッド一覧は [React 側の表](#mejiroreader-の-imperative-handle) を参照してください。Vue 版では `ref` の `.value` 経由で呼び出します。
 
-読書位置の永続化は React 版と同じ方法で行います。`useReadingPosition` は `ReadingAnchor` を保存し、ハンドルの `getAnchor` で取得して `goToAnchor` で復帰します。見開き番号（`:spread-idx`）はリフローで変わるため、保存形式には使えません。
+読書位置の永続化は React 版と同じ方法で行います。`useReadingPosition` が保存する `ReadingAnchor` を `anchor` に結び、移動のたびに保存します。見開き番号はリフローで変わるため、保存形式には使えません。
 
 ```vue
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { MejiroReader, type MejiroReaderHandle, useReadingPosition } from '@libraz/mejiro-vue';
+import { MejiroReader, useReadingPosition } from '@libraz/mejiro-vue';
 
 const props = defineProps<{ bookId: string; url: string }>();
-const reader = ref<MejiroReaderHandle | null>(null);
 const { position, save } = useReadingPosition({ key: `mejiro:position:${props.bookId}` });
-
-// 復帰はマウント時に 1 回だけ。position を watch すると save() のたびに再実行される。
-onMounted(() => {
-  if (position.value) void reader.value?.goToAnchor(position.value);
-});
-
-function onSpreadChange(): void {
-  const anchor = reader.value?.getAnchor();
-  if (anchor) save(anchor);
-}
 </script>
 
 <template>
-  <MejiroReader ref="reader" :epub-url="url" @spread-change="onSpreadChange" />
+  <MejiroReader :epub-url="url" :anchor="position" @update:anchor="save" />
 </template>
 ```
 
@@ -444,6 +448,7 @@ Props:
 | Prop | 型 | 説明 |
 |------|------|-------------|
 | `result` | `PageResult` | 必須。`layout.getSpread()` から取得したページデータ。 |
+| `layout` | `ChapterLayout` | `layout.typography` から `fontFamily` と `lineSpacing` の既定値を与える。 |
 | `fontFamily` | `string` | スロットベースレンダリング用のフォントファミリー。 |
 | `lineSpacing` | `number` | スロットベースレンダリング用の行間倍率。 |
 | `slotMode` | `boolean` | スロットベースレンダリングを強制。 |
@@ -456,7 +461,7 @@ Props:
 ```vue
 <script setup lang="ts">
 import type { ChapterLayout, SpreadResult } from '@libraz/mejiro/book';
-import { DEFAULT_HEADING_STYLES, MejiroBook } from '@libraz/mejiro/book';
+import { MejiroBook } from '@libraz/mejiro/book';
 import { MejiroPageView, useImageOverlay } from '@libraz/mejiro-vue';
 import { computed, onMounted, ref, shallowRef } from 'vue';
 
@@ -466,35 +471,43 @@ const book = new MejiroBook({
   fontFamily: '"Noto Serif JP"',
   fontSize: 16,
   lineSpacing: 1.8,
-  headingStyles: DEFAULT_HEADING_STYLES,
 });
 
 const containerRef = ref<HTMLElement | null>(null);
 const layout = shallowRef<ChapterLayout | null>(null);
 const spread = shallowRef<SpreadResult | null>(null);
-const spreadIdx = ref(0);
-const pageSize = ref({ w: 0, h: 0 });
+const spreadIndex = ref(0);
+const pageSize = ref({ width: 0, height: 0 });
 
-// Image overlay composable (note: takes Vue Refs for layout and spreadIdx)
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, (s) => {
-    spread.value = s;
+// 画像オーバーレイ: 変更のたびに周囲の本文を再流し込みします（layout と spreadIndex は Ref）
+const { currentImages, addOverlay, clearOverlays, onOverlayPointerDown, onResizePointerDown } =
+  useImageOverlay(layout, {
+    spreadIndex,
+    onReflow: (s) => {
+      spread.value = s;
+    },
   });
+const overlay = computed(() => currentImages.value[0]);
 
-const totalSpreads = computed(() => (spread.value ? Math.ceil(spread.value.totalPages / 2) : 0));
+const spreadCount = computed(() => (spread.value ? Math.ceil(spread.value.pageCount / 2) : 0));
 
-function goTo(idx: number): void {
+function goTo(index: number): void {
   if (!layout.value) return;
-  spreadIdx.value = idx;
-  spread.value = layout.value.getSpread(idx);
+  spreadIndex.value = index;
+  spread.value = layout.value.getSpread(index);
+}
+
+function toggleOverlay(): void {
+  if (overlay.value) clearOverlays(spreadIndex.value);
+  else addOverlay();
 }
 
 onMounted(async () => {
   const el = containerRef.value;
   if (!el) return;
 
-  const { pageWidth, pageHeight } = book.computePageSize(el);
-  pageSize.value = { w: pageWidth, h: pageHeight };
+  const { pageWidth, pageHeight } = book.fitPageSize(el);
+  pageSize.value = { width: pageWidth, height: pageHeight };
 
   const lo = await book.layoutChapter({ paragraphs: props.paragraphs });
   layout.value = lo;
@@ -508,29 +521,29 @@ onMounted(async () => {
       <div style="display: flex; gap: 4px; justify-content: center">
         <!-- Right page (first in vertical-rl order) -->
         <div
-          :style="{ width: pageSize.w + 'px', height: pageSize.h + 'px', position: 'relative' }"
+          :style="{ width: pageSize.width + 'px', height: pageSize.height + 'px', position: 'relative' }"
         >
           <MejiroPageView
             :result="spread.right"
             font-family='"Noto Serif JP"'
             :line-spacing="1.8"
-            :slot-mode="hasImage"
+            :slot-mode="spread.right.hasImages"
             :style="{ width: '100%', height: '100%' }"
           />
           <!-- Image overlay on the right page -->
           <div
-            v-if="imageRect"
+            v-if="overlay"
             :style="{
               position: 'absolute',
-              left: imageRect.x + 'px',
-              top: imageRect.y + 'px',
-              width: imageRect.w + 'px',
-              height: imageRect.h + 'px',
+              left: overlay.rect.x + 'px',
+              top: overlay.rect.y + 'px',
+              width: overlay.rect.width + 'px',
+              height: overlay.rect.height + 'px',
               background: 'rgba(0,0,0,0.1)',
               border: '2px dashed #888',
               cursor: 'move',
             }"
-            @pointerdown="onOverlayPointerDown"
+            @pointerdown="onOverlayPointerDown(overlay.id, $event)"
           >
             <!-- Resize handle -->
             <div
@@ -542,31 +555,31 @@ onMounted(async () => {
                 height: '16px',
                 cursor: 'nwse-resize',
               }"
-              @pointerdown="onResizePointerDown"
+              @pointerdown="onResizePointerDown(overlay.id, $event)"
             />
           </div>
         </div>
 
         <!-- Left page -->
-        <div :style="{ width: pageSize.w + 'px', height: pageSize.h + 'px' }">
+        <div :style="{ width: pageSize.width + 'px', height: pageSize.height + 'px' }">
           <MejiroPageView
             :result="spread.left"
             font-family='"Noto Serif JP"'
             :line-spacing="1.8"
-            :slot-mode="hasImage"
+            :slot-mode="spread.left.hasImages"
             :style="{ width: '100%', height: '100%' }"
           />
         </div>
       </div>
 
       <div style="text-align: center; margin-top: 8px">
-        <button :disabled="spreadIdx === 0" @click="goTo(spreadIdx - 1)">Previous</button>
-        <span style="margin: 0 1em">{{ spreadIdx + 1 }} / {{ totalSpreads }}</span>
-        <button :disabled="spreadIdx >= totalSpreads - 1" @click="goTo(spreadIdx + 1)">
+        <button :disabled="spreadIndex === 0" @click="goTo(spreadIndex - 1)">Previous</button>
+        <span style="margin: 0 1em">{{ spreadIndex + 1 }} / {{ spreadCount }}</span>
+        <button :disabled="spreadIndex >= spreadCount - 1" @click="goTo(spreadIndex + 1)">
           Next
         </button>
-        <button style="margin-left: 1em" @click="toggleImage">
-          {{ hasImage ? 'Remove Image' : 'Add Image' }}
+        <button style="margin-left: 1em" @click="toggleOverlay">
+          {{ overlay ? 'Remove Image' : 'Add Image' }}
         </button>
       </div>
     </template>
@@ -577,31 +590,16 @@ onMounted(async () => {
 
 ### useImageOverlay コンポーザブル
 
-Reactのフックと同じ機能ですが、`layout` と `spreadIdx` に **Vue Ref** を受け取り、リアクティブな **Ref** を返します。
+オプションと戻り値のキーは React のフックと同じです。`layout` と `options.spreadIndex` は値、`Ref`、getter のいずれでも受け取り、`imagesBySpread`・`currentImages`・`hasOverlays` は ref で返します。その他のオプションは一度だけ読みます。
 
 ```ts
-const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerDown } =
-  useImageOverlay(layout, spreadIdx, onUpdate, options?);
+const nav = useSpread(layout);
+const overlays = useImageOverlay(layout, {
+  spreadIndex: nav.spreadIndex,
+  onReflow: () => nav.refresh(),
+});
+overlays.addOverlay();
 ```
-
-パラメータ:
-
-| パラメータ | 型 | 説明 |
-|-----------|------|-------------|
-| `layout` | `Ref<ChapterLayout \| null>` | チャプターレイアウトへのRef。 |
-| `spreadIdx` | `Ref<number>` | 現在の見開きインデックスへのRef。 |
-| `onUpdate` | `(spread: SpreadResult) => void` | リフロー後に呼ばれるコールバック。 |
-| `options` | `UseImageOverlayOptions` | デフォルトのサイズ・位置。 |
-
-戻り値:
-
-| フィールド | 型 | 説明 |
-|-------|------|-------------|
-| `imageRect` | `Ref<ImageRect \| null>` | リアクティブな矩形。 |
-| `hasImage` | `Ref<boolean>` | リアクティブなcomputed boolean。 |
-| `toggleImage` | `() => void` | オーバーレイの切替。 |
-| `onOverlayPointerDown` | `(e: PointerEvent) => void` | ドラッグ用にアタッチ。 |
-| `onResizePointerDown` | `(e: PointerEvent) => void` | リサイズ用にアタッチ。 |
 
 ### MejiroPage（低レベル）
 
@@ -633,7 +631,9 @@ const { imageRect, hasImage, toggleImage, onOverlayPointerDown, onResizePointerD
 
 ### MejiroManuscriptEditor の controlled モード
 
-`title` / `author` / `cover` は uncontrolled（初期値）と controlled（親が所有）の両方を sane なまま使えます。`onXxxChange`（React）または `v-model:xxx`（Vue）を付けると controlled に切り替わり、親が prop を更新するまで入力値は親側の値に追従します。
+`title` / `author` / `cover` / `chapters` は uncontrolled（初期値）と controlled（親が所有）のどちらとしても使えます。`onXxxChange`（React）または `v-model:xxx`（Vue）を付けると controlled に切り替わり、親が prop を更新するまで入力値は親側の値に追従します。
+
+これは両パッケージのすべての値の prop に共通する規則で、prop は開始値、ハンドラが controlled にするものです。一般的な `value` + `onChange` / `defaultValue` の分け方とは異なります。たとえば別の画面で編集するタイトルのように、1 つのフィールドだけをホストが引き取っても、他のフィールドは uncontrolled の既定のままにでき、値ごとの prop 名も 1 つで済むようにするためです。
 
 ```tsx
 // React: 投稿フォームの状態と統合する例
@@ -660,7 +660,7 @@ const [cover, setCover] = useState<File | null>(null);
 />
 ```
 
-ハンドラを付けないと従来通りエディタ内部で状態管理されます（既存コードは変更不要）。
+ハンドラを付けなければ、そのフィールドはエディタ内部で状態管理されます。
 
 ---
 
@@ -748,14 +748,14 @@ button, input, optgroup, select, textarea { padding: 0; ... }  /* レイヤー�
 
 ### ページ番号（`pageNumbers`）
 
-見開きの各ページは、柱（ランニングヘッド）にそのページ自身のノンブルを表示します（右ページが奇数、左ページが偶数）。どのページに番号を出すかは `pageNumbers` で切り替えます。設定はすべてのリーダーモードに効きます。`mode="scroll"` でも同じ規則（先頭ページが右）でページ番号を付け、`enablePageIndicator` の表示も出ます。
+見開きの各ページは、柱（ランニングヘッド）にそのページ自身のノンブルを表示します（右ページが奇数、左ページが偶数）。どのページに番号を出すかは `pageNumbers` で切り替えます。設定はすべてのリーダーモードに効きます。`mode="scroll"` でも同じ規則（先頭ページが右）でページ番号を付け、`showPageIndicator` の表示も出ます。
 
 | 値 | 効果 |
 |---|---|
 | `'both'` | 全ページに番号（デフォルト）。 |
 | `'right'` | 右ページのみ。 |
 | `'left'` | 左ページのみ。 |
-| `'none'` | 番号を非表示。`enablePageIndicator` の「n / total」表示は独立しています。 |
+| `'none'` | 番号を非表示。`showPageIndicator` の「n / total」表示は独立しています。 |
 
 ```tsx
 // React
@@ -775,10 +775,10 @@ button, input, optgroup, select, textarea { padding: 0; ... }  /* レイヤー�
 
 | 必要なもの | API |
 |---|---|
-| 原稿の状態管理 (章配列・autosave) | `useManuscriptDraft({ onAutosave, autosaveDelay })` |
+| 原稿の状態管理 (章配列・autosave) | `useManuscriptDraft({ onAutosave, autosaveDebounceMs })` |
 | 1 章をプレビュー用にレイアウト | `useManuscriptLayout(book, chapter, surfaceRef, { dialect })` |
 | 装飾付きプレビュー (チャプタナビ・設定込み) | `<MejiroReader manuscript={chapters} dialect="mejiro" />` |
-| 自前 textarea のルビ/圏点ハイライト | `<MejiroNotationHighlighter value onChange />` |
+| 自前 textarea のルビ/圏点ハイライト | `<MejiroNotationHighlighter value onValueChange />` |
 | 完成時の EPUB 書き出し | `EpubProject.fromManuscript(...).export(...)` |
 
 ### MejiroReader を原稿でそのまま駆動する
@@ -797,9 +797,9 @@ function MyEditor() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', height: '100vh' }}>
       <MejiroReader
-        manuscript={draft.chapters.map((c) => ({ id: c.id, title: c.title, body: c.body }))}
-        chapter={draft.selected}
-        onChapterChange={draft.setSelected}
+        manuscript={draft.chapters}
+        chapterIndex={draft.selectedChapterIndex}
+        onChapterIndexChange={draft.setSelectedChapterIndex}
         dialect="mejiro"
       />
       <YourSidePanel draft={draft} />
@@ -821,7 +821,7 @@ import { useRef } from 'react';
 function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
   const { book } = useMejiroBook({ fontFamily: '"Noto Serif JP"', fontSize: 16 });
   const surface = useRef<HTMLDivElement>(null);
-  const layout = useManuscriptLayout(book, chapter, surface);
+  const layout = useManuscriptLayout(book, { chapter, surface });
   return (
     <div ref={surface} style={{ height: '100%' }}>
       {layout.layout && (
@@ -839,7 +839,7 @@ function CustomPreview({ chapter }: { chapter: ManuscriptChapter }) {
 
 ### 原稿入力 textarea にルビ可視化を載せる
 
-`MejiroNotationHighlighter` は textarea 背後にオーバーレイを置き、ルビ/圏点/縦中横/em/strong/リンク/脚注の各トークンを背景色で示します。textarea は完全にインタラクティブなまま使えます。
+`MejiroNotationHighlighter` は textarea 背後にオーバーレイを置き、ルビ/圏点/縦中横/em/strong/リンク/脚注の各トークンを背景色で示します。textarea は完全にインタラクティブなまま使えます。`onValueChange` は新しいテキストを受け取り、それ以外の textarea の属性は（ネイティブの `onChange` も含めて）textarea に届きます（Vue では `v-model:value` を使い、属性はそのまま透過します）。
 
 ```tsx
 import { MejiroNotationHighlighter } from '@libraz/mejiro-react';
@@ -847,7 +847,7 @@ import { useState } from 'react';
 
 function Notation() {
   const [text, setText] = useState('｜漢字《かんじ》のルビ例です。');
-  return <MejiroNotationHighlighter value={text} onChange={setText} dialect="mejiro" />;
+  return <MejiroNotationHighlighter value={text} onValueChange={setText} dialect="mejiro" />;
 }
 ```
 
@@ -881,16 +881,16 @@ function Reader({ bookId, epub }) {
 }
 ```
 
-`annotations` は `{ chapter, start, end, color? }` の配列です。Reader は現在の章のエントリだけを `ChapterLayout.selectionRects` でハイライト矩形に変換し、`MejiroSpread` に渡します。`storage` オプションは `useReadingPosition` と同じインターフェースなので、`localStorage` をサーバー側のストアに差し替えるだけで済みます。
+`annotations` は `ReaderAnnotation`（`{ chapterIndex, start, end, color? }`）の配列です。Reader は現在の章のエントリだけを `ChapterLayout.selectionRects` でハイライト矩形に変換し、`MejiroSpread` に渡します。`storage` オプションは `useReadingPosition` と同じインターフェースなので、`localStorage` をサーバー側のストアに差し替えるだけで済みます。
 
-サーバーと非同期に同期するには、`onChange` で変更を 1 件ずつ転送します。`onChange` は `add` / `remove` / `update` / `clear` の直後に同期的に呼ばれ、初回のハイドレーションと `key` の変更では呼ばれません。空のリストへの `clear()` は何もせず、`onChange` も呼ばれません。読書位置と同様に、送信するバイト列は `serializeAnnotations` で作ってください。次回の訪問時に `parseAnnotations` がそのまま受け付けます。
+サーバーと非同期に同期するには、`onAnnotationsChange` で変更を 1 件ずつ転送します。`onAnnotationsChange` は `add` / `remove` / `update` / `clear` の直後に同期的に呼ばれ、初回のハイドレーションと `key` の変更では呼ばれません。空のリストへの `clear()` は何もせず、`onAnnotationsChange` も呼ばれません。読書位置と同様に、送信するバイト列は `serializeAnnotations` で作ってください。次回の訪問時に `parseAnnotations` がそのまま受け付けます。
 
 ```tsx
 import { serializeAnnotations } from '@libraz/mejiro';
 
 const { annotations, add, remove } = useAnnotations({
   key: `mejiro:ann:${bookId}`,
-  onChange: (next) => {
+  onAnnotationsChange: (next) => {
     void fetch(`/api/books/${bookId}/annotations`, {
       method: 'PUT',
       body: serializeAnnotations(next),

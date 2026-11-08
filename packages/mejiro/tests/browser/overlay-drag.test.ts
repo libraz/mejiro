@@ -67,7 +67,7 @@ function overlayElements(): { overlay: HTMLElement; handle: HTMLElement } {
   return { overlay, handle };
 }
 
-const START: ImageOverlayRect = { x: 10, y: 20, w: 100, h: 120 };
+const START: ImageOverlayRect = { x: 10, y: 20, width: 100, height: 120 };
 
 describe('createOverlayDragSession', () => {
   beforeEach(() => {
@@ -90,7 +90,7 @@ describe('createOverlayDragSession', () => {
   });
 
   it('translates the start rectangle by the cumulative pointer delta', () => {
-    const onChange = vi.fn();
+    const onRectChange = vi.fn();
     const { overlay } = overlayElements();
 
     const session = createOverlayDragSession({
@@ -102,7 +102,7 @@ describe('createOverlayDragSession', () => {
       captureElement: overlay,
       activeElement: overlay,
       dragClass: 'dragging',
-      onChange,
+      onRectChange,
     });
 
     expect(overlay.setPointerCapture).toHaveBeenCalledWith(7);
@@ -110,12 +110,12 @@ describe('createOverlayDragSession', () => {
 
     pointerMove(230, 280, 7);
     flushFrames();
-    expect(onChange).toHaveBeenLastCalledWith({ x: 40, y: 0, w: 100, h: 120 });
+    expect(onRectChange).toHaveBeenLastCalledWith({ x: 40, y: 0, width: 100, height: 120 });
 
     // Deltas are measured from the gesture start, never accumulated.
     pointerMove(190, 300, 7);
     flushFrames();
-    expect(onChange).toHaveBeenLastCalledWith({ x: 0, y: 20, w: 100, h: 120 });
+    expect(onRectChange).toHaveBeenLastCalledWith({ x: 0, y: 20, width: 100, height: 120 });
 
     pointerUp(7);
     expect(session.active).toBe(false);
@@ -123,12 +123,12 @@ describe('createOverlayDragSession', () => {
 
     pointerMove(500, 500, 7);
     flushFrames();
-    expect(onChange).toHaveBeenCalledTimes(2);
-    expect(START).toEqual({ x: 10, y: 20, w: 100, h: 120 });
+    expect(onRectChange).toHaveBeenCalledTimes(2);
+    expect(START).toEqual({ x: 10, y: 20, width: 100, height: 120 });
   });
 
   it('resizes from the top-left anchor and clamps at the minimum size', () => {
-    const onChange = vi.fn();
+    const onRectChange = vi.fn();
     const { overlay, handle } = overlayElements();
 
     createOverlayDragSession({
@@ -140,7 +140,7 @@ describe('createOverlayDragSession', () => {
       captureElement: handle,
       activeElement: overlay,
       dragClass: 'dragging',
-      onChange,
+      onRectChange,
     });
 
     // The handle takes the pointer capture, the overlay takes the drag class.
@@ -149,15 +149,15 @@ describe('createOverlayDragSession', () => {
 
     pointerMove(40, 30, 3);
     flushFrames();
-    expect(onChange).toHaveBeenLastCalledWith({ x: 10, y: 20, w: 140, h: 150 });
+    expect(onRectChange).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 140, height: 150 });
 
     pointerMove(-500, -500, 3);
     flushFrames();
-    expect(onChange).toHaveBeenLastCalledWith({ x: 10, y: 20, w: 40, h: 40 });
+    expect(onRectChange).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 40, height: 40 });
   });
 
   it('honours a custom minimum size', () => {
-    const onChange = vi.fn();
+    const onRectChange = vi.fn();
 
     createOverlayDragSession({
       mode: 'resize',
@@ -165,30 +165,30 @@ describe('createOverlayDragSession', () => {
       startX: 0,
       startY: 0,
       minSize: 80,
-      onChange,
+      onRectChange,
     });
 
     pointerMove(-500, -500);
     flushFrames();
-    expect(onChange).toHaveBeenLastCalledWith({ x: 10, y: 20, w: 80, h: 80 });
+    expect(onRectChange).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 80, height: 80 });
   });
 
   it('coalesces several moves inside one animation frame', () => {
-    const onChange = vi.fn();
+    const onRectChange = vi.fn();
 
-    createOverlayDragSession({ mode: 'move', rect: START, startX: 0, startY: 0, onChange });
+    createOverlayDragSession({ mode: 'move', rect: START, startX: 0, startY: 0, onRectChange });
 
     pointerMove(5, 5);
     pointerMove(10, 10);
     pointerMove(15, 15);
     flushFrames();
 
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith({ x: 25, y: 35, w: 100, h: 120 });
+    expect(onRectChange).toHaveBeenCalledTimes(1);
+    expect(onRectChange).toHaveBeenCalledWith({ x: 25, y: 35, width: 100, height: 120 });
   });
 
-  it('cancels once, dropping the queued frame and the listeners', () => {
-    const onChange = vi.fn();
+  it('disposes once, dropping the queued frame and the listeners', () => {
+    const onRectChange = vi.fn();
     const onEnd = vi.fn();
     const registry = new Set<() => void>();
     const { overlay } = overlayElements();
@@ -202,16 +202,16 @@ describe('createOverlayDragSession', () => {
       activeElement: overlay,
       dragClass: 'dragging',
       registry,
-      onChange,
+      onRectChange,
       onEnd,
     });
     expect(registry.size).toBe(1);
 
     pointerMove(50, 50);
-    session.cancel();
+    session.dispose();
     flushFrames();
 
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onRectChange).not.toHaveBeenCalled();
     expect(onEnd).toHaveBeenCalledTimes(1);
     expect(registry.size).toBe(0);
     expect(overlay.classList.contains('dragging')).toBe(false);
@@ -220,7 +220,7 @@ describe('createOverlayDragSession', () => {
     expect(removeListener).toHaveBeenCalledWith('pointercancel', expect.any(Function));
     expect(removeListener).toHaveBeenCalledWith('lostpointercapture', expect.any(Function));
 
-    session.cancel();
+    session.dispose();
     expect(onEnd).toHaveBeenCalledTimes(1);
     removeListener.mockRestore();
   });
@@ -228,7 +228,7 @@ describe('createOverlayDragSession', () => {
   it.each(['pointercancel', 'lostpointercapture'])(
     'ends the gesture once on %s and stops following the pointer',
     (type) => {
-      const onChange = vi.fn();
+      const onRectChange = vi.fn();
       const onEnd = vi.fn();
       const registry = new Set<() => void>();
       const { overlay } = overlayElements();
@@ -243,7 +243,7 @@ describe('createOverlayDragSession', () => {
         activeElement: overlay,
         dragClass: 'dragging',
         registry,
-        onChange,
+        onRectChange,
         onEnd,
       });
 
@@ -257,13 +257,13 @@ describe('createOverlayDragSession', () => {
       pointerMove(50, 50, 1);
       flushFrames();
       pointerUp(1);
-      expect(onChange).not.toHaveBeenCalled();
+      expect(onRectChange).not.toHaveBeenCalled();
       expect(onEnd).toHaveBeenCalledTimes(1);
     },
   );
 
   it('follows only the pointer that owns the gesture', () => {
-    const onChange = vi.fn();
+    const onRectChange = vi.fn();
     const onEnd = vi.fn();
 
     const session = createOverlayDragSession({
@@ -272,15 +272,15 @@ describe('createOverlayDragSession', () => {
       startX: 0,
       startY: 0,
       pointerId: 1,
-      onChange,
+      onRectChange,
       onEnd,
     });
 
     pointerMove(10, 10, 1);
     pointerMove(300, 300, 2);
     flushFrames();
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenLastCalledWith({ x: 20, y: 30, w: 100, h: 120 });
+    expect(onRectChange).toHaveBeenCalledTimes(1);
+    expect(onRectChange).toHaveBeenLastCalledWith({ x: 20, y: 30, width: 100, height: 120 });
 
     // A second finger lifting or being cancelled does not end the gesture.
     pointerUp(2);
@@ -297,9 +297,9 @@ describe('createOverlayDragSession', () => {
   it.each(['pointerup', 'pointercancel'])(
     'delivers a move still queued at %s before ending',
     (type) => {
-      const onChange = vi.fn();
+      const onRectChange = vi.fn();
       const onEnd = vi.fn(() => {
-        expect(onChange).toHaveBeenLastCalledWith({ x: 70, y: 60, w: 100, h: 120 });
+        expect(onRectChange).toHaveBeenLastCalledWith({ x: 70, y: 60, width: 100, height: 120 });
       });
 
       createOverlayDragSession({
@@ -308,7 +308,7 @@ describe('createOverlayDragSession', () => {
         startX: 0,
         startY: 0,
         pointerId: 1,
-        onChange,
+        onRectChange,
         onEnd,
       });
 
@@ -317,11 +317,11 @@ describe('createOverlayDragSession', () => {
       pointerMove(60, 40, 1);
       pointerEvent(type, { pointerId: 1, clientX: 60, clientY: 40 });
 
-      expect(onChange).toHaveBeenCalledTimes(1);
-      expect(onChange).toHaveBeenCalledWith({ x: 70, y: 60, w: 100, h: 120 });
+      expect(onRectChange).toHaveBeenCalledTimes(1);
+      expect(onRectChange).toHaveBeenCalledWith({ x: 70, y: 60, width: 100, height: 120 });
       expect(onEnd).toHaveBeenCalledTimes(1);
       flushFrames();
-      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onRectChange).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -329,20 +329,20 @@ describe('createOverlayDragSession', () => {
     vi.unstubAllGlobals();
     vi.stubGlobal('requestAnimationFrame', undefined);
     vi.stubGlobal('cancelAnimationFrame', undefined);
-    const onChange = vi.fn();
+    const onRectChange = vi.fn();
 
     const session = createOverlayDragSession({
       mode: 'move',
       rect: START,
       startX: 0,
       startY: 0,
-      onChange,
+      onRectChange,
     });
 
     pointerMove(10, 10);
-    expect(onChange).toHaveBeenCalledWith({ x: 20, y: 30, w: 100, h: 120 });
+    expect(onRectChange).toHaveBeenCalledWith({ x: 20, y: 30, width: 100, height: 120 });
 
-    session.cancel();
+    session.dispose();
   });
 });
 
@@ -373,9 +373,7 @@ describe('pointer drag duplication', () => {
   it('has every overlay hook go through the shared session', () => {
     expect(filesMatching(/createOverlayDragSession\(\{/u)).toEqual([
       'mejiro-react/src/useImageOverlay.ts',
-      'mejiro-react/src/useMultiImageOverlay.ts',
       'mejiro-vue/src/useImageOverlay.ts',
-      'mejiro-vue/src/useMultiImageOverlay.ts',
     ]);
   });
 });

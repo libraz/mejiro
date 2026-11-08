@@ -9,8 +9,8 @@ transitions, or anything else.
 | Hook | Used for |
 |------|----------|
 | `useMejiroBook(options)` | One `MejiroBook` instance |
-| `useEpub({ defaultUrl })` | Parse + load state |
-| `useChapterLayout(book, epub, chapter, surfaceRef)` | Layout the active chapter, react to resize |
+| `useEpub({ url })` | Parse + load state |
+| `useChapterLayout(book, { epub, chapterIndex, surface })` | Layout the active chapter, react to resize |
 | `useSpread(layout, { enableKeyboard })` | Track current spread, prev/next, keyboard nav |
 | `MejiroSpread` (component) | Renders the two-page spread |
 
