@@ -171,10 +171,11 @@
 
   /* Notation highlighter — overlay that tints the background of manuscript
    * notation tokens behind the editing textarea. */
+  /* The textarea sets the wrapper's height, so the tint layer (inset: 0)
+   * never reaches past the textarea's visible box. */
   .mejiro-notation-highlighter {
     position: relative;
     display: block;
-    min-height: 110px;
   }
 
   .mejiro-notation-overlay,
@@ -202,7 +203,9 @@
 
   .mejiro-notation-textarea {
     position: relative;
+    display: block;
     width: 100%;
+    min-height: 110px;
     background: transparent;
     color: inherit;
     resize: vertical;

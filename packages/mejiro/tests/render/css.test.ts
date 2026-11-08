@@ -182,6 +182,17 @@ describe('render CSS', () => {
     expect(css).not.toContain('--mejiro-editor-panel-side');
   });
 
+  it('sizes the notation highlighter by its textarea, so the tint layer covers only the textarea', () => {
+    // The tint layer fills the wrapper (inset: 0); a wrapper taller than the
+    // textarea leaves tinted tokens drawn below the textarea's visible box.
+    const rules = cssRules(readCss('mejiro-editor.css'), '.mejiro-notation-');
+    expect(rules.get('overlay')?.get('inset')).toBe('0');
+    expect(rules.get('highlighter')?.has('min-height')).toBe(false);
+    expect(rules.get('highlighter')?.has('height')).toBe(false);
+    expect(rules.get('textarea')?.get('display')).toBe('block');
+    expect(rules.get('textarea')?.get('min-height')).toBe('110px');
+  });
+
   it('puts the overlay resize handle on the corner the resize arithmetic moves', () => {
     // Growing by (+dx, +dy) keeps x and y: the top-left is fixed, so the grabbed corner is bottom-right.
     const grown = resizeImageOverlayRect({ x: 10, y: 20, width: 100, height: 80 }, 30, 15);
