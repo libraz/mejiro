@@ -298,6 +298,44 @@ describe('tokenBoundaries support', () => {
     expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['あいうえお hello ', 'world']);
   });
 
+  it('moves a Latin word to the next line instead of splitting it after CJK punctuation', () => {
+    // The overflow falls inside "EPUB"; the position after "、" keeps it whole.
+    const value = 'あいうえお、EPUBとして';
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 80,
+    });
+
+    expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['あいうえお、', 'EPUBとして']);
+  });
+
+  it('keeps a Latin word whole when token boundaries yield no candidate', () => {
+    const value = 'あいうえお、EPUBとして';
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 80,
+      tokenBoundaries: tokenLengthsToBoundaries([text.length]),
+    });
+
+    expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['あいうえお、', 'EPUBとして']);
+  });
+
+  it('splits a Latin word that is longer than the line', () => {
+    const value = 'あABCDEFGHIJ';
+    const text = toCodepoints(value);
+    const result = computeBreaks({
+      text,
+      advances: uniformAdvances(text.length, 10),
+      lineWidth: 50,
+    });
+
+    expect(linesFromBreakPoints(value, result.breakPoints)).toEqual(['あABCD', 'EFGHI', 'J']);
+  });
+
   it('keeps the space preference when token boundaries yield no candidate', () => {
     const value = 'hello world';
     const text = toCodepoints(value);

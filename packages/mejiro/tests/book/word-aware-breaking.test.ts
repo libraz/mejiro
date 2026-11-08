@@ -184,9 +184,9 @@ describe('word-aware breaking', () => {
   });
 
   it('keeps a hinted cluster off a column boundary', async () => {
-    // Seven code points fit a column, which would otherwise cut `ABCDEF` after
-    // `C`; the Latin-word cluster pushes the break back to the character before it.
-    const paragraphs = [{ text: 'あいうえABCDEFかきくけこ' }];
+    // Seven code points fit a column, which would otherwise tear `人` off `12`;
+    // the numeral-and-counter cluster pushes the break back to the character before it.
+    const paragraphs = [{ text: 'あいうえか12人さしすせそ' }];
     const withoutHints = new MejiroBook(baseOptions);
     const withHints = new MejiroBook({
       ...baseOptions,
@@ -200,7 +200,7 @@ describe('word-aware breaking', () => {
     const hinted = await withHints.layoutChapter({ paragraphs });
 
     expect(breakPointsOf(plain)[0][0]).toBe(6);
-    expect(breakPointsOf(hinted)[0][0]).toBe(3);
+    expect(breakPointsOf(hinted)[0][0]).toBe(4);
   });
 
   it('applies the hints on the image exclusion path too', async () => {
@@ -208,7 +208,7 @@ describe('word-aware breaking', () => {
     // per-column widths rather than a uniform one. If that call did not receive
     // the cached hints, an image would silently undo the clustering — a
     // divergence that only appears once something reflows.
-    const paragraphs = [{ text: 'あいうえABCDEFかきくけこさしすせそ'.repeat(4) }];
+    const paragraphs = [{ text: 'あいうえか12人きくけこさしすせそ'.repeat(4) }];
     const image = [{ x: 10, y: 0, width: 40, height: 200, margin: 0 }];
 
     const plainBook = new MejiroBook(baseOptions);
@@ -231,9 +231,9 @@ describe('word-aware breaking', () => {
     expect(plain.getSpread(0).right.hasImages).toBe(true);
     expect(hinted.getSpread(0).right.hasImages).toBe(true);
     expect(hintedLines).not.toEqual(plainLines);
-    // No reflowed line ends part-way through the Latin word.
+    // No reflowed line tears the counter off its numeral.
     for (const line of hintedLines.slice(0, -1)) {
-      expect(line).not.toMatch(/[A-E]$/u);
+      expect(line).not.toMatch(/[0-9]$/u);
     }
   });
 

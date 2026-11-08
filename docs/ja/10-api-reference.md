@@ -263,7 +263,7 @@
 - `rubyAnnotations?: readonly RubyAnnotation[]` -- 改行処理で使用するコアレベルのルビ注釈
 - `tcyAnnotations?: readonly TcyAnnotation[]` -- 縦中横の範囲。改行前にそれぞれを自身の幅を持つ 1 つの分割不能な箱にまとめる
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- 優先分割位置
-- `breakPenalties?: Uint8Array` -- コードポイントごとに 1 要素で、そのインデックスの「後ろ」で改行するコスト。`0` は罰則なしで、値が大きいほど避ける。指定すると後方探索は最も近い有効位置ではなく `breakCost.maxBacktrackChars` の範囲内で最小コストの位置を選び、`tokenBoundaries` と空白優先の両方に優先する
+- `breakPenalties?: Uint8Array` -- コードポイントごとに 1 要素で、そのインデックスの「後ろ」で改行するコスト。`0` は罰則なしで、値が大きいほど避ける。指定すると後方探索は最も近い有効位置ではなく `breakCost.maxBacktrackChars` の範囲内で最小コストの位置を選び、`tokenBoundaries` と、語を割らない優先の両方に優先する
 - `breakCost?: BreakCostOptions` -- コスト探索の重み。`breakPenalties` がない場合は無視される
 
 **`BreakResult`** -- `computeBreaks()`の出力:

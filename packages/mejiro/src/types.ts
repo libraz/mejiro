@@ -73,7 +73,7 @@ export interface LayoutInput {
    *
    * When present, the backward search picks the lowest-cost position within
    * {@link BreakCostOptions.maxBacktrackChars} instead of the nearest valid one,
-   * and supersedes both `tokenBoundaries` and the whitespace preference. Use
+   * and supersedes both `tokenBoundaries` and the word preference. Use
    * {@link deriveTypographyHints} to produce it from a morphological analysis.
    */
   breakPenalties?: Uint8Array;

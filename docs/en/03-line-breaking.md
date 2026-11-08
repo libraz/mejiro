@@ -27,7 +27,7 @@ When `tokenBoundaries` is provided, the backward search prefers breaking at toke
 
 ### Word Boundary Preference
 
-With or without token boundaries, the nearest valid position wins, because it fills the line best. An earlier space is preferred only when breaking at the nearest position would split a word -- that is, when the characters on both sides of it belong to a space-delimited script. CJK text allows a break between any two characters, so a space in it never pulls the break away from the line end.
+With or without token boundaries, the nearest valid position wins, because it fills the line best. An earlier position is preferred only when breaking at the nearest one would split a word -- that is, when the characters on both sides of it belong to a space-delimited script, such as a run of Latin letters or digits. The break then moves to the nearest valid position outside the word, whether a space or a Japanese character precedes the word, so `、EPUB` near a line end carries `EPUB` to the next line whole. A word longer than the line is still split. CJK text allows a break between any two characters, so this preference never pulls a break away from the end of a Japanese line.
 
 ---
 
@@ -390,7 +390,7 @@ What an analysis is good for is narrower and more valuable: it says which runs o
 | `'clusters'` | Hard clusters — indivisible units | Unchanged, except where a break would have split one of those units |
 | `'full'` | Clusters plus per-position break penalties | Positions move |
 
-`'clusters'` is the stage to reach for first. It only removes break opportunities, and every one it removes is one that produced a wrong break: `第1章` cut after the `1`, a Latin word cut mid-word, a counter torn off its numeral.
+`'clusters'` is the stage to reach for first. It only removes break opportunities, and every one it removes is one that produced a wrong break: `第1章` cut after the `1`, a counter torn off its numeral.
 
 `'full'` changes how lines are filled, which is a typographic decision rather than a correctness one. It suits headings, captions and short measures, where a bad break is conspicuous and there is little text to average out. Using it for body text is a deliberate house-style choice.
 
@@ -419,23 +419,23 @@ Cluster hints ride into `computeBreaks()` through the existing `clusterIds` inpu
 ```ts
 import { computeBreaks, toCodepoints } from '@libraz/mejiro';
 
-const text = toCodepoints('あいうえ12人'); // 7 chars
-const advances = new Float32Array(7).fill(16);
+const text = toCodepoints('あいう12人'); // 6 chars
+const advances = new Float32Array(6).fill(16);
 
-// Character classes alone: the nearest valid position wins, splitting 12.
+// Character classes alone: the nearest valid position wins, tearing 人 off 12.
 const plain = computeBreaks({ text, advances, lineWidth: 80 });
 // plain.breakPoints → [4]
-// Line 1: あいうえ1, Line 2: 2人
+// Line 1: あいう12, Line 2: 人
 
 // With the hint clusters for 12人, that position is no longer available.
 const hinted = computeBreaks({
   text,
   advances,
   lineWidth: 80,
-  clusterIds: new Uint32Array([0, 1, 2, 3, 4, 4, 4]),
+  clusterIds: new Uint32Array([0, 1, 2, 3, 3, 3]),
 });
-// hinted.breakPoints → [3]
-// Line 1: あいうえ, Line 2: 12人
+// hinted.breakPoints → [2]
+// Line 1: あいう, Line 2: 12人
 ```
 
 ### Break Penalties
@@ -460,7 +460,7 @@ penaltyWeight * breakPenalties[p] + shortfallWeight * shortfall(p)
 
 The window is `maxBacktrackChars` positions wide (6 by default), which is what keeps line breaking linear in the text length. Six is also the point past which a candidate cannot win, so a wider window only costs search time: a position `k` steps further back gives up at least `0.5k` em of line, a half-width character being the narrowest thing that can sit between the two, so against the largest penalty `P` in the array it can win only while `k < 2 * penaltyWeight * P / shortfallWeight` — `k < 5.33` at the default weights and the penalties `deriveTypographyHints()` emits, which is why six covers the search completely. A caller that both flattens the weights towards `1` and raises the keep-whole penalty pushes that bound past six and should widen the window to match, or the search will not reach the position its own settings say should win. A window holding no valid position at all falls through to the unbounded search of section 1, so a long run of line-start prohibited characters is still handled.
 
-Penalties supersede both `tokenBoundaries` and the whitespace preference.
+Penalties supersede both `tokenBoundaries` and the word preference.
 
 ### Penalty Example
 

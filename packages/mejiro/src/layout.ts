@@ -29,13 +29,17 @@ const LINE_FEED = 10;
  * is present exactly when per-line `lineWidths` were passed. Both hold one entry
  * per line, i.e. `breakPoints.length + 1`; for empty text both are zero-length.
  *
+ * A break does not fall inside a space-delimited word, such as a run of Latin
+ * letters or digits, while a valid position outside it exists on the line, so
+ * such a word moves to the next line whole; a word longer than the line is split.
+ *
  * A cluster wider than the available line width does not fit on any line; it is
  * split by the forced-break rule. That is the only case in which a break falls
  * between two characters sharing a cluster ID.
  *
  * When `breakPenalties` is given, the backward search picks the lowest-cost
  * position within a bounded window instead of the nearest valid one, and
- * supersedes both `tokenBoundaries` and the whitespace/word preference.
+ * supersedes both `tokenBoundaries` and the word preference.
  *
  * @param input - Layout parameters including text, advances, and line width.
  * @returns Break points, hanging adjustments and, when requested, per-line widths.
@@ -180,7 +184,7 @@ export function computeBreaks(input: LayoutInput): BreakResult {
       // When token boundaries are provided, prefer breaking at token edges.
       let breakPos = i - 1;
       let fallbackPos = -1;
-      let whitespacePos = -1;
+      let wordSafePos = -1;
       let clusterSafePos = -1;
       let foundTokenBoundary = false;
       let lowestCostPos = -1;
@@ -233,14 +237,14 @@ export function computeBreaks(input: LayoutInput): BreakResult {
               foundTokenBoundary = true;
               break;
             }
-            if (whitespacePos < 0 && isWhitespace(text[breakPos])) whitespacePos = breakPos;
+            if (wordSafePos < 0 && !splitsWord(text, breakPos)) wordSafePos = breakPos;
             if (fallbackPos < 0) fallbackPos = breakPos;
           }
           breakPos--;
         }
         // No token boundary found — use the nearest kinsoku-valid position
         if (!foundTokenBoundary) {
-          const chosen = preferredBreakPos(text, fallbackPos, whitespacePos);
+          const chosen = preferredBreakPos(fallbackPos, wordSafePos);
           if (chosen >= 0) breakPos = chosen;
         }
       } else {
@@ -249,15 +253,15 @@ export function computeBreaks(input: LayoutInput): BreakResult {
             clusterSafePos = breakPos;
           }
           if (isBreakAllowed(text, breakPos, clusterIds, kinsoku, pairStarts)) {
-            if (isWhitespace(text[breakPos])) {
-              whitespacePos = breakPos;
+            if (fallbackPos < 0) fallbackPos = breakPos;
+            if (!splitsWord(text, breakPos)) {
+              wordSafePos = breakPos;
               break;
             }
-            if (fallbackPos < 0) fallbackPos = breakPos;
           }
           breakPos--;
         }
-        const chosen = preferredBreakPos(text, fallbackPos, whitespacePos);
+        const chosen = preferredBreakPos(fallbackPos, wordSafePos);
         if (chosen >= 0) breakPos = chosen;
       }
 
@@ -341,17 +345,16 @@ function isWordChar(codepoint: number): boolean {
 /**
  * Picks the break position from a backward search that found no token boundary.
  *
- * The nearest valid position wins, because it fills the line best. An earlier
- * whitespace is preferred only when the nearest position would split a word,
- * which is what a space-delimited script needs and what CJK text never does.
+ * The nearest valid position wins, because it fills the line best, unless it
+ * would split a word: then the nearest valid position outside a word wins, so
+ * a Latin word moves to the next line whole whether a space or a CJK character
+ * precedes it. A word longer than the whole line is split at the nearest
+ * position, since no position outside it exists.
  *
  * @returns The chosen position, or -1 when the search found no candidate.
  */
-function preferredBreakPos(text: Uint32Array, fallbackPos: number, whitespacePos: number): number {
-  if (whitespacePos >= 0 && (fallbackPos < 0 || splitsWord(text, fallbackPos))) {
-    return whitespacePos;
-  }
-  return fallbackPos;
+function preferredBreakPos(fallbackPos: number, wordSafePos: number): number {
+  return wordSafePos >= 0 ? wordSafePos : fallbackPos;
 }
 
 function validateLayoutInput(input: LayoutInput): void {

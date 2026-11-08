@@ -265,7 +265,7 @@ anchor of an unsafe link while keeping its content, nested ruby and emphasis inc
 - `rubyAnnotations?: readonly RubyAnnotation[]` -- Core-level ruby annotations used by the line breaker
 - `tcyAnnotations?: readonly TcyAnnotation[]` -- Tate-chu-yoko spans, each collapsed to one indivisible box of its own width before breaking
 - `tokenBoundaries?: Uint32Array | readonly number[]` -- Preferred break positions
-- `breakPenalties?: Uint8Array` -- Cost of breaking *after* each index, one entry per code point. `0` is unpenalised, larger values are avoided more strongly. When present, the backward search picks the lowest-cost position within `breakCost.maxBacktrackChars` instead of the nearest valid one, and supersedes both `tokenBoundaries` and the whitespace preference
+- `breakPenalties?: Uint8Array` -- Cost of breaking *after* each index, one entry per code point. `0` is unpenalised, larger values are avoided more strongly. When present, the backward search picks the lowest-cost position within `breakCost.maxBacktrackChars` instead of the nearest valid one, and supersedes both `tokenBoundaries` and the word preference
 - `breakCost?: BreakCostOptions` -- Weights for the penalty search. Ignored unless `breakPenalties` is given
 
 **`BreakResult`** -- Output of `computeBreaks()`:

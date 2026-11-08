@@ -11,7 +11,7 @@ import { getDefaultKinsokuRules, isLineStartProhibited } from '../src/kinsoku.js
 
 const HANGING_TEXT = 'あいうえお、かきくけこ';
 const SMALL_KANA_TEXT = 'あいうえおっかきくけこ';
-const COUNTER_TEXT = 'あいうえ12人';
+const COUNTER_TEXT = 'あいう12人';
 const SENTENCE_TEXT = '今日は良い天気ですね';
 const advances = (count: number): Float32Array => new Float32Array(count).fill(16);
 
@@ -80,17 +80,17 @@ describe('line breaking documentation examples', () => {
   it('keeps a numeral and its counter together once cluster hints are applied', () => {
     const text = toCodepoints(COUNTER_TEXT);
 
-    expect([...computeBreaks({ text, advances: advances(7), lineWidth: 80 }).breakPoints]).toEqual([
+    expect([...computeBreaks({ text, advances: advances(6), lineWidth: 80 }).breakPoints]).toEqual([
       4,
     ]);
     expect([
       ...computeBreaks({
         text,
-        advances: advances(7),
+        advances: advances(6),
         lineWidth: 80,
-        clusterIds: new Uint32Array([0, 1, 2, 3, 4, 4, 4]),
+        clusterIds: new Uint32Array([0, 1, 2, 3, 3, 3]),
       }).breakPoints,
-    ]).toEqual([3]);
+    ]).toEqual([2]);
   });
 
   it('moves the break onto a bunsetsu edge once penalties are applied', () => {

@@ -168,7 +168,7 @@ describe('03-line-breaking examples', () => {
     ]);
     const hints = await import('./doc-examples/03-hint-clusters.js');
     expect([...hints.plain.breakPoints]).toEqual([4]);
-    expect([...hints.hinted.breakPoints]).toEqual([3]);
+    expect([...hints.hinted.breakPoints]).toEqual([2]);
     const penalties = await import('./doc-examples/03-break-penalties.js');
     expect([...penalties.plain.breakPoints]).toEqual([5]);
     expect([...penalties.hinted.breakPoints]).toEqual([4]);
