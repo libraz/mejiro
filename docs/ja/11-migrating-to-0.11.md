@@ -304,6 +304,7 @@ const out: Uint8Array = await editor.export();
 - **原稿フックの初期内容**。`useManuscriptDraft` と `useEpubProject` は空のタイトルと空の章 1 つから始まります。既定のタイトルは `MejiroManuscriptEditor` が有効なカタログの文言で入れます。
 - **`lineSpacing` の既定値**。`MeasureOptions.lineSpacing` の既定は、`BookOptions` とコンポーネントと同じ `DEFAULT_LINE_SPACING`（1.8）になりました（以前は `1`）。`lineSpacing` を渡さずに `buildParagraphMeasures` を呼ぶコードでは、行ピッチが大きくなってページ分割が変わります。
 - **`hangingAdjustments` は常にある**。`BreakResult.hangingAdjustments` は `undefined` にならず、行ごとに 1 要素を持ち、`enableHanging: false` ではすべて 0 です。
+- **英単語での改行**。`computeBreaks` は、英字や数字の並びのような空白区切りの語を、直前が和文の文字や約物でも途中で割らなくなりました。空白の後ろにある語と同じく、語ごと次の行に送ります。1 行より長い語は従来どおり割ります。和文に英字や数字が混じる文では、0.10 と改行位置が変わることがあります。
 - **バイト列の出力**。`EditableEpub.export()`、`EpubProject.export()`、フックの `exportEpub()`、`onExport`、`ExportPolicy.transform` が扱うのは `ArrayBuffer` ではなく `Uint8Array` です。
 - **非表示のコンテナでの `fitPageSize`**。幅か高さが 0 のコンテナでは `RangeError` を投げ、何も保存しません。レイアウトフックは、表示面が大きさを報告するまで計測を待ちます。
 - **`setImages` は呼ぶたびに流し直す**。複数の見開きの画像を設定すると、見開きごとに 1 回流し直します。スナップショットの復元は 1 回でまとめて適用します。
